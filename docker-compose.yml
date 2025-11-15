@@ -42,6 +42,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DEBUG=${DEBUG:-false}
       - REDIS_SESSION_TTL=${REDIS_SESSION_TTL:-604800}
+      - LOKI_URL=http://loki:3100
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
@@ -93,31 +94,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  # ========================================
-  # 📤 Promtail - Recolector de logs
-  # ========================================
-  promtail:
-    image: grafana/promtail:2.9.0
-    container_name: saas-promtail
-    restart: unless-stopped
-    command:
-      - -config.expand-env=true
-      - -config.file=/etc/promtail/promtail.yml
-    configs:
-      - source: promtail_config
-        target: /etc/promtail/promtail.yml
-    volumes:
-      - log-data:/var/log/app:ro
-    networks:
-      - elastika-network
-    depends_on:
-      - loki
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"
 
   # ========================================
   # 📈 Grafana - Visualización
@@ -177,9 +153,3 @@ volumes:
   log-data:
     name: saas-log-data
 
-# ========================================
-# 📝 Configs
-# ========================================
-configs:
-  promtail_config:
-    file: ./promtail-simple.yml

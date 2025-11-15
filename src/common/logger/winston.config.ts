@@ -1,5 +1,6 @@
 import * as winston from 'winston';
 import * as DailyRotateFile from 'winston-daily-rotate-file';
+import LokiTransport from 'winston-loki';
 
 // Workaround for CommonJS module
 const DailyRotateFileTransport = DailyRotateFile as any;
@@ -133,6 +134,21 @@ const auditFileTransport = new DailyRotateFileTransport({
   zippedArchive: true,
 });
 
+// Transporte: Loki (solo en producción/staging si está configurado)
+const lokiTransport = process.env.LOKI_URL
+  ? new LokiTransport({
+      host: process.env.LOKI_URL || 'http://loki:3100',
+      labels: {
+        app: 'saas-backend',
+        environment: process.env.NODE_ENV || 'development',
+      },
+      json: true,
+      format: winston.format.json(),
+      replaceTimestamp: true,
+      onConnectionError: (err) => console.error('Loki connection error:', err),
+    })
+  : null;
+
 // Configuración del logger
 export const winstonConfig = {
   levels,
@@ -147,7 +163,8 @@ export const winstonConfig = {
     errorFileTransport,
     combinedFileTransport,
     auditFileTransport,
-  ],
+    ...(lokiTransport ? [lokiTransport] : []),
+  ].filter(Boolean),
   exceptionHandlers: [
     new DailyRotateFileTransport({
       filename: 'logs/exceptions-%DATE%.log',
