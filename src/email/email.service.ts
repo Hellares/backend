@@ -37,15 +37,14 @@ export class EmailService implements OnModuleInit {
     this.transporter = nodemailer.createTransport({
       host,
       port: 587,
-      secure: false, // 587 siempre es false
-      requireTLS: true, // OBLIGA STARTTLS
+      secure: false,            // 587 SIEMPRE es false
+      requireTLS: true,         // Mailcow lo exige
+      tls: {
+        rejectUnauthorized: false,  // IMPORTANTE para certificados autofirmados
+      },
       auth: {
         user,
         pass,
-      },
-      tls: {
-        // Permitir certificados auto-firmados
-        rejectUnauthorized: false,
       },
       connectionTimeout: 20000,
       greetingTimeout: 20000,
