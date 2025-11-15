@@ -161,29 +161,31 @@ export const winstonConfig = {
   ),
   transports: [
     consoleTransport,
-    errorFileTransport,
-    combinedFileTransport,
-    auditFileTransport,
+    // File transports temporalmente deshabilitados (problemas de permisos en Docker)
+    // errorFileTransport,
+    // combinedFileTransport,
+    // auditFileTransport,
     ...(lokiTransport ? [lokiTransport] : []),
   ].filter(Boolean),
-  exceptionHandlers: [
-    new DailyRotateFileTransport({
-      filename: 'logs/exceptions-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      maxSize: '20m',
-      maxFiles: '14d',
-      zippedArchive: true,
-    }),
-  ],
-  rejectionHandlers: [
-    new DailyRotateFileTransport({
-      filename: 'logs/rejections-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      maxSize: '20m',
-      maxFiles: '14d',
-      zippedArchive: true,
-    }),
-  ],
+  // Exception y rejection handlers temporalmente deshabilitados (problemas de permisos en Docker)
+  // exceptionHandlers: [
+  //   new DailyRotateFileTransport({
+  //     filename: 'logs/exceptions-%DATE%.log',
+  //     datePattern: 'YYYY-MM-DD',
+  //     maxSize: '20m',
+  //     maxFiles: '14d',
+  //     zippedArchive: true,
+  //   }),
+  // ],
+  // rejectionHandlers: [
+  //   new DailyRotateFileTransport({
+  //     filename: 'logs/rejections-%DATE%.log',
+  //     datePattern: 'YYYY-MM-DD',
+  //     maxSize: '20m',
+  //     maxFiles: '14d',
+  //     zippedArchive: true,
+  //   }),
+  // ],
 };
 
 // Exportar una instancia del logger
