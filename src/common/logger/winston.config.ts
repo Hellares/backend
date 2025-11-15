@@ -134,20 +134,21 @@ const auditFileTransport = new DailyRotateFileTransport({
   zippedArchive: true,
 });
 
-// Transporte: Loki (solo en producción/staging si está configurado)
-const lokiTransport = process.env.LOKI_URL
-  ? new LokiTransport({
-      host: process.env.LOKI_URL || 'http://loki:3100',
-      labels: {
-        app: 'saas-backend',
-        environment: process.env.NODE_ENV || 'development',
-      },
-      json: true,
-      format: winston.format.json(),
-      replaceTimestamp: true,
-      onConnectionError: (err) => console.error('Loki connection error:', err),
-    })
-  : null;
+// Transporte: Loki (temporalmente desactivado para depuración)
+// const lokiTransport = process.env.LOKI_URL
+//   ? new LokiTransport({
+//       host: process.env.LOKI_URL || 'http://loki:3100',
+//       labels: {
+//         app: 'saas-backend',
+//         environment: process.env.NODE_ENV || 'development',
+//       },
+//       json: true,
+//       format: winston.format.json(),
+//       replaceTimestamp: true,
+//       onConnectionError: (err) => console.error('Loki connection error:', err),
+//     })
+//   : null;
+const lokiTransport = null; // Temporalmente desactivado
 
 // Configuración del logger
 export const winstonConfig = {
