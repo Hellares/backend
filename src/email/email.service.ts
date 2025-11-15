@@ -41,6 +41,8 @@ export class EmailService implements OnModuleInit {
       requireTLS: true,         // Mailcow lo exige
       tls: {
         rejectUnauthorized: false,  // IMPORTANTE para certificados autofirmados
+        minVersion: 'TLSv1.2',     // Fuerza TLS 1.2 (evita 1.3 bugs)
+        ciphers: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256'  // Ciphers compatibles con Mailcow
       },
       auth: {
         user,
