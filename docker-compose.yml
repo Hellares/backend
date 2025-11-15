@@ -103,9 +103,11 @@ services:
     restart: unless-stopped
     command:
       - -config.expand-env=true
-      - -config.file=/etc/promtail/config.yml
+      - -config.file=/etc/promtail/promtail.yml
+    configs:
+      - source: promtail_config
+        target: /etc/promtail/promtail.yml
     volumes:
-      - ./promtail-simple.yml:/etc/promtail/config.yml:ro
       - log-data:/var/log/app:ro
     networks:
       - elastika-network
@@ -174,3 +176,10 @@ volumes:
     name: saas-grafana-data
   log-data:
     name: saas-log-data
+
+# ========================================
+# 📝 Configs
+# ========================================
+configs:
+  promtail_config:
+    file: ./promtail-simple.yml
