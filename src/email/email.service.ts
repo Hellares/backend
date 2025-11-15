@@ -21,99 +21,124 @@ export class EmailService implements OnModuleInit {
     await this.initializeTransporter();
   }
 
-  private async initializeTransporter() {
-    const host = this.configService.get<string>('EMAIL_HOST');
-    const port = this.configService.get<number>('EMAIL_PORT');
-    const user = this.configService.get<string>('EMAIL_USER');
-    const pass = this.configService.get<string>('EMAIL_PASS');
+ private async initializeTransporter() {
+  const host = this.configService.get<string>('EMAIL_HOST');
+  const port = this.configService.get<number>('EMAIL_PORT');
+  const user = this.configService.get<string>('EMAIL_USER');
+  const pass = this.configService.get<string>('EMAIL_PASS');
+  const secure = this.configService.get<boolean>('EMAIL_SECURE', false);  // De .env, default false para 587
 
-    // Si no hay configuración, usar transporte de prueba (ethereal.email)
-    if (!host || !user) {
-      this.logger.warn('No email configuration found. Emails will be logged instead of sent.');
-      this.transporter = null;
-      return;
-    }
-
-    this.transporter = nodemailer.createTransport({
-      host,
-      port: 587,
-      secure: false,            // 587 SIEMPRE es false
-      requireTLS: true,         // Mailcow lo exige
-      tls: {
-        rejectUnauthorized: false,  // IMPORTANTE para certificados autofirmados
-        minVersion: 'TLSv1.2',     // Fuerza TLS 1.2 (evita 1.3 bugs)
-        ciphers: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256'  // Ciphers compatibles con Mailcow
-      },
-      auth: {
-        user,
-        pass,
-      },
-      connectionTimeout: 20000,
-      greetingTimeout: 20000,
-      socketTimeout: 20000,
-    });
-
-    // Verificar la conexión SMTP (solo en desarrollo)
-    const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
-    if (nodeEnv === 'development') {
-      try {
-        await this.transporter.verify();
-        this.logger.log(`Email service initialized successfully - Connected to ${host}:${port}`);
-      } catch (error) {
-        this.logger.error(
-          `Failed to verify SMTP connection to ${host}:${port}: ${error.message}`,
-          error.stack,
-          {
-            host,
-            port,
-            user,
-            errorCode: error.code,
-          }
-        );
-        this.logger.warn('Email service will continue but emails may fail to send. Please check your SMTP configuration.');
-      }
-    } else {
-      // En producción, skip verification y intentar enviar directamente
-      this.logger.log(`Email service initialized for ${host}:${port} (verification skipped in production)`);
-    }
+  if (!host || !user) {
+    this.logger.warn('No email configuration found. Emails will be logged instead of sent.');
+    this.transporter = null;
+    return;
   }
+
+  this.transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure,  // false para 587 (STARTTLS), true para 465 (SMTPS)
+    auth: { user, pass },
+    tls: { rejectUnauthorized: false },  // Simple, como en working
+    connectionTimeout: 10000,  // 10s
+    greetingTimeout: 5000,     // 5s
+    socketTimeout: 30000,      // 30s
+    logger: this.configService.get('NODE_ENV') === 'development',  // Solo dev
+    debug: this.configService.get('NODE_ENV') === 'development',
+  });
+
+  // Siempre verifica, incluso en prod (como en working)
+  const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+  try {
+    const isConnected = await this.transporter.verify();
+    if (isConnected) {
+      this.logger.log(`Email service initialized successfully - Connected to ${host}:${port}`);
+    } else {
+      this.logger.warn('Connection SMTP verified but not successful');
+    }
+  } catch (error) {
+    this.logger.error(`Failed to verify SMTP connection to ${host}:${port}: ${error.message}`);
+    this.logger.warn('Email service will continue but emails may fail. Will retry on send.');
+  }
+
+  if (nodeEnv !== 'development') {
+    this.logger.log(`Email service initialized for ${host}:${port} (full verify done)`);
+  }
+}
+
+private async verifyConnection(): Promise<boolean> {
+  try {
+    const isConnected = await this.transporter.verify();
+    // this.isConnected = isConnected;  // Agrega private isConnected = false; al class
+    // this.lastHealthCheck = new Date();  // private lastHealthCheck: Date;
+    if (isConnected) {
+      this.logger.log('✅ Conexión SMTP verificada exitosamente');
+    } else {
+      this.logger.warn('⚠️ Conexión SMTP no pudo verificarse');
+    }
+    return isConnected;
+  } catch (error) {
+    this.logger.error('❌ Error verificando conexión SMTP:', error.message);
+    // this.isConnected = false;
+    // this.lastHealthCheck = new Date();
+    return false;
+  }
+}
 
   /**
    * Enviar email genérico
    */
   async sendEmail(options: EmailOptions): Promise<boolean> {
-    console.log('Attempting send to:', options.to, 'from:', this.configService.get('EMAIL_USER'));
-    try {
-      if (!this.transporter) {
-        this.logger.log('Email would be sent:');
-        this.logger.log(JSON.stringify(options, null, 2));
-        return true; // En desarrollo sin config, simular envío exitoso
-      }
+  console.log('Attempting send to:', options.to, 'from:', this.configService.get('EMAIL_USER'));
+  const requestId = this.generateRequestId();  // Agrega método abajo
+  this.logger.log(`📧 [${requestId}] Iniciando envío de email a: ${options.to}`);
 
-      const info = await this.transporter.sendMail({
-        from: this.configService.get('EMAIL_USER'),
-        to: options.to,
-        subject: options.subject,
-        text: options.text,
-        html: options.html,
-      });
+  try {
+    // Chequea y re-verifica conexión
+    // if (!this.isConnected) {
+    //   this.logger.warn(`🔄 [${requestId}] Conexión no verificada, reconectando...`);
+      await this.verifyConnection();
+    //   if (!this.isConnected) {
+    //     throw new Error('No hay conexión SMTP disponible');
+    //   }
+    // }
 
-      this.logger.log(`Email sent successfully to ${options.to}. Message ID: ${info.messageId}`);
+    if (!this.transporter) {
+      this.logger.log('Email would be sent:');
+      this.logger.log(JSON.stringify(options, null, 2));
       return true;
-    } catch (error) {
-      this.logger.error(
-        `Failed to send email to ${options.to}: ${error.message}`,
-        error.stack,
-        {
-          to: options.to,
-          subject: options.subject,
-          errorCode: error.code,
-          errorCommand: error.command,
-        }
-      );
-      return false;
     }
+
+    const info = await this.transporter.sendMail({
+      from: this.configService.get('EMAIL_USER'),
+      to: options.to,
+      subject: options.subject,
+      text: options.text,
+      html: options.html,
+      headers: {  // Opcional, como en working
+        'X-Request-ID': requestId,
+      },
+    });
+
+    this.logger.log(`✅ [${requestId}] Email sent successfully to ${options.to}. Message ID: ${info.messageId}`);
+    return true;
+  } catch (error) {
+    this.logger.error(`❌ [${requestId}] Failed to send email to ${options.to}: ${error.message}`);
+    return false;
   }
+}
+
+private isConnectionError(error: any): boolean {
+  const connectionErrors = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'SMTP', 'timeout', 'connection'];
+  const errorMessage = error.message?.toLowerCase() || '';
+  return connectionErrors.some(err => errorMessage.includes(err.toLowerCase()));
+}
+
+private generateRequestId(): string {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).substring(2, 8);
+  return `email_${timestamp}_${random}`;
+}
 
   /**
    * Enviar email de verificación
@@ -395,4 +420,6 @@ Si tienes alguna pregunta, no dudes en contactarnos.
       text,
     });
   }
+
+  
 }
