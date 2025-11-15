@@ -7,6 +7,18 @@ import { PrismaService } from './prisma/prisma.service';
 import { AppLoggerService } from './common/logger/logger.service';
 import { logger as winstonLogger } from './common/logger/winston.config';
 
+// Capturar errores no manejados
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
+  winstonLogger.error('Unhandled Rejection', { reason, promise });
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('🚨 Uncaught Exception:', error);
+  winstonLogger.error('Uncaught Exception', { error: error.message, stack: error.stack });
+  // No exit - let Docker handle restart if needed
+});
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: new AppLoggerService(),
