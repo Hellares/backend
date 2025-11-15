@@ -46,6 +46,9 @@ export class EmailService implements OnModuleInit {
         // No fallar en certificados inválidos (para desarrollo/servidores propios)
         rejectUnauthorized: false,
       },
+      connectionTimeout: 10000, // 10 segundos
+      greetingTimeout: 5000, // 5 segundos
+      socketTimeout: 15000, // 15 segundos
     });
 
     // Verificar la conexión SMTP
