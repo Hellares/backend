@@ -1,6 +1,6 @@
 # ===========================================
 # 🐳 DOCKER COMPOSE - SAAS BACKEND
-# Stack completo con observabilidad
+# Stack simplificado (solo backend)
 # ===========================================
 
 version: '3.8'
@@ -42,24 +42,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DEBUG=${DEBUG:-false}
       - REDIS_SESSION_TTL=${REDIS_SESSION_TTL:-604800}
-      - LOKI_URL=http://loki:3100
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
     volumes:
-      # Montar logs para que Promtail pueda leerlos
       - ./logs:/app/logs
-      - log-data:/var/log/app
     networks:
       - elastika-network
-    # Healthcheck temporalmente deshabilitado para depuración
-    # healthcheck:
-    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/api || exit 1"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 5
-    #   start_period: 60s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=Host(`api.syncronize.net.pe`)"
@@ -78,78 +68,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ========================================
-  # 📊 Loki - Agregador de logs
-  # ========================================
-  loki:
-    image: grafana/loki:2.9.0
-    container_name: saas-loki
-    restart: unless-stopped
-    ports:
-      - "3100:3100"
-    command:
-      - -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - loki-data:/loki
-    networks:
-      - elastika-network
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # ========================================
-  # 📈 Grafana - Visualización
-  # ========================================
-  grafana:
-    image: grafana/grafana:10.2.0
-    container_name: saas-grafana
-    restart: unless-stopped
-    ports:
-      - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/
-      - GF_AUTH_ANONYMOUS_ENABLED=false
-      - GF_LOG_LEVEL=info
-      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-    networks:
-      - elastika-network
-    depends_on:
-      - loki
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.grafana.rule=Host(`grafana.syncronize.net.pe`)"
-      - "traefik.http.routers.grafana.entrypoints=websecure"
-      - "traefik.http.routers.grafana.tls=true"
-      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
-      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
-      # Redirect HTTP to HTTPS
-      - "traefik.http.routers.grafana-http.rule=Host(`grafana.syncronize.net.pe`)"
-      - "traefik.http.routers.grafana-http.entrypoints=web"
-      - "traefik.http.routers.grafana-http.middlewares=redirect-to-https"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 # ========================================
 # 🌐 Networks
 # ========================================
@@ -157,15 +75,3 @@ networks:
   elastika-network:
     external: true
     name: elastika-network
-
-# ========================================
-# 💾 Volumes
-# ========================================
-volumes:
-  loki-data:
-    name: saas-loki-data
-  grafana-data:
-    name: saas-grafana-data
-  log-data:
-    name: saas-log-data
-
