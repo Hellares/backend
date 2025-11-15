@@ -17,8 +17,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Instalar dependencias
-RUN npm ci --only=production && \
+# Instalar TODAS las dependencias (necesarias para el build)
+RUN npm ci && \
     npm cache clean --force
 
 # Copiar código fuente
@@ -29,6 +29,9 @@ RUN npx prisma generate
 
 # Build de la aplicación
 RUN npm run build
+
+# Eliminar dependencias de desarrollo después del build
+RUN npm prune --production
 
 # ------------------------------------
 # Stage 2: Production
