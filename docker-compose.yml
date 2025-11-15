@@ -53,8 +53,6 @@ services:
       - log-data:/var/log/app
     networks:
       - elastika-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
       interval: 30s
