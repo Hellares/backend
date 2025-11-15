@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { Transporter } from 'nodemailer';
@@ -11,15 +11,17 @@ export interface EmailOptions {
 }
 
 @Injectable()
-export class EmailService {
+export class EmailService implements OnModuleInit {
   private readonly logger = new Logger(EmailService.name);
   private transporter: Transporter;
 
-  constructor(private readonly configService: ConfigService) {
-    this.initializeTransporter();
+  constructor(private readonly configService: ConfigService) {}
+
+  async onModuleInit() {
+    await this.initializeTransporter();
   }
 
-  private initializeTransporter() {
+  private async initializeTransporter() {
     const host = this.configService.get<string>('EMAIL_HOST');
     const port = this.configService.get<number>('EMAIL_PORT');
     const user = this.configService.get<string>('EMAIL_USER');
@@ -46,7 +48,23 @@ export class EmailService {
       },
     });
 
-    this.logger.log('Email service initialized successfully');
+    // Verificar la conexión SMTP
+    try {
+      await this.transporter.verify();
+      this.logger.log(`Email service initialized successfully - Connected to ${host}:${port}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to verify SMTP connection to ${host}:${port}: ${error.message}`,
+        error.stack,
+        {
+          host,
+          port,
+          user,
+          errorCode: error.code,
+        }
+      );
+      this.logger.warn('Email service will continue but emails may fail to send. Please check your SMTP configuration.');
+    }
   }
 
   /**
@@ -71,7 +89,16 @@ export class EmailService {
       this.logger.log(`Email sent successfully to ${options.to}. Message ID: ${info.messageId}`);
       return true;
     } catch (error) {
-      this.logger.error(`Failed to send email to ${options.to}:`, error);
+      this.logger.error(
+        `Failed to send email to ${options.to}: ${error.message}`,
+        error.stack,
+        {
+          to: options.to,
+          subject: options.subject,
+          errorCode: error.code,
+          errorCommand: error.command,
+        }
+      );
       return false;
     }
   }

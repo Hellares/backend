@@ -118,8 +118,12 @@ export class AuthService {
 
     // Enviar email de verificación (no bloquear el registro si falla)
     try {
-      await this.emailService.sendVerificationEmail(email, verificationToken, nombres);
-      this.logger.info('Verification email sent successfully', { email });
+      const emailSent = await this.emailService.sendVerificationEmail(email, verificationToken, nombres);
+      if (emailSent) {
+        this.logger.info('Verification email sent successfully', { email });
+      } else {
+        this.logger.warn('Verification email was not sent (check email service logs for details)', { email });
+      }
     } catch (error) {
       this.logger.error('Failed to send verification email', error.stack, { email });
     }
@@ -448,11 +452,15 @@ export class AuthService {
 
     // Enviar email de bienvenida (opcional)
     try {
-      await this.emailService.sendWelcomeEmail(
+      const emailSent = await this.emailService.sendWelcomeEmail(
         usuario.email,
         usuario.persona.nombres
       );
-      this.logger.info('Welcome email sent successfully', { email: usuario.email });
+      if (emailSent) {
+        this.logger.info('Welcome email sent successfully', { email: usuario.email });
+      } else {
+        this.logger.warn('Welcome email was not sent (check email service logs for details)', { email: usuario.email });
+      }
     } catch (error) {
       this.logger.error('Failed to send welcome email', error.stack, { email: usuario.email });
     }
@@ -524,12 +532,16 @@ export class AuthService {
 
     // Enviar email de recuperación de contraseña
     try {
-      await this.emailService.sendPasswordResetEmail(
+      const emailSent = await this.emailService.sendPasswordResetEmail(
         email,
         resetToken,
         usuarioConPersona.persona.nombres
       );
-      this.logger.log(`Password recovery email sent to ${email}`);
+      if (emailSent) {
+        this.logger.log(`Password recovery email sent to ${email}`);
+      } else {
+        this.logger.warn(`Password recovery email was not sent to ${email} (check email service logs for details)`);
+      }
     } catch (error) {
       this.logger.error(`Failed to send password recovery email to ${email}:`, error);
     }
