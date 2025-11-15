@@ -77,9 +77,9 @@ services:
     restart: unless-stopped
     ports:
       - "3100:3100"
-    command: -config.file=/mnt/config/loki-config.yml
+    command:
+      - -config.file=/etc/loki/local-config.yaml
     volumes:
-      - ./loki-config.yml:/mnt/config/loki-config.yml:ro
       - loki-data:/loki
     networks:
       - elastika-network
@@ -101,13 +101,12 @@ services:
     image: grafana/promtail:2.9.0
     container_name: saas-promtail
     restart: unless-stopped
-    command: -config.file=/mnt/config/promtail-config.yml
+    command:
+      - -config.expand-env=true
+      - -config.file=/etc/promtail/config.yml
     volumes:
-      - ./promtail-config.yml:/mnt/config/promtail-config.yml:ro
-      - ./logs:/var/log/app:ro
+      - ./promtail-simple.yml:/etc/promtail/config.yml:ro
       - log-data:/var/log/app:ro
-    environment:
-      - ENVIRONMENT=${NODE_ENV:-production}
     networks:
       - elastika-network
     depends_on:
