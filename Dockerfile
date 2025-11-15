@@ -5,7 +5,7 @@
 # ------------------------------------
 # Stage 1: Builder
 # ------------------------------------
-FROM node:20-alpine AS builder
+FROM node:18-alpine AS builder
 
 # Instalar dependencias del sistema necesarias para Prisma
 RUN apk add --no-cache openssl libc6-compat
@@ -36,7 +36,7 @@ RUN npm prune --production
 # ------------------------------------
 # Stage 2: Production
 # ------------------------------------
-FROM node:20-alpine AS production
+FROM node:18-alpine AS production
 
 # Instalar dependencias del sistema
 RUN apk add --no-cache openssl libc6-compat wget

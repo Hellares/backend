@@ -80,6 +80,7 @@ export class EmailService implements OnModuleInit {
    * Enviar email genérico
    */
   async sendEmail(options: EmailOptions): Promise<boolean> {
+    console.log('Attempting send to:', options.to, 'from:', this.configService.get('EMAIL_USER'));
     try {
       if (!this.transporter) {
         this.logger.log('Email would be sent:');
