@@ -51,22 +51,28 @@ export class EmailService implements OnModuleInit {
       socketTimeout: 15000, // 15 segundos
     });
 
-    // Verificar la conexión SMTP
-    try {
-      await this.transporter.verify();
-      this.logger.log(`Email service initialized successfully - Connected to ${host}:${port}`);
-    } catch (error) {
-      this.logger.error(
-        `Failed to verify SMTP connection to ${host}:${port}: ${error.message}`,
-        error.stack,
-        {
-          host,
-          port,
-          user,
-          errorCode: error.code,
-        }
-      );
-      this.logger.warn('Email service will continue but emails may fail to send. Please check your SMTP configuration.');
+    // Verificar la conexión SMTP (solo en desarrollo)
+    const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+    if (nodeEnv === 'development') {
+      try {
+        await this.transporter.verify();
+        this.logger.log(`Email service initialized successfully - Connected to ${host}:${port}`);
+      } catch (error) {
+        this.logger.error(
+          `Failed to verify SMTP connection to ${host}:${port}: ${error.message}`,
+          error.stack,
+          {
+            host,
+            port,
+            user,
+            errorCode: error.code,
+          }
+        );
+        this.logger.warn('Email service will continue but emails may fail to send. Please check your SMTP configuration.');
+      }
+    } else {
+      // En producción, skip verification y intentar enviar directamente
+      this.logger.log(`Email service initialized for ${host}:${port} (verification skipped in production)`);
     }
   }
 
@@ -82,7 +88,7 @@ export class EmailService implements OnModuleInit {
       }
 
       const info = await this.transporter.sendMail({
-        from: this.configService.get<string>('EMAIL_USER'),
+        from: this.configService.get('EMAIL_USER'),
         to: options.to,
         subject: options.subject,
         text: options.text,
