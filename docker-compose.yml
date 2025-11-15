@@ -74,20 +74,20 @@ services:
         max-file: "3"
 
   # ========================================
-  # 📧 SMTP Relay (opcional)
+  # 📧 SMTP Relay
   # ========================================
-  # smtp-relay:
-  #   image: juanluisbaptiste/postfix
-  #   container_name: saas-smtp-relay
-  #   restart: unless-stopped
-  #   environment:
-  #     - SMTP_SERVER=mail.syncronize.net.pe
-  #     - SMTP_PORT=587
-  #     - SMTP_USERNAME=${EMAIL_USER}
-  #     - SMTP_PASSWORD=${EMAIL_PASS}
-  #     - SERVER_HOSTNAME=syncronize.net.pe
-  #   networks:
-  #     - elastika-network
+  smtp-relay:
+    image: juanluisbaptiste/postfix
+    container_name: saas-smtp-relay
+    restart: unless-stopped
+    network_mode: "host"
+    environment:
+      - SMTP_SERVER=mail.syncronize.net.pe
+      - SMTP_PORT=587
+      - SMTP_USERNAME=${EMAIL_USER}
+      - SMTP_PASSWORD=${EMAIL_PASS}
+      - SERVER_HOSTNAME=syncronize.net.pe
+      - SMTP_NETWORKS=172.16.0.0/12
 
 # ========================================
 # 🌐 Networks
