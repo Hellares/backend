@@ -15,7 +15,7 @@ export class EmailService implements OnModuleInit {
   private readonly logger = new Logger(EmailService.name);
   private transporter: Transporter;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) { }
 
   async onModuleInit() {
     await this.initializeTransporter();
@@ -36,19 +36,20 @@ export class EmailService implements OnModuleInit {
 
     this.transporter = nodemailer.createTransport({
       host,
-      port,
-      secure: port === 465, // true para 465, false para otros puertos
+      port: 587,
+      secure: false, // 587 siempre es false
+      requireTLS: true, // OBLIGA STARTTLS
       auth: {
         user,
         pass,
       },
       tls: {
-        // No fallar en certificados inválidos (para desarrollo/servidores propios)
+        // Permitir certificados auto-firmados
         rejectUnauthorized: false,
       },
-      connectionTimeout: 10000, // 10 segundos
-      greetingTimeout: 5000, // 5 segundos
-      socketTimeout: 15000, // 15 segundos
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 20000,
     });
 
     // Verificar la conexión SMTP (solo en desarrollo)
