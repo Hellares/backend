@@ -1,0 +1,29 @@
+# ===========================================
+# 📊 Grafana Datasource - Loki
+# ===========================================
+
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    version: 1
+    editable: true
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        # Extraer requestId para poder hacer drill-down
+        - name: requestId
+          matcherRegex: "requestId[\"=:\\s]+(\\w+-\\w+-\\w+-\\w+-\\w+)"
+          url: ""
+        # Extraer userId para poder hacer drill-down
+        - name: userId
+          matcherRegex: "userId[\"=:\\s]+(\\w+-\\w+-\\w+-\\w+-\\w+)"
+          url: ""
+        # Extraer tenantId para poder hacer drill-down
+        - name: tenantId
+          matcherRegex: "tenantId[\"=:\\s]+(\\w+-\\w+-\\w+-\\w+-\\w+)"
+          url: ""

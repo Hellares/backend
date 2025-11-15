@@ -1,0 +1,151 @@
+# ===========================================
+# 🐳 DOCKER COMPOSE - SAAS BACKEND
+# Stack completo con observabilidad
+# ===========================================
+
+version: '3.8'
+
+services:
+  # ========================================
+  # 🚀 Backend NestJS
+  # ========================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: saas-backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    volumes:
+      # Montar logs para que Promtail pueda leerlos
+      - ./logs:/app/logs
+      - log-data:/var/log/app
+    networks:
+      - elastika-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`api.tudominio.com`)"
+      - "traefik.http.services.backend.loadbalancer.server.port=5000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ========================================
+  # 📊 Loki - Agregador de logs
+  # ========================================
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: saas-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yaml
+      - loki-data:/loki
+    networks:
+      - elastika-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ========================================
+  # 📤 Promtail - Recolector de logs
+  # ========================================
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: saas-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml
+      - ./logs:/var/log/app:ro
+      - log-data:/var/log/app:ro
+    environment:
+      - ENVIRONMENT=${NODE_ENV:-production}
+    networks:
+      - elastika-network
+    depends_on:
+      - loki
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ========================================
+  # 📈 Grafana - Visualización
+  # ========================================
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: saas-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_LOG_LEVEL=info
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - elastika-network
+    depends_on:
+      - loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.tudominio.com`)"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ========================================
+# 🌐 Networks
+# ========================================
+networks:
+  elastika-network:
+    external: true
+    name: elastika-network
+
+# ========================================
+# 💾 Volumes
+# ========================================
+volumes:
+  loki-data:
+    name: saas-loki-data
+  grafana-data:
+    name: saas-grafana-data
+  log-data:
+    name: saas-log-data

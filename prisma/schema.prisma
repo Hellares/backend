@@ -1,0 +1,1207 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Persona {
+  id                String             @id @default(cuid())
+  nombres           String
+  apellidos         String
+  dni               String?
+  telefono          String?
+  email             String?
+  fechaNacimiento   DateTime?
+  genero            Genero?
+  observaciones     String?
+  isActive          Boolean            @default(true)
+  deletedAt         DateTime?
+  esCliente         Boolean            @default(false)
+  esProveedor       Boolean            @default(false)
+  esUsuario         Boolean            @default(false)
+  creadoEn          DateTime           @default(now())
+  actualizadoEn     DateTime           @updatedAt
+  direcciones       DireccionPersona[]
+  empresasAsociadas EmpresaPersona[]
+  usuario           Usuario?
+
+  @@index([isActive])
+  @@index([dni])
+  @@index([esCliente])
+  @@index([esProveedor])
+  @@index([esUsuario])
+  @@index([deletedAt])
+}
+
+model Empresa {
+  id                       String                        @id @default(cuid())
+  nombre                   String
+  ruc                      String?                       @unique
+  subdominio               String?                       @unique
+  logo                     String?
+  isActive                 Boolean                       @default(true)
+  deletedAt                DateTime?
+  descripcion              String?
+  web                      String?
+  telefono                 String?
+  email                    String?
+  planSuscripcionId        String?
+  fechaInicioSuscripcion   DateTime?
+  fechaVencimiento         DateTime?
+  estadoSuscripcion        EstadoSuscripcion             @default(ACTIVA)
+  usuariosActuales         Int                           @default(0)
+  creadoEn                 DateTime                      @default(now())
+  actualizadoEn            DateTime                      @updatedAt
+  categorias               Categoria[]
+  componentes              Componente[]
+  comprobantes             ComprobanteElectronico[]
+  configuracionCampos      ConfiguracionCamposServicio[]
+  configuracionCodigos     ConfiguracionCodigos?
+  configuracionFacturacion ConfiguracionFacturacion?
+  planSuscripcion          PlanSuscripcion?              @relation(fields: [planSuscripcionId], references: [id])
+  personasAsociadas        EmpresaPersona[]
+  usuarios                 EmpresaUsuarioRol[]
+  marcas                   Marca[]
+  metodosPago              MetodoPago[]
+  modelosEquipos           ModeloEquipo[]
+  ordenesServicio          OrdenServicio[]
+  personalizaciones        PersonalizacionEmpresa[]
+  plantillasComprobantes   PlantillaComprobante[]
+  productos                Producto[]
+  sedes                    Sede[]
+  servicios                Servicio[]
+  tiposComponentes         TipoComponente[]
+  transaccionesRecibidas   TransaccionPago[]
+
+  @@index([subdominio])
+  @@index([isActive])
+  @@index([ruc])
+  @@index([planSuscripcionId])
+  @@index([fechaVencimiento])
+  @@index([estadoSuscripcion])
+  @@index([deletedAt])
+}
+
+model Usuario {
+  id                      String              @id @default(cuid())
+  personaId               String              @unique
+  email                   String              @unique
+  telefono                String?             @unique
+  passwordHash            String?
+  salt                    String?
+  isActive                Boolean             @default(true)
+  deletedAt               DateTime?
+  lastLoginAt             DateTime?
+  resetToken              String?             @unique
+  resetTokenExpiracion    DateTime?
+  emailVerificado         Boolean             @default(false)
+  telefonoVerificado      Boolean             @default(false)
+  rolGlobal               Rol?
+  creadoEn                DateTime            @default(now())
+  actualizadoEn           DateTime            @updatedAt
+  authProviders           AuthProvider[]
+  empresas                EmpresaUsuarioRol[]
+  metodosPagoConfigurados MetodoPago[]        @relation("MetodoPagoUsuario")
+  ordenesServicio         OrdenServicio[]
+  registrosComoCliente    RegistroCliente[]
+  transacciones           TransaccionPago[]
+  persona                 Persona             @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  sedes                   UsuarioSedeRol[]
+
+  @@index([email])
+  @@index([telefono])
+  @@index([personaId])
+  @@index([isActive])
+  @@index([rolGlobal])
+  @@index([emailVerificado])
+  @@index([telefonoVerificado])
+  @@index([resetToken])
+  @@index([deletedAt])
+}
+
+model AuthProvider {
+  id         String           @id @default(cuid())
+  userId     String
+  provider   AuthProviderType
+  providerId String
+  email      String
+  isActive   Boolean          @default(true)
+  createdAt  DateTime         @default(now())
+  usuario    Usuario          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerId])
+  @@index([userId])
+  @@index([email])
+  @@index([provider])
+}
+
+model ConfiguracionCodigos {
+  id                  String   @id @default(cuid())
+  empresaId           String   @unique
+  productoCodigo      String   @default("PROD")
+  productoSeparador   String   @default("-")
+  productoLongitud    Int      @default(6)
+  productoIncluirSede Boolean  @default(false)
+  servicioCodigo      String   @default("SERV")
+  servicioSeparador   String   @default("-")
+  servicioLongitud    Int      @default(6)
+  servicioIncluirSede Boolean  @default(false)
+  facturaCodigo       String   @default("FAC")
+  boletaCodigo        String   @default("BOL")
+  notaCreditoCodigo   String   @default("NCR")
+  notaDebitoCodigo    String   @default("NDB")
+  documentoSeparador  String   @default("-")
+  documentoLongitud   Int      @default(8)
+  ultimoProducto      Int      @default(0)
+  ultimoServicio      Int      @default(0)
+  ultimoFactura       Int      @default(0)
+  ultimaBoleta        Int      @default(0)
+  ultimaNotaCredito   Int      @default(0)
+  ultimaNotaDebito    Int      @default(0)
+  creadoEn            DateTime @default(now())
+  actualizadoEn       DateTime @updatedAt
+  empresa             Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+}
+
+model EmpresaPersona {
+  id              String                   @id @default(cuid())
+  personaId       String
+  empresaId       String
+  rol             RolPersona               @default(CLIENTE)
+  isActive        Boolean                  @default(true)
+  deletedAt       DateTime?
+  creadoEn        DateTime                 @default(now())
+  actualizadoEn   DateTime                 @updatedAt
+  comprobantes    ComprobanteElectronico[] @relation("ComoCliente")
+  empresa         Empresa                  @relation(fields: [empresaId], references: [id])
+  persona         Persona                  @relation(fields: [personaId], references: [id])
+  ordenesServicio OrdenServicio[]          @relation("OrdenServicioCliente")
+
+  @@unique([personaId, empresaId])
+  @@index([empresaId])
+  @@index([rol])
+  @@index([empresaId, rol])
+  @@index([deletedAt])
+}
+
+model EmpresaUsuarioRol {
+  id                 String                   @id @default(cuid())
+  usuarioId          String
+  empresaId          String
+  rol                Rol
+  isActive           Boolean                  @default(true)
+  deletedAt          DateTime?
+  estado             EstadoCliente            @default(ACTIVO)
+  motivoInactivacion MotivoInactivacion?
+  notasMotivo        String?
+  registradoPor      String?
+  fechaAprobacion    DateTime?
+  aprobadoPor        String?
+  creadoPor          String?
+  modificadoPor      String?
+  creadoEn           DateTime                 @default(now())
+  actualizadoEn      DateTime                 @updatedAt
+  empresa            Empresa                  @relation(fields: [empresaId], references: [id])
+  usuario            Usuario                  @relation(fields: [usuarioId], references: [id])
+  historialEstados   HistorialEstadoCliente[]
+
+  @@unique([usuarioId, empresaId])
+  @@index([empresaId])
+  @@index([rol])
+  @@index([estado])
+  @@index([empresaId, rol])
+  @@index([empresaId, estado])
+  @@index([deletedAt])
+}
+
+model UsuarioSedeRol {
+  id            String    @id @default(cuid())
+  usuarioId     String
+  sedeId        String
+  rol           Rol
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  creadoPor     String?
+  modificadoPor String?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+  sede          Sede      @relation(fields: [sedeId], references: [id])
+  usuario       Usuario   @relation(fields: [usuarioId], references: [id])
+
+  @@unique([usuarioId, sedeId])
+  @@index([sedeId])
+  @@index([rol])
+  @@index([deletedAt])
+}
+
+model Categoria {
+  id            String     @id @default(cuid())
+  empresaId     String
+  codigo        String?
+  nombre        String
+  descripcion   String?
+  padreId       String?
+  orden         Int?
+  isActive      Boolean    @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime   @default(now())
+  actualizadoEn DateTime   @updatedAt
+  empresa       Empresa    @relation(fields: [empresaId], references: [id])
+  productos     Producto[]
+  servicios     Servicio[]
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([padreId])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model Marca {
+  id            String     @id @default(cuid())
+  empresaId     String
+  codigo        String?
+  nombre        String
+  descripcion   String?
+  logo          String?
+  sitioWeb      String?
+  isActive      Boolean    @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime   @default(now())
+  actualizadoEn DateTime   @updatedAt
+  empresa       Empresa    @relation(fields: [empresaId], references: [id])
+  productos     Producto[]
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model Producto {
+  id                  String                   @id @default(cuid())
+  empresaId           String
+  sedeId              String?
+  categoriaId         String?
+  marcaId             String?
+  codigoEmpresa       String                   @unique
+  codigoSistema       String                   @unique
+  sku                 String?
+  codigoBarras        String?
+  nombre              String
+  descripcion         String?
+  detalles            Json?
+  precio              Decimal                  @db.Decimal(10, 2)
+  precioCosto         Decimal?                 @db.Decimal(10, 2)
+  stock               Int                      @default(0)
+  stockMinimo         Int?
+  peso                Decimal?                 @db.Decimal(10, 3)
+  dimensiones         Json?
+  imagenes            Json?
+  videoUrl            String?
+  impuestoPorcentaje  Decimal?                 @db.Decimal(5, 2)
+  descuentoMaximo     Decimal?                 @db.Decimal(5, 2)
+  isActive            Boolean                  @default(true)
+  deletedAt           DateTime?
+  creadoEn            DateTime                 @default(now())
+  actualizadoEn       DateTime                 @updatedAt
+  detallesComprobante DetalleComprobante[]     @relation("DetalleProducto")
+  categoria           Categoria?               @relation(fields: [categoriaId], references: [id])
+  empresa             Empresa                  @relation(fields: [empresaId], references: [id])
+  marca               Marca?                   @relation(fields: [marcaId], references: [id])
+  sede                Sede?                    @relation(fields: [sedeId], references: [id])
+  comprobantes        ComprobanteElectronico[] @relation("ProductoComprobante")
+
+  @@unique([empresaId, codigoEmpresa])
+  @@unique([empresaId, sku])
+  @@index([empresaId])
+  @@index([empresaId, codigoEmpresa])
+  @@index([categoriaId])
+  @@index([marcaId])
+  @@index([sedeId])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@index([stock])
+}
+
+model Servicio {
+  id                    String                   @id @default(cuid())
+  empresaId             String
+  sedeId                String?
+  categoriaId           String?
+  codigoEmpresa         String                   @unique
+  codigoSistema         String                   @unique
+  nombre                String
+  descripcion           String?
+  detalles              Json?
+  precio                Decimal?                 @db.Decimal(10, 2)
+  precioPorHora         Decimal?                 @db.Decimal(10, 2)
+  duracionMinutos       Int?
+  duracionHoras         Decimal?                 @db.Decimal(5, 2)
+  requiereReserva       Boolean                  @default(false)
+  requiereDeposito      Boolean                  @default(false)
+  depositoPorcentaje    Decimal?                 @db.Decimal(5, 2)
+  antigenciaMinimaHoras Int?
+  imagenes              Json?
+  videoUrl              String?
+  impuestoPorcentaje    Decimal?                 @db.Decimal(5, 2)
+  comisionTecnico       Decimal?                 @db.Decimal(5, 2)
+  isActive              Boolean                  @default(true)
+  deletedAt             DateTime?
+  creadoEn              DateTime                 @default(now())
+  actualizadoEn         DateTime                 @updatedAt
+  detallesComprobante   DetalleComprobante[]     @relation("DetalleServicio")
+  categoria             Categoria?               @relation(fields: [categoriaId], references: [id])
+  empresa               Empresa                  @relation(fields: [empresaId], references: [id])
+  sede                  Sede?                    @relation(fields: [sedeId], references: [id])
+  comprobantes          ComprobanteElectronico[] @relation("ServicioComprobante")
+
+  @@unique([empresaId, codigoEmpresa])
+  @@index([empresaId])
+  @@index([empresaId, codigoEmpresa])
+  @@index([categoriaId])
+  @@index([sedeId])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model ConfiguracionCamposServicio {
+  id            String            @id @default(cuid())
+  empresaId     String
+  nombre        String
+  tipoCampo     TipoCampoServicio
+  categoria     CategoriaCampo?
+  descripcion   String?
+  placeholder   String?
+  esRequerido   Boolean           @default(false)
+  defaultValue  String?
+  opciones      Json?
+  permiteOtro   Boolean           @default(false)
+  isActive      Boolean           @default(true)
+  orden         Int?
+  creadoEn      DateTime          @default(now())
+  actualizadoEn DateTime          @updatedAt
+  empresa       Empresa           @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([categoria])
+  @@index([isActive])
+}
+
+model TipoComponente {
+  id                   String              @id @default(cuid())
+  empresaId            String?
+  nombre               String
+  categoria            CategoriaComponente
+  descripcion          String?
+  datosTecnicos        Json?
+  camposPersonalizados Json?
+  isActive             Boolean             @default(true)
+  esGlobal             Boolean             @default(false)
+  creadoEn             DateTime            @default(now())
+  actualizadoEn        DateTime            @updatedAt
+  componentes          Componente[]
+  modelosEquipos       ModeloEquipo[]
+  empresa              Empresa?            @relation(fields: [empresaId], references: [id], onDelete: Restrict)
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([categoria])
+  @@index([isActive])
+}
+
+model ModeloEquipo {
+  id               String          @id @default(cuid())
+  empresaId        String?
+  tipoComponenteId String
+  marca            String
+  modelo           String
+  especificaciones Json?
+  isActive         Boolean         @default(true)
+  esGlobal         Boolean         @default(false)
+  creadoEn         DateTime        @default(now())
+  actualizadoEn    DateTime        @updatedAt
+  empresa          Empresa?        @relation(fields: [empresaId], references: [id], onDelete: Restrict)
+  tipoComponente   TipoComponente  @relation(fields: [tipoComponenteId], references: [id])
+  ordenesServicio  OrdenServicio[]
+
+  @@unique([empresaId, marca, modelo])
+  @@index([empresaId])
+  @@index([tipoComponenteId])
+  @@index([marca])
+  @@index([isActive])
+}
+
+model Componente {
+  id               String               @id @default(cuid())
+  empresaId        String
+  tipoComponenteId String
+  codigo           String               @unique
+  marca            String?
+  modelo           String?
+  numeroSerie      String?              @unique
+  especificaciones Json?
+  estado           EstadoComponente     @default(INGRESADO)
+  ubicacion        String?
+  costoCompra      Decimal?             @db.Decimal(10, 2)
+  costoReparacion  Decimal?             @db.Decimal(10, 2)
+  isActive         Boolean              @default(true)
+  deletedAt        DateTime?
+  creadoEn         DateTime             @default(now())
+  actualizadoEn    DateTime             @updatedAt
+  empresa          Empresa              @relation(fields: [empresaId], references: [id])
+  tipoComponente   TipoComponente       @relation(fields: [tipoComponenteId], references: [id])
+  servicios        ServicioComponente[]
+
+  @@unique([empresaId, codigo])
+  @@unique([empresaId, numeroSerie])
+  @@index([empresaId])
+  @@index([tipoComponenteId])
+  @@index([estado])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model OrdenServicio {
+  id                  String                  @id @default(cuid())
+  empresaId           String
+  clienteId           String
+  tecnicoId           String?
+  sedeId              String?
+  codigo              String                  @unique
+  tipoServicio        TipoServicio
+  prioridad           PrioridadServicio       @default(NORMAL)
+  tipoEquipo          String?
+  marcaEquipo         String?
+  numeroSerie         String?
+  modeloEquipoId      String?
+  diagnostico         Json?
+  descripcionProblema String?
+  sintomas            Json?
+  presupuesto         Decimal?                @db.Decimal(10, 2)
+  tiempoEstimado      Int?
+  fechaEntrega        DateTime?
+  estado              EstadoOrdenServicio     @default(RECIBIDO)
+  estadoDiagnostico   EstadoDiagnostico       @default(PENDIENTE)
+  notas               String?
+  accesorios          Json?
+  condicionEquipo     String?
+  comprobanteId       String?
+  creadoEn            DateTime                @default(now())
+  actualizadoEn       DateTime                @updatedAt
+  cliente             EmpresaPersona          @relation("OrdenServicioCliente", fields: [clienteId], references: [id])
+  comprobante         ComprobanteElectronico? @relation(fields: [comprobanteId], references: [id])
+  empresa             Empresa                 @relation(fields: [empresaId], references: [id])
+  modeloEquipo        ModeloEquipo?           @relation(fields: [modeloEquipoId], references: [id])
+  tecnico             Usuario?                @relation(fields: [tecnicoId], references: [id])
+  componentes         ServicioComponente[]
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId])
+  @@index([clienteId])
+  @@index([tecnicoId])
+  @@index([estado])
+  @@index([estadoDiagnostico])
+  @@index([tipoServicio])
+  @@index([fechaEntrega])
+}
+
+model ServicioComponente {
+  id                String                   @id @default(cuid())
+  ordenServicioId   String
+  componenteId      String
+  tipoAccion        TipoAccionComponente
+  estadoComponente  EstadoComponente         @default(INGRESADO)
+  descripcionAccion String?
+  detallesAccion    Json?
+  costoAccion       Decimal?                 @db.Decimal(10, 2)
+  tiempoAccion      Int?
+  costoRepuestos    Decimal?                 @db.Decimal(10, 2)
+  resultadoAccion   String?
+  pruebaRealizada   Boolean                  @default(false)
+  observaciones     String?
+  garantiaMeses     Int?
+  fechaGarantia     DateTime?
+  creadoEn          DateTime                 @default(now())
+  actualizadoEn     DateTime                 @updatedAt
+  componente        Componente               @relation(fields: [componenteId], references: [id])
+  ordenServicio     OrdenServicio            @relation(fields: [ordenServicioId], references: [id], onDelete: Cascade)
+  comprobantes      ComprobanteElectronico[] @relation("ComprobanteComponente")
+
+  @@index([ordenServicioId])
+  @@index([componenteId])
+  @@index([tipoAccion])
+  @@index([estadoComponente])
+}
+
+model DireccionPersona {
+  id            String        @id @default(cuid())
+  personaId     String
+  tipo          TipoDireccion
+  direccion     String
+  referencia    String?
+  distrito      String?
+  provincia     String?
+  departamento  String?
+  pais          String?       @default("PERU")
+  isActive      Boolean       @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime      @default(now())
+  actualizadoEn DateTime      @updatedAt
+  persona       Persona       @relation(fields: [personaId], references: [id])
+
+  @@index([personaId])
+  @@index([deletedAt])
+}
+
+model DireccionSede {
+  id            String    @id @default(cuid())
+  sedeId        String
+  direccion     String
+  referencia    String?
+  distrito      String?
+  provincia     String?
+  departamento  String?
+  pais          String?   @default("PERU")
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+  sede          Sede      @relation(fields: [sedeId], references: [id])
+
+  @@index([sedeId])
+  @@index([deletedAt])
+}
+
+model HistorialEstadoCliente {
+  id                  String              @id @default(cuid())
+  empresaUsuarioRolId String
+  estadoAnterior      EstadoCliente?
+  estadoNuevo         EstadoCliente
+  motivo              MotivoInactivacion?
+  notas               String?
+  modificadoPor       String?
+  fechaCambio         DateTime            @default(now())
+  empresaUsuarioRol   EmpresaUsuarioRol   @relation(fields: [empresaUsuarioRolId], references: [id])
+
+  @@index([empresaUsuarioRolId])
+  @@index([estadoNuevo])
+  @@index([motivo])
+  @@index([fechaCambio])
+}
+
+model RegistroCliente {
+  id            String         @id @default(cuid())
+  usuarioId     String
+  empresaId     String
+  tipoRegistro  TipoRegistro
+  canalRegistro CanalRegistro  @default(PRESENCIAL)
+  estado        EstadoRegistro @default(AUTO_APROBADO)
+  registradoPor String?
+  datosExtra    Json?
+  notas         String?
+  creadoEn      DateTime       @default(now())
+  actualizadoEn DateTime       @updatedAt
+  usuario       Usuario        @relation(fields: [usuarioId], references: [id])
+
+  @@unique([usuarioId, empresaId])
+  @@index([empresaId])
+  @@index([estado])
+  @@index([tipoRegistro])
+  @@index([canalRegistro])
+  @@index([creadoEn])
+}
+
+model PlanSuscripcion {
+  id                     String             @id @default(cuid())
+  nombre                 String             @unique
+  descripcion            String
+  precio                 Decimal            @db.Decimal(10, 2)
+  periodo                PeriodoSuscripcion
+  limiteProductos        Int?
+  limiteServicios        Int?
+  limiteUsuarios         Int?
+  limiteSedes            Int?
+  tienePersonalizacion   Boolean            @default(false)
+  tieneDominioPropio     Boolean            @default(false)
+  tieneApi               Boolean            @default(false)
+  tieneReportesAvanzados Boolean            @default(false)
+  caracteristicas        Json
+  isActive               Boolean            @default(true)
+  creadoEn               DateTime           @default(now())
+  actualizadoEn          DateTime           @updatedAt
+  empresas               Empresa[]
+
+  @@index([isActive])
+  @@index([precio])
+}
+
+model PersonalizacionEmpresa {
+  id                   String   @id @default(cuid())
+  empresaId            String
+  webConfig            Json?
+  bannerPrincipalUrl   String?
+  bannerPrincipalTexto String?
+  bannerColor          String?  @default("#000000")
+  colorPrimario        String?  @default("#007bff")
+  colorSecundario      String?  @default("#6c757d")
+  colorAcento          String?  @default("#28a745")
+  mostrarPrecios       Boolean  @default(true)
+  productosDestacados  String[]
+  serviciosDestacados  String[]
+  mostrarContacto      Boolean  @default(true)
+  mostrarRedesSociales Boolean  @default(false)
+  permitirRegistro     Boolean  @default(true)
+  appConfig            Json?
+  appSplashScreenUrl   String?
+  appColorTema         String?  @default("#007bff")
+  dominioPersonalizado String?  @unique
+  creadoEn             DateTime @default(now())
+  actualizadoEn        DateTime @updatedAt
+  empresa              Empresa  @relation(fields: [empresaId], references: [id])
+
+  @@index([empresaId])
+  @@index([dominioPersonalizado])
+}
+
+model MetodoPago {
+  id                      String            @id @default(cuid())
+  empresaId               String
+  tipo                    TipoMetodoPago
+  nombre                  String
+  esActivo                Boolean           @default(true)
+  apiKey                  String?
+  secretKey               String?
+  webhookSecret           String?
+  merchantId              String?
+  comision                Decimal?          @db.Decimal(5, 2)
+  comisionFija            Decimal?          @db.Decimal(10, 2)
+  limiteMinimo            Decimal?          @db.Decimal(10, 2)
+  limiteMaximo            Decimal?          @db.Decimal(10, 2)
+  modoPrueba              Boolean           @default(false)
+  requiere3DS             Boolean           @default(false)
+  tiempoExpiracionMinutos Int               @default(30)
+  configExtra             Json?
+  configuradoPorId        String?
+  creadoEn                DateTime          @default(now())
+  actualizadoEn           DateTime          @updatedAt
+  configuradoPor          Usuario?          @relation("MetodoPagoUsuario", fields: [configuradoPorId], references: [id])
+  empresa                 Empresa           @relation(fields: [empresaId], references: [id])
+  transacciones           TransaccionPago[]
+
+  @@unique([empresaId, tipo])
+  @@index([empresaId])
+  @@index([tipo])
+  @@index([esActivo])
+}
+
+model TransaccionPago {
+  id               String            @id @default(cuid())
+  metodoPagoId     String?
+  usuarioId        String?
+  empresaId        String?
+  monto            Decimal           @db.Decimal(10, 2)
+  moneda           String            @default("PEN")
+  tipoCambio       Decimal?          @db.Decimal(10, 6)
+  montoOriginal    Decimal?          @db.Decimal(10, 2)
+  estado           EstadoPago
+  idExterno        String?
+  descripcion      String?
+  datosCliente     Json?
+  errorMensaje     String?
+  fechaAprobacion  DateTime?
+  fechaReembolso   DateTime?
+  expiraEn         DateTime?
+  metadata         Json?
+  origen           String?
+  creadoEn         DateTime          @default(now())
+  actualizadoEn    DateTime          @updatedAt
+  pagosComprobante PagoComprobante[] @relation("PagoComprobanteTransaccion")
+  empresa          Empresa?          @relation(fields: [empresaId], references: [id])
+  metodoPago       MetodoPago?       @relation(fields: [metodoPagoId], references: [id])
+  usuario          Usuario?          @relation(fields: [usuarioId], references: [id])
+
+  @@index([metodoPagoId])
+  @@index([usuarioId])
+  @@index([empresaId])
+  @@index([estado])
+  @@index([moneda])
+  @@index([idExterno])
+  @@index([creadoEn])
+  @@index([expiraEn])
+  @@index([empresaId, estado, creadoEn])
+}
+
+model ConfiguracionFacturacion {
+  id                 String   @id @default(cuid())
+  empresaId          String   @unique
+  ruc                String?
+  razonSocial        String?
+  nombreComercial    String?
+  direccionFiscal    String?
+  telefono           String?
+  emailFacturacion   String?
+  serieFactura       String   @default("F001")
+  serieBoleta        String   @default("B001")
+  serieNotaCredito   String   @default("NC01")
+  serieNotaDebito    String   @default("ND01")
+  certificadoDigital String?
+  claveCertificado   String?
+  usuarioSol         String?
+  claveSol           String?
+  entorno            String   @default("BETA")
+  logoEmpresa        String?
+  textoPiePagina     String   @default("Gracias por su compra")
+  incluirIGV         Boolean  @default(true)
+  incluirDetalles    Boolean  @default(true)
+  formatoPapel       String   @default("A4")
+  porcentajeIGV      Decimal  @default(18.00) @db.Decimal(5, 2)
+  creadoEn           DateTime @default(now())
+  actualizadoEn      DateTime @updatedAt
+  empresa            Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+}
+
+model ComprobanteElectronico {
+  id               String               @id @default(cuid())
+  empresaId        String
+  clienteId        String?
+  tipoComprobante  TipoComprobante
+  serie            String
+  correlativo      String
+  codigoGenerado   String
+  tipoDocumento    String?
+  numeroDocumento  String?
+  nombreCliente    String
+  direccionCliente String?
+  emailCliente     String?
+  fechaEmision     DateTime             @default(now())
+  fechaVencimiento DateTime?
+  moneda           String               @default("PEN")
+  tipoCambio       Decimal?             @db.Decimal(10, 6)
+  gravada          Decimal              @default(0) @db.Decimal(10, 2)
+  inafecta         Decimal              @default(0) @db.Decimal(10, 2)
+  exonerada        Decimal              @default(0) @db.Decimal(10, 2)
+  igv              Decimal              @default(0) @db.Decimal(10, 2)
+  icbper           Decimal              @default(0) @db.Decimal(10, 2)
+  total            Decimal              @default(0) @db.Decimal(10, 2)
+  totalIgv         Decimal              @default(0) @db.Decimal(10, 2)
+  cdrResponse      Json?
+  sunatStatus      EstadoSunat          @default(PENDIENTE)
+  sunatHash        String?
+  sunatXmlUrl      String?
+  sunatPdfUrl      String?
+  estado           EstadoComprobante    @default(BORRADOR)
+  anulado          Boolean              @default(false)
+  motivoAnulacion  String?
+  creadoEn         DateTime             @default(now())
+  actualizadoEn    DateTime             @updatedAt
+  cliente          EmpresaPersona?      @relation("ComoCliente", fields: [clienteId], references: [id])
+  empresa          Empresa              @relation(fields: [empresaId], references: [id])
+  detalles         DetalleComprobante[]
+  ordenesServicio  OrdenServicio[]
+  pagos            PagoComprobante[]
+  componentes      ServicioComponente[] @relation("ComprobanteComponente")
+  productos        Producto[]           @relation("ProductoComprobante")
+  servicios        Servicio[]           @relation("ServicioComprobante")
+
+  @@unique([empresaId, tipoComprobante, serie, correlativo])
+  @@unique([empresaId, codigoGenerado])
+  @@index([empresaId])
+  @@index([tipoComprobante])
+  @@index([fechaEmision])
+  @@index([estado])
+}
+
+model DetalleComprobante {
+  id             String                 @id @default(cuid())
+  comprobanteId  String
+  productoId     String?
+  servicioId     String?
+  descripcion    String
+  unidadMedida   String                 @default("NIU")
+  cantidad       Decimal                @db.Decimal(12, 2)
+  valorUnitario  Decimal                @db.Decimal(12, 2)
+  precioUnitario Decimal                @db.Decimal(12, 2)
+  tipoAfectacion String                 @default("10")
+  porcentajeIGV  Decimal                @default(18.00) @db.Decimal(5, 2)
+  igv            Decimal                @default(0) @db.Decimal(12, 2)
+  valorVenta     Decimal                @default(0) @db.Decimal(12, 2)
+  descuentoItem  Decimal?               @db.Decimal(12, 2)
+  cargoItem      Decimal?               @db.Decimal(12, 2)
+  subtotal       Decimal                @db.Decimal(12, 2)
+  total          Decimal                @db.Decimal(12, 2)
+  creadoEn       DateTime               @default(now())
+  actualizadoEn  DateTime               @updatedAt
+  comprobante    ComprobanteElectronico @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  producto       Producto?              @relation("DetalleProducto", fields: [productoId], references: [id])
+  servicio       Servicio?              @relation("DetalleServicio", fields: [servicioId], references: [id])
+
+  @@index([comprobanteId])
+  @@index([productoId])
+  @@index([servicioId])
+}
+
+model PlantillaComprobante {
+  id              String          @id @default(cuid())
+  empresaId       String
+  tipoComprobante TipoComprobante
+  nombre          String
+  descripcion     String?
+  htmlTemplate    String?
+  cssStyles       String?
+  margenSuperior  Decimal         @default(10.00) @db.Decimal(5, 2)
+  margenInferior  Decimal         @default(10.00) @db.Decimal(5, 2)
+  margenIzquierdo Decimal         @default(10.00) @db.Decimal(5, 2)
+  margenDerecho   Decimal         @default(10.00) @db.Decimal(5, 2)
+  mostrarLogo     Boolean         @default(true)
+  mostrarCodigoQR Boolean         @default(true)
+  mostrarFirma    Boolean         @default(true)
+  mostrarDetalles Boolean         @default(true)
+  mostrarTotales  Boolean         @default(true)
+  colorEncabezado String          @default("#000000")
+  colorCuerpo     String          @default("#333333")
+  colorPiePagina  String          @default("#666666")
+  isActive        Boolean         @default(true)
+  esPorDefecto    Boolean         @default(false)
+  creadoEn        DateTime        @default(now())
+  actualizadoEn   DateTime        @updatedAt
+  empresa         Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, tipoComprobante])
+  @@index([empresaId])
+  @@index([tipoComprobante])
+}
+
+model PagoComprobante {
+  id            String                 @id @default(cuid())
+  comprobanteId String
+  transaccionId String?
+  metodoPago    String
+  monto         Decimal                @db.Decimal(10, 2)
+  moneda        String                 @default("PEN")
+  fechaPago     DateTime               @default(now())
+  referencia    String?
+  estado        String                 @default("COMPLETADO")
+  creadoEn      DateTime               @default(now())
+  actualizadoEn DateTime               @updatedAt
+  comprobante   ComprobanteElectronico @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  transaccion   TransaccionPago?       @relation("PagoComprobanteTransaccion", fields: [transaccionId], references: [id])
+
+  @@index([comprobanteId])
+  @@index([transaccionId])
+  @@index([fechaPago])
+}
+
+model Sede {
+  id            String           @id @default(cuid())
+  empresaId     String
+  nombre        String
+  telefono      String?
+  email         String?
+  direccion     String?
+  isActive      Boolean          @default(true)
+  deletedAt     DateTime?
+  esPrincipal   Boolean          @default(false)
+  creadoEn      DateTime         @default(now())
+  actualizadoEn DateTime         @updatedAt
+  direcciones   DireccionSede[]
+  productos     Producto[]
+  empresa       Empresa          @relation(fields: [empresaId], references: [id])
+  servicios     Servicio[]
+  usuarios      UsuarioSedeRol[]
+
+  @@index([empresaId])
+  @@index([isActive])
+  @@index([esPrincipal])
+  @@index([deletedAt])
+}
+
+enum AuthProviderType {
+  GOOGLE
+  MICROSOFT
+  FACEBOOK
+  APPLE
+  GITHUB
+  LINKEDIN
+  TWITTER
+  DISCORD
+  SLACK
+  SALESFORCE
+  AMAZON
+  YAHOO
+  INSTAGRAM
+  SPOTIFY
+}
+
+enum Rol {
+  SUPER_ADMIN
+  EMPRESA_ADMIN
+  SEDE_ADMIN
+  CAJERO
+  VENDEDOR
+  TECNICO
+  CONTADOR
+  LECTURA
+  OPERADOR
+  CLIENTE
+  CLIENTE_EMPRESA
+}
+
+enum EstadoCliente {
+  ACTIVO
+  INACTIVO
+  BLOQUEADO
+  SUSPENDIDO
+  ELIMINADO
+}
+
+enum MotivoInactivacion {
+  INCUMPLIMIENTO_PAGO
+  QUEJAS_RECURRENTES
+  FRAUDE
+  VIOLACION_TERMINOS
+  INACTIVIDAD_PROLONGADA
+  MAL_COMPORTAMIENTO
+  PROBLEMAS_DOCUMENTACION
+  CERRAR_NEGOCIO
+  TRASLADO
+  OTRO
+}
+
+enum Genero {
+  MASCULINO
+  FEMENINO
+  OTRO
+}
+
+enum TipoDireccion {
+  ENVIO
+  FISCAL
+  TRABAJO
+}
+
+enum TipoRegistro {
+  AUTO_REGISTRO
+  EMPRESA_REGISTRA
+  EMPRESA_CREA
+  ADMIN_REGISTRA
+}
+
+enum CanalRegistro {
+  WEB
+  MOVIL
+  PRESENCIAL
+  WHATSAPP
+  TELEMARKETING
+}
+
+enum EstadoRegistro {
+  PENDIENTE_APROBACION
+  AUTO_APROBADO
+  RECHAZADO
+  CANCELADO
+}
+
+enum PeriodoSuscripcion {
+  MENSUAL
+  TRIMESTRAL
+  SEMESTRAL
+  ANUAL
+  PERSONALIZADO
+}
+
+enum EstadoSuscripcion {
+  ACTIVA
+  VENCIDA
+  CANCELADA
+  EN_PROBATION
+}
+
+enum RolPersona {
+  CLIENTE
+  PROVEEDOR
+}
+
+enum EstadoPago {
+  PENDIENTE
+  PROCESANDO
+  APROBADO
+  RECHAZADO
+  REEMBOLSADO
+  REEMBOLSO_PENDIENTE
+  REEMBOLSO_COMPLETADO
+  CANCELADO
+  EXPIRADO
+  ERROR_PROCESAMIENTO
+  ESPERANDO_CONFIRMACION
+}
+
+enum TipoMetodoPago {
+  TARJETA_CREDITO
+  TARJETA_DEBITO
+  YAPE
+  PLIN
+  PAGO_EFECTIVO
+  MERCADO_PAGO
+  CULQI
+  IZIPAY
+  NIUBIZ
+  CODIGO_QR
+  OTRO
+}
+
+enum TipoComprobante {
+  FACTURA
+  BOLETA
+  NOTA_CREDITO
+  NOTA_DEBITO
+  GUIA_REMISION
+  RECIBO_HONORARIOS
+  COMPROBANTE_PERCEPCION
+  COMPROBANTE_RETENCION
+}
+
+enum EstadoComprobante {
+  BORRADOR
+  REGISTRADO
+  ACEPTADO
+  RECHAZADO
+  ANULADO
+  EXPIRADO
+}
+
+enum EstadoSunat {
+  PENDIENTE
+  ACEPTADO
+  RECHAZADO
+  ERROR_COMUNICACION
+  PROCESANDO
+}
+
+enum Moneda {
+  PEN
+  USD
+  EUR
+  GBP
+  JPY
+}
+
+enum OrigenTransaccion {
+  WEB
+  MOVIL
+  PRESENCIAL
+  WHATSAPP
+  TELEMARKETING
+  API
+  LINK_PAGO
+}
+
+enum TipoCampoServicio {
+  TEXTO
+  NUMERO
+  EMAIL
+  FECHA
+  HORA
+  TEXTO_AREA
+  OPCION_SIMPLES
+  OPCION_MULTIPLE
+  CHECKBOX
+  CHECKBOX_MULTIPLE
+  ARCHIVO
+  TELEFONO
+  URL
+}
+
+enum CategoriaCampo {
+  DIAGNOSTICO
+  CLIENTE
+  TECNICO
+  COMPONENTE
+  COSTOS
+  TIEMPOS
+  EQUIPO_CLIENTE
+}
+
+enum TipoServicio {
+  REPARACION
+  MANTENIMIENTO
+  INSTALACION
+  DIAGNOSTICO
+  ACTUALIZACION
+  LIMPIEZA
+  RECUPERACION_DATOS
+  CONFIGURACION
+  CONSULTORIA
+  FORMACION
+  SOPORTE
+}
+
+enum PrioridadServicio {
+  BAJA
+  NORMAL
+  ALTA
+  URGENTE
+  EMERGENCIA
+}
+
+enum EstadoOrdenServicio {
+  RECIBIDO
+  EN_DIAGNOSTICO
+  ESPERANDO_APROBACION
+  EN_REPARACION
+  PENDIENTE_PIEZAS
+  REPARADO
+  LISTO_ENTREGA
+  ENTREGADO
+  CANCELADO
+  FINALIZADO
+}
+
+enum EstadoDiagnostico {
+  PENDIENTE
+  EN_PROGRESO
+  COMPLETADO
+  REQUIERE_VISITA
+  REQUIERE_PIEZAS
+  EQUIPO_NO_REPARABLE
+}
+
+enum CategoriaComponente {
+  HARDWARE
+  SOFTWARE
+  PERIFERICO
+  ACCESORIOS
+  CONSUMIBLES
+}
+
+enum EstadoComponente {
+  NUEVO
+  INGRESADO
+  DISPONIBLE
+  EN_USO
+  EN_REPARACION
+  DANADO
+  OBSOLETO
+  VENDIDO
+  ELIMINADO
+}
+
+enum TipoAccionComponente {
+  DIAGNOSTICAR
+  REPARAR
+  REEMPLAZAR
+  LIMPIAR
+  ACTUALIZAR
+  INSTALAR
+  DESMONTAR
+  PROBAR
+  CALIBRAR
+}

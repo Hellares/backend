@@ -1,0 +1,98 @@
+# ===========================================
+# 📊 LOKI CONFIGURATION
+# ===========================================
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+# Configuración de schema para almacenamiento
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+# Límites y retención
+limits_config:
+  retention_period: 744h  # 31 días
+  enforce_metric_name: false
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h  # 7 días
+  ingestion_rate_mb: 10
+  ingestion_burst_size_mb: 20
+  max_query_length: 721h  # 30 días
+  max_query_parallelism: 32
+  max_streams_per_user: 0
+  max_global_streams_per_user: 10000
+
+# Configuración de chunks (fragmentos de datos)
+chunk_store_config:
+  max_look_back_period: 0s
+
+# Configuración de table manager
+table_manager:
+  retention_deletes_enabled: true
+  retention_period: 744h  # 31 días
+
+# Configuración de compactación
+compactor:
+  working_directory: /loki/compactor
+  shared_store: filesystem
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+
+# Configuración de ruler (alertas)
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: http://localhost:9093
+  ring:
+    kvstore:
+      store: inmemory
+  enable_api: true
+  enable_alertmanager_v2: true
+
+# Configuración de query range
+query_range:
+  align_queries_with_step: true
+  max_retries: 5
+  cache_results: true
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+# Frontend worker
+frontend_worker:
+  frontend_address: 127.0.0.1:9095
+  parallelism: 10
+
+# Analytics
+analytics:
+  reporting_enabled: false

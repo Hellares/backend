@@ -1,0 +1,212 @@
+# ===========================================
+# 📤 PROMTAIL CONFIGURATION
+# Envía logs desde archivos al servidor Loki
+# ===========================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: info
+
+# Ubicación del archivo de posiciones (checkpoint)
+positions:
+  filename: /tmp/positions.yaml
+
+# Cliente de Loki
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    batchwait: 1s
+    batchsize: 1048576  # 1MB
+    timeout: 10s
+
+# Configuración de scraping de logs
+scrape_configs:
+  # ========================================
+  # 📝 Logs Combinados (todos los niveles)
+  # ========================================
+  - job_name: backend-combined
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: backend
+          log_type: combined
+          app: saas-backend
+          environment: ${ENVIRONMENT:-production}
+          __path__: /var/log/app/combined-*.log
+
+    pipeline_stages:
+      # Parsear JSON
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            context: metadata.context
+            message: message
+            requestId: metadata.requestId
+            userId: metadata.userId
+            tenantId: metadata.tenantId
+            email: metadata.email
+            ip: metadata.ip
+            userAgent: metadata.userAgent
+            duration: metadata.duration
+            stack: stack
+
+      # Extraer labels (para filtrado rápido)
+      - labels:
+          level:
+          context:
+          tenantId:
+
+      # Timestamp
+      - timestamp:
+          source: timestamp
+          format: RFC3339
+
+      # Output format
+      - output:
+          source: message
+
+  # ========================================
+  # 🚨 Logs de Errores (solo errores)
+  # ========================================
+  - job_name: backend-errors
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: backend
+          log_type: error
+          app: saas-backend
+          environment: ${ENVIRONMENT:-production}
+          __path__: /var/log/app/error-*.log
+
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            context: metadata.context
+            message: message
+            requestId: metadata.requestId
+            userId: metadata.userId
+            tenantId: metadata.tenantId
+            stack: stack
+
+      - labels:
+          level:
+          context:
+          tenantId:
+
+      - timestamp:
+          source: timestamp
+          format: RFC3339
+
+      - output:
+          source: message
+
+  # ========================================
+  # 🔐 Logs de Auditoría (acciones críticas)
+  # ========================================
+  - job_name: backend-audit
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: backend
+          log_type: audit
+          app: saas-backend
+          environment: ${ENVIRONMENT:-production}
+          __path__: /var/log/app/audit-*.log
+
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            context: metadata.context
+            message: message
+            action: metadata.action
+            actorUserId: metadata.actor.userId
+            actorEmail: metadata.actor.email
+            targetType: metadata.target.type
+            targetId: metadata.target.id
+            success: metadata.success
+            requestId: metadata.requestId
+
+      - labels:
+          level:
+          context:
+          action:
+          targetType:
+
+      - timestamp:
+          source: timestamp
+          format: RFC3339
+
+      - output:
+          source: message
+
+  # ========================================
+  # 💥 Excepciones no capturadas
+  # ========================================
+  - job_name: backend-exceptions
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: backend
+          log_type: exception
+          app: saas-backend
+          environment: ${ENVIRONMENT:-production}
+          __path__: /var/log/app/exceptions-*.log
+
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            stack: stack
+
+      - labels:
+          level:
+
+      - timestamp:
+          source: timestamp
+          format: RFC3339
+
+      - output:
+          source: message
+
+  # ========================================
+  # 🚫 Promise rejections
+  # ========================================
+  - job_name: backend-rejections
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: backend
+          log_type: rejection
+          app: saas-backend
+          environment: ${ENVIRONMENT:-production}
+          __path__: /var/log/app/rejections-*.log
+
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            stack: stack
+
+      - labels:
+          level:
+
+      - timestamp:
+          source: timestamp
+          format: RFC3339
+
+      - output:
+          source: message
