@@ -3,12 +3,13 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PeriodoSuscripcion } from '@prisma/client';
 
 @Injectable()
-export class SeedPlanesService implements OnModuleInit {
+export class SeedPlanesService /* implements OnModuleInit */ {
   constructor(private readonly prisma: PrismaService) {}
 
-  async onModuleInit() {
-    await this.seedPlanes();
-  }
+  // Temporalmente deshabilitado para debug
+  // async onModuleInit() {
+  //   await this.seedPlanes();
+  // }
 
   async seedPlanes() {
     console.log('📦 Creando planes de suscripción...');
