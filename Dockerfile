@@ -18,7 +18,7 @@ COPY package*.json ./
 COPY prisma ./prisma/
 
 # Instalar TODAS las dependencias (necesarias para el build)
-RUN npm ci && \
+RUN npm install && \
     npm cache clean --force
 
 # Copiar código fuente
