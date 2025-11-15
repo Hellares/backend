@@ -1,9 +1,9 @@
 import * as winston from 'winston';
 import * as DailyRotateFile from 'winston-daily-rotate-file';
-import LokiTransport from 'winston-loki';
 
-// Workaround for CommonJS module
+// Workaround for CommonJS modules
 const DailyRotateFileTransport = DailyRotateFile as any;
+const LokiTransport = require('winston-loki');
 
 // Niveles de log personalizados
 const levels = {
