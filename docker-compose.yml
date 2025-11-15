@@ -53,12 +53,13 @@ services:
       - log-data:/var/log/app
     networks:
       - elastika-network
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/api || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+    # Healthcheck temporalmente deshabilitado para depuración
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/api || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 5
+    #   start_period: 60s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=Host(`api.syncronize.net.pe`)"
