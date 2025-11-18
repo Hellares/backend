@@ -23,10 +23,11 @@ export class EmailService implements OnModuleInit {
 
  private async initializeTransporter() {
   const host = this.configService.get<string>('EMAIL_HOST');
-  const port = this.configService.get<number>('EMAIL_PORT');
+  const port = this.configService.get<number>('EMAIL_PORT', 587);
   const user = this.configService.get<string>('EMAIL_USER');
   const pass = this.configService.get<string>('EMAIL_PASS');
-  const secure = this.configService.get<boolean>('EMAIL_SECURE', false);  // De .env, default false para 587
+  // const secure = port === 465;
+  const secure = this.configService.get<string>('EMAIL_SECURE') === 'true';
 
   if (!host || !user) {
     this.logger.warn('No email configuration found. Emails will be logged instead of sent.');
