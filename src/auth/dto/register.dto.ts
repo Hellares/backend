@@ -19,7 +19,7 @@ export class RegisterDto {
   @IsNotEmpty()
   @MinLength(8)
   @MaxLength(128)
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&_\-#^()+={}\[\]:;"'<>,.\/\\|~`])[A-Za-z\d@$!%*?&_\-#^()+={}\[\]:;"'<>,.\/\\|~`]{8,}$/, {
     message: 'La contraseña debe contener al menos 8 caracteres, una mayúscula, una minúscula, un número y un carácter especial'
   })
   password: string;

@@ -157,7 +157,7 @@ export class AuthService {
    * Login de usuario
    */
   async login(loginDto: LoginDto, request?: any) {
-    const { email, password, subdominioEmpresa } = loginDto;
+    const { email, password, subdominioEmpresa, rol: rolSeleccionado } = loginDto;
 
     // Verificar si la cuenta está bloqueada
     const lockStatus = await this.securityService.isLockedOut(email, 'login');
@@ -211,10 +211,17 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    // Determinar tenant
+    // Verificar que el email esté verificado
+    if (!usuario.emailVerificado) {
+      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', false, 'Email not verified');
+      throw new UnauthorizedException('Por favor verifica tu email antes de iniciar sesión. Revisa tu bandeja de entrada.');
+    }
+
+    // Determinar tenant y rol(es)
     let empresaId = undefined;
     let tenantRole = undefined;
     let tenantName = undefined;
+    let availableRoles = undefined;
 
     if (subdominioEmpresa) {
       const empresa = await this.prisma.empresa.findUnique({
@@ -225,17 +232,35 @@ export class AuthService {
         empresaId = empresa.id;
         tenantName = empresa.nombre;
 
-        // Buscar rol del usuario en esta empresa
-        const empresaUsuario = await this.prisma.empresaUsuarioRol.findUnique({
+        // Buscar TODOS los roles del usuario en esta empresa
+        const rolesUsuario = await this.prisma.empresaUsuarioRol.findMany({
           where: {
-            usuarioId_empresaId: {
-              usuarioId: usuario.id,
-              empresaId: empresa.id,
-            },
+            usuarioId: usuario.id,
+            empresaId: empresa.id,
+            isActive: true,
           },
         });
 
-        tenantRole = empresaUsuario?.rol || undefined;
+        if (rolesUsuario.length === 0) {
+          throw new UnauthorizedException('No tienes acceso a esta empresa');
+        }
+
+        availableRoles = rolesUsuario.map(r => r.rol);
+
+        // Determinar qué rol usar en la sesión
+        if (rolSeleccionado) {
+          // Verificar que el usuario tenga el rol solicitado
+          const tieneRol = rolesUsuario.some(r => r.rol === rolSeleccionado);
+          if (!tieneRol) {
+            throw new UnauthorizedException(
+              `No tienes el rol "${rolSeleccionado}" en esta empresa. Roles disponibles: ${availableRoles.join(', ')}`
+            );
+          }
+          tenantRole = rolSeleccionado;
+        } else {
+          // Si tiene múltiples roles y no especificó uno, usar el primero (o podrías requerir selección)
+          tenantRole = rolesUsuario[0].rol;
+        }
       }
     }
 
@@ -248,7 +273,7 @@ export class AuthService {
       data: { lastLoginAt: new Date() },
     });
 
-    const tokens = await this.generateTokens(usuario, empresaId, tenantRole, tenantName, clientInfo);
+    const tokens = await this.generateTokens(usuario, empresaId, tenantRole, tenantName, clientInfo, availableRoles);
 
     // Log de auditoría para login exitoso
     this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
@@ -272,7 +297,8 @@ export class AuthService {
       tenant: empresaId ? {
         id: empresaId,
         name: tenantName,
-        role: tenantRole,
+        role: tenantRole, // Rol activo en esta sesión
+        availableRoles: availableRoles, // Todos los roles disponibles del usuario en esta empresa
       } : undefined,
       ...tokens,
     };
@@ -316,6 +342,7 @@ export class AuthService {
     tenantRole?: any,
     tenantName?: string,
     clientInfo?: { ip: string; userAgent: string; device: string; platform: string },
+    tenantRoles?: any[],
   ) {
     // Crear sesión administrada
     const sessionId = await this.sessionService.createSession({
@@ -333,7 +360,8 @@ export class AuthService {
       nombres: usuario.persona.nombres,
       apellidos: usuario.persona.apellidos,
       tenantId,
-      tenantRole,
+      tenantRole,      // Rol principal/seleccionado
+      tenantRoles,     // Todos los roles disponibles en esta empresa
       tenantName,
       sessionId,
       loginMethod: 'local',

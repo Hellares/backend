@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../../redis/redis.service';
+import { AppLoggerService } from '../../common/logger/logger.service';
 
 export interface FailedAttempt {
   attempts: number;
@@ -11,12 +12,16 @@ export interface FailedAttempt {
 
 @Injectable()
 export class AuthSecurityService {
-  private readonly logger = new Logger(AuthSecurityService.name);
+  private readonly logger: AppLoggerService;
 
   constructor(
     private readonly redisService: RedisService,
     private readonly configService: ConfigService,
-  ) {}
+    loggerService: AppLoggerService,
+  ) {
+    this.logger = loggerService;
+    this.logger.setContext(AuthSecurityService.name);
+  }
 
   async recordFailedAttempt(identifier: string, type: 'login' | 'password_reset' = 'login'): Promise<FailedAttempt> {
     const key = `failed_attempts:${type}:${identifier}`;
@@ -41,7 +46,13 @@ export class AuthSecurityService {
       await this.redisService.setex(lockKey, lockoutDuration, lockUntil!.toISOString());
     }
 
-    this.logger.warn(`Failed ${type} attempt for ${identifier}: ${attempts}/${maxAttempts}`);
+    this.logger.warn(`Failed ${type} attempt`, {
+      identifier,
+      attempts,
+      maxAttempts,
+      isLocked,
+      type,
+    });
 
     return {
       attempts,

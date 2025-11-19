@@ -210,7 +210,8 @@ model EmpresaUsuarioRol {
   usuario            Usuario                  @relation(fields: [usuarioId], references: [id])
   historialEstados   HistorialEstadoCliente[]
 
-  @@unique([usuarioId, empresaId])
+  @@unique([usuarioId, empresaId, rol])
+  @@index([usuarioId, empresaId])
   @@index([empresaId])
   @@index([rol])
   @@index([estado])

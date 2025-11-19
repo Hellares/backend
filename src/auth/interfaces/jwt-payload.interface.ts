@@ -8,9 +8,10 @@ export interface JwtPayload {
   apellidos: string;  // Apellidos del usuario
 
   // Multi-tenant
-  tenantId?: string;  // Empresa ID actual
-  tenantRole?: Rol;   // Rol en la empresa actual
-  tenantName?: string; // Nombre de la empresa
+  tenantId?: string;     // Empresa ID actual
+  tenantRole?: Rol;      // Rol principal/seleccionado en esta sesión
+  tenantRoles?: Rol[];   // Todos los roles del usuario en esta empresa
+  tenantName?: string;   // Nombre de la empresa
 
   // Información de sesión
   sessionId?: string;

@@ -3,6 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EstadoSuscripcion, Rol } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
+import { AppLoggerService } from '../common/logger/logger.service';
+import { AuditLoggerService, AuditAction } from '../common/logger/audit-logger.service';
 
 export interface CreateEmpresaData {
   nombre: string;
@@ -26,6 +28,7 @@ export interface EmpresaResponse {
   web?: string;
   descripcion?: string;
   isActive: boolean;
+  roles: Rol[]; // Roles del usuario en esta empresa (puede tener múltiples)
   planSuscripcion?: {
     id: string;
     nombre: string;
@@ -43,13 +46,24 @@ export interface EmpresaResponse {
 
 @Injectable()
 export class EmpresaService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger: AppLoggerService;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    loggerService: AppLoggerService,
+    private readonly auditLogger: AuditLoggerService,
+  ) {
+    this.logger = loggerService;
+    this.logger.setContext(EmpresaService.name);
+  }
 
   /**
    * Crear nueva empresa con suscripción básica y asignar rol de admin al usuario
    */
   async createEmpresa(data: CreateEmpresaData, userId: string): Promise<EmpresaResponse> {
     const { nombre, ruc, subdominio } = data;
+
+    this.logger.info('Creating new empresa', { userId, nombre, ruc, subdominio });
 
     // Verificar si ya existe una empresa con el mismo RUC
     if (ruc) {
@@ -60,6 +74,7 @@ export class EmpresaService {
         }
       });
       if (existingRuc) {
+        this.logger.warn('Empresa creation failed: RUC already exists', { ruc, userId });
         throw new ConflictException('Ya existe una empresa con este RUC');
       }
     }
@@ -73,6 +88,7 @@ export class EmpresaService {
         }
       });
       if (existingSubdomain) {
+        this.logger.warn('Empresa creation failed: Subdomain already in use', { subdominio, userId });
         throw new ConflictException('Este subdominio ya está en uso');
       }
     }
@@ -198,11 +214,34 @@ export class EmpresaService {
       },
     });
 
+    this.logger.success('Empresa created successfully', {
+      empresaId: empresa.id,
+      nombre: empresa.nombre,
+      userId,
+    });
+
+    // Auditoría de creación de empresa
+    this.auditLogger.log({
+      action: AuditAction.TENANT_CREATED,
+      actor: { userId },
+      target: {
+        type: 'Empresa',
+        id: empresa.id,
+        name: empresa.nombre,
+      },
+      metadata: {
+        ruc,
+        subdominio: empresa.subdominio,
+        planSuscripcionId: empresa.planSuscripcionId,
+      },
+      success: true,
+    });
+
     return this.formatEmpresaResponse(empresa);
   }
 
   /**
-   * Obtener empresas del usuario
+   * Obtener empresas del usuario con todos sus roles
    */
   async getEmpresasByUsuario(userId: string): Promise<EmpresaResponse[]> {
     const empresasUsuario = await this.prisma.empresaUsuarioRol.findMany({
@@ -225,7 +264,24 @@ export class EmpresaService {
       },
     });
 
-    return empresasUsuario.map(eu => this.formatEmpresaResponse(eu.empresa));
+    // Agrupar roles por empresa
+    const empresasMap = new Map<string, { empresa: any; roles: Rol[] }>();
+
+    for (const eu of empresasUsuario) {
+      if (!empresasMap.has(eu.empresaId)) {
+        empresasMap.set(eu.empresaId, {
+          empresa: eu.empresa,
+          roles: [eu.rol],
+        });
+      } else {
+        empresasMap.get(eu.empresaId)!.roles.push(eu.rol);
+      }
+    }
+
+    // Convertir el mapa a array de respuestas
+    return Array.from(empresasMap.values()).map(({ empresa, roles }) =>
+      this.formatEmpresaResponse(empresa, roles)
+    );
   }
 
   /**
@@ -344,7 +400,7 @@ export class EmpresaService {
   /**
    * Formatear respuesta de empresa
    */
-  private formatEmpresaResponse(empresa: any): EmpresaResponse {
+  private formatEmpresaResponse(empresa: any, roles: Rol[] = []): EmpresaResponse {
     return {
       id: empresa.id,
       nombre: empresa.nombre,
@@ -356,6 +412,7 @@ export class EmpresaService {
       web: empresa.web,
       descripcion: empresa.descripcion,
       isActive: empresa.isActive,
+      roles: roles, // Incluir todos los roles del usuario en esta empresa
       planSuscripcion: empresa.planSuscripcion ? {
         id: empresa.planSuscripcion.id,
         nombre: empresa.planSuscripcion.nombre,

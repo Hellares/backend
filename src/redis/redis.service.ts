@@ -243,16 +243,22 @@
 // }
 
 // src/redis/redis.service.ts
-import { Injectable, OnModuleDestroy, Logger } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis, RedisOptions } from 'ioredis'; // ← Import correcto (soluciona TS2702)
+import { AppLoggerService } from '../common/logger/logger.service';
 
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   private readonly redis: Redis;
-  private readonly logger = new Logger(RedisService.name);
+  private readonly logger: AppLoggerService;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    loggerService: AppLoggerService,
+  ) {
+    this.logger = loggerService;
+    this.logger.setContext(RedisService.name);
     const redisUrl = this.configService.get<string>('REDIS_URL');
 
     const redisOptions: RedisOptions = {
@@ -264,7 +270,7 @@ export class RedisService implements OnModuleDestroy {
       maxRetriesPerRequest: 5,
       retryStrategy: (times) => {
         const delay = Math.min(times * 100, 5000);
-        this.logger.warn(`Redis reconnecting in ${delay}ms (attempt ${times + 1})`);
+        this.logger.warn('Redis reconnecting', { delay, attempt: times + 1 });
         return delay;
       },
       reconnectOnError: () => true, // Reintenta en cualquier error de conexión
@@ -275,11 +281,11 @@ export class RedisService implements OnModuleDestroy {
       : new Redis(redisOptions);
 
     // Eventos amigables y que NO matan el proceso
-    this.redis.on('connect', () => this.logger.log('✅ Redis connected successfully'));
-    this.redis.on('ready', () => this.logger.log('Redis client ready'));
-    this.redis.on('error', (err) => this.logger.error('Redis Client Error (servidor sigue vivo):', err.message));
+    this.redis.on('connect', () => this.logger.success('Redis connected successfully'));
+    this.redis.on('ready', () => this.logger.info('Redis client ready'));
+    this.redis.on('error', (err) => this.logger.error('Redis Client Error (servidor sigue vivo)', err.stack));
     this.redis.on('close', () => this.logger.warn('Redis connection closed'));
-    this.redis.on('reconnecting', (ms) => this.logger.warn(`Redis reconnecting in ${ms?.delay ?? '?'}ms...`));
+    this.redis.on('reconnecting', (ms) => this.logger.warn('Redis reconnecting', { delay: ms?.delay ?? 'unknown' }));
     this.redis.on('end', () => this.logger.error('Redis connection ended permanently'));
 
     // Forzar conexión al iniciar (opcional pero recomendado)

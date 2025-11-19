@@ -1,7 +1,8 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { Transporter } from 'nodemailer';
+import { AppLoggerService } from '../common/logger/logger.service';
 
 export interface EmailOptions {
   to: string;
@@ -12,10 +13,16 @@ export interface EmailOptions {
 
 @Injectable()
 export class EmailService implements OnModuleInit {
-  private readonly logger = new Logger(EmailService.name);
+  private readonly logger: AppLoggerService;
   private transporter: Transporter;
 
-  constructor(private readonly configService: ConfigService) { }
+  constructor(
+    private readonly configService: ConfigService,
+    loggerService: AppLoggerService,
+  ) {
+    this.logger = loggerService;
+    this.logger.setContext(EmailService.name);
+  }
 
   async onModuleInit() {
     await this.initializeTransporter();
@@ -30,7 +37,10 @@ export class EmailService implements OnModuleInit {
   const secure = this.configService.get<string>('EMAIL_SECURE') === 'true';
 
   if (!host || !user) {
-    this.logger.warn('No email configuration found. Emails will be logged instead of sent.');
+    this.logger.warn('No email configuration found. Emails will be logged instead of sent.', {
+      host: host || 'not set',
+      user: user ? 'set' : 'not set',
+    });
     this.transporter = null;
     return;
   }
@@ -53,17 +63,17 @@ export class EmailService implements OnModuleInit {
   try {
     const isConnected = await this.transporter.verify();
     if (isConnected) {
-      this.logger.log(`Email service initialized successfully - Connected to ${host}:${port}`);
+      this.logger.info('Email service initialized successfully', { host, port, secure });
     } else {
-      this.logger.warn('Connection SMTP verified but not successful');
+      this.logger.warn('Connection SMTP verified but not successful', { host, port });
     }
   } catch (error) {
-    this.logger.error(`Failed to verify SMTP connection to ${host}:${port}: ${error.message}`);
+    this.logger.error('Failed to verify SMTP connection', error.stack, { host, port });
     this.logger.warn('Email service will continue but emails may fail. Will retry on send.');
   }
 
   if (nodeEnv !== 'development') {
-    this.logger.log(`Email service initialized for ${host}:${port} (full verify done)`);
+    this.logger.info('Email service initialized', { host, port, nodeEnv });
   }
 }
 
@@ -73,13 +83,13 @@ private async verifyConnection(): Promise<boolean> {
     // this.isConnected = isConnected;  // Agrega private isConnected = false; al class
     // this.lastHealthCheck = new Date();  // private lastHealthCheck: Date;
     if (isConnected) {
-      this.logger.log('✅ Conexión SMTP verificada exitosamente');
+      this.logger.success('Conexión SMTP verificada exitosamente');
     } else {
-      this.logger.warn('⚠️ Conexión SMTP no pudo verificarse');
+      this.logger.warn('Conexión SMTP no pudo verificarse');
     }
     return isConnected;
   } catch (error) {
-    this.logger.error('❌ Error verificando conexión SMTP:', error.message);
+    this.logger.error('Error verificando conexión SMTP', error.stack);
     // this.isConnected = false;
     // this.lastHealthCheck = new Date();
     return false;
@@ -92,7 +102,11 @@ private async verifyConnection(): Promise<boolean> {
   async sendEmail(options: EmailOptions): Promise<boolean> {
   console.log('Attempting send to:', options.to, 'from:', this.configService.get('EMAIL_USER'));
   const requestId = this.generateRequestId();  // Agrega método abajo
-  this.logger.log(`📧 [${requestId}] Iniciando envío de email a: ${options.to}`);
+  this.logger.info('Iniciando envío de email', {
+    requestId,
+    to: options.to,
+    subject: options.subject,
+  });
 
   try {
     // Chequea y re-verifica conexión
@@ -105,8 +119,11 @@ private async verifyConnection(): Promise<boolean> {
     // }
 
     if (!this.transporter) {
-      this.logger.log('Email would be sent:');
-      this.logger.log(JSON.stringify(options, null, 2));
+      this.logger.info('Email would be sent (transporter not configured)', {
+        requestId,
+        to: options.to,
+        subject: options.subject,
+      });
       return true;
     }
 
@@ -121,10 +138,18 @@ private async verifyConnection(): Promise<boolean> {
       },
     });
 
-    this.logger.log(`✅ [${requestId}] Email sent successfully to ${options.to}. Message ID: ${info.messageId}`);
+    this.logger.success('Email sent successfully', {
+      requestId,
+      to: options.to,
+      messageId: info.messageId,
+    });
     return true;
   } catch (error) {
-    this.logger.error(`❌ [${requestId}] Failed to send email to ${options.to}: ${error.message}`);
+    this.logger.error('Failed to send email', error.stack, {
+      requestId,
+      to: options.to,
+      subject: options.subject,
+    });
     return false;
   }
 }
