@@ -86,30 +86,31 @@ model Empresa {
 }
 
 model Usuario {
-  id                      String              @id @default(cuid())
-  personaId               String              @unique
-  email                   String              @unique
-  telefono                String?             @unique
-  passwordHash            String?
-  salt                    String?
-  isActive                Boolean             @default(true)
-  deletedAt               DateTime?
-  lastLoginAt             DateTime?
-  resetToken              String?             @unique
-  resetTokenExpiracion    DateTime?
-  emailVerificado         Boolean             @default(false)
-  telefonoVerificado      Boolean             @default(false)
-  rolGlobal               Rol?
-  creadoEn                DateTime            @default(now())
-  actualizadoEn           DateTime            @updatedAt
-  authProviders           AuthProvider[]
-  empresas                EmpresaUsuarioRol[]
-  metodosPagoConfigurados MetodoPago[]        @relation("MetodoPagoUsuario")
-  ordenesServicio         OrdenServicio[]
-  registrosComoCliente    RegistroCliente[]
-  transacciones           TransaccionPago[]
-  persona                 Persona             @relation(fields: [personaId], references: [id], onDelete: Restrict)
-  sedes                   UsuarioSedeRol[]
+  id                            String              @id @default(cuid())
+  personaId                     String              @unique
+  email                         String              @unique
+  telefono                      String?             @unique
+  passwordHash                  String?
+  isActive                      Boolean             @default(true)
+  deletedAt                     DateTime?
+  lastLoginAt                   DateTime?
+  resetToken                    String?             @unique
+  resetTokenExpiracion          DateTime?
+  emailVerificationToken        String?             @unique
+  emailVerificationExpiracion   DateTime?
+  emailVerificado               Boolean             @default(false)
+  telefonoVerificado            Boolean             @default(false)
+  rolGlobal                     Rol?
+  creadoEn                      DateTime            @default(now())
+  actualizadoEn                 DateTime            @updatedAt
+  authProviders                 AuthProvider[]
+  empresas                      EmpresaUsuarioRol[]
+  metodosPagoConfigurados       MetodoPago[]        @relation("MetodoPagoUsuario")
+  ordenesServicio               OrdenServicio[]
+  registrosComoCliente          RegistroCliente[]
+  transacciones                 TransaccionPago[]
+  persona                       Persona             @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  sedes                         UsuarioSedeRol[]
 
   @@index([email])
   @@index([telefono])
@@ -119,6 +120,7 @@ model Usuario {
   @@index([emailVerificado])
   @@index([telefonoVerificado])
   @@index([resetToken])
+  @@index([emailVerificationToken])
   @@index([deletedAt])
 }
 

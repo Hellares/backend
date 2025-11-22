@@ -42,6 +42,8 @@ export class AuthController {
    */
   @Post('register')
   @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 intentos por minuto
   @ApiOperation({ summary: 'Registrar nuevo usuario' })
   @ApiResponse({
     status: 201,
@@ -77,6 +79,7 @@ export class AuthController {
   @Post('login')
   @Public()
   @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 intentos por minuto
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Iniciar sesión' })
   @ApiResponse({
@@ -122,6 +125,8 @@ export class AuthController {
    */
   @Post('refresh')
   @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 intentos por minuto
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refrescar access token' })
   @ApiResponse({
@@ -159,7 +164,8 @@ export class AuthController {
    * Cambiar contraseña (usuario autenticado)
    */
   @Post('change-password')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 intentos por minuto
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Cambiar contraseña del usuario autenticado' })

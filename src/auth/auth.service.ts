@@ -69,9 +69,8 @@ export class AuthService {
       empresaId = empresa.id;
     }
 
-    // Hash de la contraseña
-    const salt = await bcrypt.genSalt(12);
-    const passwordHash = await bcrypt.hash(password, salt);
+    // Hash de la contraseña (bcrypt incluye el salt automáticamente)
+    const passwordHash = await bcrypt.hash(password, 12);
 
     // Crear la persona primero
     const persona = await this.prisma.persona.create({
@@ -94,11 +93,10 @@ export class AuthService {
         personaId: persona.id,
         email,
         passwordHash,
-        salt,
         emailVerificado: false,
         telefonoVerificado: false,
-        resetToken: verificationToken, // Reutilizamos resetToken para verificación
-        resetTokenExpiracion: verificationTokenExpiration,
+        emailVerificationToken: verificationToken,
+        emailVerificationExpiracion: verificationTokenExpiration,
       },
       include: {
         persona: true,
@@ -305,7 +303,7 @@ export class AuthService {
   }
 
   /**
-   * Refresh token
+   * Refresh token con rotación (genera nuevo refresh token)
    */
   async refreshToken(refreshTokenDto: RefreshTokenDto) {
     const { refreshToken } = refreshTokenDto;
@@ -314,6 +312,21 @@ export class AuthService {
       const payload = this.jwtService.verify<RefreshTokenPayload>(refreshToken, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
+
+      // Validar que la sesión esté activa
+      if (payload.sessionId) {
+        // Verificar si la sesión está en blacklist
+        const isBlacklisted = await this.sessionService.isSessionBlacklisted(payload.sessionId);
+        if (isBlacklisted) {
+          throw new UnauthorizedException('Sesión revocada. Por favor, inicia sesión nuevamente.');
+        }
+
+        // Verificar que la sesión exista y esté activa
+        const session = await this.sessionService.getSession(payload.sessionId);
+        if (!session || !session.isActive) {
+          throw new UnauthorizedException('Sesión inválida o expirada. Por favor, inicia sesión nuevamente.');
+        }
+      }
 
       const usuario = await this.prisma.usuario.findUnique({
         where: { id: payload.sub },
@@ -326,11 +339,52 @@ export class AuthService {
         throw new UnauthorizedException('Token inválido');
       }
 
-      // Generar nuevos tokens
-      return this.generateTokens(usuario);
+      // ROTACIÓN DE REFRESH TOKEN:
+      // Agregar el refresh token anterior a la blacklist para evitar reutilización
+      if (payload.sessionId) {
+        const oldTokenKey = `used_refresh_token:${refreshToken.substring(0, 32)}`;
+        const expirySeconds = 7 * 24 * 60 * 60; // 7 días (mismo tiempo que el refresh token)
+        await this.sessionService['redisService'].setex(oldTokenKey, expirySeconds, 'used');
+      }
+
+      // Generar NUEVOS tokens (incluyendo nuevo refresh token)
+      // Mantener la misma sesión pero con nuevos tokens
+      const clientInfo = payload.sessionId ? await this.getSessionClientInfo(payload.sessionId) : undefined;
+
+      // Para mantener el contexto del tenant, necesitaríamos guardarlo en la sesión
+      // Por ahora, generamos tokens sin contexto de tenant (el usuario puede volver a seleccionar en el próximo login)
+      return this.generateTokens(usuario, undefined, undefined, undefined, clientInfo);
     } catch (error) {
+      // Verificar si el refresh token ya fue usado (prevenir replay attacks)
+      if (refreshToken && error.name !== 'TokenExpiredError') {
+        const tokenKey = `used_refresh_token:${refreshToken.substring(0, 32)}`;
+        const wasUsed = await this.sessionService['redisService'].get(tokenKey);
+        if (wasUsed) {
+          this.logger.warn('Intento de reutilizar refresh token', { token: refreshToken.substring(0, 20) });
+          throw new UnauthorizedException('Refresh token ya fue utilizado. Por seguridad, por favor inicia sesión nuevamente.');
+        }
+      }
+
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
       throw new UnauthorizedException('Token de refresh inválido o expirado');
     }
+  }
+
+  /**
+   * Obtener información del cliente desde una sesión
+   */
+  private async getSessionClientInfo(sessionId: string) {
+    const session = await this.sessionService.getSession(sessionId);
+    if (!session) return undefined;
+
+    return {
+      ip: session.ipAddress || '127.0.0.1',
+      userAgent: session.userAgent || 'Unknown',
+      device: session.deviceInfo || 'Unknown Device',
+      platform: 'Unknown'
+    };
   }
 
   /**
@@ -377,7 +431,7 @@ export class AuthService {
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(jwtPayload, {
         secret: this.configService.get<string>('JWT_SECRET'),
-        expiresIn: this.configService.get('JWT_EXPIRES_IN', '24h'),
+        expiresIn: this.configService.get('JWT_EXPIRES_IN', '15m'),
       }),
       this.jwtService.signAsync(refreshPayload, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
@@ -407,7 +461,7 @@ export class AuthService {
     if (usuario && usuario.passwordHash && usuario.isActive) {
       const isPasswordValid = await bcrypt.compare(password, usuario.passwordHash);
       if (isPasswordValid) {
-        const { passwordHash, salt, ...result } = usuario;
+        const { passwordHash, ...result } = usuario;
         return result;
       }
     }
@@ -450,8 +504,8 @@ export class AuthService {
     // Buscar usuario con el token de verificación
     const usuario = await this.prisma.usuario.findFirst({
       where: {
-        resetToken: token,
-        resetTokenExpiracion: {
+        emailVerificationToken: token,
+        emailVerificationExpiracion: {
           gt: new Date(), // Token no expirado
         },
         emailVerificado: false, // Solo usuarios no verificados
@@ -470,8 +524,8 @@ export class AuthService {
       where: { id: usuario.id },
       data: {
         emailVerificado: true,
-        resetToken: null,
-        resetTokenExpiracion: null,
+        emailVerificationToken: null,
+        emailVerificationExpiracion: null,
       },
     });
 
@@ -600,16 +654,14 @@ export class AuthService {
       throw new BadRequestException('Token inválido o expirado');
     }
 
-    // Hash de la nueva contraseña
-    const salt = await bcrypt.genSalt(12);
-    const passwordHash = await bcrypt.hash(newPassword, salt);
+    // Hash de la nueva contraseña (bcrypt incluye el salt automáticamente)
+    const passwordHash = await bcrypt.hash(newPassword, 12);
 
     // Actualizar usuario
     await this.prisma.usuario.update({
       where: { id: usuario.id },
       data: {
         passwordHash,
-        salt,
         resetToken: null,
         resetTokenExpiracion: null,
       },
@@ -642,16 +694,14 @@ export class AuthService {
       throw new UnauthorizedException('Contraseña actual incorrecta');
     }
 
-    // Hash de la nueva contraseña
-    const salt = await bcrypt.genSalt(12);
-    const passwordHash = await bcrypt.hash(newPassword, salt);
+    // Hash de la nueva contraseña (bcrypt incluye el salt automáticamente)
+    const passwordHash = await bcrypt.hash(newPassword, 12);
 
     // Actualizar contraseña
     await this.prisma.usuario.update({
       where: { id: userId },
       data: {
         passwordHash,
-        salt,
       },
     });
 
@@ -672,7 +722,7 @@ export class AuthService {
     return {
       sessions,
       totalSessions: sessions.length,
-      activeDevices: [...new Set(sessions.map(s => s.deviceInfo))].length,
+      activeDevices: Array.from(new Set(sessions.map(s => s.deviceInfo))).length,
     };
   }
 
