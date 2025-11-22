@@ -1,248 +1,3 @@
-// import { Injectable, OnModuleDestroy } from '@nestjs/common';
-// import { ConfigService } from '@nestjs/config';
-// import Redis from 'ioredis';
-
-// @Injectable()
-// export class RedisService implements OnModuleDestroy {
-//   private readonly redis: Redis;
-
-//   constructor(private readonly configService: ConfigService) {
-//     // Usar REDIS_URL si está disponible, si no usar parámetros individuales
-//     const redisUrl = configService.get('REDIS_URL');
-
-//     if (redisUrl) {
-//       // Usar URL completa de conexión
-//       this.redis = new Redis(redisUrl);
-//     } else {
-//       // Usar parámetros individuales
-//       this.redis = new Redis({
-//         host: configService.get('REDIS_HOST', 'localhost'),
-//         port: configService.get('REDIS_PORT', 6379),
-//         password: configService.get('REDIS_PASSWORD') || undefined,
-//         db: configService.get('REDIS_DB', 0),
-//         lazyConnect: true,
-//         maxRetriesPerRequest: 3,
-//       });
-//     }
-
-//     this.redis.on('error', (err) => {
-//       console.error('Redis connection error:', err);
-//     });
-
-//     this.redis.on('connect', () => {
-//       console.log('✅ Redis connected successfully');
-//     });
-//   }
-
-//   /**
-//    * Obtener valor por clave
-//    */
-//   async get(key: string): Promise<string | null> {
-//     try {
-//       return await this.redis.get(key);
-//     } catch (error) {
-//       console.error('Redis GET error:', error);
-//       return null;
-//     }
-//   }
-
-//   /**
-//    * Establecer valor con TTL
-//    */
-//   async setex(key: string, ttl: number, value: string): Promise<boolean> {
-//     try {
-//       const result = await this.redis.setex(key, ttl, value);
-//       return result === 'OK';
-//     } catch (error) {
-//       console.error('Redis SETEX error:', error);
-//       return false;
-//     }
-//   }
-
-//   /**
-//    * Establecer valor sin TTL
-//    */
-//   async set(key: string, value: string): Promise<boolean> {
-//     try {
-//       const result = await this.redis.set(key, value);
-//       return result === 'OK';
-//     } catch (error) {
-//       console.error('Redis SET error:', error);
-//       return false;
-//     }
-//   }
-
-//   /**
-//    * Eliminar clave
-//    */
-//   async del(key: string): Promise<number> {
-//     try {
-//       return await this.redis.del(key);
-//     } catch (error) {
-//       console.error('Redis DEL error:', error);
-//       return 0;
-//     }
-//   }
-
-//   /**
-//    * Verificar si existe clave
-//    */
-//   async exists(key: string): Promise<boolean> {
-//     try {
-//       const result = await this.redis.exists(key);
-//       return result === 1;
-//     } catch (error) {
-//       console.error('Redis EXISTS error:', error);
-//       return false;
-//     }
-//   }
-
-//   /**
-//    * Establecer expiración a clave existente
-//    */
-//   async expire(key: string, ttl: number): Promise<boolean> {
-//     try {
-//       const result = await this.redis.expire(key, ttl);
-//       return result === 1;
-//     } catch (error) {
-//       console.error('Redis EXPIRE error:', error);
-//       return false;
-//     }
-//   }
-
-//   /**
-//    * Obtener TTL de clave
-//    */
-//   async ttl(key: string): Promise<number> {
-//     try {
-//       return await this.redis.ttl(key);
-//     } catch (error) {
-//       console.error('Redis TTL error:', error);
-//       return -1;
-//     }
-//   }
-
-//   /**
-//    * Añadir a set
-//    */
-//   async sadd(key: string, member: string): Promise<number> {
-//     try {
-//       return await this.redis.sadd(key, member);
-//     } catch (error) {
-//       console.error('Redis SADD error:', error);
-//       return 0;
-//     }
-//   }
-
-//   /**
-//    * Remover de set
-//    */
-//   async srem(key: string, member: string): Promise<number> {
-//     try {
-//       return await this.redis.srem(key, member);
-//     } catch (error) {
-//       console.error('Redis SREM error:', error);
-//       return 0;
-//     }
-//   }
-
-//   /**
-//    * Obtener todos los miembros de un set
-//    */
-//   async smembers(key: string): Promise<string[]> {
-//     try {
-//       return await this.redis.smembers(key);
-//     } catch (error) {
-//       console.error('Redis SMEMBERS error:', error);
-//       return [];
-//     }
-//   }
-
-//   /**
-//    * Verificar si miembro existe en set
-//    */
-//   async sismember(key: string, member: string): Promise<boolean> {
-//     try {
-//       const result = await this.redis.sismember(key, member);
-//       return result === 1;
-//     } catch (error) {
-//       console.error('Redis SISMEMBER error:', error);
-//       return false;
-//     }
-//   }
-
-//   /**
-//    * Incrementar contador
-//    */
-//   async incr(key: string): Promise<number> {
-//     try {
-//       return await this.redis.incr(key);
-//     } catch (error) {
-//       console.error('Redis INCR error:', error);
-//       return 0;
-//     }
-//   }
-
-//   /**
-//    * Decrementar contador
-//    */
-//   async decr(key: string): Promise<number> {
-//     try {
-//       return await this.redis.decr(key);
-//     } catch (error) {
-//       console.error('Redis DECR error:', error);
-//       return 0;
-//     }
-//   }
-
-//   /**
-//    * Obtener claves con patrón (sin eliminar)
-//    */
-//   async getKeysByPattern(pattern: string): Promise<string[]> {
-//     try {
-//       const keys = await this.redis.keys(pattern);
-//       return keys;
-//     } catch (error) {
-//       console.error('Redis KEYS PATTERN error:', error);
-//       return [];
-//     }
-//   }
-
-//   /**
-//    * Limpiar claves con patrón
-//    */
-//   async flushByPattern(pattern: string): Promise<number> {
-//     try {
-//       const keys = await this.redis.keys(pattern);
-//       if (keys.length === 0) {
-//         return 0;
-//       }
-//       return await this.redis.del(...keys);
-//     } catch (error) {
-//       console.error('Redis FLUSH PATTERN error:', error);
-//       return 0;
-//     }
-//   }
-
-//   /**
-//    * Health check
-//    */
-//   async ping(): Promise<boolean> {
-//     try {
-//       const result = await this.redis.ping();
-//       return result === 'PONG';
-//     } catch (error) {
-//       console.error('Redis PING error:', error);
-//       return false;
-//     }
-//   }
-
-//   async onModuleDestroy() {
-//     await this.redis.quit();
-//   }
-// }
-
-// src/redis/redis.service.ts
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis, RedisOptions } from 'ioredis'; // ← Import correcto (soluciona TS2702)
@@ -252,6 +7,7 @@ import { AppLoggerService } from '../common/logger/logger.service';
 export class RedisService implements OnModuleDestroy {
   private readonly redis: Redis;
   private readonly logger: AppLoggerService;
+  private pingInterval?: NodeJS.Timeout;
 
   constructor(
     private readonly configService: ConfigService,
@@ -267,13 +23,40 @@ export class RedisService implements OnModuleDestroy {
       password: this.configService.get<string>('REDIS_PASSWORD') || undefined,
       db: this.configService.get<number>('REDIS_DB', 0),
       lazyConnect: true,
+
+      // Configuración de timeouts
+      connectTimeout: 10000, // 10s para conectar
+      commandTimeout: 5000,  // 5s para comandos (evita comandos colgados)
+
+      // Keep-alive para mantener la conexión
+      keepAlive: 30000, // Envía ping cada 30s para mantener viva la conexión
+
+      // Estrategia de reconexión mejorada
       maxRetriesPerRequest: 5,
       retryStrategy: (times) => {
+        if (times > 10) {
+          this.logger.error('Max Redis retry attempts reached, giving up');
+          return null; // Detener después de 10 intentos
+        }
         const delay = Math.min(times * 100, 5000);
-        this.logger.warn('Redis reconnecting', { delay, attempt: times + 1 });
+        this.logger.warn('Redis reconnecting', { delay, attempt: times });
         return delay;
       },
-      reconnectOnError: () => true, // Reintenta en cualquier error de conexión
+
+      // Reintentar solo en errores de conexión, no en errores de comandos
+      reconnectOnError: (err) => {
+        const targetError = 'READONLY';
+        if (err.message.includes(targetError)) {
+          return true; // Reconectar en modo READONLY
+        }
+        return false; // No reconectar en otros errores (solo en close/end)
+      },
+
+      // Verificar que Redis esté listo antes de enviar comandos
+      enableReadyCheck: true,
+
+      // Encolar comandos cuando no hay conexión (útil durante reconexiones)
+      enableOfflineQueue: true,
     };
 
     this.redis = redisUrl
@@ -281,12 +64,43 @@ export class RedisService implements OnModuleDestroy {
       : new Redis(redisOptions);
 
     // Eventos amigables y que NO matan el proceso
-    this.redis.on('connect', () => this.logger.success('Redis connected successfully'));
-    this.redis.on('ready', () => this.logger.info('Redis client ready'));
-    this.redis.on('error', (err) => this.logger.error('Redis Client Error (servidor sigue vivo)', err.stack));
-    this.redis.on('close', () => this.logger.warn('Redis connection closed'));
-    this.redis.on('reconnecting', (ms) => this.logger.warn('Redis reconnecting', { delay: ms?.delay ?? 'unknown' }));
-    this.redis.on('end', () => this.logger.error('Redis connection ended permanently'));
+    this.redis.on('connect', () => {
+      this.logger.success('Redis connected successfully', {
+        host: redisOptions.host,
+        port: redisOptions.port,
+        db: redisOptions.db,
+      });
+    });
+
+    this.redis.on('ready', () => {
+      this.logger.info('Redis client ready to accept commands');
+    });
+
+    this.redis.on('error', (err) => {
+      this.logger.error(
+        'Redis Client Error (servidor sigue vivo)',
+        err.stack,
+        {
+          error: err.message,
+          code: (err as any).code,
+        }
+      );
+    });
+
+    this.redis.on('close', () => {
+      this.logger.warn('Redis connection closed unexpectedly - will attempt reconnection');
+    });
+
+    this.redis.on('reconnecting', (ms) => {
+      this.logger.warn('Redis reconnecting attempt', {
+        delayMs: ms,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    this.redis.on('end', () => {
+      this.logger.error('Redis connection ended permanently - max retries reached or connection terminated');
+    });
 
     // Forzar conexión al iniciar (opcional pero recomendado)
     this.connect();
@@ -295,9 +109,40 @@ export class RedisService implements OnModuleDestroy {
   private async connect() {
     try {
       await this.redis.connect();
+      // Iniciar monitor de ping en desarrollo
+      if (this.configService.get('NODE_ENV') === 'development') {
+        this.startPingMonitor();
+      }
     } catch (err) {
       this.logger.error('Failed initial Redis connection (will retry automatically)', err);
     }
+  }
+
+  /**
+   * Monitor de ping periódico (solo en desarrollo)
+   */
+  private startPingMonitor() {
+    // Ping cada 30 segundos
+    this.pingInterval = setInterval(async () => {
+      try {
+        const start = Date.now();
+        const result = await this.redis.ping();
+        const latency = Date.now() - start;
+
+        if (result === 'PONG') {
+          this.logger.debug('Redis online', {
+            latency: `${latency}ms`,
+            status: 'connected',
+          });
+        }
+      } catch (error) {
+        this.logger.error('Redis ping failed', error.stack, {
+          error: error.message,
+        });
+      }
+    }, 30000); // 30 segundos
+
+    this.logger.debug('Redis ping monitor started (every 30s)');
   }
 
   // ====================== TUS MÉTODOS ORIGINALES (todos conservados) ======================
@@ -410,7 +255,7 @@ export class RedisService implements OnModuleDestroy {
     try {
       return await this.redis.incr(key);
     } catch (error) {
-      this.logger.error(`Redis INCR error (${key}:`, error.message);
+      this.logger.error(`Redis INCR error (${key}):`, error.message);
       return 0;
     }
   }
@@ -426,16 +271,31 @@ export class RedisService implements OnModuleDestroy {
 
   async getKeysByPattern(pattern: string): Promise<string[]> {
     try {
-      return await this.redis.keys(pattern);
+      const keys: string[] = [];
+      let cursor = '0';
+
+      do {
+        const [nextCursor, batch] = await this.redis.scan(
+          cursor,
+          'MATCH',
+          pattern,
+          'COUNT',
+          100, // Procesa 100 claves por iteración
+        );
+        cursor = nextCursor;
+        keys.push(...batch);
+      } while (cursor !== '0');
+
+      return keys;
     } catch (error) {
-      this.logger.error(`Redis KEYS PATTERN error (${pattern}):`, error.message);
+      this.logger.error(`Redis SCAN PATTERN error (${pattern}):`, error.message);
       return [];
     }
   }
 
   async flushByPattern(pattern: string): Promise<number> {
     try {
-      const keys = await this.redis.keys(pattern);
+      const keys = await this.getKeysByPattern(pattern); // Usa SCAN internamente
       if (keys.length === 0) return 0;
       return await this.redis.del(...keys);
     } catch (error) {
@@ -457,6 +317,12 @@ export class RedisService implements OnModuleDestroy {
   // Cierre limpio
   async onModuleDestroy() {
     try {
+      // Detener monitor de ping
+      if (this.pingInterval) {
+        clearInterval(this.pingInterval);
+        this.logger.debug('Redis ping monitor stopped');
+      }
+
       await this.redis.quit();
       this.logger.log('Redis connection closed gracefully');
     } catch (error) {

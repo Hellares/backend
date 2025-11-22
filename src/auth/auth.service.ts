@@ -215,7 +215,84 @@ export class AuthService {
       throw new UnauthorizedException('Por favor verifica tu email antes de iniciar sesión. Revisa tu bandeja de entrada.');
     }
 
-    // Determinar tenant y rol(es)
+    // ========== LÓGICA MEJORADA: Selección de Empresa ==========
+
+    // Si NO se proporciona subdominio, retornar empresas disponibles
+    if (!subdominioEmpresa) {
+      // Buscar todas las empresas donde el usuario tiene roles
+      const empresasUsuario = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          usuarioId: usuario.id,
+          isActive: true,
+        },
+        include: {
+          empresa: {
+            select: {
+              id: true,
+              nombre: true,
+              subdominio: true,
+              logo: true,
+            },
+          },
+        },
+      });
+
+      if (empresasUsuario.length === 0) {
+        // Usuario sin empresas → Login sin contexto tenant (usuario global)
+        this.logger.warn('User has no companies assigned', {
+          userId: usuario.id,
+          email,
+        });
+
+        // Continuar con login sin tenant (para usuarios globales o sin empresa)
+      } else {
+        // Agrupar roles por empresa
+        const empresasMap = new Map();
+
+        empresasUsuario.forEach((rel) => {
+          const empresaId = rel.empresa.id;
+
+          if (!empresasMap.has(empresaId)) {
+            empresasMap.set(empresaId, {
+              id: rel.empresa.id,
+              nombre: rel.empresa.nombre,
+              subdominio: rel.empresa.subdominio,
+              logo: rel.empresa.logo,
+              roles: [],
+            });
+          }
+
+          empresasMap.get(empresaId).roles.push(rel.rol);
+        });
+
+        const availableCompanies = Array.from(empresasMap.values());
+
+        this.logger.info('User requires company selection', {
+          userId: usuario.id,
+          email,
+          companiesCount: availableCompanies.length,
+        });
+
+        // Limpiar intentos fallidos
+        await this.securityService.clearFailedAttempts(email, 'login');
+
+        // Retornar empresas disponibles SIN generar tokens
+        return {
+          requiresCompanySelection: true,
+          message: 'Por favor selecciona una empresa para continuar',
+          user: {
+            id: usuario.id,
+            email: usuario.email,
+            nombres: usuario.persona.nombres,
+            apellidos: usuario.persona.apellidos,
+            emailVerificado: usuario.emailVerificado,
+          },
+          availableCompanies,
+        };
+      }
+    }
+
+    // Determinar tenant y rol(es) cuando SÍ se proporciona subdominio
     let empresaId = undefined;
     let tenantRole = undefined;
     let tenantName = undefined;
@@ -226,39 +303,41 @@ export class AuthService {
         where: { subdominio: subdominioEmpresa },
       });
 
-      if (empresa) {
-        empresaId = empresa.id;
-        tenantName = empresa.nombre;
+      if (!empresa) {
+        throw new NotFoundException('Empresa no encontrada');
+      }
 
-        // Buscar TODOS los roles del usuario en esta empresa
-        const rolesUsuario = await this.prisma.empresaUsuarioRol.findMany({
-          where: {
-            usuarioId: usuario.id,
-            empresaId: empresa.id,
-            isActive: true,
-          },
-        });
+      empresaId = empresa.id;
+      tenantName = empresa.nombre;
 
-        if (rolesUsuario.length === 0) {
-          throw new UnauthorizedException('No tienes acceso a esta empresa');
+      // Buscar TODOS los roles del usuario en esta empresa
+      const rolesUsuario = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          usuarioId: usuario.id,
+          empresaId: empresa.id,
+          isActive: true,
+        },
+      });
+
+      if (rolesUsuario.length === 0) {
+        throw new UnauthorizedException('No tienes acceso a esta empresa');
+      }
+
+      availableRoles = rolesUsuario.map(r => r.rol);
+
+      // Determinar qué rol usar en la sesión
+      if (rolSeleccionado) {
+        // Verificar que el usuario tenga el rol solicitado
+        const tieneRol = rolesUsuario.some(r => r.rol === rolSeleccionado);
+        if (!tieneRol) {
+          throw new UnauthorizedException(
+            `No tienes el rol "${rolSeleccionado}" en esta empresa. Roles disponibles: ${availableRoles.join(', ')}`
+          );
         }
-
-        availableRoles = rolesUsuario.map(r => r.rol);
-
-        // Determinar qué rol usar en la sesión
-        if (rolSeleccionado) {
-          // Verificar que el usuario tenga el rol solicitado
-          const tieneRol = rolesUsuario.some(r => r.rol === rolSeleccionado);
-          if (!tieneRol) {
-            throw new UnauthorizedException(
-              `No tienes el rol "${rolSeleccionado}" en esta empresa. Roles disponibles: ${availableRoles.join(', ')}`
-            );
-          }
-          tenantRole = rolSeleccionado;
-        } else {
-          // Si tiene múltiples roles y no especificó uno, usar el primero (o podrías requerir selección)
-          tenantRole = rolesUsuario[0].rol;
-        }
+        tenantRole = rolSeleccionado;
+      } else {
+        // Si tiene múltiples roles y no especificó uno, usar el primero
+        tenantRole = rolesUsuario[0].rol;
       }
     }
 
@@ -348,12 +427,25 @@ export class AuthService {
       }
 
       // Generar NUEVOS tokens (incluyendo nuevo refresh token)
-      // Mantener la misma sesión pero con nuevos tokens
-      const clientInfo = payload.sessionId ? await this.getSessionClientInfo(payload.sessionId) : undefined;
+      // Recuperar contexto de la sesión (tenant info + client info)
+      const session = payload.sessionId ? await this.sessionService.getSession(payload.sessionId) : null;
 
-      // Para mantener el contexto del tenant, necesitaríamos guardarlo en la sesión
-      // Por ahora, generamos tokens sin contexto de tenant (el usuario puede volver a seleccionar en el próximo login)
-      return this.generateTokens(usuario, undefined, undefined, undefined, clientInfo);
+      const clientInfo = session ? {
+        ip: session.ipAddress || '127.0.0.1',
+        userAgent: session.userAgent || 'Unknown',
+        device: session.deviceInfo || 'Unknown Device',
+        platform: 'Unknown'
+      } : undefined;
+
+      // Mantener el contexto del tenant de la sesión original
+      return this.generateTokens(
+        usuario,
+        session?.tenantId,
+        session?.tenantRole,
+        session?.tenantName,
+        clientInfo,
+        session?.tenantRoles
+      );
     } catch (error) {
       // Verificar si el refresh token ya fue usado (prevenir replay attacks)
       if (refreshToken && error.name !== 'TokenExpiredError') {
@@ -373,21 +465,6 @@ export class AuthService {
   }
 
   /**
-   * Obtener información del cliente desde una sesión
-   */
-  private async getSessionClientInfo(sessionId: string) {
-    const session = await this.sessionService.getSession(sessionId);
-    if (!session) return undefined;
-
-    return {
-      ip: session.ipAddress || '127.0.0.1',
-      userAgent: session.userAgent || 'Unknown',
-      device: session.deviceInfo || 'Unknown Device',
-      platform: 'Unknown'
-    };
-  }
-
-  /**
    * Generar tokens JWT
    */
   private async generateTokens(
@@ -398,12 +475,16 @@ export class AuthService {
     clientInfo?: { ip: string; userAgent: string; device: string; platform: string },
     tenantRoles?: any[],
   ) {
-    // Crear sesión administrada
+    // Crear sesión administrada con contexto tenant
     const sessionId = await this.sessionService.createSession({
       userId: usuario.id,
       ipAddress: clientInfo?.ip,
       userAgent: clientInfo?.userAgent,
       deviceInfo: `${clientInfo?.device} (${clientInfo?.platform})`,
+      tenantId,
+      tenantRole,
+      tenantName,
+      tenantRoles,
     }, 7 * 24 * 60 * 60 * 1000); // 7 días
 
     // Payload para access token

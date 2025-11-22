@@ -25,8 +25,8 @@ export class AuthSecurityService {
 
   async recordFailedAttempt(identifier: string, type: 'login' | 'password_reset' = 'login'): Promise<FailedAttempt> {
     const key = `failed_attempts:${type}:${identifier}`;
-    const maxAttempts = this.configService.get<number>('MAX_LOGIN_ATTEMPTS', 5);
-    const lockoutMinutes = this.configService.get<number>('LOCKOUT_DURATION_MINUTES', 15);
+    const maxAttempts = this.configService.get('MAX_LOGIN_ATTEMPTS', 5);
+    const lockoutMinutes = this.configService.get('LOCKOUT_DURATION_MINUTES', 15);
     const lockoutDuration = lockoutMinutes * 60 * 1000; // Convertir a milisegundos
 
     const current = await this.redisService.get(key);

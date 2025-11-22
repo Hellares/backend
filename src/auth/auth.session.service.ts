@@ -9,6 +9,10 @@ export interface CreateSessionData {
   deviceInfo?: string;
   ipAddress?: string;
   userAgent?: string;
+  tenantId?: string;
+  tenantRole?: string;
+  tenantName?: string;
+  tenantRoles?: string[];
 }
 
 export interface SessionInfo {
@@ -17,6 +21,10 @@ export interface SessionInfo {
   deviceInfo?: string;
   ipAddress?: string;
   userAgent?: string;
+  tenantId?: string;
+  tenantRole?: string;
+  tenantName?: string;
+  tenantRoles?: string[];
   createdAt: Date;
   lastAccessAt: Date;
   isActive: boolean;
@@ -46,6 +54,10 @@ export class AuthSessionService {
       deviceInfo: data.deviceInfo || 'Unknown Device',
       ipAddress: data.ipAddress || 'Unknown IP',
       userAgent: data.userAgent || 'Unknown',
+      tenantId: data.tenantId,
+      tenantRole: data.tenantRole,
+      tenantName: data.tenantName,
+      tenantRoles: data.tenantRoles,
       createdAt: now,
       lastAccessAt: now,
       isActive: true,
