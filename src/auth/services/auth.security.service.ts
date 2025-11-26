@@ -46,13 +46,16 @@ export class AuthSecurityService {
       await this.redisService.setex(lockKey, lockoutDuration, lockUntil!.toISOString());
     }
 
-    this.logger.warn(`Failed ${type} attempt`, {
-      identifier,
-      attempts,
-      maxAttempts,
-      isLocked,
-      type,
-    });
+    this.logger.warn(
+      `Failed ${type} attempt: ${attempts}/${maxAttempts} (locked: ${isLocked}) for ${identifier}`,
+      {
+        identifier,
+        attempts,
+        maxAttempts,
+        isLocked,
+        type,
+      }
+    );
 
     return {
       attempts,

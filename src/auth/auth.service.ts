@@ -646,6 +646,92 @@ export class AuthService {
   }
 
   /**
+   * Reenviar email de verificación
+   */
+  async resendVerificationEmail(email: string) {
+    // Buscar usuario por email
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { email },
+      include: {
+        persona: true,
+      },
+    });
+
+    if (!usuario) {
+      // No revelar si el email existe o no por seguridad
+      // Pero retornar mensaje genérico de éxito
+      return {
+        success: true,
+        message: 'Si el email está registrado, recibirás un correo de verificación',
+      };
+    }
+
+    // Verificar si el email ya está verificado
+    if (usuario.emailVerificado) {
+      throw new BadRequestException('El email ya está verificado');
+    }
+
+    // Verificar cooldown: no reenviar si se envió hace menos de 60 segundos
+    if (usuario.emailVerificationExpiracion && usuario.emailVerificationExpiracion > new Date()) {
+      // Calcular cuándo fue creado el token actual
+      // emailVerificationExpiracion = createdAt + 24 horas
+      // Por lo tanto: createdAt = emailVerificationExpiracion - 24 horas
+      const tokenCreatedAt = new Date(usuario.emailVerificationExpiracion.getTime() - 24 * 60 * 60 * 1000);
+      const secondsSinceCreation = Math.floor((new Date().getTime() - tokenCreatedAt.getTime()) / 1000);
+      const cooldownSeconds = 60; // Cooldown de 60 segundos
+
+      if (secondsSinceCreation < cooldownSeconds) {
+        const remainingSeconds = cooldownSeconds - secondsSinceCreation;
+        throw new BadRequestException(
+          `Ya se envió un email de verificación recientemente. Podrás solicitar uno nuevo en ${remainingSeconds} segundo(s). Por favor, revisa tu bandeja de entrada o spam.`
+        );
+      }
+    }
+
+    // Generar nuevo token de verificación
+    const verificationToken = uuidv4();
+    const verificationTokenExpiration = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
+
+    // Actualizar usuario con nuevo token
+    await this.prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        emailVerificationToken: verificationToken,
+        emailVerificationExpiracion: verificationTokenExpiration,
+      },
+    });
+
+    // Enviar email de verificación
+    try {
+      const emailSent = await this.emailService.sendVerificationEmail(
+        usuario.email,
+        verificationToken,
+        usuario.persona.nombres
+      );
+
+      if (emailSent) {
+        this.logger.info('Verification email resent successfully', { email: usuario.email });
+      } else {
+        this.logger.warn('Verification email could not be sent', { email: usuario.email });
+        throw new BadRequestException('No se pudo enviar el email de verificación. Intenta nuevamente más tarde.');
+      }
+    } catch (error) {
+      this.logger.error('Failed to resend verification email', error.stack, { email: usuario.email });
+      throw new BadRequestException('Error al enviar el email de verificación. Intenta nuevamente más tarde.');
+    }
+
+    this.logger.success('Verification email resent successfully', {
+      userId: usuario.id,
+      email: usuario.email,
+    });
+
+    return {
+      success: true,
+      message: 'Email de verificación enviado. Por favor, revisa tu bandeja de entrada o spam.',
+    };
+  }
+
+  /**
    * Solicitar recuperación de contraseña
    */
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {

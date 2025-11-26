@@ -100,7 +100,7 @@ private async verifyConnection(): Promise<boolean> {
    * Enviar email genérico
    */
   async sendEmail(options: EmailOptions): Promise<boolean> {
-  console.log('Attempting send to:', options.to, 'from:', this.configService.get('EMAIL_USER'));
+  console.log('Attempting send to:', options.to, 'from:', this.configService.get('EMAIL_FROM'));
   const requestId = this.generateRequestId();  // Agrega método abajo
   this.logger.info('Iniciando envío de email', {
     requestId,
@@ -128,7 +128,7 @@ private async verifyConnection(): Promise<boolean> {
     }
 
     const info = await this.transporter.sendMail({
-      from: this.configService.get('EMAIL_USER'),
+      from: this.configService.get('EMAIL_FROM'),
       to: options.to,
       subject: options.subject,
       text: options.text,

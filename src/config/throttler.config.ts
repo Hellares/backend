@@ -1,17 +1,15 @@
-export const throttlerConfig = [
-  {
-    name: 'auth-endpoints',
-    ttl: 900000, // 15 minutes
-    limit: 5, // 5 attempts per 15 minutes
-  },
-  {
-    name: 'general-endpoints',
-    ttl: 900000, // 15 minutes
-    limit: 100, // 100 requests per 15 minutes
-  },
-  {
-    name: 'password-reset',
-    ttl: 3600000, // 1 hour
-    limit: 3, // 3 password reset attempts per hour
-  },
-];
+/**
+ * Configuración de Throttler (Rate Limiting HTTP)
+ * Lee valores desde variables de entorno
+ *
+ * IMPORTANTE: El ThrottlerGuard usa SOLO el throttler 'default'
+ * Los throttlers nombrados no se usan automáticamente en NestJS v10+
+ */
+export const throttlerConfig = {
+  throttlers: [
+    {
+      ttl: parseInt(process.env.THROTTLE_TTL || '60000', 10), // 60 segundos = 1 minuto
+      limit: parseInt(process.env.THROTTLE_LIMIT || '10', 10), // 10 requests por minuto
+    }
+  ]
+};

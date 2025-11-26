@@ -27,6 +27,7 @@ import {
   ChangePasswordDto,
   ForgotPasswordDto,
   ResetPasswordDto,
+  ResendVerificationEmailDto,
 } from './dto';
 
 @ApiTags('Autenticación')
@@ -42,8 +43,7 @@ export class AuthController {
    */
   @Post('register')
   @Public()
-  @UseGuards(ThrottlerGuard)
-  @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 intentos por minuto
+  @UseGuards(ThrottlerGuard)  // Usa THROTTLE_LIMIT desde .env
   @ApiOperation({ summary: 'Registrar nuevo usuario' })
   @ApiResponse({
     status: 201,
@@ -78,8 +78,7 @@ export class AuthController {
    */
   @Post('login')
   @Public()
-  // @UseGuards(ThrottlerGuard)
-  // @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 intentos por minuto
+  @UseGuards(ThrottlerGuard)  // Usa THROTTLE_LIMIT desde .env
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Iniciar sesión' })
   @ApiResponse({
@@ -125,8 +124,7 @@ export class AuthController {
    */
   @Post('refresh')
   @Public()
-  @UseGuards(ThrottlerGuard)
-  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 intentos por minuto
+  @UseGuards(ThrottlerGuard)  // Usa THROTTLE_LIMIT desde .env
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refrescar access token' })
   @ApiResponse({
@@ -230,6 +228,31 @@ export class AuthController {
       const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
       return res.redirect(`${frontendUrl}/auth/email-verified?success=false&error=${encodeURIComponent(error.message)}`);
     }
+  }
+
+  /**
+   * Reenviar email de verificación
+   */
+  @Post('resend-verification-email')
+  @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 intentos por minuto
+  @ApiOperation({ summary: 'Reenviar email de verificación' })
+  @ApiResponse({
+    status: 200,
+    description: 'Email de verificación reenviado exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: 'Email de verificación enviado. Por favor, revisa tu bandeja de entrada o spam.' },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Email ya verificado o reenviado recientemente' })
+  @ApiResponse({ status: 429, description: 'Demasiados intentos, intenta nuevamente más tarde' })
+  async resendVerificationEmail(@Body() resendDto: ResendVerificationEmailDto) {
+    return await this.authService.resendVerificationEmail(resendDto.email);
   }
 
   /**
