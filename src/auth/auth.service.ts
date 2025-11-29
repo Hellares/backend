@@ -156,7 +156,7 @@ export class AuthService {
    * Login de usuario
    */
   async login(loginDto: LoginDto, request?: any) {
-    const { email, password, subdominioEmpresa, rol: rolSeleccionado } = loginDto;
+    const { email, password, subdominioEmpresa, rol: rolSeleccionado, loginMode } = loginDto;
 
     // Verificar si la cuenta está bloqueada
     const lockStatus = await this.securityService.isLockedOut(email, 'login');
@@ -216,10 +216,51 @@ export class AuthService {
       throw new UnauthorizedException('Por favor verifica tu email antes de iniciar sesión. Revisa tu bandeja de entrada.');
     }
 
-    // ========== LÓGICA MEJORADA: Selección de Empresa ==========
+    // ========== LÓGICA DUAL MODE: Marketplace vs Management ==========
 
-    // Si NO se proporciona subdominio, retornar empresas disponibles
-    if (!subdominioEmpresa) {
+    // Caso 1: Usuario solicita explícitamente login en modo MARKETPLACE
+    if (loginMode === 'marketplace') {
+      this.logger.info('User logging in to Marketplace mode', {
+        userId: usuario.id,
+        email,
+      });
+
+      // Limpiar intentos fallidos
+      await this.securityService.clearFailedAttempts(email, 'login');
+
+      // Actualizar último login
+      await this.prisma.usuario.update({
+        where: { id: usuario.id },
+        data: { lastLoginAt: new Date() },
+      });
+
+      // Generar tokens SIN contexto de tenant (marketplace mode)
+      const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+
+      // Log de auditoría
+      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+
+      return {
+        user: {
+          id: usuario.id,
+          email: usuario.email,
+          nombres: usuario.persona.nombres,
+          apellidos: usuario.persona.apellidos,
+          emailVerificado: usuario.emailVerificado,
+          rolGlobal: usuario.rolGlobal,
+        },
+        mode: 'marketplace',
+        ...tokens,
+      };
+    }
+
+    // Caso 2: Usuario solicita login en modo MANAGEMENT (debe tener subdominio)
+    if (loginMode === 'management' && !subdominioEmpresa) {
+      throw new BadRequestException('Modo "management" requiere especificar "subdominioEmpresa"');
+    }
+
+    // Caso 3: NO se especifica loginMode ni subdominio → Determinar automáticamente
+    if (!loginMode && !subdominioEmpresa) {
       // Buscar todas las empresas donde el usuario tiene roles
       const empresasUsuario = await this.prisma.empresaUsuarioRol.findMany({
         where: {
@@ -239,14 +280,41 @@ export class AuthService {
       });
 
       if (empresasUsuario.length === 0) {
-        // Usuario sin empresas → Login sin contexto tenant (usuario global)
-        this.logger.warn('User has no companies assigned', {
+        // Usuario sin empresas → Login automático en modo MARKETPLACE
+        this.logger.info('User has no companies, logging in to Marketplace mode', {
           userId: usuario.id,
           email,
         });
 
-        // Continuar con login sin tenant (para usuarios globales o sin empresa)
+        // Limpiar intentos fallidos
+        await this.securityService.clearFailedAttempts(email, 'login');
+
+        // Actualizar último login
+        await this.prisma.usuario.update({
+          where: { id: usuario.id },
+          data: { lastLoginAt: new Date() },
+        });
+
+        // Generar tokens SIN contexto de tenant
+        const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+
+        // Log de auditoría
+        this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+
+        return {
+          user: {
+            id: usuario.id,
+            email: usuario.email,
+            nombres: usuario.persona.nombres,
+            apellidos: usuario.persona.apellidos,
+            emailVerificado: usuario.emailVerificado,
+            rolGlobal: usuario.rolGlobal,
+          },
+          mode: 'marketplace',
+          ...tokens,
+        };
       } else {
+        // Usuario tiene empresas → Ofrecer opciones (Marketplace o Management)
         // Agrupar roles por empresa
         const empresasMap = new Map();
 
@@ -268,7 +336,7 @@ export class AuthService {
 
         const availableCompanies = Array.from(empresasMap.values());
 
-        this.logger.info('User requires company selection', {
+        this.logger.info('User requires mode selection', {
           userId: usuario.id,
           email,
           companiesCount: availableCompanies.length,
@@ -277,10 +345,10 @@ export class AuthService {
         // Limpiar intentos fallidos
         await this.securityService.clearFailedAttempts(email, 'login');
 
-        // Retornar empresas disponibles SIN generar tokens
+        // Retornar opciones de modo SIN generar tokens
         return {
-          requiresCompanySelection: true,
-          message: 'Por favor selecciona una empresa para continuar',
+          requiresSelection: true,
+          message: '¿Qué deseas hacer?',
           user: {
             id: usuario.id,
             email: usuario.email,
@@ -288,7 +356,19 @@ export class AuthService {
             apellidos: usuario.persona.apellidos,
             emailVerificado: usuario.emailVerificado,
           },
-          availableCompanies,
+          options: [
+            {
+              type: 'marketplace',
+              label: 'Ver Marketplace',
+              description: 'Explorar productos y servicios de todas las empresas',
+            },
+            {
+              type: 'management',
+              label: 'Gestionar Empresas',
+              description: 'Acceder al panel de gestión de tus empresas',
+              availableCompanies,
+            },
+          ],
         };
       }
     }
@@ -372,6 +452,7 @@ export class AuthService {
         emailVerificado: usuario.emailVerificado,
         rolGlobal: usuario.rolGlobal,
       },
+      mode: empresaId ? 'management' : 'marketplace',
       tenant: empresaId ? {
         id: empresaId,
         name: tenantName,
@@ -884,7 +965,7 @@ export class AuthService {
   /**
    * Autenticación con Google (verificación de ID Token)
    */
-  async authenticateWithGoogle(idToken: string, request?: any) {
+  async authenticateWithGoogle(idToken: string, request?: any, subdominioEmpresa?: string, loginMode?: 'marketplace' | 'management') {
     try {
       // Inicializar cliente de Google
       const client = new OAuth2Client(this.configService.get<string>('GOOGLE_CLIENT_ID'));
@@ -1029,8 +1110,202 @@ export class AuthService {
         }
       }
 
+      // ========== LÓGICA DUAL MODE: Marketplace vs Management (Google) ==========
+
+      // Caso 1: Usuario solicita explícitamente login en modo MARKETPLACE
+      if (loginMode === 'marketplace') {
+        this.logger.info('User logging in to Marketplace mode (Google)', {
+          userId: usuario.id,
+          email,
+        });
+
+        // Actualizar último login
+        await this.prisma.usuario.update({
+          where: { id: usuario.id },
+          data: { lastLoginAt: new Date() },
+        });
+
+        // Generar tokens SIN contexto de tenant (marketplace mode)
+        const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+
+        // Log de auditoría
+        this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+
+        return {
+          user: {
+            id: usuario.id,
+            email: usuario.email,
+            nombres: usuario.persona.nombres,
+            apellidos: usuario.persona.apellidos,
+            emailVerificado: usuario.emailVerificado,
+            rolGlobal: usuario.rolGlobal,
+            photoUrl,
+          },
+          mode: 'marketplace',
+          ...tokens,
+        };
+      }
+
+      // Caso 2: Usuario solicita login en modo MANAGEMENT (debe tener subdominio)
+      if (loginMode === 'management' && !subdominioEmpresa) {
+        throw new BadRequestException('Modo "management" requiere especificar "subdominioEmpresa"');
+      }
+
+      // Caso 3: NO se especifica loginMode ni subdominio → Determinar automáticamente
+      if (!loginMode && !subdominioEmpresa) {
+        // Buscar todas las empresas donde el usuario tiene roles
+        const empresasUsuario = await this.prisma.empresaUsuarioRol.findMany({
+          where: {
+            usuarioId: usuario.id,
+            isActive: true,
+          },
+          include: {
+            empresa: {
+              select: {
+                id: true,
+                nombre: true,
+                subdominio: true,
+                logo: true,
+              },
+            },
+          },
+        });
+
+        if (empresasUsuario.length === 0) {
+          // Usuario sin empresas → Login automático en modo MARKETPLACE
+          this.logger.info('User has no companies, logging in to Marketplace mode (Google)', {
+            userId: usuario.id,
+            email,
+          });
+
+          // Actualizar último login
+          await this.prisma.usuario.update({
+            where: { id: usuario.id },
+            data: { lastLoginAt: new Date() },
+          });
+
+          // Generar tokens SIN contexto de tenant
+          const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+
+          // Log de auditoría
+          this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+
+          return {
+            user: {
+              id: usuario.id,
+              email: usuario.email,
+              nombres: usuario.persona.nombres,
+              apellidos: usuario.persona.apellidos,
+              emailVerificado: usuario.emailVerificado,
+              rolGlobal: usuario.rolGlobal,
+              photoUrl,
+            },
+            mode: 'marketplace',
+            ...tokens,
+          };
+        } else {
+          // Usuario tiene empresas → Ofrecer opciones (Marketplace o Management)
+          // Agrupar roles por empresa
+          const empresasMap = new Map();
+
+          empresasUsuario.forEach((rel) => {
+            const empresaId = rel.empresa.id;
+
+            if (!empresasMap.has(empresaId)) {
+              empresasMap.set(empresaId, {
+                id: rel.empresa.id,
+                nombre: rel.empresa.nombre,
+                subdominio: rel.empresa.subdominio,
+                logo: rel.empresa.logo,
+                roles: [],
+              });
+            }
+
+            empresasMap.get(empresaId).roles.push(rel.rol);
+          });
+
+          const availableCompanies = Array.from(empresasMap.values());
+
+          this.logger.info('User requires mode selection (Google login)', {
+            userId: usuario.id,
+            email,
+            companiesCount: availableCompanies.length,
+          });
+
+          // Retornar opciones de modo SIN generar tokens
+          return {
+            requiresSelection: true,
+            message: '¿Qué deseas hacer?',
+            user: {
+              id: usuario.id,
+              email: usuario.email,
+              nombres: usuario.persona.nombres,
+              apellidos: usuario.persona.apellidos,
+              emailVerificado: usuario.emailVerificado,
+              photoUrl,
+            },
+            options: [
+              {
+                type: 'marketplace',
+                label: 'Ver Marketplace',
+                description: 'Explorar productos y servicios de todas las empresas',
+              },
+              {
+                type: 'management',
+                label: 'Gestionar Empresas',
+                description: 'Acceder al panel de gestión de tus empresas',
+                availableCompanies,
+              },
+            ],
+          };
+        }
+      }
+
+      // Determinar tenant y rol(es) cuando SÍ se proporciona subdominio
+      let empresaId = undefined;
+      let tenantRole = undefined;
+      let tenantName = undefined;
+      let availableRoles = undefined;
+
+      if (subdominioEmpresa) {
+        const empresa = await this.prisma.empresa.findUnique({
+          where: { subdominio: subdominioEmpresa },
+        });
+
+        if (!empresa) {
+          throw new NotFoundException('Empresa no encontrada');
+        }
+
+        empresaId = empresa.id;
+        tenantName = empresa.nombre;
+
+        // Buscar TODOS los roles del usuario en esta empresa
+        const rolesUsuario = await this.prisma.empresaUsuarioRol.findMany({
+          where: {
+            usuarioId: usuario.id,
+            empresaId: empresa.id,
+            isActive: true,
+          },
+        });
+
+        if (rolesUsuario.length === 0) {
+          throw new UnauthorizedException('No tienes acceso a esta empresa');
+        }
+
+        availableRoles = rolesUsuario.map(r => r.rol);
+
+        // Si tiene múltiples roles, usar el primero
+        tenantRole = rolesUsuario[0].rol;
+      }
+
+      // Actualizar último login
+      await this.prisma.usuario.update({
+        where: { id: usuario.id },
+        data: { lastLoginAt: new Date() },
+      });
+
       // Generar tokens JWT propios del sistema
-      const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo);
+      const tokens = await this.generateTokens(usuario, empresaId, tenantRole, tenantName, clientInfo, availableRoles);
 
       // Log de auditoría para login exitoso
       this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
@@ -1038,6 +1313,7 @@ export class AuthService {
       this.logger.info('User authenticated with Google successfully', {
         userId: usuario.id,
         email,
+        tenantId: empresaId,
         ip: clientInfo?.ip,
       });
 
@@ -1051,6 +1327,13 @@ export class AuthService {
           rolGlobal: usuario.rolGlobal,
           photoUrl,
         },
+        mode: empresaId ? 'management' : 'marketplace',
+        tenant: empresaId ? {
+          id: empresaId,
+          name: tenantName,
+          role: tenantRole,
+          availableRoles: availableRoles,
+        } : undefined,
         ...tokens,
       };
     } catch (error) {

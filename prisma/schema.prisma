@@ -37,22 +37,40 @@ model Persona {
 }
 
 model Empresa {
-  id                       String                        @id @default(cuid())
-  nombre                   String
-  ruc                      String?                       @unique
-  subdominio               String?                       @unique
-  logo                     String?
-  isActive                 Boolean                       @default(true)
-  deletedAt                DateTime?
-  descripcion              String?
-  web                      String?
-  telefono                 String?
-  email                    String?
-  planSuscripcionId        String?
-  fechaInicioSuscripcion   DateTime?
-  fechaVencimiento         DateTime?
-  estadoSuscripcion        EstadoSuscripcion             @default(ACTIVA)
-  usuariosActuales         Int                           @default(0)
+  id                     String            @id @default(cuid())
+  nombre                 String
+  ruc                    String?           @unique
+  subdominio             String?           @unique
+  logo                   String?
+  isActive               Boolean           @default(true)
+  deletedAt              DateTime?
+  descripcion            String?
+  web                    String?
+  telefono               String?
+  email                  String?
+  planSuscripcionId      String?
+  fechaInicioSuscripcion DateTime?
+  fechaVencimiento       DateTime?
+  estadoSuscripcion      EstadoSuscripcion @default(ACTIVA)
+  usuariosActuales       Int               @default(0)
+
+  // Campos para Marketplace
+  visibleEnMarketplace Boolean @default(true)
+  destacadoMarketplace Boolean @default(false)
+  ordenMarketplace     Int?
+  vistasMarketplace    Int     @default(0)
+
+  // SEO y Metadata
+  metaTitle       String?
+  metaDescription String?
+  keywords        String?
+
+  // Redes Sociales
+  facebook  String?
+  instagram String?
+  twitter   String?
+  linkedin  String?
+
   creadoEn                 DateTime                      @default(now())
   actualizadoEn            DateTime                      @updatedAt
   categorias               Categoria[]
@@ -83,34 +101,37 @@ model Empresa {
   @@index([fechaVencimiento])
   @@index([estadoSuscripcion])
   @@index([deletedAt])
+  @@index([visibleEnMarketplace])
+  @@index([destacadoMarketplace])
+  @@index([ordenMarketplace])
 }
 
 model Usuario {
-  id                            String              @id @default(cuid())
-  personaId                     String              @unique
-  email                         String              @unique
-  telefono                      String?             @unique
-  passwordHash                  String?
-  isActive                      Boolean             @default(true)
-  deletedAt                     DateTime?
-  lastLoginAt                   DateTime?
-  resetToken                    String?             @unique
-  resetTokenExpiracion          DateTime?
-  emailVerificationToken        String?             @unique
-  emailVerificationExpiracion   DateTime?
-  emailVerificado               Boolean             @default(false)
-  telefonoVerificado            Boolean             @default(false)
-  rolGlobal                     Rol?
-  creadoEn                      DateTime            @default(now())
-  actualizadoEn                 DateTime            @updatedAt
-  authProviders                 AuthProvider[]
-  empresas                      EmpresaUsuarioRol[]
-  metodosPagoConfigurados       MetodoPago[]        @relation("MetodoPagoUsuario")
-  ordenesServicio               OrdenServicio[]
-  registrosComoCliente          RegistroCliente[]
-  transacciones                 TransaccionPago[]
-  persona                       Persona             @relation(fields: [personaId], references: [id], onDelete: Restrict)
-  sedes                         UsuarioSedeRol[]
+  id                          String              @id @default(cuid())
+  personaId                   String              @unique
+  email                       String              @unique
+  telefono                    String?             @unique
+  passwordHash                String?
+  isActive                    Boolean             @default(true)
+  deletedAt                   DateTime?
+  lastLoginAt                 DateTime?
+  resetToken                  String?             @unique
+  resetTokenExpiracion        DateTime?
+  emailVerificationToken      String?             @unique
+  emailVerificationExpiracion DateTime?
+  emailVerificado             Boolean             @default(false)
+  telefonoVerificado          Boolean             @default(false)
+  rolGlobal                   Rol?
+  creadoEn                    DateTime            @default(now())
+  actualizadoEn               DateTime            @updatedAt
+  authProviders               AuthProvider[]
+  empresas                    EmpresaUsuarioRol[]
+  metodosPagoConfigurados     MetodoPago[]        @relation("MetodoPagoUsuario")
+  ordenesServicio             OrdenServicio[]
+  registrosComoCliente        RegistroCliente[]
+  transacciones               TransaccionPago[]
+  persona                     Persona             @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  sedes                       UsuarioSedeRol[]
 
   @@index([email])
   @@index([telefono])
@@ -287,28 +308,40 @@ model Marca {
 }
 
 model Producto {
-  id                  String                   @id @default(cuid())
-  empresaId           String
-  sedeId              String?
-  categoriaId         String?
-  marcaId             String?
-  codigoEmpresa       String                   @unique
-  codigoSistema       String                   @unique
-  sku                 String?
-  codigoBarras        String?
-  nombre              String
-  descripcion         String?
-  detalles            Json?
-  precio              Decimal                  @db.Decimal(10, 2)
-  precioCosto         Decimal?                 @db.Decimal(10, 2)
-  stock               Int                      @default(0)
-  stockMinimo         Int?
-  peso                Decimal?                 @db.Decimal(10, 3)
-  dimensiones         Json?
-  imagenes            Json?
-  videoUrl            String?
-  impuestoPorcentaje  Decimal?                 @db.Decimal(5, 2)
-  descuentoMaximo     Decimal?                 @db.Decimal(5, 2)
+  id                 String   @id @default(cuid())
+  empresaId          String
+  sedeId             String?
+  categoriaId        String?
+  marcaId            String?
+  codigoEmpresa      String   @unique
+  codigoSistema      String   @unique
+  sku                String?
+  codigoBarras       String?
+  nombre             String
+  descripcion        String?
+  detalles           Json?
+  precio             Decimal  @db.Decimal(10, 2)
+  precioCosto        Decimal? @db.Decimal(10, 2)
+  stock              Int      @default(0)
+  stockMinimo        Int?
+  peso               Decimal? @db.Decimal(10, 3)
+  dimensiones        Json?
+  imagenes           Json?
+  videoUrl           String?
+  impuestoPorcentaje Decimal? @db.Decimal(5, 2)
+  descuentoMaximo    Decimal? @db.Decimal(5, 2)
+
+  // Campos para Marketplace
+  visibleMarketplace Boolean @default(true)
+  destacado          Boolean @default(false)
+  ordenMarketplace   Int?
+
+  // Sistema de Ofertas
+  enOferta          Boolean   @default(false)
+  precioOferta      Decimal?  @db.Decimal(10, 2)
+  fechaInicioOferta DateTime?
+  fechaFinOferta    DateTime?
+
   isActive            Boolean                  @default(true)
   deletedAt           DateTime?
   creadoEn            DateTime                 @default(now())
@@ -330,39 +363,56 @@ model Producto {
   @@index([isActive])
   @@index([deletedAt])
   @@index([stock])
+  @@index([visibleMarketplace])
+  @@index([destacado])
+  @@index([ordenMarketplace])
+  @@index([enOferta])
+  @@index([fechaFinOferta])
 }
 
 model Servicio {
-  id                    String                   @id @default(cuid())
+  id                    String   @id @default(cuid())
   empresaId             String
   sedeId                String?
   categoriaId           String?
-  codigoEmpresa         String                   @unique
-  codigoSistema         String                   @unique
+  codigoEmpresa         String   @unique
+  codigoSistema         String   @unique
   nombre                String
   descripcion           String?
   detalles              Json?
-  precio                Decimal?                 @db.Decimal(10, 2)
-  precioPorHora         Decimal?                 @db.Decimal(10, 2)
+  precio                Decimal? @db.Decimal(10, 2)
+  precioPorHora         Decimal? @db.Decimal(10, 2)
   duracionMinutos       Int?
-  duracionHoras         Decimal?                 @db.Decimal(5, 2)
-  requiereReserva       Boolean                  @default(false)
-  requiereDeposito      Boolean                  @default(false)
-  depositoPorcentaje    Decimal?                 @db.Decimal(5, 2)
+  duracionHoras         Decimal? @db.Decimal(5, 2)
+  requiereReserva       Boolean  @default(false)
+  requiereDeposito      Boolean  @default(false)
+  depositoPorcentaje    Decimal? @db.Decimal(5, 2)
   antigenciaMinimaHoras Int?
   imagenes              Json?
   videoUrl              String?
-  impuestoPorcentaje    Decimal?                 @db.Decimal(5, 2)
-  comisionTecnico       Decimal?                 @db.Decimal(5, 2)
-  isActive              Boolean                  @default(true)
-  deletedAt             DateTime?
-  creadoEn              DateTime                 @default(now())
-  actualizadoEn         DateTime                 @updatedAt
-  detallesComprobante   DetalleComprobante[]     @relation("DetalleServicio")
-  categoria             Categoria?               @relation(fields: [categoriaId], references: [id])
-  empresa               Empresa                  @relation(fields: [empresaId], references: [id])
-  sede                  Sede?                    @relation(fields: [sedeId], references: [id])
-  comprobantes          ComprobanteElectronico[] @relation("ServicioComprobante")
+  impuestoPorcentaje    Decimal? @db.Decimal(5, 2)
+  comisionTecnico       Decimal? @db.Decimal(5, 2)
+
+  // Campos para Marketplace
+  visibleMarketplace Boolean @default(true)
+  destacado          Boolean @default(false)
+  ordenMarketplace   Int?
+
+  // Sistema de Ofertas
+  enOferta          Boolean   @default(false)
+  precioOferta      Decimal?  @db.Decimal(10, 2)
+  fechaInicioOferta DateTime?
+  fechaFinOferta    DateTime?
+
+  isActive            Boolean                  @default(true)
+  deletedAt           DateTime?
+  creadoEn            DateTime                 @default(now())
+  actualizadoEn       DateTime                 @updatedAt
+  detallesComprobante DetalleComprobante[]     @relation("DetalleServicio")
+  categoria           Categoria?               @relation(fields: [categoriaId], references: [id])
+  empresa             Empresa                  @relation(fields: [empresaId], references: [id])
+  sede                Sede?                    @relation(fields: [sedeId], references: [id])
+  comprobantes        ComprobanteElectronico[] @relation("ServicioComprobante")
 
   @@unique([empresaId, codigoEmpresa])
   @@index([empresaId])
@@ -371,6 +421,11 @@ model Servicio {
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])
+  @@index([visibleMarketplace])
+  @@index([destacado])
+  @@index([ordenMarketplace])
+  @@index([enOferta])
+  @@index([fechaFinOferta])
 }
 
 model ConfiguracionCamposServicio {

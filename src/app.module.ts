@@ -7,6 +7,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { AuthModule } from './auth/auth.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
 import { EmpresaModule } from './empresa/empresa.module';
+import { MarketplaceModule } from './marketplace/marketplace.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { validate } from './config/validation';
@@ -23,6 +24,7 @@ import { validate } from './config/validation';
     AuthModule,
     UsuariosModule,
     EmpresaModule,
+    MarketplaceModule,
   ],
   controllers: [AppController],
   providers: [

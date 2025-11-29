@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsIn } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class GoogleAuthDto {
@@ -9,4 +9,24 @@ export class GoogleAuthDto {
   @IsString()
   @IsNotEmpty()
   idToken: string;
+
+  @ApiProperty({
+    description: 'Subdominio de la empresa (opcional, para segundo paso del flujo)',
+    example: 'empresa123',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  subdominioEmpresa?: string;
+
+  @ApiProperty({
+    description: 'Modo de login: marketplace (sin tenant) o management (con tenant)',
+    example: 'marketplace',
+    required: false,
+    enum: ['marketplace', 'management'],
+  })
+  @IsString()
+  @IsOptional()
+  @IsIn(['marketplace', 'management'])
+  loginMode?: 'marketplace' | 'management';
 }

@@ -4,7 +4,8 @@ import {
   IsString,
   MaxLength,
   IsOptional,
-  IsEnum
+  IsEnum,
+  IsIn
 } from 'class-validator';
 import { Rol } from '@prisma/client';
 
@@ -29,4 +30,10 @@ export class LoginDto {
   @IsEnum(Rol)
   @IsOptional()
   rol?: Rol; // Rol específico a usar en esta sesión
+
+  // Modo de login: marketplace (sin tenant) o management (con tenant)
+  @IsString()
+  @IsOptional()
+  @IsIn(['marketplace', 'management'])
+  loginMode?: 'marketplace' | 'management';
 }

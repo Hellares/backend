@@ -163,7 +163,12 @@ export class AuthController {
     @Body() googleAuthDto: GoogleAuthDto,
     @Request() req,
   ) {
-    return this.authService.authenticateWithGoogle(googleAuthDto.idToken, req);
+    return this.authService.authenticateWithGoogle(
+      googleAuthDto.idToken,
+      req,
+      googleAuthDto.subdominioEmpresa,
+      googleAuthDto.loginMode,
+    );
   }
 
   /**
