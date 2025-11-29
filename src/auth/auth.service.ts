@@ -15,6 +15,7 @@ import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthSessionService } from './auth.session.service';
 import { AuthSecurityService } from './services/auth.security.service';
+import { OAuth2Client } from 'google-auth-library';
 
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -878,6 +879,189 @@ export class AuthService {
     this.logger.success('Password changed successfully', { userId });
 
     return { message: 'Contraseña cambiada exitosamente' };
+  }
+
+  /**
+   * Autenticación con Google (verificación de ID Token)
+   */
+  async authenticateWithGoogle(idToken: string, request?: any) {
+    try {
+      // Inicializar cliente de Google
+      const client = new OAuth2Client(this.configService.get<string>('GOOGLE_CLIENT_ID'));
+
+      // Aceptar múltiples Client IDs (Web y Android)
+      const webClientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
+      const androidClientId = this.configService.get<string>('GOOGLE_ANDROID_CLIENT_ID');
+
+      // Verificar el ID token con Google, aceptando ambos Client IDs
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: [webClientId, androidClientId].filter(Boolean), // Filtrar valores nulos/undefined
+      });
+
+      const payload = ticket.getPayload();
+
+      if (!payload || !payload.email) {
+        throw new UnauthorizedException('Token de Google inválido');
+      }
+
+      // Extraer información del usuario desde el token de Google
+      const {
+        sub: googleId,
+        email,
+        given_name: nombres,
+        family_name: apellidos,
+        picture: photoUrl,
+        email_verified: emailVerified,
+      } = payload;
+
+      // Obtener información del cliente
+      const clientInfo = request ? this.securityService.getClientInfo(request) : {
+        ip: '127.0.0.1',
+        userAgent: 'Unknown Device',
+        device: 'Mobile App',
+        platform: 'Unknown'
+      };
+
+      // Buscar si ya existe un AuthProvider con este googleId
+      let authProvider = await this.prisma.authProvider.findUnique({
+        where: {
+          provider_providerId: {
+            provider: 'GOOGLE',
+            providerId: googleId,
+          },
+        },
+        include: {
+          usuario: {
+            include: {
+              persona: true,
+            },
+          },
+        },
+      });
+
+      let usuario;
+
+      if (authProvider) {
+        // Usuario ya existe con Google OAuth
+        usuario = authProvider.usuario;
+
+        if (!usuario.isActive) {
+          throw new UnauthorizedException('Cuenta desactivada');
+        }
+
+        // Actualizar último login
+        await this.prisma.usuario.update({
+          where: { id: usuario.id },
+          data: { lastLoginAt: new Date() },
+        });
+      } else {
+        // Verificar si ya existe un usuario con este email (registrado con email/password)
+        const existingUser = await this.prisma.usuario.findUnique({
+          where: { email },
+          include: {
+            persona: true,
+          },
+        });
+
+        if (existingUser) {
+          // Vincular cuenta existente con Google
+          usuario = existingUser;
+
+          // Crear AuthProvider para vincular Google
+          await this.prisma.authProvider.create({
+            data: {
+              userId: usuario.id,
+              provider: 'GOOGLE',
+              providerId: googleId,
+              email,
+              isActive: true,
+            },
+          });
+
+          this.logger.info('Existing user linked with Google', {
+            userId: usuario.id,
+            email,
+          });
+        } else {
+          // Crear nuevo usuario con Google OAuth
+          // Primero crear la persona
+          const persona = await this.prisma.persona.create({
+            data: {
+              nombres: nombres || 'Usuario',
+              apellidos: apellidos || 'Google',
+              email,
+              esUsuario: true,
+            },
+          });
+
+          // Crear el usuario (sin contraseña porque es OAuth)
+          usuario = await this.prisma.usuario.create({
+            data: {
+              personaId: persona.id,
+              email,
+              emailVerificado: emailVerified || true, // Google ya verificó el email
+              telefonoVerificado: false,
+            },
+            include: {
+              persona: true,
+            },
+          });
+
+          // Crear AuthProvider
+          await this.prisma.authProvider.create({
+            data: {
+              userId: usuario.id,
+              provider: 'GOOGLE',
+              providerId: googleId,
+              email,
+              isActive: true,
+            },
+          });
+
+          // Log de auditoría
+          this.auditLogger.logUserRegistered(usuario.id, email, null);
+
+          this.logger.success('New user created via Google OAuth', {
+            userId: usuario.id,
+            email,
+          });
+        }
+      }
+
+      // Generar tokens JWT propios del sistema
+      const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo);
+
+      // Log de auditoría para login exitoso
+      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+
+      this.logger.info('User authenticated with Google successfully', {
+        userId: usuario.id,
+        email,
+        ip: clientInfo?.ip,
+      });
+
+      return {
+        user: {
+          id: usuario.id,
+          email: usuario.email,
+          nombres: usuario.persona.nombres,
+          apellidos: usuario.persona.apellidos,
+          emailVerificado: usuario.emailVerificado,
+          rolGlobal: usuario.rolGlobal,
+          photoUrl,
+        },
+        ...tokens,
+      };
+    } catch (error) {
+      this.logger.error('Google authentication failed', error.stack);
+
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+
+      throw new UnauthorizedException('Error al autenticar con Google: ' + error.message);
+    }
   }
 
   /**

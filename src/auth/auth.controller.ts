@@ -29,6 +29,7 @@ import {
   ResetPasswordDto,
   ResendVerificationEmailDto,
 } from './dto';
+import { GoogleAuthDto } from './dto/google-auth.dto';
 
 @ApiTags('Autenticación')
 @Controller('auth')
@@ -117,6 +118,52 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
   async login(@Body() loginDto: LoginDto, @Request() req) {
     return this.authService.login(loginDto, req);
+  }
+
+  /**
+   * Autenticación con Google
+   */
+  @Post('google')
+  @Public()
+  @UseGuards(ThrottlerGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Autenticación con Google (verificación de ID Token)',
+    description: 'Autentica un usuario usando el ID Token obtenido desde Google Sign-In en la app móvil',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Autenticación exitosa con Google',
+    schema: {
+      type: 'object',
+      properties: {
+        user: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            email: { type: 'string' },
+            nombres: { type: 'string' },
+            apellidos: { type: 'string' },
+            emailVerificado: { type: 'boolean' },
+            rolGlobal: { type: 'string', nullable: true },
+            photoUrl: { type: 'string', nullable: true },
+          },
+        },
+        accessToken: { type: 'string' },
+        refreshToken: { type: 'string' },
+        expiresIn: { type: 'string' },
+        sessionId: { type: 'string' },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Token de Google inválido' })
+  @ApiResponse({ status: 429, description: 'Demasiados intentos. Intente más tarde' })
+  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
+  async authenticateWithGoogle(
+    @Body() googleAuthDto: GoogleAuthDto,
+    @Request() req,
+  ) {
+    return this.authService.authenticateWithGoogle(googleAuthDto.idToken, req);
   }
 
   /**
