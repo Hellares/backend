@@ -68,7 +68,7 @@ RUN mkdir -p /app/logs && \
 USER nestjs
 
 # Exponer puerto
-EXPOSE 5000
+EXPOSE 6000
 
 # Comando de inicio
 CMD ["node", "dist/src/main.js"]
