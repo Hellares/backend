@@ -1,10 +1,20 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { EstadoSuscripcion, Rol } from '@prisma/client';
+import { EstadoSuscripcion, Rol, EmpresaUsuarioRol } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { AuditLoggerService, AuditAction } from '../common/logger/audit-logger.service';
+import {
+  EmpresaContextResponseDto,
+  EmpresaPermissionsDto,
+  EmpresaStatisticsDto,
+  SedeResponseDto,
+  UserRoleInfoDto,
+  EmpresaInfoDto,
+  PersonalizacionEmpresaDto,
+  PersonalizacionEmpresaResponseDto,
+} from './dto';
 
 export interface CreateEmpresaData {
   nombre: string;
@@ -504,5 +514,437 @@ export class EmpresaService {
     });
 
     return this.formatEmpresaResponse(empresaActualizada);
+  }
+
+  /**
+   * Obtener contexto completo de la empresa
+   * Incluye información de la empresa, roles del usuario, sedes, permisos y estadísticas
+   */
+  async getEmpresaContext(empresaId: string, userId: string): Promise<EmpresaContextResponseDto> {
+    this.logger.info('Getting empresa context', { empresaId, userId });
+
+    // 1. Verificar que el usuario tenga acceso a esta empresa y obtener sus roles
+    const userRoles = await this.prisma.empresaUsuarioRol.findMany({
+      where: {
+        empresaId,
+        usuarioId: userId,
+        isActive: true,
+        deletedAt: null,
+      },
+      orderBy: {
+        creadoEn: 'asc',
+      },
+    });
+
+    if (!userRoles.length) {
+      this.logger.warn('User does not have access to empresa', { empresaId, userId });
+      throw new ForbiddenException('No tienes acceso a esta empresa');
+    }
+
+    // 2. Obtener datos de la empresa
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      include: {
+        planSuscripcion: true,
+      },
+    });
+
+    if (!empresa || empresa.deletedAt) {
+      this.logger.warn('Empresa not found or deleted', { empresaId });
+      throw new NotFoundException('Empresa no encontrada');
+    }
+
+    // 3. Obtener sedes con roles del usuario
+    const sedes = await this.prisma.sede.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        deletedAt: null
+      },
+      include: {
+        usuarios: {
+          where: { usuarioId: userId },
+        },
+      },
+      orderBy: [
+        { esPrincipal: 'desc' },
+        { nombre: 'asc' },
+      ],
+    });
+
+    // 4. Calcular estadísticas
+    const statistics = await this.calculateStatistics(empresaId);
+
+    // 5. Calcular permisos basados en roles
+    const permissions = this.calculatePermissions(userRoles);
+
+    // 6. Formatear respuesta
+    const empresaInfo: EmpresaInfoDto = {
+      id: empresa.id,
+      nombre: empresa.nombre,
+      ruc: empresa.ruc,
+      subdominio: empresa.subdominio,
+      logo: empresa.logo,
+      email: empresa.email,
+      telefono: empresa.telefono,
+      descripcion: empresa.descripcion,
+      web: empresa.web,
+      planSuscripcionId: empresa.planSuscripcionId,
+      estadoSuscripcion: empresa.estadoSuscripcion,
+      usuariosActuales: empresa.usuariosActuales,
+      fechaInicioSuscripcion: empresa.fechaInicioSuscripcion,
+      fechaVencimiento: empresa.fechaVencimiento,
+      planSuscripcion: empresa.planSuscripcion ? {
+        id: empresa.planSuscripcion.id,
+        nombre: empresa.planSuscripcion.nombre,
+        descripcion: empresa.planSuscripcion.descripcion,
+        precio: Number(empresa.planSuscripcion.precio),
+        periodo: empresa.planSuscripcion.periodo,
+      } : undefined,
+    };
+
+    const userRolesInfo: UserRoleInfoDto[] = userRoles.map(ur => ({
+      id: ur.id,
+      rol: ur.rol,
+      isActive: ur.isActive,
+      estado: ur.estado,
+      fechaAprobacion: ur.fechaAprobacion,
+    }));
+
+    const sedesInfo: SedeResponseDto[] = sedes.map(sede => ({
+      id: sede.id,
+      nombre: sede.nombre,
+      telefono: sede.telefono,
+      email: sede.email,
+      direccion: sede.direccion,
+      esPrincipal: sede.esPrincipal,
+      isActive: sede.isActive,
+      userRole: sede.usuarios.length > 0 ? sede.usuarios[0].rol : undefined,
+    }));
+
+    this.logger.success('Empresa context retrieved successfully', {
+      empresaId,
+      userId,
+      rolesCount: userRoles.length,
+      sedesCount: sedes.length,
+    });
+
+    return {
+      empresa: empresaInfo,
+      userRoles: userRolesInfo,
+      sedes: sedesInfo,
+      permissions,
+      statistics,
+    };
+  }
+
+  /**
+   * Calcular permisos del usuario basado en sus roles en la empresa
+   */
+  private calculatePermissions(userRoles: EmpresaUsuarioRol[]): EmpresaPermissionsDto {
+    const roles = userRoles.map(r => r.rol);
+
+    const isSuperAdmin = roles.includes(Rol.SUPER_ADMIN);
+    const isEmpresaAdmin = roles.includes(Rol.EMPRESA_ADMIN);
+    const isSedeAdmin = roles.includes(Rol.SEDE_ADMIN);
+    const isCajero = roles.includes(Rol.CAJERO);
+    const isVendedor = roles.includes(Rol.VENDEDOR);
+    const isTecnico = roles.includes(Rol.TECNICO);
+    const isContador = roles.includes(Rol.CONTADOR);
+
+    return {
+      // Gestión de usuarios: Solo SUPER_ADMIN y EMPRESA_ADMIN
+      canManageUsers: isSuperAdmin || isEmpresaAdmin,
+
+      // Gestión de productos: Admins, SEDE_ADMIN, VENDEDOR
+      canManageProducts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor,
+
+      // Gestión de servicios: Admins, SEDE_ADMIN, TECNICO
+      canManageServices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
+
+      // Gestión de sedes: Solo SUPER_ADMIN y EMPRESA_ADMIN
+      canManageSedes: isSuperAdmin || isEmpresaAdmin,
+
+      // Ver reportes: Todos excepto roles muy básicos
+      canViewReports: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador || isCajero,
+
+      // Gestión de comprobantes/facturas: Admins, CAJERO, CONTADOR
+      canManageInvoices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isCajero || isContador,
+
+      // Gestión de órdenes de servicio: Admins, SEDE_ADMIN, TECNICO
+      canManageOrders: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
+
+      // Ver estadísticas: Admins y CONTADOR
+      canViewStatistics: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
+
+      // Gestión de configuración: Solo SUPER_ADMIN y EMPRESA_ADMIN
+      canManageSettings: isSuperAdmin || isEmpresaAdmin,
+
+      // Gestión de métodos de pago: Solo SUPER_ADMIN y EMPRESA_ADMIN
+      canManagePaymentMethods: isSuperAdmin || isEmpresaAdmin,
+
+      // Cambiar plan de suscripción: Solo SUPER_ADMIN y EMPRESA_ADMIN
+      canChangePlan: isSuperAdmin || isEmpresaAdmin,
+    };
+  }
+
+  /**
+   * Calcular estadísticas de la empresa
+   */
+  private async calculateStatistics(empresaId: string): Promise<EmpresaStatisticsDto> {
+    const now = new Date();
+    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    const [
+      totalProductos,
+      totalServicios,
+      totalUsuarios,
+      totalSedes,
+      ordenesPendientes,
+      comprobantesMes,
+      comprobantesConTotal,
+    ] = await Promise.all([
+      // Total de productos activos
+      this.prisma.producto.count({
+        where: {
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+      }),
+
+      // Total de servicios activos
+      this.prisma.servicio.count({
+        where: {
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+      }),
+
+      // Total de usuarios activos
+      this.prisma.empresaUsuarioRol.count({
+        where: {
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+      }),
+
+      // Total de sedes activas
+      this.prisma.sede.count({
+        where: {
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+      }),
+
+      // Órdenes de servicio pendientes
+      this.prisma.ordenServicio.count({
+        where: {
+          empresaId,
+          estado: {
+            in: ['RECIBIDO', 'EN_DIAGNOSTICO', 'EN_REPARACION', 'ESPERANDO_APROBACION', 'PENDIENTE_PIEZAS'],
+          },
+        },
+      }),
+
+      // Comprobantes emitidos este mes
+      this.prisma.comprobanteElectronico.count({
+        where: {
+          empresaId,
+          fechaEmision: {
+            gte: firstDayOfMonth,
+            lte: lastDayOfMonth,
+          },
+          anulado: false,
+        },
+      }),
+
+      // Comprobantes con totales para calcular ingresos
+      this.prisma.comprobanteElectronico.findMany({
+        where: {
+          empresaId,
+          fechaEmision: {
+            gte: firstDayOfMonth,
+            lte: lastDayOfMonth,
+          },
+          anulado: false,
+          estado: {
+            in: ['REGISTRADO', 'ACEPTADO'],
+          },
+        },
+        select: {
+          total: true,
+        },
+      }),
+    ]);
+
+    // Calcular ingresos totales del mes
+    const ingresosMes = comprobantesConTotal.reduce(
+      (sum, comprobante) => sum + Number(comprobante.total),
+      0,
+    );
+
+    return {
+      totalProductos,
+      totalServicios,
+      totalUsuarios,
+      totalSedes,
+      ordenesPendientes,
+      comprobantesMes,
+      ingresosMes: Math.round(ingresosMes * 100) / 100, // Redondear a 2 decimales
+    };
+  }
+
+  /**
+   * Obtener personalización de la empresa
+   */
+  async getPersonalizacion(empresaId: string, userId: string): Promise<PersonalizacionEmpresaResponseDto> {
+    this.logger.info('Getting empresa personalization', { empresaId, userId });
+
+    // Verificar acceso del usuario a la empresa
+    const hasAccess = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        empresaId,
+        usuarioId: userId,
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+
+    if (!hasAccess) {
+      this.logger.warn('User does not have access to empresa', { empresaId, userId });
+      throw new ForbiddenException('No tienes acceso a esta empresa');
+    }
+
+    // Buscar personalización existente
+    let personalizacion = await this.prisma.personalizacionEmpresa.findFirst({
+      where: { empresaId },
+    });
+
+    // Si no existe, crear una con valores por defecto
+    if (!personalizacion) {
+      this.logger.info('Creating default personalization', { empresaId });
+      personalizacion = await this.prisma.personalizacionEmpresa.create({
+        data: {
+          empresaId,
+          mostrarPrecios: true,
+          mostrarContacto: true,
+          mostrarRedesSociales: false,
+          permitirRegistro: true,
+          productosDestacados: [],
+          serviciosDestacados: [],
+        },
+      });
+    }
+
+    this.logger.success('Personalization retrieved successfully', { empresaId });
+    return personalizacion as PersonalizacionEmpresaResponseDto;
+  }
+
+  /**
+   * Actualizar personalización de la empresa
+   */
+  async updatePersonalizacion(
+    empresaId: string,
+    userId: string,
+    data: PersonalizacionEmpresaDto,
+  ): Promise<PersonalizacionEmpresaResponseDto> {
+    this.logger.info('Updating empresa personalization', { empresaId, userId });
+
+    // Verificar que el usuario sea administrador de la empresa
+    const userRole = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        empresaId,
+        usuarioId: userId,
+        isActive: true,
+        deletedAt: null,
+        rol: {
+          in: [Rol.SUPER_ADMIN, Rol.EMPRESA_ADMIN],
+        },
+      },
+    });
+
+    if (!userRole) {
+      this.logger.warn('User does not have admin permissions', { empresaId, userId });
+      throw new ForbiddenException('No tienes permisos para modificar la personalización');
+    }
+
+    // Verificar si ya existe personalización
+    const existingPersonalizacion = await this.prisma.personalizacionEmpresa.findFirst({
+      where: { empresaId },
+    });
+
+    let personalizacion;
+
+    if (existingPersonalizacion) {
+      // Actualizar personalización existente
+      personalizacion = await this.prisma.personalizacionEmpresa.update({
+        where: { id: existingPersonalizacion.id },
+        data: {
+          webConfig: data.webConfig,
+          bannerPrincipalUrl: data.bannerPrincipalUrl,
+          bannerPrincipalTexto: data.bannerPrincipalTexto,
+          bannerColor: data.bannerColor,
+          colorPrimario: data.colorPrimario,
+          colorSecundario: data.colorSecundario,
+          colorAcento: data.colorAcento,
+          mostrarPrecios: data.mostrarPrecios,
+          productosDestacados: data.productosDestacados,
+          serviciosDestacados: data.serviciosDestacados,
+          mostrarContacto: data.mostrarContacto,
+          mostrarRedesSociales: data.mostrarRedesSociales,
+          permitirRegistro: data.permitirRegistro,
+          appConfig: data.appConfig,
+          appSplashScreenUrl: data.appSplashScreenUrl,
+          appColorTema: data.appColorTema,
+          dominioPersonalizado: data.dominioPersonalizado,
+        },
+      });
+    } else {
+      // Crear nueva personalización
+      personalizacion = await this.prisma.personalizacionEmpresa.create({
+        data: {
+          empresaId,
+          webConfig: data.webConfig,
+          bannerPrincipalUrl: data.bannerPrincipalUrl,
+          bannerPrincipalTexto: data.bannerPrincipalTexto,
+          bannerColor: data.bannerColor,
+          colorPrimario: data.colorPrimario,
+          colorSecundario: data.colorSecundario,
+          colorAcento: data.colorAcento,
+          mostrarPrecios: data.mostrarPrecios ?? true,
+          productosDestacados: data.productosDestacados ?? [],
+          serviciosDestacados: data.serviciosDestacados ?? [],
+          mostrarContacto: data.mostrarContacto ?? true,
+          mostrarRedesSociales: data.mostrarRedesSociales ?? false,
+          permitirRegistro: data.permitirRegistro ?? true,
+          appConfig: data.appConfig,
+          appSplashScreenUrl: data.appSplashScreenUrl,
+          appColorTema: data.appColorTema,
+          dominioPersonalizado: data.dominioPersonalizado,
+        },
+      });
+    }
+
+    this.logger.success('Personalization updated successfully', { empresaId });
+
+    // Auditoría
+    this.auditLogger.log({
+      action: AuditAction.TENANT_UPDATED,
+      actor: { userId },
+      target: {
+        type: 'PersonalizacionEmpresa',
+        id: personalizacion.id,
+        name: `Personalización de empresa ${empresaId}`,
+      },
+      metadata: data,
+      success: true,
+    });
+
+    return personalizacion as PersonalizacionEmpresaResponseDto;
   }
 }

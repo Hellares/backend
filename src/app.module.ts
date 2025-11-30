@@ -8,6 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
 import { EmpresaModule } from './empresa/empresa.module';
 import { MarketplaceModule } from './marketplace/marketplace.module';
+import { StorageModule } from './storage/storage.module';
+import { ProductoModule } from './producto/producto.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { validate } from './config/validation';
@@ -25,6 +27,8 @@ import { validate } from './config/validation';
     UsuariosModule,
     EmpresaModule,
     MarketplaceModule,
+    StorageModule,
+    ProductoModule,
   ],
   controllers: [AppController],
   providers: [

@@ -215,7 +215,6 @@ export class MarketplaceService {
           precio: true,
           precioCosto: true,
           stock: true,
-          imagenes: true,
           destacado: true,
           // Campos de ofertas
           enOferta: true,
@@ -312,7 +311,6 @@ export class MarketplaceService {
           duracionMinutos: true,
           duracionHoras: true,
           requiereReserva: true,
-          imagenes: true,
           destacado: true,
           // Campos de ofertas
           enOferta: true,
@@ -375,7 +373,6 @@ export class MarketplaceService {
         precioCosto: true,
         stock: true,
         stockMinimo: true,
-        imagenes: true,
         peso: true,
         dimensiones: true,
         categoria: {
@@ -439,7 +436,6 @@ export class MarketplaceService {
         requiereReserva: true,
         requiereDeposito: true,
         depositoPorcentaje: true,
-        imagenes: true,
         videoUrl: true,
         categoria: {
           select: {

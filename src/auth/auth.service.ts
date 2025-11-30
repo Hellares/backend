@@ -1393,4 +1393,51 @@ export class AuthService {
     const session = await this.sessionService.getSession(sessionId);
     return session !== null && session.isActive;
   }
+
+  /**
+   * Cambiar empresa activa (switch tenant)
+   */
+  async switchTenant(
+    userId: string,
+    empresaId: string,
+    subdominioEmpresa?: string,
+  ): Promise<{ success: boolean; message: string; empresaId: string; empresaNombre: string }> {
+    this.logger.info('Switching tenant', { userId, empresaId });
+
+    // Verificar que el usuario tiene acceso a la empresa
+    const userRole = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        usuarioId: userId,
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+      },
+      include: {
+        empresa: true,
+      },
+    });
+
+    if (!userRole) {
+      this.logger.warn('User does not have access to empresa', { userId, empresaId });
+      throw new NotFoundException('No tienes acceso a esta empresa o la empresa no existe');
+    }
+
+    if (!userRole.empresa || userRole.empresa.deletedAt) {
+      this.logger.warn('Empresa not found or deleted', { empresaId });
+      throw new NotFoundException('Empresa no encontrada');
+    }
+
+    this.logger.success('Tenant switched successfully', {
+      userId,
+      empresaId,
+      empresaNombre: userRole.empresa.nombre,
+    });
+
+    return {
+      success: true,
+      message: 'Empresa cambiada exitosamente',
+      empresaId: userRole.empresa.id,
+      empresaNombre: userRole.empresa.nombre,
+    };
+  }
 }

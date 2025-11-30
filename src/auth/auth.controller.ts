@@ -28,6 +28,7 @@ import {
   ForgotPasswordDto,
   ResetPasswordDto,
   ResendVerificationEmailDto,
+  SwitchTenantDto,
 } from './dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
 
@@ -405,5 +406,42 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Todas las sesiones revocadas' })
   async revokeAllSessions(@CurrentUser() user: any) {
     return this.authService.logout(user.sub);
+  }
+
+  /**
+   * Cambiar empresa activa (switch tenant)
+   */
+  @Post('switch-tenant')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Cambiar empresa activa',
+    description: 'Permite al usuario cambiar entre sus empresas disponibles',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Empresa cambiada exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: 'Empresa cambiada exitosamente' },
+        empresaId: { type: 'string' },
+        empresaNombre: { type: 'string' },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'No tienes acceso a esta empresa' })
+  @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
+  async switchTenant(
+    @CurrentUser() user: any,
+    @Body() switchTenantDto: SwitchTenantDto,
+  ) {
+    return this.authService.switchTenant(
+      user.sub,
+      switchTenantDto.empresaId,
+      switchTenantDto.subdominioEmpresa,
+    );
   }
 }

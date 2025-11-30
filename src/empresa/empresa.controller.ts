@@ -19,6 +19,9 @@ import {
   CreateEmpresaDto,
   UpdateEmpresaDto,
   CambiarPlanDto,
+  EmpresaContextResponseDto,
+  PersonalizacionEmpresaDto,
+  PersonalizacionEmpresaResponseDto,
 } from './dto';
 
 @ApiTags('Gestión de Empresas')
@@ -172,6 +175,32 @@ export class EmpresaController {
   }
 
   /**
+   * Obtener contexto completo de la empresa
+   * Incluye información de la empresa, roles del usuario, sedes, permisos y estadísticas
+   */
+  @Get(':id/context')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Obtener contexto completo de la empresa',
+    description: 'Obtiene información completa de la empresa incluyendo roles del usuario, sedes, permisos calculados y estadísticas',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Contexto de la empresa obtenido exitosamente',
+    type: EmpresaContextResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 403, description: 'No tienes acceso a esta empresa' })
+  @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
+  async getEmpresaContext(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ): Promise<EmpresaContextResponseDto> {
+    return this.empresaService.getEmpresaContext(id, user.sub);
+  }
+
+  /**
    * Actualizar empresa
    */
   @Put(':id')
@@ -251,5 +280,57 @@ export class EmpresaController {
     @CurrentUser() user: any,
   ) {
     return this.empresaService.cambiarPlan(id, user.sub, cambiarPlanDto.planId);
+  }
+
+  /**
+   * Obtener personalización de la empresa
+   */
+  @Get(':id/personalizacion')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Obtener personalización de la empresa',
+    description: 'Obtiene la configuración de personalización para marketplace, web y app',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Personalización obtenida exitosamente',
+    type: PersonalizacionEmpresaResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 403, description: 'No tienes acceso a esta empresa' })
+  @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
+  async getPersonalizacion(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ): Promise<PersonalizacionEmpresaResponseDto> {
+    return this.empresaService.getPersonalizacion(id, user.sub);
+  }
+
+  /**
+   * Actualizar personalización de la empresa
+   */
+  @Put(':id/personalizacion')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Actualizar personalización de la empresa',
+    description: 'Actualiza la configuración de personalización (solo administradores)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Personalización actualizada exitosamente',
+    type: PersonalizacionEmpresaResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos de administrador' })
+  @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
+  async updatePersonalizacion(
+    @Param('id') id: string,
+    @Body() personalizacionDto: PersonalizacionEmpresaDto,
+    @CurrentUser() user: any,
+  ): Promise<PersonalizacionEmpresaResponseDto> {
+    return this.empresaService.updatePersonalizacion(id, user.sub, personalizacionDto);
   }
 }

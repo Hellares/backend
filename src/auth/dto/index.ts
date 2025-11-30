@@ -7,4 +7,5 @@ export * from './change-password.dto';
 export * from './forgot-password.dto';
 export * from './reset-password.dto';
 export * from './resend-verification-email.dto';
+export * from './switch-tenant.dto';
 export * from './responses.dto';
