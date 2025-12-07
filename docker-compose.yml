@@ -51,6 +51,9 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME:-}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY:-}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET:-}
     # volumes:
     #   - ./logs:/app/logs  # Deshabilitado - solo console logging por ahora
     networks:
