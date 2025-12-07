@@ -42,6 +42,7 @@ model Empresa {
   ruc                    String?           @unique
   subdominio             String?           @unique
   logo                   String?
+  rubro                  RubroEmpresa      @default(TECNOLOGIA)
   isActive               Boolean           @default(true)
   deletedAt              DateTime?
   descripcion            String?
@@ -73,7 +74,6 @@ model Empresa {
 
   creadoEn                 DateTime                      @default(now())
   actualizadoEn            DateTime                      @updatedAt
-  categorias               Categoria[]
   componentes              Componente[]
   comprobantes             ComprobanteElectronico[]
   configuracionCampos      ConfiguracionCamposServicio[]
@@ -82,7 +82,6 @@ model Empresa {
   planSuscripcion          PlanSuscripcion?              @relation(fields: [planSuscripcionId], references: [id])
   personasAsociadas        EmpresaPersona[]
   usuarios                 EmpresaUsuarioRol[]
-  marcas                   Marca[]
   metodosPago              MetodoPago[]
   modelosEquipos           ModeloEquipo[]
   ordenesServicio          OrdenServicio[]
@@ -94,6 +93,10 @@ model Empresa {
   tiposComponentes         TipoComponente[]
   transaccionesRecibidas   TransaccionPago[]
   archivos                 Archivo[]
+  empresaCategorias        EmpresaCategoria[]
+  empresaMarcas            EmpresaMarca[]
+  productoVariantes        ProductoVariante[]
+  productoAtributos        ProductoAtributo[]
 
   @@index([subdominio])
   @@index([isActive])
@@ -264,58 +267,153 @@ model UsuarioSedeRol {
   @@index([deletedAt])
 }
 
-model Categoria {
-  id            String     @id @default(cuid())
-  empresaId     String
-  codigo        String?
-  nombre        String
-  descripcion   String?
-  padreId       String?
-  orden         Int?
-  isActive      Boolean    @default(true)
-  deletedAt     DateTime?
-  creadoEn      DateTime   @default(now())
-  actualizadoEn DateTime   @updatedAt
-  empresa       Empresa    @relation(fields: [empresaId], references: [id])
-  productos     Producto[]
-  servicios     Servicio[]
+// ============================================
+// CATÁLOGOS MAESTROS (Sistema Global)
+// ============================================
 
-  @@unique([empresaId, nombre])
-  @@index([empresaId])
+model CategoriaMaestra {
+  id          String   @id @default(cuid())
+  nombre      String   @unique
+  slug        String   @unique
+  descripcion String?
+  icono       String?  // Emoji o URL de icono
+  imagen      String?  // Banner/imagen de categoría
+
+  // Jerarquía
+  padreId     String?
+  nivel       Int      @default(0)
+
+  // Metadata
+  orden       Int?
+  esPopular   Boolean  @default(false)
+
+  // Auditoría
+  isActive    Boolean  @default(true)
+  creadoEn    DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones jerárquicas
+  padre       CategoriaMaestra?  @relation("SubcategoriasMaestras", fields: [padreId], references: [id], onDelete: Restrict)
+  hijos       CategoriaMaestra[] @relation("SubcategoriasMaestras")
+
+  // Relación con empresas
+  empresaCategorias EmpresaCategoria[]
+
   @@index([padreId])
   @@index([isActive])
-  @@index([deletedAt])
+  @@index([esPopular])
+  @@index([slug])
 }
 
-model Marca {
-  id            String     @id @default(cuid())
-  empresaId     String
-  codigo        String?
-  nombre        String
-  descripcion   String?
-  logo          String?
-  sitioWeb      String?
-  isActive      Boolean    @default(true)
-  deletedAt     DateTime?
-  creadoEn      DateTime   @default(now())
-  actualizadoEn DateTime   @updatedAt
-  empresa       Empresa    @relation(fields: [empresaId], references: [id])
-  productos     Producto[]
+model MarcaMaestra {
+  id          String   @id @default(cuid())
+  nombre      String   @unique
+  slug        String   @unique
+  descripcion String?
+  logo        String?
+  sitioWeb    String?
+  paisOrigen  String?
 
-  @@unique([empresaId, nombre])
-  @@index([empresaId])
+  // Metadata
+  esPopular   Boolean  @default(false)
+
+  // Auditoría
+  isActive    Boolean  @default(true)
+  creadoEn    DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relación con empresas
+  empresaMarcas EmpresaMarca[]
+
   @@index([isActive])
-  @@index([deletedAt])
+  @@index([esPopular])
+  @@index([slug])
+}
+
+// ============================================
+// RELACIÓN EMPRESA-CATÁLOGO (Activación)
+// ============================================
+
+model EmpresaCategoria {
+  id                 String   @id @default(cuid())
+  empresaId          String
+  categoriaMaestraId String?  // NULL = categoría personalizada
+
+  // Campos para categorías PERSONALIZADAS (cuando categoriaMaestraId es NULL)
+  nombrePersonalizado       String?
+  descripcionPersonalizada  String?
+  padreId                   String?
+
+  // Personalización/Override del nombre maestro
+  nombreLocal         String?  // Ejemplo: "Electrónica" → "Tech"
+
+  // Configuración por empresa
+  orden       Int?
+  isVisible   Boolean  @default(true)
+  isActive    Boolean  @default(true)
+  deletedAt   DateTime?
+
+  // Auditoría
+  creadoEn    DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa            Empresa           @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  categoriaMaestra   CategoriaMaestra? @relation(fields: [categoriaMaestraId], references: [id], onDelete: Restrict)
+  productos          Producto[]
+  servicios          Servicio[]
+
+  @@unique([empresaId, categoriaMaestraId])
+  @@index([empresaId])
+  @@index([categoriaMaestraId])
+  @@index([isActive])
+  @@index([isVisible])
+}
+
+model EmpresaMarca {
+  id               String   @id @default(cuid())
+  empresaId        String
+  marcaMaestraId   String?  // NULL = marca personalizada
+
+  // Campos para marcas PERSONALIZADAS
+  nombrePersonalizado       String?
+  descripcionPersonalizada  String?
+  logoPersonalizado         String?
+  sitioWebPersonalizado     String?
+
+  // Personalización
+  nombreLocal      String?
+
+  // Configuración
+  orden            Int?
+  isVisible        Boolean  @default(true)
+  isActive         Boolean  @default(true)
+  deletedAt        DateTime?
+
+  // Auditoría
+  creadoEn         DateTime @default(now())
+  actualizadoEn    DateTime @updatedAt
+
+  // Relaciones
+  empresa          Empresa       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  marcaMaestra     MarcaMaestra? @relation(fields: [marcaMaestraId], references: [id], onDelete: Restrict)
+  productos        Producto[]
+
+  @@unique([empresaId, marcaMaestraId])
+  @@index([empresaId])
+  @@index([marcaMaestraId])
+  @@index([isActive])
+  @@index([isVisible])
 }
 
 model Producto {
   id                 String   @id @default(cuid())
   empresaId          String
   sedeId             String?
-  categoriaId        String?
-  marcaId            String?
-  codigoEmpresa      String   @unique
-  codigoSistema      String   @unique
+  empresaCategoriaId String?
+  empresaMarcaId     String?
+  codigoEmpresa      String
+  codigoSistema      String
   sku                String?
   codigoBarras       String?
   nombre             String
@@ -342,23 +440,27 @@ model Producto {
   fechaInicioOferta DateTime?
   fechaFinOferta    DateTime?
 
+  // Sistema de Variantes
+  tieneVariantes Boolean @default(false)
+
   isActive            Boolean                  @default(true)
   deletedAt           DateTime?
   creadoEn            DateTime                 @default(now())
   actualizadoEn       DateTime                 @updatedAt
   detallesComprobante DetalleComprobante[]     @relation("DetalleProducto")
-  categoria           Categoria?               @relation(fields: [categoriaId], references: [id])
+  empresaCategoria    EmpresaCategoria?        @relation(fields: [empresaCategoriaId], references: [id])
+  empresaMarca        EmpresaMarca?            @relation(fields: [empresaMarcaId], references: [id])
   empresa             Empresa                  @relation(fields: [empresaId], references: [id])
-  marca               Marca?                   @relation(fields: [marcaId], references: [id])
   sede                Sede?                    @relation(fields: [sedeId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ProductoComprobante")
+  variantes           ProductoVariante[]
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
   @@index([empresaId])
   @@index([empresaId, codigoEmpresa])
-  @@index([categoriaId])
-  @@index([marcaId])
+  @@index([empresaCategoriaId])
+  @@index([empresaMarcaId])
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])
@@ -374,7 +476,7 @@ model Servicio {
   id                    String   @id @default(cuid())
   empresaId             String
   sedeId                String?
-  categoriaId           String?
+  empresaCategoriaId    String?
   codigoEmpresa         String   @unique
   codigoSistema         String   @unique
   nombre                String
@@ -408,7 +510,7 @@ model Servicio {
   creadoEn            DateTime                 @default(now())
   actualizadoEn       DateTime                 @updatedAt
   detallesComprobante DetalleComprobante[]     @relation("DetalleServicio")
-  categoria           Categoria?               @relation(fields: [categoriaId], references: [id])
+  empresaCategoria    EmpresaCategoria?        @relation(fields: [empresaCategoriaId], references: [id])
   empresa             Empresa                  @relation(fields: [empresaId], references: [id])
   sede                Sede?                    @relation(fields: [sedeId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ServicioComprobante")
@@ -416,7 +518,7 @@ model Servicio {
   @@unique([empresaId, codigoEmpresa])
   @@index([empresaId])
   @@index([empresaId, codigoEmpresa])
-  @@index([categoriaId])
+  @@index([empresaCategoriaId])
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])
@@ -999,6 +1101,7 @@ model Archivo {
   // Relación polimórfica con entidades
   entidadTipo      EntidadTipo?
   entidadId        String?
+  varianteId       String?           // Para imágenes de variantes de producto
   categoria        CategoriaArchivo?
   orden            Int?
 
@@ -1031,9 +1134,11 @@ model Archivo {
 
   // Relaciones
   empresa          Empresa           @relation(fields: [empresaId], references: [id])
+  variante         ProductoVariante? @relation(fields: [varianteId], references: [id], onDelete: Cascade)
 
   @@index([empresaId])
   @@index([entidadTipo, entidadId])
+  @@index([varianteId])
   @@index([proveedor])
   @@index([tipoArchivo])
   @@index([categoria])
@@ -1140,6 +1245,19 @@ enum EstadoSuscripcion {
   VENCIDA
   CANCELADA
   EN_PROBATION
+}
+
+enum RubroEmpresa {
+  TECNOLOGIA
+  GASTRONOMIA
+  MODA
+  HOGAR
+  SALUD
+  AUTOMOTRIZ
+  DEPORTES
+  CONSTRUCCION
+  EDUCACION
+  OTRO
 }
 
 enum RolPersona {
@@ -1335,8 +1453,114 @@ enum TipoArchivo {
   OTRO
 }
 
+// =========================================
+// 📦 SISTEMA DE VARIANTES DE PRODUCTOS
+// =========================================
+
+/// Variantes de un producto (ej: diferentes colores, tallas, conexiones)
+model ProductoVariante {
+  id          String   @id @default(cuid())
+  productoId  String
+  empresaId   String
+
+  // Identificación de la variante
+  nombre       String   // "Negro - USB", "Blanco - Bluetooth"
+  sku          String   // SKU único de la variante
+  codigoBarras String?  // Código de barras único
+  codigoEmpresa String  // Código interno de la empresa
+
+  // Atributos de la variante (JSON flexible)
+  // Ejemplo: {"color": "Negro", "conexion": "USB", "capacidad": "1TB"}
+  atributos Json
+
+  // Pricing específico de la variante
+  precio       Decimal  @db.Decimal(10, 2)
+  precioCosto  Decimal? @db.Decimal(10, 2)
+  precioOferta Decimal? @db.Decimal(10, 2)
+
+  // Inventario específico de la variante
+  stock        Int @default(0)
+  stockMinimo  Int?
+
+  // Características físicas (si difieren del producto base)
+  peso        Decimal? @db.Decimal(10, 3)
+  dimensiones Json?    // {"largo": 30, "ancho": 20, "alto": 5} en cm
+
+  // Visibilidad y orden
+  isActive Boolean @default(true)
+  orden    Int     @default(0) // Para ordenar variantes en el frontend
+
+  // Auditoría
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  producto Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  empresa  Empresa  @relation(fields: [empresaId], references: [id])
+  archivos Archivo[]
+
+  @@unique([empresaId, sku])
+  @@unique([empresaId, codigoEmpresa])
+  @@index([productoId])
+  @@index([empresaId])
+  @@index([sku])
+  @@index([isActive])
+  @@index([stock])
+}
+
+/// Definición de atributos configurables para productos
+/// Permite crear filtros dinámicos (Color, Talla, Capacidad, etc.)
+model ProductoAtributo {
+  id        String   @id @default(cuid())
+  empresaId String
+
+  // Información del atributo
+  nombre      String         // "Color", "Talla", "Conexión", "Capacidad"
+  tipo        AtributoTipo
+  requerido   Boolean        @default(false)
+  descripcion String?
+
+  // Valores posibles (solo para tipos SELECT y MULTI_SELECT)
+  // Ejemplo: ["Negro", "Blanco", "Rojo"] para Color
+  valores String[] @default([])
+
+  // Configuración de visualización
+  orden              Int     @default(0)
+  mostrarEnListado   Boolean @default(true)
+  usarParaFiltros    Boolean @default(true)
+  mostrarEnMarketplace Boolean @default(true)
+
+  // Auditoría
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([tipo])
+  @@index([isActive])
+}
+
+/// Tipos de atributos para productos
+enum AtributoTipo {
+  COLOR           // Color con picker
+  TALLA           // Tallas predefinidas (XS, S, M, L, XL, etc.)
+  MATERIAL        // Material del producto (ej: Algodón, Poliéster)
+  CAPACIDAD       // Capacidad (ej: 1TB, 500GB, 64GB)
+  TEXTO           // Texto libre
+  NUMERO          // Valor numérico
+  SELECT          // Lista desplegable (un solo valor)
+  MULTI_SELECT    // Lista desplegable (múltiples valores)
+  BOOLEAN         // Sí/No
+}
+
 enum EntidadTipo {
   PRODUCTO
+  PRODUCTO_VARIANTE
   SERVICIO
   EMPRESA
   COMPROBANTE

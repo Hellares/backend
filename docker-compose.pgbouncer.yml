@@ -1,0 +1,111 @@
+# =======================================================
+# 🔧 PgBouncer - Connection Pooler para PostgreSQL
+# =======================================================
+#
+# PgBouncer actúa como un proxy entre tu aplicación y PostgreSQL,
+# permitiendo que miles de conexiones de aplicación se traduzcan
+# en solo unas pocas conexiones reales a la base de datos.
+#
+# Beneficios:
+# - Reduce el uso de memoria en PostgreSQL
+# - Permite escalar a miles de usuarios simultáneos
+# - Mejora el rendimiento al reutilizar conexiones
+#
+# Para usar PgBouncer en producción:
+# 1. docker-compose -f docker-compose.pgbouncer.yml up -d
+# 2. Cambiar DATABASE_URL para apuntar a PgBouncer (puerto 6432)
+#
+# =======================================================
+
+version: '3.8'
+
+services:
+  pgbouncer:
+    image: pgbouncer/pgbouncer:latest
+    container_name: saas_pgbouncer
+    restart: unless-stopped
+
+    environment:
+      # Configuración de la base de datos
+      # IMPORTANTE: Cambiar estos valores por los de tu DB real
+      DATABASES_HOST: 86.48.26.221           # Host de PostgreSQL
+      DATABASES_PORT: 5432                   # Puerto de PostgreSQL
+      DATABASES_USER: postgres               # Usuario de PostgreSQL
+      DATABASES_PASSWORD: jtorres159.        # Contraseña de PostgreSQL
+      DATABASES_DBNAME: db_saas              # Nombre de la base de datos
+
+      # Modo de pooling
+      # - session: Una conexión por sesión del cliente (más memoria, más compatible)
+      # - transaction: Una conexión por transacción (recomendado, más eficiente)
+      # - statement: Una conexión por statement (más eficiente, menos compatible)
+      PGBOUNCER_POOL_MODE: transaction
+
+      # Límites de conexiones
+      PGBOUNCER_MAX_CLIENT_CONN: 10000       # Máximo de conexiones de clientes
+      PGBOUNCER_DEFAULT_POOL_SIZE: 100       # Conexiones a PostgreSQL por pool
+      PGBOUNCER_MIN_POOL_SIZE: 10            # Mínimo de conexiones a mantener
+      PGBOUNCER_RESERVE_POOL_SIZE: 10        # Pool de reserva para picos
+
+      # Timeouts (en segundos)
+      PGBOUNCER_SERVER_IDLE_TIMEOUT: 600     # 10 minutos
+      PGBOUNCER_QUERY_TIMEOUT: 30            # 30 segundos
+      PGBOUNCER_CLIENT_IDLE_TIMEOUT: 3600    # 1 hora
+
+      # Logging
+      PGBOUNCER_LOG_CONNECTIONS: 1
+      PGBOUNCER_LOG_DISCONNECTIONS: 1
+      PGBOUNCER_LOG_POOLER_ERRORS: 1
+
+    ports:
+      - "6432:6432"  # Puerto de PgBouncer
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "psql", "-h", "localhost", "-p", "6432", "-U", "postgres", "-d", "db_saas", "-c", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - saas_network
+
+networks:
+  saas_network:
+    driver: bridge
+
+# =======================================================
+# 📝 CÓMO USAR:
+# =======================================================
+#
+# 1. Levantar PgBouncer:
+#    docker-compose -f docker-compose.pgbouncer.yml up -d
+#
+# 2. Actualizar .env para usar PgBouncer:
+#    DATABASE_URL="postgresql://postgres:jtorres159.@localhost:6432/db_saas?connection_limit=15&pool_timeout=20"
+#
+# 3. Ver logs de PgBouncer:
+#    docker logs -f saas_pgbouncer
+#
+# 4. Monitorear conexiones:
+#    docker exec -it saas_pgbouncer psql -p 6432 -U postgres pgbouncer -c "SHOW STATS"
+#    docker exec -it saas_pgbouncer psql -p 6432 -U postgres pgbouncer -c "SHOW POOLS"
+#
+# 5. Ver configuración:
+#    docker exec -it saas_pgbouncer psql -p 6432 -U postgres pgbouncer -c "SHOW CONFIG"
+#
+# =======================================================
+# ⚠️ PRODUCCIÓN:
+# =======================================================
+#
+# En producción (AWS, DigitalOcean, etc.), considera usar:
+# - AWS RDS Proxy (si usas AWS RDS)
+# - Supabase (incluye PgBouncer automáticamente)
+# - PgBouncer como servicio systemd (no Docker)
+#
+# Para múltiples instancias de NestJS:
+# - Reduce connection_limit por instancia a 10-15
+# - PgBouncer mantendrá solo 100 conexiones a PostgreSQL
+# - Ejemplo: 10 instancias x 15 conexiones = 150 conexiones app → 100 conexiones DB
+#
+# =======================================================

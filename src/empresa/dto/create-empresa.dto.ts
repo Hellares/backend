@@ -5,9 +5,11 @@ import {
   MaxLength,
   MinLength,
   Matches,
-  IsNotEmpty
+  IsNotEmpty,
+  IsEnum
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { RubroEmpresa } from '@prisma/client';
 
 export class CreateEmpresaDto {
   @ApiProperty({
@@ -87,4 +89,13 @@ export class CreateEmpresaDto {
   @IsOptional()
   @MaxLength(500, { message: 'La URL del logo no puede tener más de 500 caracteres' })
   logo?: string;
+
+  @ApiProperty({
+    description: 'Rubro o sector de la empresa',
+    enum: RubroEmpresa,
+    example: RubroEmpresa.TECNOLOGIA,
+  })
+  @IsEnum(RubroEmpresa, { message: 'El rubro debe ser uno de los valores permitidos' })
+  @IsNotEmpty({ message: 'Debe seleccionar un rubro para su empresa' })
+  rubro: RubroEmpresa;
 }

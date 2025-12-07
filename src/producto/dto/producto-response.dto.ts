@@ -11,10 +11,10 @@ export class ProductoResponseDto {
   sedeId?: string;
 
   @ApiPropertyOptional()
-  categoriaId?: string;
+  empresaCategoriaId?: string;
 
   @ApiPropertyOptional()
-  marcaId?: string;
+  empresaMarcaId?: string;
 
   @ApiProperty({
     description: 'Código generado por la empresa',
@@ -96,22 +96,34 @@ export class ProductoResponseDto {
   isActive: boolean;
 
   @ApiProperty()
+  tieneVariantes: boolean;
+
+  @ApiProperty()
   creadoEn: Date;
 
   @ApiProperty()
   actualizadoEn: Date;
 
   // Relaciones opcionales
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'Información de la categoría activada',
+  })
   categoria?: {
     id: string;
     nombre: string;
+    categoriaMaestraId?: string;
+    slug?: string;
   };
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'Información de la marca activada',
+  })
   marca?: {
     id: string;
     nombre: string;
+    marcaMaestraId?: string;
+    slug?: string;
+    logo?: string;
   };
 
   @ApiPropertyOptional()
@@ -129,6 +141,21 @@ export class ProductoResponseDto {
     url: string;
     urlThumbnail?: string;
     categoria: string;
+    orden: number;
+  }>;
+
+  @ApiPropertyOptional({
+    description: 'Variantes del producto',
+    type: [Object],
+  })
+  variantes?: Array<{
+    id: string;
+    nombre: string;
+    sku: string;
+    atributos: Record<string, any>;
+    precio: number;
+    stock: number;
+    isActive: boolean;
     orden: number;
   }>;
 }

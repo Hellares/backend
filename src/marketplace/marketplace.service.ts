@@ -221,16 +221,31 @@ export class MarketplaceService {
           precioOferta: true,
           fechaInicioOferta: true,
           fechaFinOferta: true,
-          categoria: {
+          empresaCategoria: {
             select: {
               id: true,
-              nombre: true,
+              nombreLocal: true,
+              categoriaMaestra: {
+                select: {
+                  nombre: true,
+                  slug: true,
+                },
+              },
+              nombrePersonalizado: true,
             },
           },
-          marca: {
+          empresaMarca: {
             select: {
               id: true,
-              nombre: true,
+              nombreLocal: true,
+              marcaMaestra: {
+                select: {
+                  nombre: true,
+                  slug: true,
+                  logo: true,
+                },
+              },
+              nombrePersonalizado: true,
             },
           },
           creadoEn: true,
@@ -317,10 +332,17 @@ export class MarketplaceService {
           precioOferta: true,
           fechaInicioOferta: true,
           fechaFinOferta: true,
-          categoria: {
+          empresaCategoria: {
             select: {
               id: true,
-              nombre: true,
+              nombreLocal: true,
+              categoriaMaestra: {
+                select: {
+                  nombre: true,
+                  slug: true,
+                },
+              },
+              nombrePersonalizado: true,
             },
           },
           creadoEn: true,
@@ -375,16 +397,31 @@ export class MarketplaceService {
         stockMinimo: true,
         peso: true,
         dimensiones: true,
-        categoria: {
+        empresaCategoria: {
           select: {
             id: true,
-            nombre: true,
+            nombreLocal: true,
+            categoriaMaestra: {
+              select: {
+                nombre: true,
+                slug: true,
+              },
+            },
+            nombrePersonalizado: true,
           },
         },
-        marca: {
+        empresaMarca: {
           select: {
             id: true,
-            nombre: true,
+            nombreLocal: true,
+            marcaMaestra: {
+              select: {
+                nombre: true,
+                slug: true,
+                logo: true,
+              },
+            },
+            nombrePersonalizado: true,
           },
         },
         empresa: {
@@ -437,10 +474,17 @@ export class MarketplaceService {
         requiereDeposito: true,
         depositoPorcentaje: true,
         videoUrl: true,
-        categoria: {
+        empresaCategoria: {
           select: {
             id: true,
-            nombre: true,
+            nombreLocal: true,
+            categoriaMaestra: {
+              select: {
+                nombre: true,
+                slug: true,
+              },
+            },
+            nombrePersonalizado: true,
           },
         },
         empresa: {

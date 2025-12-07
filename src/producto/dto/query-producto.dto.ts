@@ -45,20 +45,20 @@ export class QueryProductoDto {
   search?: string;
 
   @ApiPropertyOptional({
-    description: 'Filtrar por categoría',
-    example: 'categoria-id-123',
+    description: 'Filtrar por categoría activada de la empresa (EmpresaCategoria)',
+    example: 'empresa-categoria-id-123',
   })
   @IsOptional()
   @IsString()
-  categoriaId?: string;
+  empresaCategoriaId?: string;
 
   @ApiPropertyOptional({
-    description: 'Filtrar por marca',
-    example: 'marca-id-123',
+    description: 'Filtrar por marca activada de la empresa (EmpresaMarca)',
+    example: 'empresa-marca-id-123',
   })
   @IsOptional()
   @IsString()
-  marcaId?: string;
+  empresaMarcaId?: string;
 
   @ApiPropertyOptional({
     description: 'Filtrar por sede',

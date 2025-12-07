@@ -31,20 +31,20 @@ export class CreateProductoDto {
   sedeId?: string;
 
   @ApiPropertyOptional({
-    description: 'ID de la categoría',
-    example: 'categoria-id-123',
+    description: 'ID de la categoría activada para la empresa (EmpresaCategoria)',
+    example: 'empresa-categoria-id-123',
   })
   @IsOptional()
   @IsString()
-  categoriaId?: string;
+  empresaCategoriaId?: string;
 
   @ApiPropertyOptional({
-    description: 'ID de la marca',
-    example: 'marca-id-123',
+    description: 'ID de la marca activada para la empresa (EmpresaMarca)',
+    example: 'empresa-marca-id-123',
   })
   @IsOptional()
   @IsString()
-  marcaId?: string;
+  empresaMarcaId?: string;
 
   @ApiPropertyOptional({
     description: 'SKU del producto',
@@ -235,4 +235,13 @@ export class CreateProductoDto {
   @IsArray()
   @IsString({ each: true })
   imagenesIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Indica si el producto tiene variantes',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  tieneVariantes?: boolean;
 }

@@ -23,6 +23,7 @@ import {
   PersonalizacionEmpresaDto,
   PersonalizacionEmpresaResponseDto,
 } from './dto';
+import { CreateEmpresaConCatalogosDto } from './dto/create-empresa-con-catalogos.dto';
 
 @ApiTags('Gestión de Empresas')
 @Controller('empresas')
@@ -78,6 +79,32 @@ export class EmpresaController {
     @CurrentUser() user: any,
   ) {
     return this.empresaService.createEmpresa(createEmpresaDto, user.sub);
+  }
+
+  /**
+   * Crear empresa con selección personalizada de catálogos
+   */
+  @Post('con-catalogos')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Crear empresa con selección personalizada de catálogos',
+    description:
+      'Permite crear una empresa y especificar qué categorías y marcas activar. ' +
+      'Si no se especifican catálogos, se activan los recomendados del rubro.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Empresa creada con catálogos personalizados',
+  })
+  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 409, description: 'Empresa ya existe con estos datos' })
+  async createEmpresaConCatalogos(
+    @Body() createDto: CreateEmpresaConCatalogosDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.empresaService.createEmpresaConCatalogos(createDto, user.sub);
   }
 
   /**

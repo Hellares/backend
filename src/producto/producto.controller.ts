@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Patch,
+  Headers,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -16,8 +17,11 @@ import {
   ApiBearerAuth,
   ApiResponse,
   ApiQuery,
+  ApiHeader,
 } from '@nestjs/swagger';
 import { ProductoService } from './producto.service';
+import { ProductoVarianteService } from './producto-variante.service';
+import { ProductoAtributoService } from './producto-atributo.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateProductoDto } from './dto/create-producto.dto';
@@ -27,13 +31,21 @@ import {
   ProductoResponseDto,
   PaginatedProductoResponseDto,
 } from './dto/producto-response.dto';
+import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
+import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
+import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
+import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
 
 @ApiTags('Productos')
 @Controller('productos')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class ProductoController {
-  constructor(private readonly productoService: ProductoService) {}
+  constructor(
+    private readonly productoService: ProductoService,
+    private readonly varianteService: ProductoVarianteService,
+    private readonly atributoService: ProductoAtributoService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Crear un nuevo producto' })
@@ -51,6 +63,31 @@ export class ProductoController {
     return await this.productoService.create(createProductoDto, user.sub);
   }
 
+  // @Get()
+  // @ApiOperation({ summary: 'Obtener lista de productos con filtros' })
+  // @ApiResponse({
+  //   status: 200,
+  //   description: 'Lista de productos obtenida exitosamente',
+  //   type: PaginatedProductoResponseDto,
+  // })
+  // @ApiQuery({ name: 'empresaId', required: true, type: String })
+  // @ApiQuery({ name: 'page', required: false, type: Number })
+  // @ApiQuery({ name: 'limit', required: false, type: Number })
+  // @ApiQuery({ name: 'search', required: false, type: String })
+  // @ApiQuery({ name: 'empresaCategoriaId', required: false, type: String })
+  // @ApiQuery({ name: 'empresaMarcaId', required: false, type: String })
+  // @ApiQuery({ name: 'sedeId', required: false, type: String })
+  // @ApiQuery({ name: 'visibleMarketplace', required: false, type: Boolean })
+  // @ApiQuery({ name: 'destacado', required: false, type: Boolean })
+  // @ApiQuery({ name: 'enOferta', required: false, type: Boolean })
+  // @ApiQuery({ name: 'stockBajo', required: false, type: Boolean })
+  // async findAll(
+  //   @Query('empresaId') empresaId: string,
+  //   @Query() queryDto: QueryProductoDto,
+  // ): Promise<PaginatedProductoResponseDto> {
+  //   return await this.productoService.findAll(empresaId, queryDto);
+  // }
+
   @Get()
   @ApiOperation({ summary: 'Obtener lista de productos con filtros' })
   @ApiResponse({
@@ -58,22 +95,118 @@ export class ProductoController {
     description: 'Lista de productos obtenida exitosamente',
     type: PaginatedProductoResponseDto,
   })
-  @ApiQuery({ name: 'empresaId', required: true, type: String })
+  @ApiHeader({  // ✅ Documentación del header
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'categoriaId', required: false, type: String })
-  @ApiQuery({ name: 'marcaId', required: false, type: String })
+  @ApiQuery({ name: 'empresaCategoriaId', required: false, type: String })
+  @ApiQuery({ name: 'empresaMarcaId', required: false, type: String })
   @ApiQuery({ name: 'sedeId', required: false, type: String })
   @ApiQuery({ name: 'visibleMarketplace', required: false, type: Boolean })
   @ApiQuery({ name: 'destacado', required: false, type: Boolean })
   @ApiQuery({ name: 'enOferta', required: false, type: Boolean })
   @ApiQuery({ name: 'stockBajo', required: false, type: Boolean })
   async findAll(
-    @Query('empresaId') empresaId: string,
-    @Query() queryDto: QueryProductoDto,
+    @Headers('x-tenant-id') empresaId: string,  // ✅ Del header
+    @Query() queryDto: QueryProductoDto,        // ✅ Sin empresaId
   ): Promise<PaginatedProductoResponseDto> {
     return await this.productoService.findAll(empresaId, queryDto);
+  }
+
+  // =========================================
+  // ENDPOINTS DE ATRIBUTOS (ANTES DE :id)
+  // =========================================
+
+  @Post('atributos')
+  @ApiOperation({ summary: 'Crear un atributo de producto' })
+  @ApiResponse({
+    status: 201,
+    description: 'Atributo creado exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async createAtributo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CreateProductoAtributoDto,
+  ) {
+    return await this.atributoService.create(empresaId, dto);
+  }
+
+  @Get('atributos')
+  @ApiOperation({ summary: 'Obtener todos los atributos de la empresa' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de atributos obtenida exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async findAllAtributos(@Headers('x-tenant-id') empresaId: string) {
+    return await this.atributoService.findAll(empresaId);
+  }
+
+  @Get('atributos/:atributoId')
+  @ApiOperation({ summary: 'Obtener un atributo por ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Atributo obtenido exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async findOneAtributo(
+    @Param('atributoId') atributoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return await this.atributoService.findOne(atributoId, empresaId);
+  }
+
+  @Put('atributos/:atributoId')
+  @ApiOperation({ summary: 'Actualizar un atributo' })
+  @ApiResponse({
+    status: 200,
+    description: 'Atributo actualizado exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async updateAtributo(
+    @Param('atributoId') atributoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: Partial<CreateProductoAtributoDto>,
+  ) {
+    return await this.atributoService.update(atributoId, empresaId, dto);
+  }
+
+  @Delete('atributos/:atributoId')
+  @ApiOperation({ summary: 'Eliminar un atributo' })
+  @ApiResponse({
+    status: 200,
+    description: 'Atributo eliminado exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async removeAtributo(
+    @Param('atributoId') atributoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<void> {
+    return await this.atributoService.remove(atributoId, empresaId);
   }
 
   @Get(':id')
@@ -84,9 +217,14 @@ export class ProductoController {
     type: ProductoResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
   async findOne(
     @Param('id') id: string,
-    @Query('empresaId') empresaId: string,
+    @Headers('x-tenant-id') empresaId: string,
   ): Promise<ProductoResponseDto> {
     return await this.productoService.findOne(id, empresaId);
   }
@@ -100,9 +238,14 @@ export class ProductoController {
   })
   @ApiResponse({ status: 404, description: 'Producto no encontrado' })
   @ApiResponse({ status: 403, description: 'Sin permisos' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
   async update(
     @Param('id') id: string,
-    @Query('empresaId') empresaId: string,
+    @Headers('x-tenant-id') empresaId: string,
     @Body() updateProductoDto: UpdateProductoDto,
     @CurrentUser() user: any,
   ): Promise<ProductoResponseDto> {
@@ -122,9 +265,14 @@ export class ProductoController {
   })
   @ApiResponse({ status: 404, description: 'Producto no encontrado' })
   @ApiResponse({ status: 403, description: 'Sin permisos' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
   async remove(
     @Param('id') id: string,
-    @Query('empresaId') empresaId: string,
+    @Headers('x-tenant-id') empresaId: string,
     @CurrentUser() user: any,
   ): Promise<{ success: boolean }> {
     return await this.productoService.remove(id, empresaId, user.sub);
@@ -139,9 +287,14 @@ export class ProductoController {
   })
   @ApiResponse({ status: 400, description: 'Stock insuficiente' })
   @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
   async updateStock(
     @Param('id') id: string,
-    @Query('empresaId') empresaId: string,
+    @Headers('x-tenant-id') empresaId: string,
     @Body()
     body: {
       cantidad: number;
@@ -153,6 +306,130 @@ export class ProductoController {
       empresaId,
       body.cantidad,
       body.operacion,
+    );
+  }
+
+  // =========================================
+  // ENDPOINTS DE VARIANTES
+  // =========================================
+
+  @Post(':productoId/variantes')
+  @ApiOperation({ summary: 'Crear una variante para un producto' })
+  @ApiResponse({
+    status: 201,
+    description: 'Variante creada exitosamente',
+    type: ProductoVarianteResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async createVariante(
+    @Param('productoId') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CreateProductoVarianteDto,
+  ): Promise<ProductoVarianteResponseDto> {
+    return await this.varianteService.create(productoId, empresaId, dto);
+  }
+
+  @Get(':productoId/variantes')
+  @ApiOperation({ summary: 'Obtener todas las variantes de un producto' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de variantes obtenida exitosamente',
+    type: [ProductoVarianteResponseDto],
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async findVariantes(
+    @Param('productoId') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<ProductoVarianteResponseDto[]> {
+    return await this.varianteService.findByProducto(productoId, empresaId);
+  }
+
+  @Get('variantes/:varianteId')
+  @ApiOperation({ summary: 'Obtener una variante por ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Variante obtenida exitosamente',
+    type: ProductoVarianteResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async findOneVariante(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<ProductoVarianteResponseDto> {
+    return await this.varianteService.findOne(varianteId, empresaId);
+  }
+
+  @Put('variantes/:varianteId')
+  @ApiOperation({ summary: 'Actualizar una variante' })
+  @ApiResponse({
+    status: 200,
+    description: 'Variante actualizada exitosamente',
+    type: ProductoVarianteResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async updateVariante(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: UpdateProductoVarianteDto,
+  ): Promise<ProductoVarianteResponseDto> {
+    return await this.varianteService.update(varianteId, empresaId, dto);
+  }
+
+  @Delete('variantes/:varianteId')
+  @ApiOperation({ summary: 'Eliminar una variante' })
+  @ApiResponse({
+    status: 200,
+    description: 'Variante eliminada exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async removeVariante(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<void> {
+    return await this.varianteService.remove(varianteId, empresaId);
+  }
+
+  @Patch('variantes/:varianteId/stock')
+  @ApiOperation({ summary: 'Actualizar stock de una variante' })
+  @ApiResponse({
+    status: 200,
+    description: 'Stock de variante actualizado exitosamente',
+    type: ProductoVarianteResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async updateVarianteStock(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() body: { cantidad: number },
+  ): Promise<ProductoVarianteResponseDto> {
+    return await this.varianteService.updateStock(
+      varianteId,
+      empresaId,
+      body.cantidad,
     );
   }
 }
