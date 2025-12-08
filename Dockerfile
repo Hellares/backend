@@ -16,6 +16,7 @@ WORKDIR /app
 # Copiar archivos de dependencias
 COPY package*.json ./
 COPY prisma ./prisma/
+COPY prisma.config.ts ./
 
 # Instalar TODAS las dependencias (necesarias para el build)
 RUN npm install && \
@@ -51,8 +52,9 @@ WORKDIR /app
 # Copiar dependencias de node_modules desde builder
 COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 
-# Copiar Prisma Client generado
+# Copiar Prisma Client generado y configuración
 COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nestjs:nodejs /app/prisma.config.ts ./
 
 # Copiar build de la aplicación
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
