@@ -7,8 +7,14 @@
 # ------------------------------------
 FROM node:18-alpine AS builder
 
-# Instalar dependencias del sistema necesarias para Prisma
-RUN apk add --no-cache openssl libc6-compat
+# Instalar dependencias del sistema necesarias para Prisma y módulos nativos
+RUN apk add --no-cache \
+    openssl \
+    libc6-compat \
+    python3 \
+    make \
+    g++ \
+    postgresql-dev
 
 # Establecer directorio de trabajo
 WORKDIR /app
@@ -39,8 +45,12 @@ RUN npm prune --production
 # ------------------------------------
 FROM node:18-alpine AS production
 
-# Instalar dependencias del sistema
-RUN apk add --no-cache openssl libc6-compat wget
+# Instalar dependencias del sistema y librerías de PostgreSQL
+RUN apk add --no-cache \
+    openssl \
+    libc6-compat \
+    wget \
+    postgresql-libs
 
 # Crear usuario no-root para seguridad
 RUN addgroup -g 1001 -S nodejs && \
