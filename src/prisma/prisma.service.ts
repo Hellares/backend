@@ -1,14 +1,21 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
   private queryCount = 0;
   private slowQueryThreshold = 2000; // 2 segundos
+  private pool: Pool;
 
   constructor() {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const adapter = new PrismaPg(pool);
+
     super({
+      adapter,
       log: [
         { emit: 'event', level: 'query' },
         { emit: 'event', level: 'error' },
@@ -16,6 +23,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       ],
       errorFormat: 'pretty',
     });
+
+    this.pool = pool;
 
     // Monitorear queries lentas
     this.$on('query' as never, (e: any) => {
@@ -62,6 +71,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleDestroy() {
     try {
       await this.$disconnect();
+      await this.pool.end();
       this.logger.log('👋 Database disconnected successfully');
     } catch (error) {
       this.logger.error('❌ Error disconnecting from database', error);
