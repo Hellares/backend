@@ -25,8 +25,8 @@ COPY prisma ./prisma/
 COPY prisma.config.ts ./
 
 # Instalar TODAS las dependencias (necesarias para el build)
-RUN npm install && \
-    npm cache clean --force
+# Usar npm ci para instalación más confiable en Docker
+RUN npm ci --verbose || npm install --verbose
 
 # Copiar código fuente
 COPY . .
