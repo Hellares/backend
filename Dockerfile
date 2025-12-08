@@ -5,7 +5,7 @@
 # ------------------------------------
 # Stage 1: Builder
 # ------------------------------------
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 # Instalar dependencias del sistema necesarias para Prisma y módulos nativos
 RUN apk add --no-cache \
@@ -31,8 +31,8 @@ RUN npm ci --verbose || npm install --verbose
 # Copiar código fuente
 COPY . .
 
-# Generar Prisma Client
-RUN npx prisma generate
+# Generar Prisma Client (con URL dummy para build)
+RUN DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" npx prisma generate
 
 # Build de la aplicación
 RUN npm run build
@@ -43,7 +43,7 @@ RUN npm prune --production
 # ------------------------------------
 # Stage 2: Production
 # ------------------------------------
-FROM node:18-alpine AS production
+FROM node:20-alpine AS production
 
 # Instalar dependencias del sistema y librerías de PostgreSQL
 RUN apk add --no-cache \
