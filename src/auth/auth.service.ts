@@ -23,6 +23,8 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SetPasswordDto } from './dto/set-password.dto';
+import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
 import { JwtPayload, RefreshTokenPayload } from './interfaces/jwt-payload.interface';
 
 @Injectable()
@@ -98,9 +100,21 @@ export class AuthService {
         telefonoVerificado: false,
         emailVerificationToken: verificationToken,
         emailVerificationExpiracion: verificationTokenExpiration,
+        authMethodsCount: 1, // Usuario tiene método PASSWORD
       },
       include: {
         persona: true,
+      },
+    });
+
+    // Crear AuthProvider para método PASSWORD
+    await this.prisma.authProvider.create({
+      data: {
+        userId: usuario.id,
+        provider: 'PASSWORD',
+        providerId: usuario.id, // Para PASSWORD, usamos el userId como providerId
+        email,
+        isActive: true,
       },
     });
 
@@ -182,7 +196,7 @@ export class AuthService {
       platform: 'Unknown'
     };
 
-    if (!usuario || !usuario.passwordHash || !usuario.isActive) {
+    if (!usuario || !usuario.isActive) {
       // Registrar intento fallido
       await this.securityService.recordFailedAttempt(email, 'login');
 
@@ -196,6 +210,25 @@ export class AuthService {
       );
 
       throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    // Verificar que el usuario tenga método de autenticación PASSWORD
+    const passwordProvider = await this.prisma.authProvider.findFirst({
+      where: {
+        userId: usuario.id,
+        provider: 'PASSWORD',
+        isActive: true,
+      },
+    });
+
+    if (!passwordProvider || !usuario.passwordHash) {
+      // Registrar intento fallido
+      await this.securityService.recordFailedAttempt(email, 'login');
+
+      // Log de auditoría para método no disponible
+      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', false, 'Password login not available for this account');
+
+      throw new UnauthorizedException('Credenciales inválidas. Esta cuenta no tiene configurado el login con contraseña.');
     }
 
     // Verificar contraseña
@@ -1060,6 +1093,16 @@ export class AuthService {
             },
           });
 
+          // Incrementar contador de métodos de autenticación
+          await this.prisma.usuario.update({
+            where: { id: usuario.id },
+            data: {
+              authMethodsCount: {
+                increment: 1,
+              },
+            },
+          });
+
           this.logger.info('Existing user linked with Google', {
             userId: usuario.id,
             email,
@@ -1083,6 +1126,7 @@ export class AuthService {
               email,
               emailVerificado: emailVerified || true, // Google ya verificó el email
               telefonoVerificado: false,
+              authMethodsCount: 1, // Usuario tiene método GOOGLE
             },
             include: {
               persona: true,
@@ -1438,6 +1482,111 @@ export class AuthService {
       message: 'Empresa cambiada exitosamente',
       empresaId: userRole.empresa.id,
       empresaNombre: userRole.empresa.nombre,
+    };
+  }
+
+  /**
+   * Establecer contraseña para usuarios que se registraron con OAuth (ej. Google)
+   * Permite vincular método PASSWORD a una cuenta existente
+   */
+  async setPassword(userId: string, password: string) {
+    // Buscar usuario
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+    });
+
+    if (!usuario || !usuario.isActive) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // Verificar si ya tiene método PASSWORD
+    const existingPasswordProvider = await this.prisma.authProvider.findFirst({
+      where: {
+        userId: usuario.id,
+        provider: 'PASSWORD',
+      },
+    });
+
+    if (existingPasswordProvider) {
+      throw new ConflictException('Este usuario ya tiene configurado el login con contraseña. Usa "Cambiar contraseña" en su lugar.');
+    }
+
+    // Hash de la contraseña
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    // Actualizar usuario con la contraseña e incrementar authMethodsCount
+    await this.prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        passwordHash,
+        authMethodsCount: {
+          increment: 1,
+        },
+      },
+    });
+
+    // Crear AuthProvider para método PASSWORD
+    await this.prisma.authProvider.create({
+      data: {
+        userId: usuario.id,
+        provider: 'PASSWORD',
+        providerId: usuario.id,
+        email: usuario.email,
+        isActive: true,
+      },
+    });
+
+    // Log de auditoría
+    this.auditLogger.logPasswordChanged(userId, usuario.email, userId);
+
+    this.logger.success('Password method added to user account', {
+      userId,
+      email: usuario.email,
+    });
+
+    return {
+      success: true,
+      message: 'Contraseña establecida exitosamente. Ahora puedes iniciar sesión con email y contraseña.',
+    };
+  }
+
+  /**
+   * Verificar métodos de autenticación disponibles para un email
+   * Útil para el frontend: saber si mostrar campo de contraseña o botón de Google
+   */
+  async checkAuthMethods(email: string) {
+    // Buscar usuario por email
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { email },
+    });
+
+    if (!usuario) {
+      // No revelar si el email existe o no por seguridad
+      return {
+        email,
+        exists: false,
+        methods: [],
+      };
+    }
+
+    // Obtener todos los AuthProviders activos para este usuario
+    const authProviders = await this.prisma.authProvider.findMany({
+      where: {
+        userId: usuario.id,
+        isActive: true,
+      },
+      select: {
+        provider: true,
+      },
+    });
+
+    const availableMethods = authProviders.map(ap => ap.provider);
+
+    return {
+      email,
+      exists: true,
+      methods: availableMethods, // Ej: ['PASSWORD', 'GOOGLE']
+      authMethodsCount: usuario.authMethodsCount,
     };
   }
 }

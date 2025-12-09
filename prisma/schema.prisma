@@ -126,6 +126,7 @@ model Usuario {
   emailVerificado             Boolean             @default(false)
   telefonoVerificado          Boolean             @default(false)
   rolGlobal                   Rol?
+  authMethodsCount            Int                 @default(0)
   creadoEn                    DateTime            @default(now())
   actualizadoEn               DateTime            @updatedAt
   authProviders               AuthProvider[]
@@ -1147,6 +1148,7 @@ model Archivo {
 }
 
 enum AuthProviderType {
+  PASSWORD
   GOOGLE
   MICROSOFT
   FACEBOOK

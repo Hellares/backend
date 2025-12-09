@@ -31,6 +31,8 @@ import {
   SwitchTenantDto,
 } from './dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
+import { SetPasswordDto } from './dto/set-password.dto';
+import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
 
 @ApiTags('Autenticación')
 @Controller('auth')
@@ -443,5 +445,71 @@ export class AuthController {
       switchTenantDto.empresaId,
       switchTenantDto.subdominioEmpresa,
     );
+  }
+
+  /**
+   * Establecer contraseña (para usuarios OAuth que quieren agregar login con contraseña)
+   */
+  @Post('set-password')
+  @UseGuards(JwtAuthGuard, ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 intentos por minuto
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Establecer contraseña para usuario autenticado',
+    description: 'Permite a usuarios que se registraron con Google agregar login con contraseña',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Contraseña establecida exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: 'Contraseña establecida exitosamente. Ahora puedes iniciar sesión con email y contraseña.' },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 409, description: 'El usuario ya tiene contraseña configurada' })
+  @ApiResponse({ status: 400, description: 'Contraseña inválida (debe cumplir requisitos de seguridad)' })
+  async setPassword(
+    @CurrentUser() user: any,
+    @Body() setPasswordDto: SetPasswordDto,
+  ) {
+    return this.authService.setPassword(user.sub, setPasswordDto.password);
+  }
+
+  /**
+   * Verificar métodos de autenticación disponibles para un email
+   */
+  @Post('methods')
+  @Public()
+  @UseGuards(ThrottlerGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verificar métodos de autenticación disponibles',
+    description: 'Devuelve los métodos de autenticación disponibles para un email (PASSWORD, GOOGLE, etc.)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Métodos de autenticación disponibles',
+    schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', example: 'usuario@ejemplo.com' },
+        exists: { type: 'boolean', example: true },
+        methods: {
+          type: 'array',
+          items: { type: 'string' },
+          example: ['PASSWORD', 'GOOGLE']
+        },
+        authMethodsCount: { type: 'number', example: 2 },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Email inválido' })
+  async checkAuthMethods(@Body() checkAuthMethodsDto: CheckAuthMethodsDto) {
+    return this.authService.checkAuthMethods(checkAuthMethodsDto.email);
   }
 }
