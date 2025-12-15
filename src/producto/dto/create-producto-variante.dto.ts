@@ -1,5 +1,6 @@
 import { IsString, IsNotEmpty, IsNumber, IsOptional, IsObject, IsBoolean, Min } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsPrecioMayorQueCosto } from '../validators/precio-mayor-que-costo.validator';
 
 export class CreateProductoVarianteDto {
   @IsString()
@@ -21,6 +22,7 @@ export class CreateProductoVarianteDto {
   @IsNumber()
   @Type(() => Number)
   @Min(0)
+  @IsPrecioMayorQueCosto()
   precio: number;
 
   @IsNumber()

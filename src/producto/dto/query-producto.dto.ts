@@ -105,6 +105,24 @@ export class QueryProductoDto {
   stockBajo?: boolean;
 
   @ApiPropertyOptional({
+    description: 'Filtrar solo productos simples (excluye combos)',
+    example: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  soloProductos?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Filtrar solo combos/kits',
+    example: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  soloCombos?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Ordenamiento',
     enum: OrdenProducto,
     example: OrdenProducto.NOMBRE_ASC,

@@ -4,8 +4,11 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import {
@@ -16,12 +19,24 @@ import {
   ProductoResponseDto,
   PaginatedProductoResponseDto,
 } from './dto/producto-response.dto';
+import { AppLoggerService } from 'src/common/logger';
+import { ProductoComboService } from './producto-combo.service';
+import { createPaginatedResponse } from '../common/utils/pagination.util';
 
 @Injectable()
 export class ProductoService {
-  private readonly logger = new Logger(ProductoService.name);
+  private readonly logger: AppLoggerService;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private cache: CacheService,
+    @Inject(forwardRef(() => ProductoComboService))
+    private productoComboService: ProductoComboService,
+    loggerService: AppLoggerService,
+  ) {
+    this.logger = loggerService;
+    this.logger.setContext(ProductoService.name);
+  }
 
   /**
    * Crear un nuevo producto
@@ -128,9 +143,13 @@ export class ProductoService {
         `Producto creado: ${producto.id} (${producto.codigoEmpresa})`,
       );
 
+      // Invalidar cache de estadísticas de la empresa
+      await this.invalidateEmpresaStats(empresaId);
+
       return this.toResponseDto(producto);
     } catch (error) {
-      this.logger.error(`Error al crear producto: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al crear producto: ${errorMessage}`);
       throw error;
     }
   }
@@ -153,6 +172,8 @@ export class ProductoService {
       destacado,
       enOferta,
       stockBajo,
+      soloProductos,
+      soloCombos,
       orden,
     } = queryDto;
 
@@ -181,13 +202,39 @@ export class ProductoService {
     if (visibleMarketplace !== undefined)
       where.visibleMarketplace = visibleMarketplace;
     if (destacado !== undefined) where.destacado = destacado;
-    if (enOferta !== undefined) where.enOferta = enOferta;
+
+    // Filtro de ofertas: validar que no estén expiradas
+    if (enOferta !== undefined) {
+      if (enOferta === true) {
+        // Solo mostrar ofertas activas y no expiradas
+        where.enOferta = true;
+        // Agregar validación de fecha de expiración
+        if (!where.AND) where.AND = [];
+        where.AND.push({
+          OR: [
+            { fechaFinOferta: null }, // Ofertas sin fecha de fin
+            { fechaFinOferta: { gte: new Date() } }, // Ofertas que aún no expiran
+          ],
+        });
+      } else {
+        where.enOferta = false;
+      }
+    }
+
+    // Filtros de tipo de producto
+    if (soloProductos !== undefined && soloProductos === true) {
+      where.esCombo = false;
+    }
+    if (soloCombos !== undefined && soloCombos === true) {
+      where.esCombo = true;
+    }
 
     // Filtro de stock bajo
     if (stockBajo) {
-      where.AND = [
-        { stock: { lte: this.prisma.producto.fields.stockMinimo } },
-      ];
+      if (!where.AND) where.AND = [];
+      where.AND.push({
+        stock: { lte: this.prisma.producto.fields.stockMinimo },
+      });
     }
 
     // Ordenamiento
@@ -245,7 +292,7 @@ export class ProductoService {
       this.prisma.producto.count({ where }),
     ]);
 
-    // Obtener imágenes para cada producto
+    // Obtener imágenes y calcular stock para cada producto
     const productosConImagenes = await Promise.all(
       productos.map(async (producto) => {
         const archivos = await this.prisma.archivo.findMany({
@@ -266,17 +313,19 @@ export class ProductoService {
           },
         });
 
-        return this.toResponseDto(producto, archivos);
+        const productoDto = this.toResponseDto(producto, archivos);
+
+        // Si es un combo, calcular el stock disponible basado en componentes
+        if (producto.esCombo) {
+          const stockDisponible = await this.productoComboService.getStockDisponibleCombo(producto.id);
+          productoDto.stock = stockDisponible;
+        }
+
+        return productoDto;
       }),
     );
 
-    return {
-      data: productosConImagenes,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return createPaginatedResponse(productosConImagenes, total, page, limit);
   }
 
   /**
@@ -391,6 +440,111 @@ export class ProductoService {
       await this.validateEmpresaMarca(productoData.empresaMarcaId, empresaId);
     }
 
+    // Validar que no se intente activar variantes en un combo (XOR)
+    if (productoData.tieneVariantes === true && productoExistente.esCombo) {
+      throw new BadRequestException(
+        'No se puede activar variantes en un producto que es combo. ' +
+        'Un producto no puede ser combo y tener variantes al mismo tiempo.',
+      );
+    }
+
+    // Validar si se está deshabilitando variantes
+    if (
+      productoData.tieneVariantes === false &&
+      productoExistente.tieneVariantes === true
+    ) {
+      const variantesActivas = await this.prisma.productoVariante.count({
+        where: {
+          productoId: id,
+          isActive: true,
+          deletedAt: null,
+        },
+      });
+
+      if (variantesActivas > 0) {
+        throw new BadRequestException(
+          `No se puede deshabilitar variantes. El producto tiene ${variantesActivas} variante(s) activa(s). Elimínelas primero.`,
+        );
+      }
+    }
+
+    // Si se está habilitando variantes, crear variante por defecto con datos actuales
+    let variantePorDefectoCreada = false;
+    if (
+      productoData.tieneVariantes === true &&
+      productoExistente.tieneVariantes === false
+    ) {
+      // Verificar que no tenga variantes ya creadas (edge case)
+      const variantesExistentes = await this.prisma.productoVariante.count({
+        where: {
+          productoId: id,
+          deletedAt: null,
+        },
+      });
+
+      if (variantesExistentes === 0) {
+        this.logger.info('Convirtiendo producto a variantes, creando variante por defecto', {
+          productoId: id,
+          stockActual: productoExistente.stock,
+          precioActual: productoExistente.precio,
+        });
+
+        // Generar código único para la variante
+        let config = await this.prisma.configuracionCodigos.findUnique({
+          where: { empresaId },
+        });
+
+        if (!config) {
+          config = await this.prisma.configuracionCodigos.create({
+            data: { empresaId },
+          });
+        }
+
+        const updated = await this.prisma.configuracionCodigos.update({
+          where: { empresaId },
+          data: {
+            ultimaVariante: {
+              increment: 1,
+            },
+          },
+        });
+
+        const numero = updated.ultimaVariante.toString().padStart(config.varianteLongitud, '0');
+        const codigoEmpresa = `${config.varianteCodigo}${config.varianteSeparador}${numero}`;
+
+        // Crear variante por defecto con los datos del producto original
+        await this.prisma.productoVariante.create({
+          data: {
+            productoId: id,
+            empresaId,
+            nombre: 'Original',
+            sku: `${productoExistente.codigoEmpresa}-ORIGINAL`,
+            codigoBarras: null, // No copiar código de barras, se asignará después si es necesario
+            codigoEmpresa,
+            atributos: { tipo: 'original' },
+            precio: productoExistente.precio,
+            precioCosto: productoExistente.precioCosto,
+            stock: productoExistente.stock,
+            stockMinimo: productoExistente.stockMinimo,
+            peso: productoExistente.peso,
+            dimensiones: productoExistente.dimensiones as any,
+            isActive: true,
+            orden: 0,
+          },
+        });
+
+        // Limpiar stock base del producto para evitar confusión en BD
+        // (El stock ahora se maneja a nivel de variantes)
+        productoData.stock = 0;
+
+        variantePorDefectoCreada = true;
+        this.logger.success('Variante por defecto creada exitosamente', {
+          codigoEmpresa,
+          stockTransferido: productoExistente.stock,
+        });
+      }
+    }
+
     // Convertir fechas de string a Date si están presentes
     const dataToUpdate = {
       ...productoData,
@@ -450,12 +604,48 @@ export class ProductoService {
         },
       });
 
+      // Si se desactivó el producto (era activo y ahora es inactivo) y tiene variantes,
+      // desactivar todas las variantes automáticamente
+      if (
+        productoExistente.isActive === true &&
+        producto.isActive === false &&
+        productoExistente.tieneVariantes
+      ) {
+        const variantesActivas = await this.prisma.productoVariante.count({
+          where: {
+            productoId: id,
+            isActive: true,
+            deletedAt: null,
+          },
+        });
+
+        if (variantesActivas > 0) {
+          await this.prisma.productoVariante.updateMany({
+            where: {
+              productoId: id,
+              isActive: true,
+              deletedAt: null,
+            },
+            data: {
+              isActive: false,
+            },
+          });
+
+          this.logger.warn(
+            `Producto ${id} desactivado. Se desactivaron automáticamente ${variantesActivas} variante(s).`,
+          );
+        }
+      }
+
       // Actualizar imágenes si se proporcionaron
       if (imagenesIds !== undefined) {
         await this.actualizarImagenes(id, empresaId, imagenesIds);
       }
 
       this.logger.log(`Producto actualizado: ${id}`);
+
+      // Invalidar cache de estadísticas de la empresa
+      await this.invalidateEmpresaStats(empresaId);
 
       // Obtener archivos actualizados
       const archivos = await this.prisma.archivo.findMany({
@@ -471,7 +661,8 @@ export class ProductoService {
 
       return this.toResponseDto(producto, archivos);
     } catch (error) {
-      this.logger.error(`Error al actualizar producto: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al actualizar producto: ${errorMessage}`);
       throw error;
     }
   }
@@ -506,6 +697,9 @@ export class ProductoService {
 
     this.logger.log(`Producto eliminado: ${id}`);
 
+    // Invalidar cache de estadísticas de la empresa
+    await this.invalidateEmpresaStats(empresaId);
+
     return { success: true };
   }
 
@@ -524,6 +718,14 @@ export class ProductoService {
 
     if (!producto) {
       throw new NotFoundException('Producto no encontrado');
+    }
+
+    // Validar que el producto no tenga variantes
+    if (producto.tieneVariantes) {
+      throw new BadRequestException(
+        'No se puede actualizar el stock directamente en productos con variantes. ' +
+        'Actualice el stock de cada variante individualmente.',
+      );
     }
 
     const nuevoStock =
@@ -652,7 +854,7 @@ export class ProductoService {
   }
 
   private async generateCodigos(empresaId: string, sedeId?: string) {
-    // Obtener configuración de códigos
+    // Obtener o crear configuración de códigos
     let config = await this.prisma.configuracionCodigos.findUnique({
       where: { empresaId },
     });
@@ -664,13 +866,17 @@ export class ProductoService {
       });
     }
 
-    // Incrementar contador
-    const nuevoContador = config.ultimoProducto + 1;
-
-    await this.prisma.configuracionCodigos.update({
+    // Incrementar contador atómicamente (evita race conditions)
+    const updated = await this.prisma.configuracionCodigos.update({
       where: { empresaId },
-      data: { ultimoProducto: nuevoContador },
+      data: {
+        ultimoProducto: {
+          increment: 1,
+        },
+      },
     });
+
+    const nuevoContador = updated.ultimoProducto;
 
     // Generar códigos
     const numero = nuevoContador.toString().padStart(config.productoLongitud, '0');
@@ -837,5 +1043,244 @@ export class ProductoService {
         orden: v.orden,
       })),
     };
+  }
+
+  /**
+   * Obtener stock total de un producto
+   * Si tiene variantes, suma el stock de todas las variantes activas
+   * Si no tiene variantes, retorna el stock del producto base
+   */
+  async getStockTotal(productoId: string, empresaId: string): Promise<number> {
+    const producto = await this.prisma.producto.findFirst({
+      where: {
+        id: productoId,
+        empresaId,
+        deletedAt: null,
+      },
+    });
+
+    if (!producto) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+
+    // Si tiene variantes, sumar stock de todas las variantes activas
+    if (producto.tieneVariantes) {
+      const result = await this.prisma.productoVariante.aggregate({
+        where: {
+          productoId,
+          isActive: true,
+          deletedAt: null,
+        },
+        _sum: {
+          stock: true,
+        },
+      });
+
+      return result._sum.stock || 0;
+    }
+
+    // Si no tiene variantes, retornar stock del producto base
+    return producto.stock;
+  }
+
+  // =========================================
+  // MÉTODOS AUXILIARES PARA COMBOS
+  // =========================================
+
+  /**
+   * Convierte un producto existente en combo
+   * Marca el producto como combo y configura el tipo de precio
+   */
+  async convertirACombo(
+    productoId: string,
+    empresaId: string,
+    tipoPrecioCombo: 'FIJO' | 'CALCULADO' | 'CALCULADO_CON_DESCUENTO',
+    descuentoPorcentaje?: number,
+  ): Promise<ProductoResponseDto> {
+    try {
+      const producto = await this.prisma.producto.findFirst({
+        where: {
+          id: productoId,
+          empresaId,
+          deletedAt: null,
+        },
+      });
+
+      if (!producto) {
+        throw new NotFoundException('Producto no encontrado');
+      }
+
+      if (producto.esCombo) {
+        throw new BadRequestException('El producto ya es un combo');
+      }
+
+      // Validar que el producto no tenga variantes
+      if (producto.tieneVariantes) {
+        throw new BadRequestException(
+          'No se puede convertir a combo un producto que tiene variantes habilitadas. ' +
+          'Deshabilite las variantes primero.',
+        );
+      }
+
+      // Actualizar producto para marcarlo como combo
+      const actualizado = await this.prisma.producto.update({
+        where: { id: productoId },
+        data: {
+          esCombo: true,
+          tipoPrecioCombo,
+          ...(tipoPrecioCombo === 'CALCULADO_CON_DESCUENTO' && descuentoPorcentaje
+            ? { descuentoMaximo: descuentoPorcentaje }
+            : {}),
+        },
+        include: {
+          empresaCategoria: {
+            include: {
+              categoriaMaestra: true,
+            },
+          },
+          empresaMarca: {
+            include: {
+              marcaMaestra: true,
+            },
+          },
+          sede: true,
+        },
+      });
+
+      this.logger.log(`Producto ${productoId} convertido a combo tipo ${tipoPrecioCombo}`);
+
+      // Invalidar cache
+      await this.invalidateEmpresaStats(empresaId);
+
+      return this.toResponseDto(actualizado, []);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al convertir producto a combo: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Valida si un producto puede ser usado como componente de combo
+   * Verifica que no sea un combo y que tenga stock disponible
+   */
+  async validarProductoParaCombo(productoId: string, empresaId: string): Promise<boolean> {
+    try {
+      const producto = await this.prisma.producto.findFirst({
+        where: {
+          id: productoId,
+          empresaId,
+          deletedAt: null,
+          isActive: true,
+        },
+      });
+
+      if (!producto) {
+        return false;
+      }
+
+      // No permitir que combos sean componentes de otros combos
+      if (producto.esCombo) {
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al validar producto para combo: ${errorMessage}`);
+      return false;
+    }
+  }
+
+  /**
+   * Obtiene productos disponibles para usar como componentes de combo
+   * Excluye combos y productos sin stock
+   * Soporta paginación y búsqueda
+   */
+  async getProductosDisponiblesParaCombo(
+    empresaId: string,
+    page: number = 1,
+    limit: number = 50,
+    search?: string,
+  ): Promise<PaginatedProductoResponseDto> {
+    try {
+      const skip = (page - 1) * limit;
+
+      const where: any = {
+        empresaId,
+        deletedAt: null,
+        isActive: true,
+        esCombo: false, // Solo productos no-combo
+      };
+
+      // Agregar búsqueda si se proporciona
+      if (search) {
+        where.OR = [
+          { nombre: { contains: search, mode: 'insensitive' } },
+          { descripcion: { contains: search, mode: 'insensitive' } },
+          { codigoEmpresa: { contains: search, mode: 'insensitive' } },
+          { sku: { contains: search, mode: 'insensitive' } },
+          { codigoBarras: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      const [productos, total] = await Promise.all([
+        this.prisma.producto.findMany({
+          where,
+          skip,
+          take: limit,
+          include: {
+            empresaCategoria: {
+              include: {
+                categoriaMaestra: true,
+              },
+            },
+            empresaMarca: {
+              include: {
+                marcaMaestra: true,
+              },
+            },
+            sede: true,
+            variantes: {
+              where: {
+                isActive: true,
+                deletedAt: null,
+              },
+              orderBy: {
+                orden: 'asc',
+              },
+            },
+          },
+          orderBy: {
+            nombre: 'asc',
+          },
+        }),
+        this.prisma.producto.count({ where }),
+      ]);
+
+      const data = productos.map((p) => this.toResponseDto(p));
+      return createPaginatedResponse(data, total, page, limit);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al obtener productos para combo: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Invalidar cache de estadísticas de la empresa
+   * Se llama automáticamente cuando se crea, actualiza o elimina un producto
+   */
+  private async invalidateEmpresaStats(empresaId: string): Promise<void> {
+    try {
+      const cacheKey = this.cache.getEmpresaStatsKey(empresaId);
+      await this.cache.invalidate(cacheKey);
+      this.logger.debug(`Cache de estadísticas invalidado para empresa: ${empresaId}`);
+    } catch (error) {
+      // No lanzar error si falla la invalidación del cache
+      // El sistema debe seguir funcionando aunque Redis falle
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Error al invalidar cache de estadísticas: ${errorMessage}`);
+    }
   }
 }

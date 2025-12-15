@@ -209,6 +209,42 @@ export class ProductoController {
     return await this.atributoService.remove(atributoId, empresaId);
   }
 
+  // =========================================
+  // ENDPOINTS ESTÁTICOS DE COMBOS (ANTES DE :id)
+  // =========================================
+
+  @Get('disponibles-para-combo')
+  @ApiOperation({
+    summary: 'Obtener productos disponibles para usar como componentes de combo',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista paginada de productos disponibles para combo',
+    type: PaginatedProductoResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async getProductosDisponiblesParaCombo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('search') search?: string,
+  ): Promise<PaginatedProductoResponseDto> {
+    return await this.productoService.getProductosDisponiblesParaCombo(
+      empresaId,
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 50,
+      search,
+    );
+  }
+
+  // =========================================
+  // ENDPOINTS DINÁMICOS CON :id
+  // =========================================
+
   @Get(':id')
   @ApiOperation({ summary: 'Obtener un producto por ID' })
   @ApiResponse({
@@ -308,6 +344,83 @@ export class ProductoController {
       body.operacion,
     );
   }
+
+  @Get(':id/stock-total')
+  @ApiOperation({ summary: 'Obtener stock total de un producto (incluyendo variantes)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Stock total obtenido exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        stockTotal: {
+          type: 'number',
+          description: 'Stock total del producto. Si tiene variantes, es la suma de todas las variantes activas. Si no tiene variantes, es el stock del producto base.',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async getStockTotal(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<{ stockTotal: number }> {
+    const stockTotal = await this.productoService.getStockTotal(id, empresaId);
+    return { stockTotal };
+  }
+
+  // =========================================
+  // ENDPOINTS DE COMBOS
+  // =========================================
+
+  // =========================================
+  // ENDPOINT DEPRECADO - NO USAR
+  // =========================================
+  /**
+   * @deprecated Este endpoint está deprecado.
+   * En su lugar, crea combos directamente usando POST /api/combos
+   *
+   * Razón: Convertir productos existentes a combos causa pérdida de stock/precio.
+   * Es mejor crear combos específicos desde el inicio.
+   */
+  // @Patch(':id/convertir-a-combo')
+  // @ApiOperation({
+  //   summary: 'DEPRECADO - Convertir un producto existente en combo',
+  //   deprecated: true,
+  // })
+  // @ApiResponse({
+  //   status: 200,
+  //   description: 'Producto convertido a combo exitosamente',
+  //   type: ProductoResponseDto,
+  // })
+  // @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  // @ApiResponse({ status: 400, description: 'El producto ya es un combo' })
+  // @ApiHeader({
+  //   name: 'x-tenant-id',
+  //   description: 'ID de la empresa (tenant)',
+  //   required: true,
+  // })
+  // async convertirACombo(
+  //   @Param('id') id: string,
+  //   @Headers('x-tenant-id') empresaId: string,
+  //   @Body()
+  //   body: {
+  //     tipoPrecioCombo: 'FIJO' | 'CALCULADO' | 'CALCULADO_CON_DESCUENTO';
+  //     descuentoPorcentaje?: number;
+  //   },
+  // ): Promise<ProductoResponseDto> {
+  //   return await this.productoService.convertirACombo(
+  //     id,
+  //     empresaId,
+  //     body.tipoPrecioCombo,
+  //     body.descuentoPorcentaje,
+  //   );
+  // }
 
   // =========================================
   // ENDPOINTS DE VARIANTES

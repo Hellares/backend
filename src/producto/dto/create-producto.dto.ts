@@ -12,6 +12,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsPrecioMayorQueCosto } from '../validators/precio-mayor-que-costo.validator';
 
 export class CreateProductoDto {
   @ApiProperty({
@@ -94,6 +95,7 @@ export class CreateProductoDto {
   })
   @IsNumber()
   @Min(0)
+  @IsPrecioMayorQueCosto()
   @Type(() => Number)
   precio: number;
 

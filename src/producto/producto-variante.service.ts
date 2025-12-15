@@ -44,6 +44,14 @@ export class ProductoVarianteService {
       throw new BadRequestException('El producto no tiene variantes habilitadas');
     }
 
+    // Validar que el producto padre esté activo si se intenta crear una variante activa
+    if ((dto.isActive === undefined || dto.isActive === true) && !producto.isActive) {
+      throw new BadRequestException(
+        'No se puede crear una variante activa cuando el producto padre está inactivo. ' +
+        'Active primero el producto padre o cree la variante como inactiva.',
+      );
+    }
+
     // Verificar que el SKU no existe
     const existingSku = await this.prisma.productoVariante.findFirst({
       where: {
@@ -55,6 +63,13 @@ export class ProductoVarianteService {
 
     if (existingSku) {
       throw new ConflictException(`Ya existe una variante con el SKU: ${dto.sku}`);
+    }
+
+    // Validar que el precio sea válido
+    if (!dto.precio || dto.precio <= 0) {
+      throw new BadRequestException(
+        'El precio de la variante debe ser mayor a 0',
+      );
     }
 
     // Generar código de empresa único
@@ -188,6 +203,21 @@ export class ProductoVarianteService {
 
     if (!existing) {
       throw new NotFoundException(`Variante ${varianteId} no encontrada`);
+    }
+
+    // Validar que el producto padre esté activo si se intenta activar la variante
+    if (dto.isActive === true) {
+      const producto = await this.prisma.producto.findUnique({
+        where: { id: existing.productoId },
+        select: { isActive: true },
+      });
+
+      if (producto && !producto.isActive) {
+        throw new BadRequestException(
+          'No se puede activar una variante cuando el producto padre está inactivo. ' +
+          'Active primero el producto padre.',
+        );
+      }
     }
 
     // Si se actualiza el SKU, verificar que no exista
@@ -337,13 +367,38 @@ export class ProductoVarianteService {
 
   /**
    * Generar código único de empresa para variante
+   * Usa incremento atómico en ConfiguracionCodigos para garantizar unicidad
    */
   private async generateCodigoEmpresa(empresaId: string): Promise<string> {
-    const count = await this.prisma.productoVariante.count({
+    // Obtener o crear configuración de códigos
+    let config = await this.prisma.configuracionCodigos.findUnique({
       where: { empresaId },
     });
 
-    return `VAR-${(count + 1).toString().padStart(6, '0')}`;
+    if (!config) {
+      // Crear configuración por defecto
+      config = await this.prisma.configuracionCodigos.create({
+        data: { empresaId },
+      });
+    }
+
+    // Incrementar contador atómicamente (evita race conditions)
+    const updated = await this.prisma.configuracionCodigos.update({
+      where: { empresaId },
+      data: {
+        ultimaVariante: {
+          increment: 1,
+        },
+      },
+    });
+
+    const nuevoContador = updated.ultimaVariante;
+
+    // Generar código usando la configuración
+    const numero = nuevoContador.toString().padStart(config.varianteLongitud, '0');
+    const codigoEmpresa = `${config.varianteCodigo}${config.varianteSeparador}${numero}`;
+
+    return codigoEmpresa;
   }
 
   /**

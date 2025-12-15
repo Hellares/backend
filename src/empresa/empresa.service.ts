@@ -1047,7 +1047,7 @@ export class EmpresaService {
   }
 
   /**
-   * Calcular estadísticas de la empresa (con cache de 5 minutos)
+   * //!Calcular estadísticas de la empresa (con cache de 5 minutos)
    */
   private async calculateStatistics(empresaId: string): Promise<EmpresaStatisticsDto> {
     const cacheKey = this.cache.getEmpresaStatsKey(empresaId);
@@ -1163,7 +1163,7 @@ export class EmpresaService {
           ingresosMes: Math.round(ingresosMes * 100) / 100, // Redondear a 2 decimales
         };
       },
-      300, // Cache por 5 minutos
+      1800, //! Cache por 30 minutos (se invalida automáticamente al modificar datos)
     );
   }
 
