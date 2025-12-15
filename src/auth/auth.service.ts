@@ -46,18 +46,62 @@ export class AuthService {
   }
 
   /**
+   * Detecta el tipo de credencial (EMAIL, DNI, TELEFONO)
+   */
+  private detectarTipoCredencial(credencial: string): 'EMAIL' | 'DNI' | 'TELEFONO' {
+    // Patrón para email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    // Patrón para DNI peruano (8 dígitos)
+    const dniRegex = /^\d{8}$/;
+    // Patrón para teléfono (9-15 dígitos, puede empezar con +)
+    const telefonoRegex = /^\+?\d{9,15}$/;
+
+    if (emailRegex.test(credencial)) {
+      return 'EMAIL';
+    }
+    if (dniRegex.test(credencial)) {
+      return 'DNI';
+    }
+    if (telefonoRegex.test(credencial)) {
+      return 'TELEFONO';
+    }
+
+    // Por defecto, asumir que es email si no coincide con nada
+    return 'EMAIL';
+  }
+
+  /**
    * Registro de nuevo usuario
    */
   async register(registerDto: RegisterDto, tenantId?: string) {
-    const { email, password, nombres, apellidos, telefono, dni, subdominioEmpresa } = registerDto;
+    const { email, password, nombres, apellidos, telefono, dni, subdominioEmpresa, esClienteSinEmail } = registerDto;
 
-    // Verificar si el email ya existe
-    const existingUser = await this.prisma.usuario.findUnique({
-      where: { email },
-    });
+    // Validar que se proporcione al menos email o DNI
+    if (!email && !dni) {
+      throw new BadRequestException('Debe proporcionar email o DNI');
+    }
 
-    if (existingUser) {
-      throw new ConflictException('El email ya está registrado');
+    // Verificar si el email ya existe (solo si se proporciona)
+    if (email) {
+      const existingUser = await this.prisma.usuario.findUnique({
+        where: { email },
+      });
+
+      if (existingUser) {
+        throw new ConflictException('El email ya está registrado');
+      }
+    }
+
+    // Verificar si el DNI ya existe (solo si se proporciona)
+    if (dni) {
+      const existingPersona = await this.prisma.persona.findUnique({
+        where: { dni },
+        include: { usuario: true },
+      });
+
+      if (existingPersona && existingPersona.usuario) {
+        throw new ConflictException('El DNI ya está registrado');
+      }
     }
 
     // Determinar el tenant si no se proporciona
@@ -72,8 +116,17 @@ export class AuthService {
       empresaId = empresa.id;
     }
 
+    // Determinar la contraseña: si es cliente sin email, usar DNI como contraseña temporal
+    const passwordToHash = esClienteSinEmail && dni ? dni : password;
+    if (!passwordToHash) {
+      throw new BadRequestException('Debe proporcionar una contraseña');
+    }
+
     // Hash de la contraseña (bcrypt incluye el salt automáticamente)
-    const passwordHash = await bcrypt.hash(password, 12);
+    const passwordHash = await bcrypt.hash(passwordToHash, 12);
+
+    // Determinar método principal de login
+    const metodoPrincipalLogin = esClienteSinEmail ? 'DNI' : (email ? 'EMAIL' : 'DNI');
 
     // Crear la persona primero
     const persona = await this.prisma.persona.create({
@@ -83,24 +136,29 @@ export class AuthService {
         telefono,
         dni,
         esUsuario: true,
+        esCliente: esClienteSinEmail ? true : undefined,
       },
     });
 
-    // Generar token de verificación de email
-    const verificationToken = uuidv4();
-    const verificationTokenExpiration = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
+    // Generar token de verificación de email (solo si hay email)
+    const verificationToken = email ? uuidv4() : null;
+    const verificationTokenExpiration = email ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null; // 24 horas
 
     // Crear el usuario
     const usuario = await this.prisma.usuario.create({
       data: {
         personaId: persona.id,
-        email,
+        email: email || null,
         passwordHash,
-        emailVerificado: false,
+        emailVerificado: esClienteSinEmail ? true : false, // Si no tiene email, marcar como verificado
         telefonoVerificado: false,
         emailVerificationToken: verificationToken,
         emailVerificationExpiracion: verificationTokenExpiration,
         authMethodsCount: 1, // Usuario tiene método PASSWORD
+        metodoPrincipalLogin: metodoPrincipalLogin as any,
+        requiereCambioPassword: esClienteSinEmail ? true : false, // Clientes sin email deben cambiar password
+        dniVerificado: esClienteSinEmail && dni ? true : false,
+        rolGlobal: esClienteSinEmail ? 'CLIENTE' : null,
       },
       include: {
         persona: true,
@@ -113,7 +171,7 @@ export class AuthService {
         userId: usuario.id,
         provider: 'PASSWORD',
         providerId: usuario.id, // Para PASSWORD, usamos el userId como providerId
-        email,
+        email: email || dni || usuario.id, // Usar email, DNI o userId como fallback
         isActive: true,
       },
     });
@@ -127,30 +185,44 @@ export class AuthService {
           rol: 'CLIENTE', // Rol por defecto
         },
       });
+
+      // Crear registro de cliente
+      await this.prisma.registroCliente.create({
+        data: {
+          usuarioId: usuario.id,
+          empresaId,
+          tipoRegistro: 'EMPRESA_REGISTRA',
+          canalRegistro: 'PRESENCIAL',
+          estado: 'AUTO_APROBADO',
+        },
+      });
     }
 
-    // Enviar email de verificación (no bloquear el registro si falla)
-    try {
-      const emailSent = await this.emailService.sendVerificationEmail(email, verificationToken, nombres);
-      if (emailSent) {
-        this.logger.info('Verification email sent successfully', { email });
-      } else {
-        this.logger.warn('Verification email was not sent (check email service logs for details)', { email });
+    // Enviar email de verificación solo si hay email (no bloquear el registro si falla)
+    if (email && verificationToken) {
+      try {
+        const emailSent = await this.emailService.sendVerificationEmail(email, verificationToken, nombres);
+        if (emailSent) {
+          this.logger.info('Verification email sent successfully', { email });
+        } else {
+          this.logger.warn('Verification email was not sent (check email service logs for details)', { email });
+        }
+      } catch (error) {
+        this.logger.error('Failed to send verification email', error.stack, { email });
       }
-    } catch (error) {
-      this.logger.error('Failed to send verification email', error.stack, { email });
     }
 
     // Log de auditoría
-    this.auditLogger.logUserRegistered(usuario.id, email, empresaId);
+    this.auditLogger.logUserRegistered(usuario.id, email || dni || usuario.id, empresaId);
 
     // Generar tokens
     const tokens = await this.generateTokens(usuario, empresaId);
 
     this.logger.success('User registered successfully', {
       userId: usuario.id,
-      email,
+      email: email || dni,
       tenantId: empresaId,
+      metodoPrincipalLogin,
     });
 
     // Retornar información sin datos sensibles
@@ -158,9 +230,12 @@ export class AuthService {
       user: {
         id: usuario.id,
         email: usuario.email,
+        dni: usuario.persona.dni,
         nombres: usuario.persona.nombres,
         apellidos: usuario.persona.apellidos,
         emailVerificado: usuario.emailVerificado,
+        metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+        requiereCambioPassword: usuario.requiereCambioPassword,
       },
       ...tokens,
     };
@@ -170,23 +245,54 @@ export class AuthService {
    * Login de usuario
    */
   async login(loginDto: LoginDto, request?: any) {
-    const { email, password, subdominioEmpresa, rol: rolSeleccionado, loginMode } = loginDto;
+    const { credencial, password, subdominioEmpresa, rol: rolSeleccionado, loginMode } = loginDto;
+
+    // Detectar tipo de credencial
+    const tipoCredencial = this.detectarTipoCredencial(credencial);
 
     // Verificar si la cuenta está bloqueada
-    const lockStatus = await this.securityService.isLockedOut(email, 'login');
+    const lockStatus = await this.securityService.isLockedOut(credencial, 'login');
     if (lockStatus.isLocked) {
       throw new UnauthorizedException(
         `Cuenta bloqueada. Intente nuevamente en ${Math.ceil((lockStatus.remainingTime || 0) / 60)} minutos.`
       );
     }
 
-    // Buscar usuario con su persona
-    const usuario = await this.prisma.usuario.findUnique({
-      where: { email },
-      include: {
-        persona: true,
-      },
-    });
+    // Buscar usuario según el tipo de credencial
+    let usuario: any;
+
+    if (tipoCredencial === 'EMAIL') {
+      usuario = await this.prisma.usuario.findUnique({
+        where: { email: credencial },
+        include: {
+          persona: true,
+        },
+      });
+    } else if (tipoCredencial === 'DNI') {
+      // Buscar por DNI en Persona, luego obtener Usuario
+      const persona = await this.prisma.persona.findUnique({
+        where: { dni: credencial },
+        include: {
+          usuario: true,
+        },
+      });
+
+      if (persona && persona.usuario) {
+        usuario = await this.prisma.usuario.findUnique({
+          where: { id: persona.usuario.id },
+          include: {
+            persona: true,
+          },
+        });
+      }
+    } else if (tipoCredencial === 'TELEFONO') {
+      usuario = await this.prisma.usuario.findUnique({
+        where: { telefono: credencial },
+        include: {
+          persona: true,
+        },
+      });
+    }
 
     // Obtener información real del cliente (mover antes de su uso)
     const clientInfo = request ? this.securityService.getClientInfo(request) : {
@@ -198,12 +304,12 @@ export class AuthService {
 
     if (!usuario || !usuario.isActive) {
       // Registrar intento fallido
-      await this.securityService.recordFailedAttempt(email, 'login');
+      await this.securityService.recordFailedAttempt(credencial, 'login');
 
       // Log de auditoría para intento fallido
       this.auditLogger.logUserLogin(
         usuario?.id || 'unknown',
-        email,
+        credencial,
         clientInfo?.ip || 'unknown',
         false,
         'User not found or inactive',
@@ -223,10 +329,10 @@ export class AuthService {
 
     if (!passwordProvider || !usuario.passwordHash) {
       // Registrar intento fallido
-      await this.securityService.recordFailedAttempt(email, 'login');
+      await this.securityService.recordFailedAttempt(credencial, 'login');
 
       // Log de auditoría para método no disponible
-      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', false, 'Password login not available for this account');
+      this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', false, 'Password login not available for this account');
 
       throw new UnauthorizedException('Credenciales inválidas. Esta cuenta no tiene configurado el login con contraseña.');
     }
@@ -235,18 +341,27 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, usuario.passwordHash);
     if (!isPasswordValid) {
       // Registrar intento fallido
-      await this.securityService.recordFailedAttempt(email, 'login');
+      await this.securityService.recordFailedAttempt(credencial, 'login');
 
       // Log de auditoría para contraseña incorrecta
-      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', false, 'Invalid password');
+      this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', false, 'Invalid password');
 
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    // Verificar que el email esté verificado
-    if (!usuario.emailVerificado) {
-      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', false, 'Email not verified');
+    // Verificar que el email esté verificado (solo si el usuario tiene email y metodoPrincipalLogin es EMAIL)
+    if (usuario.email && usuario.metodoPrincipalLogin === 'EMAIL' && !usuario.emailVerificado) {
+      this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', false, 'Email not verified');
       throw new UnauthorizedException('Por favor verifica tu email antes de iniciar sesión. Revisa tu bandeja de entrada.');
+    }
+
+    // Si el usuario requiere cambio de password, retornar un indicador especial
+    if (usuario.requiereCambioPassword) {
+      return {
+        requiereCambioPassword: true,
+        userId: usuario.id,
+        message: 'Debe cambiar su contraseña antes de continuar',
+      };
     }
 
     // ========== LÓGICA DUAL MODE: Marketplace vs Management ==========
@@ -255,11 +370,11 @@ export class AuthService {
     if (loginMode === 'marketplace') {
       this.logger.info('User logging in to Marketplace mode', {
         userId: usuario.id,
-        email,
+        credencial,
       });
 
       // Limpiar intentos fallidos
-      await this.securityService.clearFailedAttempts(email, 'login');
+      await this.securityService.clearFailedAttempts(credencial, 'login');
 
       // Actualizar último login
       await this.prisma.usuario.update({
@@ -271,16 +386,18 @@ export class AuthService {
       const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
 
       // Log de auditoría
-      this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+      this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
 
       return {
         user: {
           id: usuario.id,
           email: usuario.email,
+          dni: usuario.persona.dni,
           nombres: usuario.persona.nombres,
           apellidos: usuario.persona.apellidos,
           emailVerificado: usuario.emailVerificado,
           rolGlobal: usuario.rolGlobal,
+          metodoPrincipalLogin: usuario.metodoPrincipalLogin,
         },
         mode: 'marketplace',
         ...tokens,
@@ -316,11 +433,11 @@ export class AuthService {
         // Usuario sin empresas → Login automático en modo MARKETPLACE
         this.logger.info('User has no companies, logging in to Marketplace mode', {
           userId: usuario.id,
-          email,
+          credencial,
         });
 
         // Limpiar intentos fallidos
-        await this.securityService.clearFailedAttempts(email, 'login');
+        await this.securityService.clearFailedAttempts(credencial, 'login');
 
         // Actualizar último login
         await this.prisma.usuario.update({
@@ -332,16 +449,18 @@ export class AuthService {
         const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
 
         // Log de auditoría
-        this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+        this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
 
         return {
           user: {
             id: usuario.id,
             email: usuario.email,
+            dni: usuario.persona.dni,
             nombres: usuario.persona.nombres,
             apellidos: usuario.persona.apellidos,
             emailVerificado: usuario.emailVerificado,
             rolGlobal: usuario.rolGlobal,
+            metodoPrincipalLogin: usuario.metodoPrincipalLogin,
           },
           mode: 'marketplace',
           ...tokens,
@@ -371,12 +490,12 @@ export class AuthService {
 
         this.logger.info('User requires mode selection', {
           userId: usuario.id,
-          email,
+          credencial,
           companiesCount: availableCompanies.length,
         });
 
         // Limpiar intentos fallidos
-        await this.securityService.clearFailedAttempts(email, 'login');
+        await this.securityService.clearFailedAttempts(credencial, 'login');
 
         // Retornar opciones de modo SIN generar tokens
         return {
@@ -385,9 +504,11 @@ export class AuthService {
           user: {
             id: usuario.id,
             email: usuario.email,
+            dni: usuario.persona.dni,
             nombres: usuario.persona.nombres,
             apellidos: usuario.persona.apellidos,
             emailVerificado: usuario.emailVerificado,
+            metodoPrincipalLogin: usuario.metodoPrincipalLogin,
           },
           options: [
             {
@@ -456,7 +577,7 @@ export class AuthService {
     }
 
     // Limpiar intentos fallidos exitosamente
-    await this.securityService.clearFailedAttempts(email, 'login');
+    await this.securityService.clearFailedAttempts(credencial, 'login');
 
     // Actualizar último login
     await this.prisma.usuario.update({
@@ -467,11 +588,12 @@ export class AuthService {
     const tokens = await this.generateTokens(usuario, empresaId, tenantRole, tenantName, clientInfo, availableRoles);
 
     // Log de auditoría para login exitoso
-    this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+    this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
 
     this.logger.info('User logged in successfully', {
       userId: usuario.id,
-      email,
+      credencial,
+      metodoPrincipalLogin: usuario.metodoPrincipalLogin,
       tenantId: empresaId,
       ip: clientInfo?.ip,
     });
@@ -480,10 +602,13 @@ export class AuthService {
       user: {
         id: usuario.id,
         email: usuario.email,
+        dni: usuario.persona.dni,
         nombres: usuario.persona.nombres,
         apellidos: usuario.persona.apellidos,
         emailVerificado: usuario.emailVerificado,
         rolGlobal: usuario.rolGlobal,
+        metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+        requiereCambioPassword: usuario.requiereCambioPassword,
       },
       mode: empresaId ? 'management' : 'marketplace',
       tenant: empresaId ? {
@@ -979,16 +1104,18 @@ export class AuthService {
     // Hash de la nueva contraseña (bcrypt incluye el salt automáticamente)
     const passwordHash = await bcrypt.hash(newPassword, 12);
 
-    // Actualizar contraseña
+    // Actualizar contraseña y resetear flag de cambio obligatorio
     await this.prisma.usuario.update({
       where: { id: userId },
       data: {
         passwordHash,
+        requiereCambioPassword: false,
+        ultimoCambioPassword: new Date(),
       },
     });
 
     // Log de auditoría
-    this.auditLogger.logPasswordChanged(userId, usuario.email, userId);
+    this.auditLogger.logPasswordChanged(userId, usuario.email || usuario.id, userId);
 
     this.logger.success('Password changed successfully', { userId });
 

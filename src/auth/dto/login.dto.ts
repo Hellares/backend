@@ -5,15 +5,17 @@ import {
   MaxLength,
   IsOptional,
   IsEnum,
-  IsIn
+  IsIn,
+  ValidateIf
 } from 'class-validator';
 import { Rol } from '@prisma/client';
 
 export class LoginDto {
-  @IsEmail()
+  // Credencial: puede ser email o DNI
+  @IsString()
   @IsNotEmpty()
   @MaxLength(255)
-  email: string;
+  credencial: string;
 
   @IsString()
   @IsNotEmpty()

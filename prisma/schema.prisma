@@ -11,7 +11,7 @@ model Persona {
   id                String             @id @default(cuid())
   nombres           String
   apellidos         String
-  dni               String?
+  dni               String?            @unique
   telefono          String?
   email             String?
   fechaNacimiento   DateTime?
@@ -113,7 +113,7 @@ model Empresa {
 model Usuario {
   id                          String              @id @default(cuid())
   personaId                   String              @unique
-  email                       String              @unique
+  email                       String?             @unique
   telefono                    String?             @unique
   passwordHash                String?
   isActive                    Boolean             @default(true)
@@ -127,6 +127,13 @@ model Usuario {
   telefonoVerificado          Boolean             @default(false)
   rolGlobal                   Rol?
   authMethodsCount            Int                 @default(0)
+
+  // Campos para login con DNI
+  metodoPrincipalLogin        MetodoLogin?        @default(EMAIL)
+  requiereCambioPassword      Boolean             @default(false)
+  dniVerificado               Boolean             @default(false)
+  ultimoCambioPassword        DateTime?
+
   creadoEn                    DateTime            @default(now())
   actualizadoEn               DateTime            @updatedAt
   authProviders               AuthProvider[]
@@ -148,6 +155,7 @@ model Usuario {
   @@index([resetToken])
   @@index([emailVerificationToken])
   @@index([deletedAt])
+  @@index([metodoPrincipalLogin])
 }
 
 model AuthProvider {
@@ -1175,6 +1183,14 @@ enum AuthProviderType {
   YAHOO
   INSTAGRAM
   SPOTIFY
+}
+
+enum MetodoLogin {
+  EMAIL
+  DNI
+  TELEFONO
+  GOOGLE
+  FACEBOOK
 }
 
 enum Rol {
