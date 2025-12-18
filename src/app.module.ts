@@ -11,8 +11,10 @@ import { MarketplaceModule } from './marketplace/marketplace.module';
 import { StorageModule } from './storage/storage.module';
 import { ProductoModule } from './producto/producto.module';
 import { CatalogosModule } from './catalogos/catalogos.module';
+import { ClientesModule } from './clientes/clientes.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
+import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
 import { validate } from './config/validation';
 
 @Module({
@@ -31,6 +33,7 @@ import { validate } from './config/validation';
     StorageModule,
     ProductoModule,
     CatalogosModule,
+    ClientesModule,
   ],
   controllers: [AppController],
   providers: [
@@ -43,7 +46,9 @@ import { validate } from './config/validation';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    // Aplicar RequestContextMiddleware a todas las rutas
-    consumer.apply(RequestContextMiddleware).forRoutes('*');
+    // Aplicar middlewares a todas las rutas
+    consumer
+      .apply(RequestContextMiddleware, CurrentEmpresaMiddleware)
+      .forRoutes('*');
   }
 }

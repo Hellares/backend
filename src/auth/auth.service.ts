@@ -355,12 +355,28 @@ export class AuthService {
       throw new UnauthorizedException('Por favor verifica tu email antes de iniciar sesión. Revisa tu bandeja de entrada.');
     }
 
-    // Si el usuario requiere cambio de password, retornar un indicador especial
+    // Si el usuario requiere cambio de password, generar tokens temporales para permitir el cambio
     if (usuario.requiereCambioPassword) {
+      // Log de auditoría para login exitoso (aunque requiera cambio de password)
+      this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
+
+      // Generar tokens temporales sin actualizar lastLoginAt
+      // Estos tokens solo permitirán cambiar la contraseña
+      const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+
       return {
-        requiereCambioPassword: true,
-        userId: usuario.id,
+        user: {
+          id: usuario.id,
+          email: usuario.email,
+          dni: usuario.persona?.dni,
+          nombres: usuario.persona?.nombres,
+          apellidos: usuario.persona?.apellidos,
+          emailVerificado: usuario.emailVerificado,
+          metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+          requiereCambioPassword: true,
+        },
         message: 'Debe cambiar su contraseña antes de continuar',
+        ...tokens, // Incluir tokens para permitir cambio de contraseña
       };
     }
 
@@ -1614,6 +1630,7 @@ export class AuthService {
 
   /**
    * Establecer contraseña para usuarios que se registraron con OAuth (ej. Google)
+   * O para usuarios con contraseña temporal que necesitan cambiarla
    * Permite vincular método PASSWORD a una cuenta existente
    */
   async setPassword(userId: string, password: string) {
@@ -1634,10 +1651,40 @@ export class AuthService {
       },
     });
 
+    // CASO ESPECIAL: Permitir cambio de contraseña temporal
+    if (existingPasswordProvider && usuario.requiereCambioPassword) {
+      // Usuario tiene contraseña temporal y debe cambiarla
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      await this.prisma.usuario.update({
+        where: { id: usuario.id },
+        data: {
+          passwordHash,
+          requiereCambioPassword: false,
+          ultimoCambioPassword: new Date(),
+        },
+      });
+
+      // Log de auditoría
+      this.auditLogger.logPasswordChanged(userId, usuario.email || usuario.id, userId);
+
+      this.logger.success('Temporary password changed successfully', {
+        userId,
+        email: usuario.email,
+      });
+
+      return {
+        success: true,
+        message: 'Contraseña actualizada exitosamente. Ya puedes iniciar sesión normalmente.',
+      };
+    }
+
+    // Si ya tiene contraseña y NO requiere cambio, debe usar change-password
     if (existingPasswordProvider) {
       throw new ConflictException('Este usuario ya tiene configurado el login con contraseña. Usa "Cambiar contraseña" en su lugar.');
     }
 
+    // CASO NORMAL: Usuario OAuth sin contraseña
     // Hash de la contraseña
     const passwordHash = await bcrypt.hash(password, 12);
 
