@@ -257,4 +257,39 @@ export class AuthSessionService {
     const blacklistKey = `blacklist:${sessionId}`;
     return await this.redisService.exists(blacklistKey);
   }
+
+  /**
+   * Actualizar contexto de tenant en una sesión
+   */
+  async updateSessionTenant(
+    sessionId: string,
+    tenantData: {
+      tenantId?: string;
+      tenantRole?: string;
+      tenantName?: string;
+      tenantRoles?: string[];
+    },
+  ): Promise<boolean> {
+    const session = await this.getSession(sessionId);
+
+    if (!session) {
+      return false;
+    }
+
+    // Actualizar campos de tenant
+    session.tenantId = tenantData.tenantId;
+    session.tenantRole = tenantData.tenantRole;
+    session.tenantName = tenantData.tenantName;
+    session.tenantRoles = tenantData.tenantRoles;
+
+    const sessionKey = `session:${sessionId}`;
+    const ttl = Math.floor((session.expiresAt.getTime() - Date.now()) / 1000);
+
+    if (ttl > 0) {
+      await this.redisService.setex(sessionKey, ttl, JSON.stringify(session));
+      return true;
+    }
+
+    return false;
+  }
 }

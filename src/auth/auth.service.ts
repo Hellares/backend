@@ -1614,6 +1614,46 @@ export class AuthService {
       throw new NotFoundException('Empresa no encontrada');
     }
 
+    // Obtener todos los roles del usuario en la nueva empresa
+    const rolesEnEmpresa = await this.prisma.empresaUsuarioRol.findMany({
+      where: {
+        usuarioId: userId,
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+
+    const tenantRoles = rolesEnEmpresa.map(r => r.rol);
+    const tenantRole = userRole.rol;
+
+    // Actualizar TODAS las sesiones activas del usuario con el nuevo contexto
+    try {
+      const userSessions = await this.sessionService.getUserSessions(userId);
+
+      for (const session of userSessions) {
+        await this.sessionService.updateSessionTenant(session.sessionId, {
+          tenantId: empresaId,
+          tenantRole: tenantRole,
+          tenantName: userRole.empresa.nombre,
+          tenantRoles: tenantRoles,
+        });
+      }
+
+      this.logger.info('Updated tenant context in sessions', {
+        userId,
+        sessionCount: userSessions.length,
+        newTenantId: empresaId,
+      });
+    } catch (error) {
+      this.logger.warn('Failed to update some sessions during tenant switch', {
+        userId,
+        empresaId,
+        error: error.message,
+      });
+      // No lanzar error - el switch es exitoso aunque falle actualizar sesiones
+    }
+
     this.logger.success('Tenant switched successfully', {
       userId,
       empresaId,

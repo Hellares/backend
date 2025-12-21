@@ -465,7 +465,6 @@ export class MarketplaceService {
         codigoEmpresa: true,
         codigoSistema: true,
         descripcion: true,
-        detalles: true,
         precio: true,
         precioPorHora: true,
         duracionMinutos: true,

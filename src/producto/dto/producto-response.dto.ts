@@ -39,9 +39,6 @@ export class ProductoResponseDto {
   @ApiPropertyOptional()
   descripcion?: string;
 
-  @ApiPropertyOptional()
-  detalles?: any;
-
   @ApiProperty()
   precio: number;
 
@@ -100,6 +97,15 @@ export class ProductoResponseDto {
   tieneVariantes: boolean;
 
   @ApiProperty()
+  esCombo: boolean;
+
+  @ApiPropertyOptional({
+    enum: ['FIJO', 'CALCULADO', 'CALCULADO_CON_DESCUENTO'],
+    nullable: true,
+  })
+  tipoPrecioCombo?: 'FIJO' | 'CALCULADO' | 'CALCULADO_CON_DESCUENTO' | null;
+
+  @ApiProperty()
   creadoEn: Date;
 
   @ApiProperty()
@@ -146,6 +152,23 @@ export class ProductoResponseDto {
   }>;
 
   @ApiPropertyOptional({
+    description: 'Atributos estructurados del producto base (solo si no tiene variantes)',
+    type: [Object],
+  })
+  atributosValores?: Array<{
+    id: string;
+    atributoId: string;
+    valor: string;
+    atributo: {
+      id: string;
+      nombre: string;
+      clave: string;
+      tipo: string;
+      unidad?: string;
+    };
+  }>;
+
+  @ApiPropertyOptional({
     description: 'Variantes del producto',
     type: [Object],
   })
@@ -153,11 +176,22 @@ export class ProductoResponseDto {
     id: string;
     nombre: string;
     sku: string;
-    atributos: Record<string, any>;
     precio: number;
     stock: number;
     isActive: boolean;
     orden: number;
+    atributosValores?: Array<{
+      id: string;
+      atributoId: string;
+      valor: string;
+      atributo: {
+        id: string;
+        nombre: string;
+        clave: string;
+        tipo: string;
+        unidad?: string;
+      };
+    }>;
   }>;
 }
 

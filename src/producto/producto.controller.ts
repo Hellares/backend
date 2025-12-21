@@ -22,6 +22,7 @@ import {
 import { ProductoService } from './producto.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
+import { ProductoAtributoValorService } from './producto-atributo-valor.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateProductoDto } from './dto/create-producto.dto';
@@ -35,6 +36,7 @@ import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
 import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
+import { SetProductoAtributosDto } from './dto/create-producto-atributo-valor.dto';
 
 @ApiTags('Productos')
 @Controller('productos')
@@ -45,6 +47,7 @@ export class ProductoController {
     private readonly productoService: ProductoService,
     private readonly varianteService: ProductoVarianteService,
     private readonly atributoService: ProductoAtributoService,
+    private readonly atributoValorService: ProductoAtributoValorService,
   ) {}
 
   @Post()
@@ -543,6 +546,98 @@ export class ProductoController {
       varianteId,
       empresaId,
       body.cantidad,
+    );
+  }
+
+  // =============================================================================
+  // ENDPOINTS DE ATRIBUTOS DE PRODUCTOS
+  // =============================================================================
+
+  @Post(':id/atributos')
+  @ApiOperation({ summary: 'Asignar o actualizar atributos de un producto' })
+  @ApiResponse({
+    status: 200,
+    description: 'Atributos asignados exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async setProductoAtributos(
+    @Param('id') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: SetProductoAtributosDto,
+  ) {
+    return await this.atributoValorService.setProductoAtributos(
+      empresaId,
+      productoId,
+      dto,
+    );
+  }
+
+  @Get(':id/atributos')
+  @ApiOperation({ summary: 'Obtener atributos de un producto' })
+  @ApiResponse({
+    status: 200,
+    description: 'Atributos obtenidos exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async getProductoAtributos(
+    @Param('id') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return await this.atributoValorService.getProductoAtributos(
+      empresaId,
+      productoId,
+    );
+  }
+
+  @Post('variantes/:varianteId/atributos')
+  @ApiOperation({ summary: 'Asignar o actualizar atributos de una variante' })
+  @ApiResponse({
+    status: 200,
+    description: 'Atributos asignados exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async setVarianteAtributos(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: SetProductoAtributosDto,
+  ) {
+    return await this.atributoValorService.setVarianteAtributos(
+      empresaId,
+      varianteId,
+      dto,
+    );
+  }
+
+  @Get('variantes/:varianteId/atributos')
+  @ApiOperation({ summary: 'Obtener atributos de una variante' })
+  @ApiResponse({
+    status: 200,
+    description: 'Atributos obtenidos exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async getVarianteAtributos(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return await this.atributoValorService.getVarianteAtributos(
+      empresaId,
+      varianteId,
     );
   }
 }

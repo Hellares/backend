@@ -7,10 +7,13 @@ import { AtributoTipo } from '@prisma/client';
 export interface ProductoAtributoResponse {
   id: string;
   empresaId: string;
+  categoriaId?: string;
   nombre: string;
+  clave: string;
   tipo: AtributoTipo;
   requerido: boolean;
   descripcion?: string;
+  unidad?: string;
   valores: string[];
   orden: number;
   mostrarEnListado: boolean;
@@ -42,16 +45,18 @@ export class ProductoAtributoService {
   ): Promise<ProductoAtributoResponse> {
     this.logger.info('Creating product attribute', { empresaId, dto });
 
-    // Verificar que no existe un atributo con el mismo nombre
-    const existing = await this.prisma.productoAtributo.findFirst({
+    // Verificar que no existe un atributo con la misma clave
+    const existing = await this.prisma.productoAtributo.findUnique({
       where: {
-        empresaId,
-        nombre: dto.nombre,
+        empresaId_clave: {
+          empresaId,
+          clave: dto.clave,
+        },
       },
     });
 
     if (existing) {
-      throw new ConflictException(`Ya existe un atributo con el nombre: ${dto.nombre}`);
+      throw new ConflictException(`Ya existe un atributo con la clave: ${dto.clave}`);
     }
 
     // Validar coherencia entre tipo y valores
@@ -60,10 +65,13 @@ export class ProductoAtributoService {
     const atributo = await this.prisma.productoAtributo.create({
       data: {
         empresaId,
+        categoriaId: dto.categoriaId,
         nombre: dto.nombre,
+        clave: dto.clave,
         tipo: dto.tipo,
         requerido: dto.requerido ?? false,
         descripcion: dto.descripcion,
+        unidad: dto.unidad,
         valores: dto.valores ?? [],
         orden: dto.orden ?? 0,
         mostrarEnListado: dto.mostrarEnListado ?? true,
@@ -87,6 +95,24 @@ export class ProductoAtributoService {
       where: {
         empresaId,
         ...(includeInactive ? {} : { isActive: true }),
+      },
+      orderBy: { orden: 'asc' },
+    });
+
+    return atributos.map((a) => this.mapToResponse(a));
+  }
+
+  /**
+   * Obtener atributos por categoría
+   */
+  async findByCategoria(empresaId: string, categoriaId: string): Promise<ProductoAtributoResponse[]> {
+    this.logger.debug('Finding attributes by category', { empresaId, categoriaId });
+
+    const atributos = await this.prisma.productoAtributo.findMany({
+      where: {
+        empresaId,
+        categoriaId,
+        isActive: true,
       },
       orderBy: { orden: 'asc' },
     });
@@ -135,18 +161,19 @@ export class ProductoAtributoService {
       throw new NotFoundException(`Atributo ${atributoId} no encontrado`);
     }
 
-    // Si se actualiza el nombre, verificar que no exista
-    if (dto.nombre && dto.nombre !== existing.nombre) {
-      const duplicado = await this.prisma.productoAtributo.findFirst({
+    // Si se actualiza la clave, verificar que no exista
+    if (dto.clave && dto.clave !== existing.clave) {
+      const duplicado = await this.prisma.productoAtributo.findUnique({
         where: {
-          empresaId,
-          nombre: dto.nombre,
-          id: { not: atributoId },
+          empresaId_clave: {
+            empresaId,
+            clave: dto.clave,
+          },
         },
       });
 
       if (duplicado) {
-        throw new ConflictException(`Ya existe un atributo con el nombre: ${dto.nombre}`);
+        throw new ConflictException(`Ya existe un atributo con la clave: ${dto.clave}`);
       }
     }
 
@@ -159,9 +186,12 @@ export class ProductoAtributoService {
       where: { id: atributoId },
       data: {
         ...(dto.nombre && { nombre: dto.nombre }),
+        ...(dto.clave && { clave: dto.clave }),
         ...(dto.tipo && { tipo: dto.tipo }),
         ...(dto.requerido !== undefined && { requerido: dto.requerido }),
         ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
+        ...(dto.unidad !== undefined && { unidad: dto.unidad }),
+        ...(dto.categoriaId !== undefined && { categoriaId: dto.categoriaId }),
         ...(dto.valores && { valores: dto.valores }),
         ...(dto.orden !== undefined && { orden: dto.orden }),
         ...(dto.mostrarEnListado !== undefined && { mostrarEnListado: dto.mostrarEnListado }),
@@ -256,10 +286,13 @@ export class ProductoAtributoService {
     return {
       id: atributo.id,
       empresaId: atributo.empresaId,
+      categoriaId: atributo.categoriaId,
       nombre: atributo.nombre,
+      clave: atributo.clave,
       tipo: atributo.tipo,
       requerido: atributo.requerido,
       descripcion: atributo.descripcion,
+      unidad: atributo.unidad,
       valores: atributo.valores,
       orden: atributo.orden,
       mostrarEnListado: atributo.mostrarEnListado,

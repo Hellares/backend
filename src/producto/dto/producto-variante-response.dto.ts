@@ -1,3 +1,18 @@
+export class AtributoValorDto {
+  id: string;
+  atributoId: string;
+  valor: string;
+
+  // Información del atributo (plantilla)
+  atributo: {
+    id: string;
+    nombre: string;
+    clave: string;
+    tipo: string;
+    unidad?: string;
+  };
+}
+
 export class ProductoVarianteResponseDto {
   id: string;
   productoId: string;
@@ -8,7 +23,8 @@ export class ProductoVarianteResponseDto {
   codigoBarras?: string;
   codigoEmpresa: string;
 
-  atributos: Record<string, any>;
+  // ✅ Atributos estructurados (nuevo formato)
+  atributosValores: AtributoValorDto[];
 
   precio: number;
   precioCosto?: number;

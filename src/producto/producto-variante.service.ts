@@ -75,7 +75,7 @@ export class ProductoVarianteService {
     // Generar código de empresa único
     const codigoEmpresa = await this.generateCodigoEmpresa(empresaId);
 
-    // Crear la variante
+    // Crear la variante (SIN campo atributos)
     const variante = await this.prisma.productoVariante.create({
       data: {
         productoId,
@@ -84,7 +84,6 @@ export class ProductoVarianteService {
         sku: dto.sku,
         codigoBarras: dto.codigoBarras,
         codigoEmpresa,
-        atributos: dto.atributos,
         precio: dto.precio,
         precioCosto: dto.precioCosto,
         precioOferta: dto.precioOferta,
@@ -100,8 +99,54 @@ export class ProductoVarianteService {
           where: { deletedAt: null },
           orderBy: { orden: 'asc' },
         },
+        atributosValores: {
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
+        },
       },
     });
+
+    // Crear atributos estructurados si se proporcionaron
+    if (dto.atributosEstructurados && dto.atributosEstructurados.length > 0) {
+      await this.createVarianteAtributosFromStructured(variante.id, empresaId, dto.atributosEstructurados);
+
+      // Recargar variante con atributos creados
+      const varianteConAtributos = await this.prisma.productoVariante.findUnique({
+        where: { id: variante.id },
+        include: {
+          archivos: {
+            where: { deletedAt: null },
+            orderBy: { orden: 'asc' },
+          },
+          atributosValores: {
+            include: {
+              atributo: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  clave: true,
+                  tipo: true,
+                  unidad: true,
+                },
+              },
+            },
+          },
+        },
+      });
+      
+      if (varianteConAtributos) {
+        Object.assign(variante, varianteConAtributos);
+      }
+    }
 
     // Asociar imágenes si se proporcionaron
     if (dto.imagenesIds && dto.imagenesIds.length > 0) {
@@ -145,6 +190,19 @@ export class ProductoVarianteService {
           where: { deletedAt: null },
           orderBy: { orden: 'asc' },
         },
+        atributosValores: {
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
+        },
       },
       orderBy: { orden: 'asc' },
     });
@@ -171,6 +229,19 @@ export class ProductoVarianteService {
         archivos: {
           where: { deletedAt: null },
           orderBy: { orden: 'asc' },
+        },
+        atributosValores: {
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
         },
       },
     });
@@ -236,14 +307,13 @@ export class ProductoVarianteService {
       }
     }
 
-    // Actualizar la variante
+    // Actualizar la variante (SIN campo atributos)
     const variante = await this.prisma.productoVariante.update({
       where: { id: varianteId },
       data: {
         ...(dto.nombre && { nombre: dto.nombre }),
         ...(dto.sku && { sku: dto.sku }),
         ...(dto.codigoBarras !== undefined && { codigoBarras: dto.codigoBarras }),
-        ...(dto.atributos && { atributos: dto.atributos }),
         ...(dto.precio !== undefined && { precio: dto.precio }),
         ...(dto.precioCosto !== undefined && { precioCosto: dto.precioCosto }),
         ...(dto.precioOferta !== undefined && { precioOferta: dto.precioOferta }),
@@ -259,8 +329,62 @@ export class ProductoVarianteService {
           where: { deletedAt: null },
           orderBy: { orden: 'asc' },
         },
+        atributosValores: {
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
+        },
       },
     });
+
+    // Actualizar atributos si se proporcionaron
+    if (dto.atributosEstructurados !== undefined) {
+      // Eliminar atributos existentes
+      await this.prisma.productoAtributoValor.deleteMany({
+        where: { varianteId: varianteId },
+      });
+
+      // Crear nuevos atributos si hay
+      if (dto.atributosEstructurados.length > 0) {
+        await this.createVarianteAtributosFromStructured(varianteId, empresaId, dto.atributosEstructurados);
+      }
+
+      // Recargar variante con nuevos atributos
+      const varianteConAtributos = await this.prisma.productoVariante.findUnique({
+        where: { id: varianteId },
+        include: {
+          archivos: {
+            where: { deletedAt: null },
+            orderBy: { orden: 'asc' },
+          },
+          atributosValores: {
+            include: {
+              atributo: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  clave: true,
+                  tipo: true,
+                  unidad: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (varianteConAtributos) {
+        Object.assign(variante, varianteConAtributos);
+      }
+    }
 
     // Actualizar imágenes si se proporcionaron
     if (dto.imagenesIds !== undefined) {
@@ -293,6 +417,107 @@ export class ProductoVarianteService {
     this.logger.success('Variant updated', { varianteId });
 
     return this.mapToResponseDto(variante);
+  }
+
+  /**
+   * Crea atributos estructurados para una variante
+   * Convierte el formato JSON libre a la tabla ProductoAtributoValor
+   */
+  private async createVarianteAtributos(
+    varianteId: string,
+    empresaId: string,
+    atributos: Record<string, any>,
+  ): Promise<void> {
+    // Obtener todos los atributos configurados para esta empresa
+    const atributosDisponibles = await this.prisma.productoAtributo.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+      },
+    });
+
+    if (atributosDisponibles.length === 0) {
+      this.logger.warn(`No hay atributos configurados para empresa ${empresaId}. No se crearán valores de atributos.`);
+      return;
+    }
+
+    // Crear un mapa clave -> atributo para búsqueda rápida
+    const atributosMap = new Map(
+      atributosDisponibles.map(attr => [attr.clave.toLowerCase(), attr])
+    );
+
+    // Crear los valores de atributos
+    const valoresAtributos = Object.entries(atributos)
+      .map(([clave, valor]) => {
+        const atributo = atributosMap.get(clave.toLowerCase());
+        
+        if (!atributo) {
+          this.logger.warn(`Atributo con clave "${clave}" no encontrado en empresa ${empresaId}. Ignorando.`);
+          return null;
+        }
+
+        return {
+          varianteId,
+          atributoId: atributo.id,
+          valor: String(valor), // Siempre convertir a string
+        };
+      })
+      .filter(Boolean); // Filtrar nulos
+
+    if (valoresAtributos.length > 0) {
+      await this.prisma.productoAtributoValor.createMany({
+        data: valoresAtributos as any[],
+        skipDuplicates: true,
+      });
+
+      this.logger.debug(`Creados ${valoresAtributos.length} valores de atributos para variante ${varianteId}`);
+    }
+  }
+
+  /**
+   * Crea atributos estructurados a partir de un array de VarianteAtributoDto
+   * (Formato recomendado para nuevos desarrollos)
+   */
+  private async createVarianteAtributosFromStructured(
+    varianteId: string,
+    empresaId: string,
+    atributosEstructurados: Array<{ atributoId: string; valor: string }>,
+  ): Promise<void> {
+    if (atributosEstructurados.length === 0) {
+      return;
+    }
+
+    // Verificar que los atributos pertenezcan a la empresa y estén activos
+    const atributoIds = atributosEstructurados.map(a => a.atributoId);
+    const atributosExistentes = await this.prisma.productoAtributo.findMany({
+      where: {
+        id: { in: atributoIds },
+        empresaId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    const existentesSet = new Set(atributosExistentes.map(a => a.id));
+    const atributosValidos = atributosEstructurados.filter(a => existentesSet.has(a.atributoId));
+
+    if (atributosValidos.length === 0) {
+      this.logger.warn(`Ningún atributoId válido encontrado para empresa ${empresaId}. No se crearán valores.`);
+      return;
+    }
+
+    const valoresAtributos = atributosValidos.map(a => ({
+      varianteId,
+      atributoId: a.atributoId,
+      valor: String(a.valor),
+    }));
+
+    await this.prisma.productoAtributoValor.createMany({
+      data: valoresAtributos,
+      skipDuplicates: true,
+    });
+
+    this.logger.debug(`Creados ${valoresAtributos.length} valores de atributos estructurados para variante ${varianteId}`);
   }
 
   /**
@@ -357,6 +582,19 @@ export class ProductoVarianteService {
           where: { deletedAt: null },
           orderBy: { orden: 'asc' },
         },
+        atributosValores: {
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -402,7 +640,7 @@ export class ProductoVarianteService {
   }
 
   /**
-   * Mapear a DTO de respuesta
+   * Mapear a DTO de respuesta (formato estructurado)
    */
   private mapToResponseDto(variante: any): ProductoVarianteResponseDto {
     return {
@@ -413,7 +651,18 @@ export class ProductoVarianteService {
       sku: variante.sku,
       codigoBarras: variante.codigoBarras,
       codigoEmpresa: variante.codigoEmpresa,
-      atributos: variante.atributos as Record<string, any>,
+      atributosValores: variante.atributosValores?.map((av: any) => ({
+        id: av.id,
+        atributoId: av.atributoId,
+        valor: av.valor,
+        atributo: {
+          id: av.atributo.id,
+          nombre: av.atributo.nombre,
+          clave: av.atributo.clave,
+          tipo: av.atributo.tipo,
+          unidad: av.atributo.unidad,
+        },
+      })) || [],
       precio: Number(variante.precio),
       precioCosto: variante.precioCosto ? Number(variante.precioCosto) : undefined,
       precioOferta: variante.precioOferta ? Number(variante.precioOferta) : undefined,

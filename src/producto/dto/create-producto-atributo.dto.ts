@@ -14,7 +14,11 @@ import { AtributoTipo } from '@prisma/client';
 export class CreateProductoAtributoDto {
   @IsString()
   @IsNotEmpty()
-  nombre: string; // "Color", "Talla", "Conexión"
+  nombre: string; // "Color", "Socket del Procesador", "Tipo de RAM"
+
+  @IsString()
+  @IsNotEmpty()
+  clave: string; // "color", "cpu_socket", "ram_type" - identificador programático único
 
   @IsEnum(AtributoTipo)
   tipo: AtributoTipo;
@@ -26,6 +30,14 @@ export class CreateProductoAtributoDto {
   @IsString()
   @IsOptional()
   descripcion?: string;
+
+  @IsString()
+  @IsOptional()
+  unidad?: string; // "MHz", "GB", "mm", "W" - para valores numéricos
+
+  @IsString()
+  @IsOptional()
+  categoriaId?: string; // Asociar atributo a una categoría específica
 
   @IsArray()
   @IsString({ each: true })

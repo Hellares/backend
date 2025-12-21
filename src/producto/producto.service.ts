@@ -63,11 +63,63 @@ export class ProductoService {
       await this.validateEmpresaMarca(productoData.empresaMarcaId, empresaId);
     }
 
+    // Validar relación XOR entre esCombo y tieneVariantes
+    if (productoData.esCombo === true && productoData.tieneVariantes === true) {
+      throw new BadRequestException(
+        'Un producto no puede ser combo y tener variantes al mismo tiempo. ' +
+        'Deshabilite "tiene variantes" si desea crear un combo.',
+      );
+    }
+
+    // Si es combo, asegurar que tieneVariantes sea false
+    if (productoData.esCombo === true) {
+      productoData.tieneVariantes = false;
+    }
+
+    // Si no es combo, limpiar tipoPrecioCombo (no aplica)
+    if (productoData.esCombo === false && productoData.tipoPrecioCombo !== undefined) {
+      productoData.tipoPrecioCombo = null;
+    }
+
+    // Establecer valor por defecto para esCombo si no se proporciona
+    if (productoData.esCombo === undefined) {
+      productoData.esCombo = false;
+    }
+
+    // Validar atributosEstructurados
+    if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
+      // Solo permitir atributos en productos sin variantes y sin combo
+      if (productoData.tieneVariantes === true) {
+        throw new BadRequestException(
+          'No se pueden asignar atributos a un producto con variantes habilitadas. ' +
+          'Los atributos deben definirse a nivel de variante.',
+        );
+      }
+      if (productoData.esCombo === true) {
+        throw new BadRequestException(
+          'No se pueden asignar atributos a un producto combo.',
+        );
+      }
+    }
+
     // Generar códigos únicos
     const { codigoEmpresa, codigoSistema } = await this.generateCodigos(
       empresaId,
       createDto.sedeId,
     );
+
+    // Determinar el precio final
+    // Si es combo con precio calculado y no se proporciona precio, establecer 0
+    // El precio se calculará automáticamente cuando se agreguen los componentes del combo
+    let precioFinal = productoData.precio ?? 0;
+    if (
+      productoData.esCombo === true &&
+      (productoData.tipoPrecioCombo === 'CALCULADO' ||
+        productoData.tipoPrecioCombo === 'CALCULADO_CON_DESCUENTO') &&
+      (productoData.precio === undefined || productoData.precio === null)
+    ) {
+      precioFinal = 0;
+    }
 
     // Convertir fechas de string a Date si están presentes
     const dataToCreate = {
@@ -75,6 +127,7 @@ export class ProductoService {
       empresaId,
       codigoEmpresa,
       codigoSistema,
+      precio: precioFinal,
       stock: productoData.stock ?? 0,
       visibleMarketplace: productoData.visibleMarketplace ?? true,
       destacado: productoData.destacado ?? false,
@@ -88,7 +141,7 @@ export class ProductoService {
     };
 
     try {
-      // Crear producto
+      // Crear producto (el código ya es único gracias a generateCodigos)
       const producto = await this.prisma.producto.create({
         data: dataToCreate,
         include: {
@@ -117,7 +170,6 @@ export class ProductoService {
               sku: true,
               codigoBarras: true,
               codigoEmpresa: true,
-              atributos: true,
               precio: true,
               precioCosto: true,
               precioOferta: true,
@@ -129,10 +181,32 @@ export class ProductoService {
               orden: true,
               creadoEn: true,
               actualizadoEn: true,
+              atributosValores: {
+                include: {
+                  atributo: {
+                    select:{
+                      id: true,
+                      nombre: true,
+                      clave: true,
+                      tipo: true,
+                      unidad: true,
+                    }
+                  }
+                }
+              }
             },
           },
         },
       });
+
+      // Crear atributos si se proporcionaron
+      if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
+        await this.createProductoAtributosFromStructured(
+          producto.id,
+          empresaId,
+          productoData.atributosEstructurados,
+        );
+      }
 
       // Asociar imágenes si se proporcionaron
       if (imagenesIds && imagenesIds.length > 0) {
@@ -146,7 +220,65 @@ export class ProductoService {
       // Invalidar cache de estadísticas de la empresa
       await this.invalidateEmpresaStats(empresaId);
 
-      return this.toResponseDto(producto);
+      // Obtener producto con atributos para respuesta
+      const productoConAtributos = await this.prisma.producto.findUnique({
+        where: { id: producto.id },
+        include: {
+          empresaCategoria: {
+            include: {
+              categoriaMaestra: true,
+            },
+          },
+          empresaMarca: {
+            include: {
+              marcaMaestra: true,
+            },
+          },
+          sede: true,
+          variantes: {
+            where: {
+              deletedAt: null,
+              isActive: true,
+            },
+            orderBy: { orden: 'asc' },
+            select: {
+              id: true,
+              productoId: true,
+              empresaId: true,
+              nombre: true,
+              sku: true,
+              codigoBarras: true,
+              codigoEmpresa: true,
+              precio: true,
+              precioCosto: true,
+              precioOferta: true,
+              stock: true,
+              stockMinimo: true,
+              peso: true,
+              dimensiones: true,
+              isActive: true,
+              orden: true,
+              creadoEn: true,
+              actualizadoEn: true,
+              atributosValores: {
+                include: {
+                  atributo: {
+                    select: {
+                      id: true,
+                      nombre: true,
+                      clave: true,
+                      tipo: true,
+                      unidad: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return this.toResponseDto(productoConAtributos);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al crear producto: ${errorMessage}`);
@@ -259,6 +391,22 @@ export class ProductoService {
             },
           },
           sede: { select: { id: true, nombre: true } },
+          atributosValores: {
+            where: {
+              varianteId: null, // Solo atributos del producto base (no de variantes)
+            },
+            include: {
+              atributo: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  clave: true,
+                  tipo: true,
+                  unidad: true,
+                },
+              },
+            },
+          },
           variantes: {
             where: {
               deletedAt: null,
@@ -273,7 +421,6 @@ export class ProductoService {
               sku: true,
               codigoBarras: true,
               codigoEmpresa: true,
-              atributos: true,
               precio: true,
               precioCosto: true,
               precioOferta: true,
@@ -285,6 +432,19 @@ export class ProductoService {
               orden: true,
               creadoEn: true,
               actualizadoEn: true,
+              atributosValores: {
+                include: {
+                  atributo: {
+                    select:{
+                      id: true,
+                      nombre: true,
+                      clave: true,
+                      tipo: true,
+                      unidad: true,
+                    }
+                  }
+                }
+              }
             },
           },
         },
@@ -354,6 +514,22 @@ export class ProductoService {
           },
         },
         sede: true,
+        atributosValores: {
+          where: {
+            varianteId: null, // Solo atributos del producto base (no de variantes)
+          },
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
+        },
         variantes: {
           where: {
             deletedAt: null,
@@ -368,7 +544,6 @@ export class ProductoService {
             sku: true,
             codigoBarras: true,
             codigoEmpresa: true,
-            atributos: true,
             precio: true,
             precioCosto: true,
             precioOferta: true,
@@ -380,6 +555,19 @@ export class ProductoService {
             orden: true,
             creadoEn: true,
             actualizadoEn: true,
+            atributosValores: {
+                include: {
+                  atributo: {
+                    select:{
+                      id: true,
+                      nombre: true,
+                      clave: true,
+                      tipo: true,
+                      unidad: true,
+                    }
+                  }
+                }
+              }
           },
         },
       },
@@ -440,12 +628,39 @@ export class ProductoService {
       await this.validateEmpresaMarca(productoData.empresaMarcaId, empresaId);
     }
 
-    // Validar que no se intente activar variantes en un combo (XOR)
+    // Validar relación XOR entre esCombo y tieneVariantes
+    // Caso 1: Si se intenta activar variantes en un combo existente
     if (productoData.tieneVariantes === true && productoExistente.esCombo) {
       throw new BadRequestException(
         'No se puede activar variantes en un producto que es combo. ' +
         'Un producto no puede ser combo y tener variantes al mismo tiempo.',
       );
+    }
+
+    // Caso 2: Si se intenta marcar como combo mientras tiene variantes activas
+    if (productoData.esCombo === true && productoExistente.tieneVariantes === true) {
+      throw new BadRequestException(
+        'No se puede marcar como combo un producto que tiene variantes activas. ' +
+        'Deshabilite las variantes primero.',
+      );
+    }
+
+    // Caso 3: Si se intenta marcar como combo y también habilitar variantes simultáneamente
+    if (productoData.esCombo === true && productoData.tieneVariantes === true) {
+      throw new BadRequestException(
+        'Un producto no puede ser combo y tener variantes al mismo tiempo. ' +
+        'Deshabilite "tiene variantes" si desea crear un combo.',
+      );
+    }
+
+    // Si es combo, asegurar que tieneVariantes sea false (incluso si no se envía)
+    if (productoData.esCombo === true) {
+      productoData.tieneVariantes = false;
+    }
+
+    // Si no es combo, limpiar tipoPrecioCombo (no aplica)
+    if (productoData.esCombo === false && productoData.tipoPrecioCombo !== undefined) {
+      productoData.tipoPrecioCombo = null;
     }
 
     // Validar si se está deshabilitando variantes
@@ -489,49 +704,60 @@ export class ProductoService {
           precioActual: productoExistente.precio,
         });
 
-        // Generar código único para la variante
-        let config = await this.prisma.configuracionCodigos.findUnique({
-          where: { empresaId },
-        });
-
-        if (!config) {
-          config = await this.prisma.configuracionCodigos.create({
-            data: { empresaId },
-          });
-        }
-
-        const updated = await this.prisma.configuracionCodigos.update({
-          where: { empresaId },
-          data: {
-            ultimaVariante: {
-              increment: 1,
-            },
-          },
-        });
-
-        const numero = updated.ultimaVariante.toString().padStart(config.varianteLongitud, '0');
-        const codigoEmpresa = `${config.varianteCodigo}${config.varianteSeparador}${numero}`;
+        // Generar código único para la variante usando transacción para evitar race conditions
+        const { codigoEmpresa } = await this.generateCodigoVariante(empresaId);
 
         // Crear variante por defecto con los datos del producto original
-        await this.prisma.productoVariante.create({
-          data: {
-            productoId: id,
-            empresaId,
-            nombre: 'Original',
-            sku: `${productoExistente.codigoEmpresa}-ORIGINAL`,
-            codigoBarras: null, // No copiar código de barras, se asignará después si es necesario
-            codigoEmpresa,
-            atributos: { tipo: 'original' },
-            precio: productoExistente.precio,
-            precioCosto: productoExistente.precioCosto,
-            stock: productoExistente.stock,
-            stockMinimo: productoExistente.stockMinimo,
-            peso: productoExistente.peso,
-            dimensiones: productoExistente.dimensiones as any,
-            isActive: true,
-            orden: 0,
-          },
-        });
+        let variantePorDefecto;
+        try {
+          variantePorDefecto = await this.prisma.productoVariante.create({
+            data: {
+              productoId: id,
+              empresaId,
+              nombre: 'Original',
+              sku: `${productoExistente.codigoEmpresa}-ORIGINAL`,
+              codigoBarras: null, // No copiar código de barras, se asignará después si es necesario
+              codigoEmpresa,
+              precio: productoExistente.precio,
+              precioCosto: productoExistente.precioCosto,
+              stock: productoExistente.stock,
+              stockMinimo: productoExistente.stockMinimo,
+              peso: productoExistente.peso,
+              dimensiones: productoExistente.dimensiones as any,
+              isActive: true,
+              orden: 0,
+            },
+          });
+        } catch (error) {
+          // Si falla por código duplicado, reintentar con un nuevo código
+          if (error.code === 'P2002' && error.meta?.target?.includes('codigoEmpresa')) {
+            this.logger.warn(`Código de variante duplicado ${codigoEmpresa}, generando nuevo código`);
+            const { codigoEmpresa: nuevoCodigo } = await this.generateCodigoVariante(empresaId, true);
+            variantePorDefecto = await this.prisma.productoVariante.create({
+              data: {
+                productoId: id,
+                empresaId,
+                nombre: 'Original',
+                sku: `${productoExistente.codigoEmpresa}-ORIGINAL`,
+                codigoBarras: null,
+                codigoEmpresa: nuevoCodigo,
+                precio: productoExistente.precio,
+                precioCosto: productoExistente.precioCosto,
+                stock: productoExistente.stock,
+                stockMinimo: productoExistente.stockMinimo,
+                peso: productoExistente.peso,
+                dimensiones: productoExistente.dimensiones as any,
+                isActive: true,
+                orden: 0,
+              },
+            });
+          } else {
+            throw error;
+          }
+        }
+
+        // Migrar atributos del producto base a la variante por defecto
+        await this.migrarAtributosProductoAVariante(id, variantePorDefecto.id, empresaId);
 
         // Limpiar stock base del producto para evitar confusión en BD
         // (El stock ahora se maneja a nivel de variantes)
@@ -545,9 +771,31 @@ export class ProductoService {
       }
     }
 
+    // Determinar el precio final para el update
+    // Si es combo con precio calculado y no se proporciona precio, establecer 0
+    // El precio se calculará automáticamente cuando se agreguen los componentes del combo
+    const esComboActual = productoData.esCombo !== undefined ? productoData.esCombo : productoExistente.esCombo;
+    const tipoPrecioComboActual = productoData.tipoPrecioCombo !== undefined
+      ? productoData.tipoPrecioCombo
+      : productoExistente.tipoPrecioCombo;
+
+    // Determinar si necesitamos establecer el precio en 0
+    let precioParaUpdate = productoData.precio;
+    if (
+      esComboActual === true &&
+      (tipoPrecioComboActual === 'CALCULADO' ||
+        tipoPrecioComboActual === 'CALCULADO_CON_DESCUENTO')
+    ) {
+      // Si se está cambiando a combo calculado o se está actualizando el tipoPrecioCombo
+      if (productoData.tipoPrecioCombo !== undefined || productoData.esCombo === true) {
+        precioParaUpdate = productoData.precio ?? 0;
+      }
+    }
+
     // Convertir fechas de string a Date si están presentes
     const dataToUpdate = {
       ...productoData,
+      ...(precioParaUpdate !== undefined && { precio: precioParaUpdate }),
       ...(productoData.fechaInicioOferta && {
         fechaInicioOferta: new Date(productoData.fechaInicioOferta),
       }),
@@ -573,6 +821,22 @@ export class ProductoService {
             },
           },
           sede: true,
+          atributosValores: {
+            where: {
+              varianteId: null,
+            },
+            include: {
+              atributo: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  clave: true,
+                  tipo: true,
+                  unidad: true,
+                },
+              },
+            },
+          },
           variantes: {
             where: {
               deletedAt: null,
@@ -587,7 +851,6 @@ export class ProductoService {
               sku: true,
               codigoBarras: true,
               codigoEmpresa: true,
-              atributos: true,
               precio: true,
               precioCosto: true,
               precioOferta: true,
@@ -599,6 +862,19 @@ export class ProductoService {
               orden: true,
               creadoEn: true,
               actualizadoEn: true,
+              atributosValores: {
+                  include: {
+                    atributo: {
+                      select:{
+                        id: true,
+                        nombre: true,
+                        clave: true,
+                        tipo: true,
+                        unidad: true,
+                      }
+                    }
+                  }
+                }
             },
           },
         },
@@ -766,7 +1042,6 @@ export class ProductoService {
             sku: true,
             codigoBarras: true,
             codigoEmpresa: true,
-            atributos: true,
             precio: true,
             precioCosto: true,
             precioOferta: true,
@@ -778,6 +1053,19 @@ export class ProductoService {
             orden: true,
             creadoEn: true,
             actualizadoEn: true,
+            atributosValores: {
+                include: {
+                  atributo: {
+                    select:{
+                      id: true,
+                      nombre: true,
+                      clave: true,
+                      tipo: true,
+                      unidad: true,
+                    }
+                  }
+                }
+              }
           },
         },
       },
@@ -854,48 +1142,210 @@ export class ProductoService {
   }
 
   private async generateCodigos(empresaId: string, sedeId?: string) {
-    // Obtener o crear configuración de códigos
-    let config = await this.prisma.configuracionCodigos.findUnique({
-      where: { empresaId },
-    });
-
-    if (!config) {
-      // Crear configuración por defecto
-      config = await this.prisma.configuracionCodigos.create({
-        data: { empresaId },
+    // Usar transacción para evitar race conditions
+    return await this.prisma.$transaction(async (tx) => {
+      // Obtener o crear configuración de códigos
+      let config = await tx.configuracionCodigos.findUnique({
+        where: { empresaId },
       });
-    }
 
-    // Incrementar contador atómicamente (evita race conditions)
-    const updated = await this.prisma.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimoProducto: {
-          increment: 1,
-        },
-      },
-    });
-
-    const nuevoContador = updated.ultimoProducto;
-
-    // Generar códigos
-    const numero = nuevoContador.toString().padStart(config.productoLongitud, '0');
-    let codigoEmpresa = `${config.productoCodigo}${config.productoSeparador}${numero}`;
-
-    if (config.productoIncluirSede && sedeId) {
-      const sede = await this.prisma.sede.findUnique({
-        where: { id: sedeId },
-        select: { nombre: true },
-      });
-      if (sede) {
-        const sedeCode = sede.nombre.substring(0, 3).toUpperCase();
-        codigoEmpresa = `${config.productoCodigo}${config.productoSeparador}${sedeCode}${config.productoSeparador}${numero}`;
+      if (!config) {
+        // Crear configuración por defecto
+        config = await tx.configuracionCodigos.create({
+          data: { empresaId },
+        });
       }
-    }
 
-    const codigoSistema = `${empresaId.substring(0, 8)}-PROD-${numero}`;
+      // Sincronizar contador con el estado real de la BD
+      // Esto evita bucles innecesarios cuando hay productos eliminados
+      const ultimoProducto = await tx.producto.findFirst({
+        where: {
+          empresaId,
+          deletedAt: null,
+          codigoEmpresa: {
+            startsWith: config.productoCodigo,
+          },
+        },
+        orderBy: {
+          codigoEmpresa: 'desc',
+        },
+        select: {
+          codigoEmpresa: true,
+        },
+      });
 
-    return { codigoEmpresa, codigoSistema };
+      let nuevoContador = config.ultimoProducto;
+
+      // Si hay productos, extraer el número del último código
+      if (ultimoProducto) {
+        // Extraer número del código (ej: "PROD-000015" -> 15)
+        const match = ultimoProducto.codigoEmpresa.match(/(\d+)$/);
+        if (match) {
+          const ultimoNumero = parseInt(match[1], 10);
+          // Si el último número es mayor que el contador, actualizar
+          if (ultimoNumero >= nuevoContador) {
+            nuevoContador = ultimoNumero;
+            // Actualizar configuración para mantener sincronizado
+            await tx.configuracionCodigos.update({
+              where: { empresaId },
+              data: { ultimoProducto: nuevoContador },
+            });
+          }
+        }
+      }
+
+      // Incrementar contador atómicamente
+      const updated = await tx.configuracionCodigos.update({
+        where: { empresaId },
+        data: {
+          ultimoProducto: {
+            increment: 1,
+          },
+        },
+      });
+
+      nuevoContador = updated.ultimoProducto;
+
+      // Generar código
+      const numero = nuevoContador.toString().padStart(config.productoLongitud, '0');
+      let codigoEmpresa = `${config.productoCodigo}${config.productoSeparador}${numero}`;
+
+      if (config.productoIncluirSede && sedeId) {
+        const sede = await tx.sede.findUnique({
+          where: { id: sedeId },
+          select: { nombre: true },
+        });
+        if (sede) {
+          const sedeCode = sede.nombre.substring(0, 3).toUpperCase();
+          codigoEmpresa = `${config.productoCodigo}${config.productoSeparador}${sedeCode}${config.productoSeparador}${numero}`;
+        }
+      }
+
+      const codigoSistema = `${empresaId.substring(0, 8)}-PROD-${numero}`;
+
+      // Verificación final por si acaso (muy raro que ocurra)
+      const existe = await tx.producto.findFirst({
+        where: {
+          empresaId,
+          codigoEmpresa,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+
+      if (existe) {
+        // Si aún existe (caso muy raro), hacer un reintento recursivo
+        this.logger.warn(
+          `Código ${codigoEmpresa} ya existe después de sincronización. Reintentando...`,
+        );
+        // Hacer una llamada recursiva (solo debería ocurrir en casos extremos)
+        return this.generateCodigos(empresaId, sedeId);
+      }
+
+      return { codigoEmpresa, codigoSistema };
+    });
+  }
+
+  /**
+   * Genera un código único para una variante de producto
+   * Usa transacción para evitar race conditions y verifica que el código no exista
+   * @param empresaId ID de la empresa
+   * @param forceIncrement Si es true, incrementa el contador incluso si el código ya existe (para reintentos)
+   * @returns Código único para la variante
+   */
+  private async generateCodigoVariante(
+    empresaId: string,
+    forceIncrement: boolean = false,
+  ): Promise<{ codigoEmpresa: string }> {
+    // Usar transacción para evitar race conditions
+    return await this.prisma.$transaction(async (tx) => {
+      // Obtener o crear configuración de códigos
+      let config = await tx.configuracionCodigos.findUnique({
+        where: { empresaId },
+      });
+
+      if (!config) {
+        // Crear configuración por defecto
+        config = await tx.configuracionCodigos.create({
+          data: { empresaId },
+        });
+      }
+
+      // Sincronizar contador con el estado real de la BD
+      // Esto evita bucles innecesarios cuando hay variantes eliminadas
+      const ultimaVariante = await tx.productoVariante.findFirst({
+        where: {
+          empresaId,
+          deletedAt: null,
+          codigoEmpresa: {
+            startsWith: config.varianteCodigo,
+          },
+        },
+        orderBy: {
+          codigoEmpresa: 'desc',
+        },
+        select: {
+          codigoEmpresa: true,
+        },
+      });
+
+      let nuevoContador = config.ultimaVariante;
+
+      // Si hay variantes, extraer el número del último código
+      if (ultimaVariante) {
+        // Extraer número del código (ej: "VAR-001" -> 1)
+        const match = ultimaVariante.codigoEmpresa.match(/(\d+)$/);
+        if (match) {
+          const ultimoNumero = parseInt(match[1], 10);
+          // Si el último número es mayor que el contador, actualizar
+          if (ultimoNumero >= nuevoContador) {
+            nuevoContador = ultimoNumero;
+            // Actualizar configuración para mantener sincronizado
+            await tx.configuracionCodigos.update({
+              where: { empresaId },
+              data: { ultimaVariante: nuevoContador },
+            });
+          }
+        }
+      }
+
+      // Incrementar contador atómicamente
+      const updated = await tx.configuracionCodigos.update({
+        where: { empresaId },
+        data: {
+          ultimaVariante: {
+            increment: 1,
+          },
+        },
+      });
+
+      nuevoContador = updated.ultimaVariante;
+
+      // Generar código
+      const numero = nuevoContador.toString().padStart(config.varianteLongitud, '0');
+      const codigoEmpresa = `${config.varianteCodigo}${config.varianteSeparador}${numero}`;
+
+      // Verificación final por si acaso (muy raro que ocurra)
+      const existe = await tx.productoVariante.findFirst({
+        where: {
+          empresaId,
+          codigoEmpresa,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+
+      if (existe) {
+        // Si aún existe (caso muy raro), hacer un reintento recursivo
+        this.logger.warn(
+          `Código de variante ${codigoEmpresa} ya existe después de sincronización. Reintentando...`,
+        );
+        // Hacer una llamada recursiva (solo debería ocurrir en casos extremos)
+        return this.generateCodigoVariante(empresaId, true);
+      }
+
+      return { codigoEmpresa };
+    });
   }
 
   private async asociarImagenes(
@@ -984,8 +1434,8 @@ export class ProductoService {
       );
     }
 
-    // Desestructurar para excluir empresaCategoria, empresaMarca, empresa, sede y variantes
-    const { empresaCategoria, empresaMarca, empresa, sede, variantes, ...productoData } = producto;
+    // Desestructurar para excluir empresaCategoria, empresaMarca, empresa, sede, variantes y atributosValores
+    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, ...productoData } = producto;
 
     return {
       ...productoData,
@@ -1031,12 +1481,36 @@ export class ProductoService {
         categoria: a.categoria,
         orden: a.orden,
       })),
-      // Información de variantes
+      // Atributos estructurados del producto base (solo si no tiene variantes)
+      atributosValores: atributosValores?.map((av: any) => ({
+        id: av.id,
+        atributoId: av.atributoId,
+        valor: av.valor,
+        atributo: {
+          id: av.atributo.id,
+          nombre: av.atributo.nombre,
+          clave: av.atributo.clave,
+          tipo: av.atributo.tipo,
+          unidad: av.atributo.unidad,
+        },
+      })) || [],
+      // Información de variantes con atributos estructurados
       variantes: variantes?.map((v: any) => ({
         id: v.id,
         nombre: v.nombre,
         sku: v.sku,
-        atributos: v.atributos,
+        atributosValores: v.atributosValores?.map((av: any) => ({
+          id: av.id,
+          atributoId: av.atributoId,
+          valor: av.valor,
+          atributo: {
+            id: av.atributo.id,
+            nombre: av.atributo.nombre,
+            clave: av.atributo.clave,
+            tipo: av.atributo.tipo,
+            unidad: av.atributo.unidad,
+          },
+        })) || [],
         precio: Number(v.precio),
         stock: v.stock,
         isActive: v.isActive,
@@ -1265,6 +1739,99 @@ export class ProductoService {
       this.logger.error(`Error al obtener productos para combo: ${errorMessage}`);
       throw error;
     }
+  }
+
+  /**
+   * Crea atributos estructurados para un producto base
+   * Convierte el formato array de atributos a la tabla ProductoAtributoValor
+   */
+  private async createProductoAtributosFromStructured(
+    productoId: string,
+    empresaId: string,
+    atributosEstructurados: Array<{ atributoId: string; valor: string }>,
+  ): Promise<void> {
+    if (atributosEstructurados.length === 0) {
+      return;
+    }
+
+    // Verificar que los atributos pertenezcan a la empresa y estén activos
+    const atributoIds = atributosEstructurados.map(a => a.atributoId);
+    const atributosExistentes = await this.prisma.productoAtributo.findMany({
+      where: {
+        id: { in: atributoIds },
+        empresaId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    const existentesSet = new Set(atributosExistentes.map(a => a.id));
+    const atributosValidos = atributosEstructurados.filter(a => existentesSet.has(a.atributoId));
+
+    if (atributosValidos.length === 0) {
+      this.logger.warn(`Ningún atributoId válido encontrado para empresa ${empresaId}. No se crearán valores.`);
+      return;
+    }
+
+    const valoresAtributos = atributosValidos.map(a => ({
+      productoId,
+      atributoId: a.atributoId,
+      valor: String(a.valor),
+    }));
+
+    await this.prisma.productoAtributoValor.createMany({
+      data: valoresAtributos,
+      skipDuplicates: true,
+    });
+
+    this.logger.debug(`Creados ${valoresAtributos.length} valores de atributos estructurados para producto ${productoId}`);
+  }
+
+  /**
+   * Migra atributos de un producto base a una variante
+   * Actualiza los registros de ProductoAtributoValor para que apunten a la variante en lugar del producto
+   */
+  private async migrarAtributosProductoAVariante(
+    productoId: string,
+    varianteId: string,
+    empresaId: string,
+  ): Promise<void> {
+    // Obtener todos los atributos del producto base
+    const atributosProducto = await this.prisma.productoAtributoValor.findMany({
+      where: {
+        productoId,
+        varianteId: null,
+        atributo: {
+          empresaId,
+          isActive: true,
+        },
+      },
+      select: {
+        id: true,
+        atributoId: true,
+        valor: true,
+      },
+    });
+
+    if (atributosProducto.length === 0) {
+      this.logger.debug(`No hay atributos para migrar del producto ${productoId} a variante ${varianteId}`);
+      return;
+    }
+
+    // Actualizar cada atributo para asignarle la varianteId y desvincularlo del producto
+    await Promise.all(
+      atributosProducto.map(async (atributo) => {
+        await this.prisma.productoAtributoValor.update({
+          where: { id: atributo.id },
+          data: {
+            productoId: null,
+            varianteId,
+          },
+        });
+      }),
+    );
+
+    this.logger.debug(`Migrados ${atributosProducto.length} atributos del producto ${productoId} a variante ${varianteId}`);
   }
 
   /**

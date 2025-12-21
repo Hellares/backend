@@ -1,7 +1,15 @@
 import { PrismaClient } from '@prisma/client';
 import { PeriodoSuscripcion } from '@prisma/client';
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
+import * as dotenv from 'dotenv';
 
-const prisma = new PrismaClient();
+// Load environment variables
+dotenv.config();
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter });
 
 export async function seedPlanesSuscripcion() {
   console.log('📦 Creando planes de suscripción...');
@@ -16,6 +24,7 @@ export async function seedPlanesSuscripcion() {
       limiteServicios: 20,
       limiteUsuarios: 3,
       limiteSedes: 1,
+      limitePlantillasAtributos: 5, // ✨ Límite de plantillas de atributos
       tienePersonalizacion: false,
       tieneDominioPropio: false,
       tieneApi: false,
@@ -25,6 +34,7 @@ export async function seedPlanesSuscripcion() {
         servicios: 20,
         usuarios: 3,
         sedes: 1,
+        plantillasAtributos: 5,
         facturacion: true,
         inventario: true,
         clientes: true,
@@ -41,6 +51,7 @@ export async function seedPlanesSuscripcion() {
       limiteServicios: 100,
       limiteUsuarios: 10,
       limiteSedes: 3,
+      limitePlantillasAtributos: 15, // ✨ Límite de plantillas de atributos
       tienePersonalizacion: true,
       tieneDominioPropio: false,
       tieneApi: false,
@@ -50,6 +61,7 @@ export async function seedPlanesSuscripcion() {
         servicios: 100,
         usuarios: 10,
         sedes: 3,
+        plantillasAtributos: 15,
         facturacion: true,
         inventario: true,
         clientes: true,
@@ -67,6 +79,7 @@ export async function seedPlanesSuscripcion() {
       limiteServicios: null, // Ilimitado
       limiteUsuarios: 50,
       limiteSedes: 10,
+      limitePlantillasAtributos: null, // ✨ Ilimitado
       tienePersonalizacion: true,
       tieneDominioPropio: true,
       tieneApi: true,
@@ -76,6 +89,7 @@ export async function seedPlanesSuscripcion() {
         servicios: 'ilimitado',
         usuarios: 50,
         sedes: 10,
+        plantillasAtributos: 'ilimitado',
         facturacion: true,
         inventario: true,
         clientes: true,
@@ -90,20 +104,28 @@ export async function seedPlanesSuscripcion() {
 
   for (const plan of planes) {
     try {
-      const existingPlan = await prisma.planSuscripcion.findUnique({
-        where: { nombre: plan.nombre }
+      await prisma.planSuscripcion.upsert({
+        where: { nombre: plan.nombre },
+        update: {
+          descripcion: plan.descripcion,
+          precio: plan.precio,
+          periodo: plan.periodo,
+          limiteProductos: plan.limiteProductos,
+          limiteServicios: plan.limiteServicios,
+          limiteUsuarios: plan.limiteUsuarios,
+          limiteSedes: plan.limiteSedes,
+          limitePlantillasAtributos: plan.limitePlantillasAtributos,
+          tienePersonalizacion: plan.tienePersonalizacion,
+          tieneDominioPropio: plan.tieneDominioPropio,
+          tieneApi: plan.tieneApi,
+          tieneReportesAvanzados: plan.tieneReportesAvanzados,
+          caracteristicas: plan.caracteristicas,
+        },
+        create: plan
       });
-
-      if (!existingPlan) {
-        await prisma.planSuscripcion.create({
-          data: plan
-        });
-        console.log(`✅ Plan "${plan.nombre}" creado exitosamente`);
-      } else {
-        console.log(`⚠️  Plan "${plan.nombre}" ya existe`);
-      }
+      console.log(`✅ Plan "${plan.nombre}" creado/actualizado exitosamente`);
     } catch (error) {
-      console.error(`❌ Error creando plan "${plan.nombre}":`, error);
+      console.error(`❌ Error procesando plan "${plan.nombre}":`, error);
     }
   }
 
@@ -111,13 +133,12 @@ export async function seedPlanesSuscripcion() {
 }
 
 // Para ejecutar manualmente si es necesario
-// import { PrismaClient } from '@prisma/client';
-// const prisma = new PrismaClient();
-// seedPlanesSuscripcion()
-//   .catch((e) => {
-//     console.error(e);
-//     process.exit(1);
-//   })
-//   .finally(async () => {
-//     await prisma.$disconnect();
-//   });
+seedPlanesSuscripcion()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+    await pool.end();
+  });

@@ -1,6 +1,16 @@
-import { IsString, IsNotEmpty, IsNumber, IsOptional, IsObject, IsBoolean, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsOptional, IsObject, IsBoolean, Min, IsArray, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsPrecioMayorQueCosto } from '../validators/precio-mayor-que-costo.validator';
+
+export class VarianteAtributoDto {
+  @IsString()
+  @IsNotEmpty()
+  atributoId: string; // ID del ProductoAtributo
+
+  @IsString()
+  @IsNotEmpty()
+  valor: string; // Valor del atributo
+}
 
 export class CreateProductoVarianteDto {
   @IsString()
@@ -15,9 +25,12 @@ export class CreateProductoVarianteDto {
   @IsOptional()
   codigoBarras?: string;
 
-  @IsObject()
-  @IsNotEmpty()
-  atributos: Record<string, any>; // {"color": "Negro", "conexion": "USB"}
+  // ✅ Atributos estructurados (recomendado)
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => VarianteAtributoDto)
+  @IsOptional()
+  atributosEstructurados?: VarianteAtributoDto[];
 
   @IsNumber()
   @Type(() => Number)

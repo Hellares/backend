@@ -10,9 +10,14 @@ import {
   IsDateString,
   IsArray,
   MaxLength,
+  IsEnum,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsPrecioMayorQueCosto } from '../validators/precio-mayor-que-costo.validator';
+import { IsPrecioRequeridoCondicional } from '../validators/precio-requerido-condicional.validator';
+import { TipoPrecioCombo } from '@prisma/client';
+import { VarianteAtributoDto } from './create-producto-variante.dto';
 
 export class CreateProductoDto {
   @ApiProperty({
@@ -83,21 +88,16 @@ export class CreateProductoDto {
   descripcion?: string;
 
   @ApiPropertyOptional({
-    description: 'Detalles adicionales en formato JSON',
-    example: { color: 'plata', garantia: '1 año' },
-  })
-  @IsOptional()
-  detalles?: any;
-
-  @ApiProperty({
-    description: 'Precio de venta',
+    description: 'Precio de venta (requerido solo si NO es combo con precio calculado)',
     example: 2999.99,
   })
+  @IsOptional()
   @IsNumber()
   @Min(0)
+  @IsPrecioRequeridoCondicional()
   @IsPrecioMayorQueCosto()
   @Type(() => Number)
-  precio: number;
+  precio?: number;
 
   @ApiPropertyOptional({
     description: 'Precio de costo',
@@ -246,4 +246,36 @@ export class CreateProductoDto {
   @IsOptional()
   @IsBoolean()
   tieneVariantes?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Indica si el producto es un combo',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  esCombo?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Tipo de precio del combo (solo aplica si esCombo es true)',
+    enum: TipoPrecioCombo,
+    example: TipoPrecioCombo.FIJO,
+  })
+  @IsOptional()
+  @IsEnum(TipoPrecioCombo)
+  tipoPrecioCombo?: TipoPrecioCombo;
+
+  @ApiPropertyOptional({
+    description: 'Atributos estructurados del producto base (solo aplica si tieneVariantes es false)',
+    example: [
+      { atributoId: 'attr-123', valor: 'Negro' },
+      { atributoId: 'attr-456', valor: 'XL' },
+    ],
+    type: [VarianteAtributoDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => VarianteAtributoDto)
+  atributosEstructurados?: VarianteAtributoDto[];
 }

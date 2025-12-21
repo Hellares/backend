@@ -103,7 +103,6 @@ export class ProductoComboService {
           codigoBarras: comboData.codigoBarras,
           nombre: comboData.nombre,
           descripcion: comboData.descripcion,
-          detalles: comboData.detalles,
 
           // Campos específicos de combo
           esCombo: true,
@@ -176,9 +175,9 @@ export class ProductoComboService {
         sku: combo.sku,
         isActive: combo.isActive,
         creadoEn: combo.creadoEn,
-        categoria: combo.empresaCategoria,
-        marca: combo.empresaMarca,
-        sede: combo.sede,
+        categoria: (combo as any).empresaCategoria,
+        marca: (combo as any).empresaMarca,
+        sede: (combo as any).sede,
         imagen: null, // Por ahora sin imagen (se pueden agregar después)
       };
     } catch (error) {
