@@ -199,6 +199,15 @@ export class ProductoService {
         },
       });
 
+      // Sincronizar niveles de precio si se asignó una configuración
+      if (productoData.configuracionPrecioId) {
+        await this.sincronizarNivelesDesdeConfiguracion(
+          producto.id,
+          productoData.configuracionPrecioId,
+          empresaId,
+        );
+      }
+
       // Crear atributos si se proporcionaron
       if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
         await this.createProductoAtributosFromStructured(
@@ -759,6 +768,9 @@ export class ProductoService {
         // Migrar atributos del producto base a la variante por defecto
         await this.migrarAtributosProductoAVariante(id, variantePorDefecto.id, empresaId);
 
+        // Migrar niveles de precio del producto base a la variante por defecto
+        await this.migrarNivelesProductoAVariante(id, variantePorDefecto.id);
+
         // Limpiar stock base del producto para evitar confusión en BD
         // (El stock ahora se maneja a nivel de variantes)
         productoData.stock = 0;
@@ -910,6 +922,25 @@ export class ProductoService {
           this.logger.warn(
             `Producto ${id} desactivado. Se desactivaron automáticamente ${variantesActivas} variante(s).`,
           );
+        }
+      }
+
+      // Sincronizar niveles de precio si se actualizó la configuración
+      // IMPORTANTE: Solo para productos SIN variantes (los que tienen variantes, los niveles van a las variantes)
+      if (
+        productoData.configuracionPrecioId !== undefined &&
+        !producto.tieneVariantes
+      ) {
+        if (productoData.configuracionPrecioId) {
+          // Se asignó o cambió configuración → sincronizar niveles
+          await this.sincronizarNivelesDesdeConfiguracion(
+            id,
+            productoData.configuracionPrecioId,
+            empresaId,
+          );
+        } else {
+          // Se removió configuración → eliminar niveles
+          await this.eliminarNivelesDeProducto(id);
         }
       }
 
@@ -1832,6 +1863,147 @@ export class ProductoService {
     );
 
     this.logger.debug(`Migrados ${atributosProducto.length} atributos del producto ${productoId} a variante ${varianteId}`);
+  }
+
+  /**
+   * Sincroniza niveles de precio desde una configuración
+   * Copia los niveles de configuracionprecionivel → precionivel
+   */
+  private async sincronizarNivelesDesdeConfiguracion(
+    productoId: string,
+    configuracionPrecioId: string,
+    empresaId: string,
+  ): Promise<void> {
+    this.logger.info('Sincronizando niveles desde configuración', {
+      productoId,
+      configuracionPrecioId,
+    });
+
+    // 1. Obtener niveles de la configuración
+    const configuracion = await this.prisma.configuracionPrecio.findUnique({
+      where: { id: configuracionPrecioId },
+      include: {
+        niveles: {
+          orderBy: { orden: 'asc' },
+        },
+      },
+    });
+
+    if (!configuracion) {
+      this.logger.warn(`Configuración ${configuracionPrecioId} no encontrada`);
+      return;
+    }
+
+    if (!configuracion.niveles || configuracion.niveles.length === 0) {
+      this.logger.warn(`Configuración ${configuracionPrecioId} no tiene niveles`);
+      return;
+    }
+
+    // 2. Eliminar niveles anteriores del producto (soft delete)
+    await this.prisma.precioNivel.updateMany({
+      where: { productoId, isActive: true },
+      data: { isActive: false },
+    });
+
+    // 3. Crear nuevos niveles basados en la configuración
+    const nivelesParaCrear = configuracion.niveles.map((nivel, index) => ({
+      productoId,
+      varianteId: null,
+      nombre: nivel.nombre,
+      cantidadMinima: nivel.cantidadMinima,
+      cantidadMaxima: nivel.cantidadMaxima,
+      tipoPrecio: nivel.tipoPrecio,
+      precio: null, // Se usa el precio del producto, no se copia desde la configuración
+      porcentajeDesc: nivel.porcentajeDesc,
+      descripcion: nivel.descripcion,
+      orden: nivel.orden ?? index,
+      isActive: true,
+    }));
+
+    await this.prisma.precioNivel.createMany({
+      data: nivelesParaCrear,
+    });
+
+    this.logger.log(
+      `${nivelesParaCrear.length} niveles sincronizados para producto ${productoId}`,
+    );
+  }
+
+  /**
+   * Elimina todos los niveles de precio de un producto
+   * (Soft delete - marca como inactivos)
+   */
+  private async eliminarNivelesDeProducto(productoId: string): Promise<void> {
+    const result = await this.prisma.precioNivel.updateMany({
+      where: { productoId, isActive: true },
+      data: { isActive: false },
+    });
+
+    this.logger.info(`${result.count} niveles eliminados para producto ${productoId}`);
+  }
+
+  /**
+   * Migra niveles de precio de un producto base a una variante
+   * Se usa cuando se convierte un producto simple a producto con variantes
+   * Los niveles del producto se desactivan y se crean nuevos para la variante
+   */
+  private async migrarNivelesProductoAVariante(
+    productoId: string,
+    varianteId: string,
+  ): Promise<void> {
+    // Obtener niveles activos del producto base
+    const nivelesProducto = await this.prisma.precioNivel.findMany({
+      where: {
+        productoId,
+        varianteId: null,
+        isActive: true,
+      },
+      orderBy: { orden: 'asc' },
+    });
+
+    if (nivelesProducto.length === 0) {
+      this.logger.debug(
+        `No hay niveles de precio para migrar del producto ${productoId} a variante ${varianteId}`,
+      );
+      return;
+    }
+
+    this.logger.info(
+      `Migrando ${nivelesProducto.length} niveles de precio del producto ${productoId} a variante ${varianteId}`,
+    );
+
+    // Desactivar niveles del producto base (ya no se usarán)
+    await this.prisma.precioNivel.updateMany({
+      where: {
+        productoId,
+        varianteId: null,
+        isActive: true,
+      },
+      data: { isActive: false },
+    });
+
+    // Crear nuevos niveles para la variante con los mismos datos
+    const nivelesParaVariante = nivelesProducto.map((nivel) => ({
+      varianteId,
+      productoId: null, // Los niveles ahora pertenecen a la variante, no al producto
+      nombre: nivel.nombre,
+      cantidadMinima: nivel.cantidadMinima,
+      cantidadMaxima: nivel.cantidadMaxima,
+      tipoPrecio: nivel.tipoPrecio,
+      precio: nivel.precio,
+      porcentajeDesc: nivel.porcentajeDesc,
+      descripcion: nivel.descripcion,
+      orden: nivel.orden,
+      isActive: true,
+    }));
+
+    await this.prisma.precioNivel.createMany({
+      data: nivelesParaVariante,
+    });
+
+    this.logger.success(
+      `${nivelesProducto.length} niveles de precio migrados exitosamente a variante ${varianteId}`,
+    );
   }
 
   /**

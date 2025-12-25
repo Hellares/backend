@@ -15,6 +15,9 @@ import { EmpresaService } from './empresa.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { JwtAuthGuard } from '../auth/guards';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import {
   CreateEmpresaDto,
   UpdateEmpresaDto,
@@ -231,7 +234,8 @@ export class EmpresaController {
    * Actualizar empresa
    */
   @Put(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Actualizar información de una empresa' })
   @ApiResponse({
@@ -290,7 +294,8 @@ export class EmpresaController {
    * Cambiar plan de suscripción
    */
   @Post(':id/cambiar-plan')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.CHANGE_PLAN)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cambiar plan de suscripción de la empresa' })
@@ -338,7 +343,8 @@ export class EmpresaController {
    * Actualizar personalización de la empresa
    */
   @Put(':id/personalizacion')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Actualizar personalización de la empresa',

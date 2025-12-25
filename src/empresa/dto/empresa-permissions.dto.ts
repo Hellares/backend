@@ -11,16 +11,40 @@ export class EmpresaPermissionsDto {
   canManageUsers: boolean;
 
   @ApiProperty({
-    description: 'Puede gestionar productos',
+    description: 'Puede ver el catálogo de productos',
+    example: true,
+  })
+  canViewProducts: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar productos (crear, editar, eliminar)',
     example: true,
   })
   canManageProducts: boolean;
 
   @ApiProperty({
-    description: 'Puede gestionar servicios',
+    description: 'Puede ver el catálogo de servicios',
+    example: true,
+  })
+  canViewServices: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar servicios (crear, editar, eliminar)',
     example: true,
   })
   canManageServices: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver la lista de clientes',
+    example: true,
+  })
+  canViewClients: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar clientes (crear, editar, eliminar)',
+    example: true,
+  })
+  canManageClients: boolean;
 
   @ApiProperty({
     description: 'Puede gestionar sedes',

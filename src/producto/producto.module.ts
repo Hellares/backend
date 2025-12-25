@@ -9,6 +9,9 @@ import { ProductoComboService } from './producto-combo.service';
 import { ProductoComboController } from './producto-combo.controller';
 import { ProductoAtributoPlantillaService } from './producto-atributo-plantilla.service';
 import { ProductoAtributoPlantillaController } from './producto-atributo-plantilla.controller';
+import { PrecioNivelService } from './precio-nivel.service';
+import { ConfiguracionPrecioService } from './configuracion-precio.service';
+import { ConfiguracionPrecioController } from './configuracion-precio.controller';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
@@ -19,6 +22,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     ProductoComboController,
     ProductoAtributoController,
     ProductoAtributoPlantillaController,
+    ConfiguracionPrecioController,
   ],
   providers: [
     ProductoService,
@@ -27,6 +31,8 @@ import { PrismaModule } from '../prisma/prisma.module';
     ProductoAtributoValorService,
     ProductoComboService,
     ProductoAtributoPlantillaService,
+    PrecioNivelService,
+    ConfiguracionPrecioService,
     PlanLimitsService,
   ],
   exports: [
@@ -36,6 +42,8 @@ import { PrismaModule } from '../prisma/prisma.module';
     ProductoAtributoValorService,
     ProductoComboService,
     ProductoAtributoPlantillaService,
+    PrecioNivelService,
+    ConfiguracionPrecioService,
   ],
 })
 export class ProductoModule {}

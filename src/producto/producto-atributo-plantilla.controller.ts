@@ -18,9 +18,10 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { Rol } from '@prisma/client';
+import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import { ProductoAtributoPlantillaService } from './producto-atributo-plantilla.service';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CreateProductoAtributoPlantillaDto } from './dto/create-producto-atributo-plantilla.dto';
@@ -30,7 +31,7 @@ import { ProductoAtributoPlantillaResponseDto } from './dto/producto-atributo-pl
 
 @ApiTags('Plantillas de Atributos')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @Controller('producto-atributo-plantillas')
 export class ProductoAtributoPlantillaController {
   constructor(
@@ -39,7 +40,7 @@ export class ProductoAtributoPlantillaController {
   ) {}
 
   @Post()
-  @Roles(Rol.EMPRESA_ADMIN, Rol.SUPER_ADMIN)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({
     summary: 'Crear una nueva plantilla de atributos',
     description: 'Crea una plantilla reutilizable con múltiples atributos. Límite según plan de suscripción.',
@@ -61,6 +62,7 @@ export class ProductoAtributoPlantillaController {
   }
 
   @Get()
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Listar plantillas de atributos',
     description: 'Obtiene todas las plantillas activas de la empresa',
@@ -83,6 +85,7 @@ export class ProductoAtributoPlantillaController {
   }
 
   @Get('limits-info')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Obtener información de límites del plan',
     description: 'Muestra límites y uso actual de plantillas según el plan de suscripción',
@@ -96,6 +99,7 @@ export class ProductoAtributoPlantillaController {
   }
 
   @Get(':id')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Obtener una plantilla por ID',
   })
@@ -116,7 +120,7 @@ export class ProductoAtributoPlantillaController {
   }
 
   @Patch(':id')
-  @Roles(Rol.EMPRESA_ADMIN, Rol.SUPER_ADMIN)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({
     summary: 'Actualizar una plantilla',
     description: 'Solo se pueden editar plantillas personalizadas (no las predefinidas)',
@@ -139,7 +143,7 @@ export class ProductoAtributoPlantillaController {
   }
 
   @Delete(':id')
-  @Roles(Rol.EMPRESA_ADMIN, Rol.SUPER_ADMIN)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({
     summary: 'Eliminar una plantilla',
     description: 'Solo se pueden eliminar plantillas personalizadas (soft delete)',
@@ -160,7 +164,7 @@ export class ProductoAtributoPlantillaController {
   }
 
   @Post('aplicar')
-  @Roles(Rol.EMPRESA_ADMIN, Rol.SUPER_ADMIN, Rol.VENDEDOR)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({
     summary: 'Aplicar plantilla a un producto o variante',
     description: 'Crea la estructura de atributos basándose en la plantilla seleccionada',

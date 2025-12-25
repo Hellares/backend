@@ -22,18 +22,23 @@ import {
 } from '@nestjs/swagger';
 import { StorageService } from './storage.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UploadArchivoDto, ArchivoResponseDto } from './dto/upload-archivo.dto';
 import { EntidadTipo, ProveedorStorage } from '@prisma/client';
 
 @ApiTags('Storage')
 @Controller('storage')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class StorageController {
   constructor(private readonly storageService: StorageService) {}
 
   @Post('upload')
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiOperation({ summary: 'Subir un archivo' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -80,6 +85,7 @@ export class StorageController {
   }
 
   @Delete(':archivoId')
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiOperation({ summary: 'Eliminar un archivo' })
   @ApiResponse({ status: 200, description: 'Archivo eliminado exitosamente' })
   async deleteArchivo(
@@ -109,6 +115,7 @@ export class StorageController {
   }
 
   @Post('migrate')
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiOperation({ summary: 'Migrar archivos a otro proveedor' })
   @ApiBody({
     schema: {

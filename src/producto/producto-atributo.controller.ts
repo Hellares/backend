@@ -12,12 +12,16 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import { ProductoAtributoService, ProductoAtributoResponse } from './producto-atributo.service';
 import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
 
 @ApiTags('Producto Atributos')
 @Controller('producto-atributos')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class ProductoAtributoController {
   constructor(private readonly atributoService: ProductoAtributoService) {}
@@ -27,6 +31,7 @@ export class ProductoAtributoController {
    * POST /producto-atributos
    */
   @Post()
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Crear atributo de producto' })
   @ApiResponse({ status: 201, description: 'Atributo creado exitosamente' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -42,6 +47,7 @@ export class ProductoAtributoController {
    * GET /producto-atributos
    */
   @Get()
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Listar atributos de producto' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findAll(
@@ -56,6 +62,7 @@ export class ProductoAtributoController {
    * GET /producto-atributos/categoria/:categoriaId
    */
   @Get('categoria/:categoriaId')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Listar atributos por categoría' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findByCategoria(
@@ -70,6 +77,7 @@ export class ProductoAtributoController {
    * GET /producto-atributos/:id
    */
   @Get(':id')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener atributo por ID' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findOne(
@@ -84,6 +92,7 @@ export class ProductoAtributoController {
    * PUT /producto-atributos/:id
    */
   @Put(':id')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Actualizar atributo' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async update(
@@ -99,6 +108,7 @@ export class ProductoAtributoController {
    * DELETE /producto-atributos/:id
    */
   @Delete(':id')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Eliminar atributo' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async remove(

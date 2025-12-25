@@ -163,6 +163,9 @@ export class ProductoVarianteService {
       });
     }
 
+    // Copiar niveles de precio de otra variante del mismo producto
+    await this.copiarNivelesDeOtraVariante(productoId, variante.id);
+
     this.logger.success('Product variant created', { varianteId: variante.id });
 
     return this.mapToResponseDto(variante);
@@ -681,5 +684,64 @@ export class ProductoVarianteService {
       creadoEn: variante.creadoEn,
       actualizadoEn: variante.actualizadoEn,
     };
+  }
+
+  /**
+   * Copia niveles de precio de otra variante del mismo producto a una nueva variante
+   * Se usa para mantener consistencia en descuentos al crear nuevas variantes
+   */
+  private async copiarNivelesDeOtraVariante(
+    productoId: string,
+    nuevaVarianteId: string,
+  ): Promise<void> {
+    // Buscar una variante existente del mismo producto que tenga niveles de precio
+    const varianteConNiveles = await this.prisma.productoVariante.findFirst({
+      where: {
+        productoId,
+        id: { not: nuevaVarianteId },
+        deletedAt: null,
+      },
+      include: {
+        preciosNivel: {
+          where: { isActive: true },
+          orderBy: { orden: 'asc' },
+        },
+      },
+    });
+
+    // Si no hay variantes con niveles, no hacer nada
+    if (!varianteConNiveles?.preciosNivel?.length) {
+      this.logger.debug(
+        `No hay variantes con niveles de precio para copiar a variante ${nuevaVarianteId}`,
+      );
+      return;
+    }
+
+    this.logger.info(
+      `Copiando ${varianteConNiveles.preciosNivel.length} niveles de precio de variante ${varianteConNiveles.id} a variante ${nuevaVarianteId}`,
+    );
+
+    // Copiar niveles a la nueva variante
+    const nivelesParaCopiar = varianteConNiveles.preciosNivel.map((nivel) => ({
+      varianteId: nuevaVarianteId,
+      productoId: null, // Los niveles pertenecen a la variante, no al producto
+      nombre: nivel.nombre,
+      cantidadMinima: nivel.cantidadMinima,
+      cantidadMaxima: nivel.cantidadMaxima,
+      tipoPrecio: nivel.tipoPrecio,
+      precio: nivel.precio,
+      porcentajeDesc: nivel.porcentajeDesc,
+      descripcion: nivel.descripcion,
+      orden: nivel.orden,
+      isActive: true,
+    }));
+
+    await this.prisma.precioNivel.createMany({
+      data: nivelesParaCopiar,
+    });
+
+    this.logger.success(
+      `${nivelesParaCopiar.length} niveles de precio copiados exitosamente a variante ${nuevaVarianteId}`,
+    );
   }
 }

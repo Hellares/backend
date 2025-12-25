@@ -17,6 +17,9 @@ import {
 } from '@nestjs/swagger';
 import { CatalogosService } from './catalogos.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 
@@ -64,7 +67,8 @@ export class CatalogosController {
   // ============================================
 
   @Get('categorias/empresa/:empresaId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Obtener categorías activas de una empresa',
@@ -82,7 +86,8 @@ export class CatalogosController {
   }
 
   @Post('categorias/activar')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Activar categoría para una empresa',
@@ -108,7 +113,8 @@ export class CatalogosController {
   }
 
   @Delete('categorias/empresa/:empresaId/:empresaCategoriaId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Desactivar categoría de una empresa' })
   @ApiResponse({
@@ -130,7 +136,8 @@ export class CatalogosController {
   }
 
   @Post('categorias/activar-populares')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Activar categorías populares automáticamente',
@@ -172,7 +179,8 @@ export class CatalogosController {
   // ============================================
 
   @Get('marcas/empresa/:empresaId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Obtener marcas activas de una empresa' })
   @ApiResponse({
@@ -186,7 +194,8 @@ export class CatalogosController {
   }
 
   @Post('marcas/activar')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Activar marca para una empresa' })
   @ApiResponse({ status: 201, description: 'Marca activada exitosamente' })
@@ -205,7 +214,8 @@ export class CatalogosController {
   }
 
   @Delete('marcas/empresa/:empresaId/:empresaMarcaId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Desactivar marca de una empresa' })
   @ApiResponse({ status: 200, description: 'Marca desactivada exitosamente' })
@@ -220,7 +230,8 @@ export class CatalogosController {
   }
 
   @Post('marcas/activar-populares')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Activar marcas populares automáticamente' })
   @ApiResponse({ status: 201, description: 'Marcas activadas' })

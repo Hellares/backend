@@ -20,6 +20,9 @@ import {
 import { ClientesService } from './clientes.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateClienteDto } from './dto/create-cliente.dto';
 import { UpdateClienteDto } from './dto/update-cliente.dto';
@@ -32,12 +35,13 @@ import {
 
 @ApiTags('Clientes')
 @Controller('clientes')
-@UseGuards(JwtAuthGuard, TenantAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class ClientesController {
   constructor(private readonly clientesService: ClientesService) {}
 
   @Post()
+  @RequiresPermission(Permission.MANAGE_CLIENTS)
   @ApiOperation({
     summary: 'Registrar un nuevo cliente o asociar uno existente',
     description:
@@ -68,6 +72,7 @@ export class ClientesController {
   }
 
   @Get()
+  @RequiresPermission(Permission.VIEW_CLIENTS)
   @ApiOperation({
     summary: 'Obtener lista de clientes de la empresa',
     description:
@@ -91,6 +96,7 @@ export class ClientesController {
   }
 
   @Get(':id')
+  @RequiresPermission(Permission.VIEW_CLIENTS)
   @ApiOperation({ summary: 'Obtener un cliente por ID' })
   @ApiResponse({
     status: 200,
@@ -111,6 +117,7 @@ export class ClientesController {
   }
 
   @Put(':id')
+  @RequiresPermission(Permission.MANAGE_CLIENTS)
   @ApiOperation({ summary: 'Actualizar un cliente' })
   @ApiResponse({
     status: 200,
@@ -136,6 +143,7 @@ export class ClientesController {
   }
 
   @Delete(':id')
+  @RequiresPermission(Permission.MANAGE_CLIENTS)
   @ApiOperation({ summary: 'Eliminar un cliente (soft delete)' })
   @ApiResponse({
     status: 200,

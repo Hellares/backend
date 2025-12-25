@@ -23,7 +23,11 @@ import { ProductoService } from './producto.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoAtributoValorService } from './producto-atributo-valor.service';
+import { PrecioNivelService } from './precio-nivel.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission, Permission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
@@ -37,10 +41,13 @@ import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
 import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
 import { SetProductoAtributosDto } from './dto/create-producto-atributo-valor.dto';
+import { CreatePrecioNivelDto } from './dto/create-precio-nivel.dto';
+import { UpdatePrecioNivelDto } from './dto/update-precio-nivel.dto';
+import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
 
 @ApiTags('Productos')
 @Controller('productos')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class ProductoController {
   constructor(
@@ -48,9 +55,11 @@ export class ProductoController {
     private readonly varianteService: ProductoVarianteService,
     private readonly atributoService: ProductoAtributoService,
     private readonly atributoValorService: ProductoAtributoValorService,
+    private readonly precioNivelService: PrecioNivelService,
   ) {}
 
   @Post()
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Crear un nuevo producto' })
   @ApiResponse({
     status: 201,
@@ -92,6 +101,7 @@ export class ProductoController {
   // }
 
   @Get()
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener lista de productos con filtros' })
   @ApiResponse({
     status: 200,
@@ -125,6 +135,7 @@ export class ProductoController {
   // =========================================
 
   @Post('atributos')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Crear un atributo de producto' })
   @ApiResponse({
     status: 201,
@@ -143,6 +154,7 @@ export class ProductoController {
   }
 
   @Get('atributos')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener todos los atributos de la empresa' })
   @ApiResponse({
     status: 200,
@@ -158,6 +170,7 @@ export class ProductoController {
   }
 
   @Get('atributos/:atributoId')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener un atributo por ID' })
   @ApiResponse({
     status: 200,
@@ -176,6 +189,7 @@ export class ProductoController {
   }
 
   @Put('atributos/:atributoId')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Actualizar un atributo' })
   @ApiResponse({
     status: 200,
@@ -195,6 +209,7 @@ export class ProductoController {
   }
 
   @Delete('atributos/:atributoId')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Eliminar un atributo' })
   @ApiResponse({
     status: 200,
@@ -217,6 +232,7 @@ export class ProductoController {
   // =========================================
 
   @Get('disponibles-para-combo')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Obtener productos disponibles para usar como componentes de combo',
   })
@@ -249,6 +265,7 @@ export class ProductoController {
   // =========================================
 
   @Get(':id')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener un producto por ID' })
   @ApiResponse({
     status: 200,
@@ -269,6 +286,7 @@ export class ProductoController {
   }
 
   @Put(':id')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Actualizar un producto' })
   @ApiResponse({
     status: 200,
@@ -297,6 +315,7 @@ export class ProductoController {
   }
 
   @Delete(':id')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Eliminar un producto (soft delete)' })
   @ApiResponse({
     status: 200,
@@ -318,6 +337,7 @@ export class ProductoController {
   }
 
   @Patch(':id/stock')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Actualizar stock de un producto' })
   @ApiResponse({
     status: 200,
@@ -349,6 +369,7 @@ export class ProductoController {
   }
 
   @Get(':id/stock-total')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener stock total de un producto (incluyendo variantes)' })
   @ApiResponse({
     status: 200,
@@ -430,6 +451,7 @@ export class ProductoController {
   // =========================================
 
   @Post(':productoId/variantes')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Crear una variante para un producto' })
   @ApiResponse({
     status: 201,
@@ -450,6 +472,7 @@ export class ProductoController {
   }
 
   @Get(':productoId/variantes')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener todas las variantes de un producto' })
   @ApiResponse({
     status: 200,
@@ -469,6 +492,7 @@ export class ProductoController {
   }
 
   @Get('variantes/:varianteId')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener una variante por ID' })
   @ApiResponse({
     status: 200,
@@ -488,6 +512,7 @@ export class ProductoController {
   }
 
   @Put('variantes/:varianteId')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Actualizar una variante' })
   @ApiResponse({
     status: 200,
@@ -508,6 +533,7 @@ export class ProductoController {
   }
 
   @Delete('variantes/:varianteId')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Eliminar una variante' })
   @ApiResponse({
     status: 200,
@@ -526,6 +552,7 @@ export class ProductoController {
   }
 
   @Patch('variantes/:varianteId/stock')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Actualizar stock de una variante' })
   @ApiResponse({
     status: 200,
@@ -554,6 +581,7 @@ export class ProductoController {
   // =============================================================================
 
   @Post(':id/atributos')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Asignar o actualizar atributos de un producto' })
   @ApiResponse({
     status: 200,
@@ -577,6 +605,7 @@ export class ProductoController {
   }
 
   @Get(':id/atributos')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener atributos de un producto' })
   @ApiResponse({
     status: 200,
@@ -598,6 +627,7 @@ export class ProductoController {
   }
 
   @Post('variantes/:varianteId/atributos')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Asignar o actualizar atributos de una variante' })
   @ApiResponse({
     status: 200,
@@ -621,6 +651,7 @@ export class ProductoController {
   }
 
   @Get('variantes/:varianteId/atributos')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener atributos de una variante' })
   @ApiResponse({
     status: 200,
@@ -638,6 +669,233 @@ export class ProductoController {
     return await this.atributoValorService.getVarianteAtributos(
       empresaId,
       varianteId,
+    );
+  }
+
+  // ============================================
+  // ENDPOINTS DE PRECIOS POR NIVEL (VOLUMEN)
+  // ============================================
+
+  @Post(':id/precios-nivel')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Agregar nivel de precio a un producto' })
+  @ApiResponse({
+    status: 201,
+    description: 'Nivel de precio creado exitosamente',
+    type: PrecioNivelResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async agregarPrecioNivel(
+    @Param('id') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CreatePrecioNivelDto,
+  ): Promise<PrecioNivelResponseDto> {
+    return await this.precioNivelService.create(
+      empresaId,
+      productoId,
+      undefined,
+      dto,
+    );
+  }
+
+  @Post('variantes/:varianteId/precios-nivel')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Agregar nivel de precio a una variante' })
+  @ApiResponse({
+    status: 201,
+    description: 'Nivel de precio creado exitosamente',
+    type: PrecioNivelResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async agregarPrecioNivelVariante(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CreatePrecioNivelDto,
+  ): Promise<PrecioNivelResponseDto> {
+    return await this.precioNivelService.create(
+      empresaId,
+      undefined,
+      varianteId,
+      dto,
+    );
+  }
+
+  @Get(':id/precios-nivel')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Obtener niveles de precio de un producto' })
+  @ApiResponse({
+    status: 200,
+    description: 'Niveles de precio obtenidos exitosamente',
+    type: [PrecioNivelResponseDto],
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async obtenerPreciosNivel(
+    @Param('id') productoId: string,
+  ): Promise<PrecioNivelResponseDto[]> {
+    return await this.precioNivelService.findAll(productoId, undefined);
+  }
+
+  @Get('variantes/:varianteId/precios-nivel')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Obtener niveles de precio de una variante' })
+  @ApiResponse({
+    status: 200,
+    description: 'Niveles de precio obtenidos exitosamente',
+    type: [PrecioNivelResponseDto],
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async obtenerPreciosNivelVariante(
+    @Param('varianteId') varianteId: string,
+  ): Promise<PrecioNivelResponseDto[]> {
+    return await this.precioNivelService.findAll(undefined, varianteId);
+  }
+
+  @Get('precios-nivel/:nivelId')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Obtener un nivel de precio por ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Nivel de precio obtenido exitosamente',
+    type: PrecioNivelResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async obtenerPrecioNivel(
+    @Param('nivelId') nivelId: string,
+  ): Promise<PrecioNivelResponseDto> {
+    return await this.precioNivelService.findOne(nivelId);
+  }
+
+  @Patch('precios-nivel/:nivelId')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Actualizar un nivel de precio' })
+  @ApiResponse({
+    status: 200,
+    description: 'Nivel de precio actualizado exitosamente',
+    type: PrecioNivelResponseDto,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async actualizarPrecioNivel(
+    @Param('nivelId') nivelId: string,
+    @Body() dto: UpdatePrecioNivelDto,
+  ): Promise<PrecioNivelResponseDto> {
+    return await this.precioNivelService.update(nivelId, dto);
+  }
+
+  @Delete('precios-nivel/:nivelId')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Eliminar un nivel de precio' })
+  @ApiResponse({
+    status: 200,
+    description: 'Nivel de precio eliminado exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async eliminarPrecioNivel(@Param('nivelId') nivelId: string): Promise<void> {
+    return await this.precioNivelService.remove(nivelId);
+  }
+
+  @Get(':id/calcular-precio')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Calcular precio según cantidad para un producto' })
+  @ApiQuery({
+    name: 'cantidad',
+    description: 'Cantidad de unidades',
+    required: true,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Precio calculado exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        precioUnitario: { type: 'number', example: 1350.0 },
+        nivelAplicado: { type: 'string', example: 'Por Mayor' },
+        descuentoAplicado: { type: 'number', example: 10.0 },
+        precioBase: { type: 'number', example: 1500.0 },
+      },
+    },
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async calcularPrecioProducto(
+    @Param('id') productoId: string,
+    @Query('cantidad') cantidad: string,
+  ) {
+    return await this.precioNivelService.calcularPrecioSegunCantidad(
+      productoId,
+      null,
+      parseInt(cantidad, 10),
+    );
+  }
+
+  @Get('variantes/:varianteId/calcular-precio')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Calcular precio según cantidad para una variante',
+  })
+  @ApiQuery({
+    name: 'cantidad',
+    description: 'Cantidad de unidades',
+    required: true,
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Precio calculado exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        precioUnitario: { type: 'number', example: 1350.0 },
+        nivelAplicado: { type: 'string', example: 'Por Mayor' },
+        descuentoAplicado: { type: 'number', example: 10.0 },
+        precioBase: { type: 'number', example: 1500.0 },
+      },
+    },
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async calcularPrecioVariante(
+    @Param('varianteId') varianteId: string,
+    @Query('cantidad') cantidad: string,
+  ) {
+    return await this.precioNivelService.calcularPrecioSegunCantidad(
+      null,
+      varianteId,
+      parseInt(cantidad, 10),
     );
   }
 }

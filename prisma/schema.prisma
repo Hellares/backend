@@ -98,6 +98,7 @@ model Empresa {
   productoVariantes        ProductoVariante[]
   productoAtributos        ProductoAtributo[]
   plantillasAtributos      ProductoAtributoPlantilla[]
+  configuracionesPrecios   ConfiguracionPrecio[]
 
   @@index([subdominio])
   @@index([isActive])
@@ -462,6 +463,9 @@ model Producto {
   esCombo         Boolean          @default(false)
   tipoPrecioCombo TipoPrecioCombo?
 
+  // Configuración de precios por volumen
+  configuracionPrecioId String?
+
   isActive            Boolean                  @default(true)
   deletedAt           DateTime?
   creadoEn            DateTime                 @default(now())
@@ -480,6 +484,10 @@ model Producto {
 
   // Relaciones para atributos estructurados
   atributosValores ProductoAtributoValor[]
+
+  // Relaciones para precios por volumen
+  preciosNivel        PrecioNivel[]
+  configuracionPrecio ConfiguracionPrecio? @relation(fields: [configuracionPrecioId], references: [id], onDelete: SetNull)
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
@@ -1535,6 +1543,9 @@ model ProductoVariante {
   // Relaciones para atributos estructurados
   atributosValores ProductoAtributoValor[]
 
+  // Relaciones para precios por volumen
+  preciosNivel PrecioNivel[]
+
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
   @@index([productoId])
@@ -1778,4 +1789,103 @@ enum TipoPrecioCombo {
   FIJO // Precio fijo definido manualmente
   CALCULADO // Suma de componentes
   CALCULADO_CON_DESCUENTO // Suma de componentes con descuento aplicado
+}
+
+// =========================================
+// 💰 SISTEMA DE PRECIOS POR VOLUMEN
+// =========================================
+
+/// Niveles de precios según cantidad (precios por mayor/menor)
+/// Permite configurar diferentes precios según la cantidad comprada
+/// Ejemplo: 1-5 unidades = precio retail, 6-11 = precio por mayor, 12+ = distribuidor
+model PrecioNivel {
+  id String @id @default(cuid())
+
+  // Puede aplicar a producto base O a variante específica
+  productoId String?
+  varianteId String?
+
+  // Definición del nivel
+  nombre         String // "Retail", "Por Mayor", "Distribuidor"
+  cantidadMinima Int // Cantidad mínima para aplicar este precio
+  cantidadMaxima Int? // Cantidad máxima (null = sin límite superior)
+
+  // Precio o descuento
+  tipoPrecio     TipoPrecioNivel // PRECIO_FIJO o PORCENTAJE_DESCUENTO
+  precio         Decimal?        @db.Decimal(10, 2) // Si es PRECIO_FIJO
+  porcentajeDesc Decimal?        @db.Decimal(5, 2) // Si es PORCENTAJE_DESCUENTO (0-100)
+
+  // Metadata
+  orden       Int      @default(0) // Orden de visualización
+  isActive    Boolean  @default(true)
+  descripcion String? // Descripción opcional para el usuario
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  producto Producto?         @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  variante ProductoVariante? @relation(fields: [varianteId], references: [id], onDelete: Cascade)
+
+  @@unique([productoId, cantidadMinima])
+  @@unique([varianteId, cantidadMinima])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([cantidadMinima])
+  @@index([isActive])
+}
+
+/// Tipo de precio para niveles de volumen
+enum TipoPrecioNivel {
+  PRECIO_FIJO // Precio específico para este nivel
+  PORCENTAJE_DESCUENTO // Descuento porcentual sobre precio base
+}
+
+/// Configuración/Plantilla de precios reutilizable
+model ConfiguracionPrecio {
+  id          String   @id @default(cuid())
+  empresaId   String
+  nombre      String // "Estándar 3 Niveles", "Solo Mayoreo", etc.
+  descripcion String? // Descripción de cuándo usar esta configuración
+  isActive    Boolean  @default(true)
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa   Empresa                     @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  niveles   ConfiguracionPrecioNivel[] // Los niveles de esta configuración
+  productos Producto[] // Productos que usan esta configuración
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([isActive])
+}
+
+/// Nivel de precio dentro de una configuración
+model ConfiguracionPrecioNivel {
+  id              String @id @default(cuid())
+  configuracionId String
+
+  // Definición del nivel (similar a PrecioNivel pero sin precio fijo)
+  nombre         String // "Retail", "Por Mayor", "Distribuidor"
+  cantidadMinima Int // Cantidad mínima para aplicar
+  cantidadMaxima Int? // Cantidad máxima (null = sin límite)
+
+  // Solo guardamos porcentaje de descuento (el precio se calcula en tiempo real)
+  tipoPrecio     TipoPrecioNivel // PRECIO_FIJO o PORCENTAJE_DESCUENTO
+  porcentajeDesc Decimal?        @db.Decimal(5, 2) // Porcentaje de descuento (0-100)
+
+  // Metadata
+  orden       Int     @default(0)
+  descripcion String? // Descripción del nivel
+
+  // Relaciones
+  configuracion ConfiguracionPrecio @relation(fields: [configuracionId], references: [id], onDelete: Cascade)
+
+  @@unique([configuracionId, cantidadMinima])
+  @@index([configuracionId])
+  @@index([cantidadMinima])
 }

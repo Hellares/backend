@@ -266,6 +266,14 @@ export class CreateProductoDto {
   tipoPrecioCombo?: TipoPrecioCombo;
 
   @ApiPropertyOptional({
+    description: 'ID de la configuración de precios aplicada',
+    example: 'config-precio-id-123',
+  })
+  @IsOptional()
+  @IsString()
+  configuracionPrecioId?: string;
+
+  @ApiPropertyOptional({
     description: 'Atributos estructurados del producto base (solo aplica si tieneVariantes es false)',
     example: [
       { atributoId: 'attr-123', valor: 'Negro' },

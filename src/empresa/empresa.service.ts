@@ -1014,11 +1014,26 @@ export class EmpresaService {
       // Gestión de usuarios: Solo SUPER_ADMIN y EMPRESA_ADMIN
       canManageUsers: isSuperAdmin || isEmpresaAdmin,
 
-      // Gestión de productos: Admins, SEDE_ADMIN, VENDEDOR
-      canManageProducts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor,
+      // PRODUCTOS - Separado en VIEW y MANAGE
+      // Ver productos: Todos los roles que trabajan con productos
+      canViewProducts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor || isCajero || isTecnico,
 
-      // Gestión de servicios: Admins, SEDE_ADMIN, TECNICO
+      // Gestionar productos: Solo administradores
+      canManageProducts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+
+      // SERVICIOS - Separado en VIEW y MANAGE
+      // Ver servicios: Todos los roles que trabajan con servicios
+      canViewServices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico || isCajero,
+
+      // Gestionar servicios: Admins y TECNICO
       canManageServices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
+
+      // CLIENTES - Separado en VIEW y MANAGE
+      // Ver clientes: Todos los roles que interactúan con clientes
+      canViewClients: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor || isCajero || isTecnico,
+
+      // Gestionar clientes: Admins, VENDEDOR y CAJERO
+      canManageClients: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor || isCajero,
 
       // Gestión de sedes: Solo SUPER_ADMIN y EMPRESA_ADMIN
       canManageSedes: isSuperAdmin || isEmpresaAdmin,

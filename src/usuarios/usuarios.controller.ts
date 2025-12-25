@@ -25,15 +25,19 @@ import {
   PaginatedUsuarioResponseDto,
 } from './dto/usuario-response.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 
 @ApiTags('usuarios')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('usuarios')
 export class UsuariosController {
   constructor(private readonly usuariosService: UsuariosService) {}
 
   @Post()
+  @RequiresPermission(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Crear un nuevo usuario' })
   @ApiResponse({
     status: 201,
@@ -44,6 +48,7 @@ export class UsuariosController {
   }
 
   @Get()
+  @RequiresPermission(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Obtener lista de usuarios con paginación y filtros' })
   @ApiResponse({
     status: 200,
@@ -61,6 +66,7 @@ export class UsuariosController {
   }
 
   @Get(':id')
+  @RequiresPermission(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Obtener un usuario por ID' })
   @ApiResponse({
     status: 200,
@@ -73,6 +79,7 @@ export class UsuariosController {
   }
 
   @Patch(':id')
+  @RequiresPermission(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Actualizar un usuario' })
   @ApiResponse({
     status: 200,
@@ -84,6 +91,7 @@ export class UsuariosController {
   }
 
   @Delete(':id')
+  @RequiresPermission(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Eliminar un usuario (soft delete)' })
   @ApiResponse({
     status: 200,

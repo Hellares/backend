@@ -18,6 +18,10 @@ import {
 } from '@nestjs/swagger';
 import { ProductoComboService } from './producto-combo.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateComponenteComboDto, CreateComponentesComboBatchDto } from './dto/create-producto-combo.dto';
 import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
@@ -33,7 +37,7 @@ import {
  */
 @ApiTags('Productos - Combos')
 @Controller('combos')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class ProductoComboController {
   constructor(private readonly comboService: ProductoComboService) {}
@@ -42,6 +46,7 @@ export class ProductoComboController {
    * Obtener todos los combos de una empresa
    */
   @Get()
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Obtener todos los combos de una empresa con información completa',
     description: 'Retorna todos los combos con componentes, stock calculado y precio calculado',
@@ -66,6 +71,7 @@ export class ProductoComboController {
    * Crear un nuevo combo directamente
    */
   @Post()
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({
     summary: 'Crear un nuevo combo directamente',
     description: 'Crea un combo como producto desde el inicio con esCombo=true. Stock y precio se manejan según componentes.',
@@ -87,6 +93,7 @@ export class ProductoComboController {
    * Agregar un componente a un combo
    */
   @Post(':id/componentes')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Agregar componente a un combo' })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -112,6 +119,7 @@ export class ProductoComboController {
    * Agregar múltiples componentes a un combo en batch
    */
   @Post(':id/componentes/batch')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Agregar múltiples componentes a un combo en una sola operación' })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -137,6 +145,7 @@ export class ProductoComboController {
    * Obtener todos los componentes de un combo
    */
   @Get(':id/componentes')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener componentes de un combo' })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -160,6 +169,7 @@ export class ProductoComboController {
    * Obtener información completa del combo con cálculos
    */
   @Get(':id/combo-completo')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Obtener combo completo con componentes, stock y precio calculado',
   })
@@ -185,6 +195,7 @@ export class ProductoComboController {
    * Obtener stock disponible del combo
    */
   @Get(':id/stock-disponible-combo')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Calcular stock disponible del combo (máximo de combos que se pueden armar)',
   })
@@ -208,6 +219,7 @@ export class ProductoComboController {
    * Calcular precio del combo
    */
   @Get(':id/precio-calculado-combo')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Calcular precio del combo según su tipo (FIJO, CALCULADO, CALCULADO_CON_DESCUENTO)',
   })
@@ -231,6 +243,7 @@ export class ProductoComboController {
    * Actualizar un componente del combo
    */
   @Put('componentes/:id')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Actualizar componente de un combo' })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -255,6 +268,7 @@ export class ProductoComboController {
    * Eliminar un componente del combo
    */
   @Delete('componentes/:id')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Eliminar componente de un combo' })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -278,6 +292,7 @@ export class ProductoComboController {
    * Validar si combo tiene stock suficiente
    */
   @Get(':id/validar-stock-combo/:cantidad')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Validar si el combo tiene stock suficiente para la cantidad solicitada',
   })
