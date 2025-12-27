@@ -7,7 +7,7 @@ import { RedisService } from './redis.service';
 @Injectable()
 export class CacheService {
   private readonly logger = new Logger(CacheService.name);
-  private readonly defaultTTL = 300; // 5 minutos por defecto
+  private readonly defaultTTL = 1800; // 30 minutos por defecto
 
   constructor(private readonly redis: RedisService) {}
 
@@ -15,7 +15,7 @@ export class CacheService {
    * Obtener o calcular un valor con cache
    * @param key Clave del cache
    * @param fetcher Función para obtener el dato si no está en cache
-   * @param ttl Tiempo de vida en segundos (default: 5 minutos)
+   * @param ttl Tiempo de vida en segundos (default: 30 minutos)
    */
   async getOrSet<T>(
     key: string,
@@ -90,9 +90,43 @@ export class CacheService {
   }
 
   /**
+   * Generar clave de cache para lista de productos
+   * Usa hash de filtros para crear clave única por combinación de filtros
+   */
+  getProductosListKey(empresaId: string, filtros: any): string {
+    // Crear hash simple de los filtros para la clave
+    const filtrosString = JSON.stringify(filtros);
+    const hash = this.simpleHash(filtrosString);
+    return `productos:empresa:${empresaId}:${hash}`;
+  }
+
+  /**
+   * Invalidar todos los caches de listas de productos de una empresa
+   * Se llama cuando se crea/actualiza/elimina un producto
+   */
+  async invalidateProductosLists(empresaId: string): Promise<void> {
+    await this.invalidatePattern(`productos:empresa:${empresaId}:*`);
+    this.logger.log(`🗑️ Invalidados todos los caches de productos para empresa ${empresaId}`);
+  }
+
+  /**
    * Invalidar todos los caches relacionados a una empresa
    */
   async invalidateEmpresa(empresaId: string): Promise<void> {
     await this.invalidatePattern(`*:empresa:${empresaId}*`);
+  }
+
+  /**
+   * Generar hash simple para cache keys
+   * No necesita ser criptográficamente seguro, solo único
+   */
+  private simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash).toString(36);
   }
 }

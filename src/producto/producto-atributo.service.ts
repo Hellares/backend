@@ -303,4 +303,57 @@ export class ProductoAtributoService {
       actualizadoEn: atributo.actualizadoEn,
     };
   }
+
+  /**
+   * Crea valores de atributos estructurados para un producto base
+   * Convierte el formato array de atributos a la tabla ProductoAtributoValor
+   * @param productoId ID del producto
+   * @param empresaId ID de la empresa
+   * @param atributosEstructurados Array de atributos con sus valores
+   * @param tx Transacción de Prisma (opcional)
+   */
+  async createProductoAtributosFromStructured(
+    productoId: string,
+    empresaId: string,
+    atributosEstructurados: Array<{ atributoId: string; valor: string }>,
+    tx?: any,
+  ): Promise<void> {
+    if (atributosEstructurados.length === 0) {
+      return;
+    }
+
+    const prisma = tx || this.prisma;
+
+    // Verificar que los atributos pertenezcan a la empresa y estén activos
+    const atributoIds = atributosEstructurados.map(a => a.atributoId);
+    const atributosExistentes = await prisma.productoAtributo.findMany({
+      where: {
+        id: { in: atributoIds },
+        empresaId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    const existentesSet = new Set(atributosExistentes.map((a: any) => a.id));
+    const atributosValidos = atributosEstructurados.filter(a => existentesSet.has(a.atributoId));
+
+    if (atributosValidos.length === 0) {
+      this.logger.warn(`Ningún atributoId válido encontrado para empresa ${empresaId}. No se crearán valores.`);
+      return;
+    }
+
+    const valoresAtributos = atributosValidos.map(a => ({
+      productoId,
+      atributoId: a.atributoId,
+      valor: String(a.valor),
+    }));
+
+    await prisma.productoAtributoValor.createMany({
+      data: valoresAtributos,
+      skipDuplicates: true,
+    });
+
+    this.logger.debug(`Creados ${valoresAtributos.length} valores de atributos estructurados para producto ${productoId}`);
+  }
 }

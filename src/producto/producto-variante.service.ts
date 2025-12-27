@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
@@ -426,56 +427,56 @@ export class ProductoVarianteService {
    * Crea atributos estructurados para una variante
    * Convierte el formato JSON libre a la tabla ProductoAtributoValor
    */
-  private async createVarianteAtributos(
-    varianteId: string,
-    empresaId: string,
-    atributos: Record<string, any>,
-  ): Promise<void> {
-    // Obtener todos los atributos configurados para esta empresa
-    const atributosDisponibles = await this.prisma.productoAtributo.findMany({
-      where: {
-        empresaId,
-        isActive: true,
-      },
-    });
+  // private async createVarianteAtributos(
+  //   varianteId: string,
+  //   empresaId: string,
+  //   atributos: Record<string, any>,
+  // ): Promise<void> {
+  //   // Obtener todos los atributos configurados para esta empresa
+  //   const atributosDisponibles = await this.prisma.productoAtributo.findMany({
+  //     where: {
+  //       empresaId,
+  //       isActive: true,
+  //     },
+  //   });
 
-    if (atributosDisponibles.length === 0) {
-      this.logger.warn(`No hay atributos configurados para empresa ${empresaId}. No se crearán valores de atributos.`);
-      return;
-    }
+  //   if (atributosDisponibles.length === 0) {
+  //     this.logger.warn(`No hay atributos configurados para empresa ${empresaId}. No se crearán valores de atributos.`);
+  //     return;
+  //   }
 
-    // Crear un mapa clave -> atributo para búsqueda rápida
-    const atributosMap = new Map(
-      atributosDisponibles.map(attr => [attr.clave.toLowerCase(), attr])
-    );
+  //   // Crear un mapa clave -> atributo para búsqueda rápida
+  //   const atributosMap = new Map(
+  //     atributosDisponibles.map(attr => [attr.clave.toLowerCase(), attr])
+  //   );
 
-    // Crear los valores de atributos
-    const valoresAtributos = Object.entries(atributos)
-      .map(([clave, valor]) => {
-        const atributo = atributosMap.get(clave.toLowerCase());
+  //   // Crear los valores de atributos
+  //   const valoresAtributos = Object.entries(atributos)
+  //     .map(([clave, valor]) => {
+  //       const atributo = atributosMap.get(clave.toLowerCase());
         
-        if (!atributo) {
-          this.logger.warn(`Atributo con clave "${clave}" no encontrado en empresa ${empresaId}. Ignorando.`);
-          return null;
-        }
+  //       if (!atributo) {
+  //         this.logger.warn(`Atributo con clave "${clave}" no encontrado en empresa ${empresaId}. Ignorando.`);
+  //         return null;
+  //       }
 
-        return {
-          varianteId,
-          atributoId: atributo.id,
-          valor: String(valor), // Siempre convertir a string
-        };
-      })
-      .filter(Boolean); // Filtrar nulos
+  //       return {
+  //         varianteId,
+  //         atributoId: atributo.id,
+  //         valor: String(valor), // Siempre convertir a string
+  //       };
+  //     })
+  //     .filter(Boolean); // Filtrar nulos
 
-    if (valoresAtributos.length > 0) {
-      await this.prisma.productoAtributoValor.createMany({
-        data: valoresAtributos as any[],
-        skipDuplicates: true,
-      });
+  //   if (valoresAtributos.length > 0) {
+  //     await this.prisma.productoAtributoValor.createMany({
+  //       data: valoresAtributos as any[],
+  //       skipDuplicates: true,
+  //     });
 
-      this.logger.debug(`Creados ${valoresAtributos.length} valores de atributos para variante ${varianteId}`);
-    }
-  }
+  //     this.logger.debug(`Creados ${valoresAtributos.length} valores de atributos para variante ${varianteId}`);
+  //   }
+  // }
 
   /**
    * Crea atributos estructurados a partir de un array de VarianteAtributoDto
@@ -743,5 +744,173 @@ export class ProductoVarianteService {
     this.logger.success(
       `${nivelesParaCopiar.length} niveles de precio copiados exitosamente a variante ${nuevaVarianteId}`,
     );
+  }
+
+  // =====================================================
+  // MÉTODOS PARA CONVERSIÓN A VARIANTES (NUEVOS)
+  // =====================================================
+
+  /**
+   * Crea una variante por defecto cuando se habilita tieneVariantes en un producto
+   * Migra los datos del producto base a la nueva variante
+   * @param productoId ID del producto que se está convirtiendo a variantes
+   * @param empresaId ID de la empresa
+   * @param productoData Datos del producto base para copiar
+   * @param generateCodigoFn Función para generar código de variante (inyectada para evitar circular)
+   * @param tx Transacción de Prisma (opcional)
+   * @returns ID de la variante creada y su código
+   */
+  async createVariantePorDefecto(
+    productoId: string,
+    empresaId: string,
+    productoData: {
+      stock: number;
+      precio: any;
+      precioCosto?: any;
+      stockMinimo?: number;
+      peso?: any;
+      dimensiones?: any;
+      codigoEmpresa: string;
+    },
+    generateCodigoFn: (empresaId: string, tx?: Prisma.TransactionClient) => Promise<{ codigoEmpresa: string }>,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ varianteId: string; codigoEmpresa: string }> {
+    const prisma = tx || this.prisma;
+
+    // Verificar que no tenga variantes ya creadas (edge case)
+    const variantesExistentes = await prisma.productoVariante.count({
+      where: {
+        productoId,
+        deletedAt: null,
+      },
+    });
+
+    if (variantesExistentes > 0) {
+      this.logger.warn(`El producto ${productoId} ya tiene variantes, no se creará variante por defecto`);
+      throw new BadRequestException('El producto ya tiene variantes creadas');
+    }
+
+    this.logger.info('Creando variante por defecto', {
+      productoId,
+      stockActual: productoData.stock,
+      precioActual: productoData.precio,
+    });
+
+    // Generar código único para la variante
+    const { codigoEmpresa } = await generateCodigoFn(empresaId, tx);
+
+    // Crear variante por defecto con los datos del producto original
+    let variantePorDefecto;
+    try {
+      variantePorDefecto = await prisma.productoVariante.create({
+        data: {
+          productoId,
+          empresaId,
+          nombre: 'Original',
+          sku: `${productoData.codigoEmpresa}-ORIGINAL`,
+          codigoBarras: null,
+          codigoEmpresa,
+          precio: productoData.precio,
+          precioCosto: productoData.precioCosto,
+          stock: productoData.stock,
+          stockMinimo: productoData.stockMinimo,
+          peso: productoData.peso,
+          dimensiones: productoData.dimensiones as any,
+          isActive: true,
+          orden: 0,
+        },
+      });
+    } catch (error: any) {
+      // Si falla por código duplicado, reintentar con un nuevo código
+      if (error.code === 'P2002' && error.meta?.target?.includes('codigoEmpresa')) {
+        this.logger.warn(`Código de variante duplicado ${codigoEmpresa}, generando nuevo código`);
+        const { codigoEmpresa: nuevoCodigo } = await generateCodigoFn(empresaId, tx);
+        variantePorDefecto = await prisma.productoVariante.create({
+          data: {
+            productoId,
+            empresaId,
+            nombre: 'Original',
+            sku: `${productoData.codigoEmpresa}-ORIGINAL`,
+            codigoBarras: null,
+            codigoEmpresa: nuevoCodigo,
+            precio: productoData.precio,
+            precioCosto: productoData.precioCosto,
+            stock: productoData.stock,
+            stockMinimo: productoData.stockMinimo,
+            peso: productoData.peso,
+            dimensiones: productoData.dimensiones as any,
+            isActive: true,
+            orden: 0,
+          },
+        });
+      } else {
+        throw error;
+      }
+    }
+
+    this.logger.success('Variante por defecto creada exitosamente', {
+      varianteId: variantePorDefecto.id,
+      codigoEmpresa: variantePorDefecto.codigoEmpresa,
+      stockTransferido: productoData.stock,
+    });
+
+    return {
+      varianteId: variantePorDefecto.id,
+      codigoEmpresa: variantePorDefecto.codigoEmpresa,
+    };
+  }
+
+  /**
+   * Migra atributos de un producto base a una variante
+   * Actualiza los registros de ProductoAtributoValor para que apunten a la variante en lugar del producto
+   * @param productoId ID del producto origen
+   * @param varianteId ID de la variante destino
+   * @param empresaId ID de la empresa
+   * @param tx Transacción de Prisma (opcional)
+   */
+  async migrarAtributosProductoAVariante(
+    productoId: string,
+    varianteId: string,
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const prisma = tx || this.prisma;
+
+    // Obtener todos los atributos del producto base
+    const atributosProducto = await prisma.productoAtributoValor.findMany({
+      where: {
+        productoId,
+        varianteId: null,
+        atributo: {
+          empresaId,
+          isActive: true,
+        },
+      },
+      select: {
+        id: true,
+        atributoId: true,
+        valor: true,
+      },
+    });
+
+    if (atributosProducto.length === 0) {
+      this.logger.debug(`No hay atributos para migrar del producto ${productoId} a variante ${varianteId}`);
+      return;
+    }
+
+    // Actualizar cada atributo para asignarle la varianteId y desvincularlo del producto
+    await Promise.all(
+      atributosProducto.map(async (atributo) => {
+        await prisma.productoAtributoValor.update({
+          where: { id: atributo.id },
+          data: {
+            productoId: null,
+            varianteId,
+          },
+        });
+      }),
+    );
+
+    this.logger.debug(`Migrados ${atributosProducto.length} atributos del producto ${productoId} a variante ${varianteId}`);
   }
 }

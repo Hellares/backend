@@ -14,6 +14,10 @@ import { ConfiguracionPrecioService } from './configuracion-precio.service';
 import { ConfiguracionPrecioController } from './configuracion-precio.controller';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { PrismaModule } from '../prisma/prisma.module';
+// Nuevos servicios especializados (Modular Monolith)
+import { ProductoCatalogService } from './producto-catalog.service';
+import { ProductoInventoryService } from './producto-inventory.service';
+import { ProductoPricingService } from './producto-pricing.service';
 
 @Module({
   imports: [PrismaModule],
@@ -25,7 +29,15 @@ import { PrismaModule } from '../prisma/prisma.module';
     ConfiguracionPrecioController,
   ],
   providers: [
+    // Facade (orquestador)
     ProductoService,
+
+    // Servicios especializados (Modular Monolith)
+    ProductoCatalogService,
+    ProductoInventoryService,
+    ProductoPricingService,
+
+    // Servicios existentes
     ProductoVarianteService,
     ProductoAtributoService,
     ProductoAtributoValorService,
@@ -36,7 +48,15 @@ import { PrismaModule } from '../prisma/prisma.module';
     PlanLimitsService,
   ],
   exports: [
+    // Facade (para otros módulos)
     ProductoService,
+
+    // Servicios especializados (opcional - si otros módulos los necesitan)
+    ProductoCatalogService,
+    ProductoInventoryService,
+    ProductoPricingService,
+
+    // Servicios existentes
     ProductoVarianteService,
     ProductoAtributoService,
     ProductoAtributoValorService,

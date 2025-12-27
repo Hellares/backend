@@ -1062,7 +1062,7 @@ export class EmpresaService {
   }
 
   /**
-   * //!Calcular estadísticas de la empresa (con cache de 5 minutos)
+   * //!Calcular estadísticas de la empresa (con cache de 30 minutos)
    */
   private async calculateStatistics(empresaId: string): Promise<EmpresaStatisticsDto> {
     const cacheKey = this.cache.getEmpresaStatsKey(empresaId);

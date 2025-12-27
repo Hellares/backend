@@ -504,6 +504,17 @@ model Producto {
   @@index([ordenMarketplace])
   @@index([enOferta])
   @@index([fechaFinOferta])
+  // Índices para búsqueda optimizada
+  @@index([nombre])
+  @@index([descripcion])
+  @@index([codigoBarras])
+  @@index([sku])
+  @@index([esCombo])
+  @@index([tieneVariantes])
+  // Índices compuestos para filtros comunes
+  @@index([empresaId, esCombo])
+  @@index([empresaId, isActive, deletedAt])
+  @@index([empresaId, visibleMarketplace, isActive])
 }
 
 model Servicio {
