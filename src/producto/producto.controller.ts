@@ -24,6 +24,7 @@ import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoAtributoValorService } from './producto-atributo-valor.service';
 import { PrecioNivelService } from './precio-nivel.service';
+import { ProductoPrecioHistorialService } from './producto-precio-historial.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -44,6 +45,10 @@ import { SetProductoAtributosDto } from './dto/create-producto-atributo-valor.dt
 import { CreatePrecioNivelDto } from './dto/create-precio-nivel.dto';
 import { UpdatePrecioNivelDto } from './dto/update-precio-nivel.dto';
 import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
+import {
+  AjusteMasivoPreciosDto,
+  AjusteMasivoPreciosResponseDto,
+} from './dto/ajuste-masivo-precios.dto';
 
 @ApiTags('Productos')
 @Controller('productos')
@@ -56,6 +61,7 @@ export class ProductoController {
     private readonly atributoService: ProductoAtributoService,
     private readonly atributoValorService: ProductoAtributoValorService,
     private readonly precioNivelService: PrecioNivelService,
+    private readonly precioHistorialService: ProductoPrecioHistorialService,
   ) {}
 
   @Post()
@@ -260,6 +266,87 @@ export class ProductoController {
     );
   }
 
+  @Post('ajuste-masivo-precios')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Ajuste masivo de precios por porcentaje',
+    description: `
+      Permite incrementar o decrementar precios de múltiples productos de forma masiva.
+
+      **Características:**
+      - Ajuste por porcentaje (1-100%)
+      - Aplicar a TODOS los productos o productos SELECCIONADOS
+      - Incluye variantes opcionalmente
+      - Redondeo a 2 decimales
+      - Modo PREVIEW para ver cambios antes de aplicar
+      - Registra todos los cambios en historial de precios
+
+      **Casos de uso:**
+      - Ajustes por inflación
+      - Cambios de temporada
+      - Actualizaciones de costos de proveedores
+    `,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Ajuste masivo aplicado exitosamente o preview generado',
+    schema: {
+      type: 'object',
+      properties: {
+        resumen: {
+          type: 'object',
+          properties: {
+            totalProductosAfectados: { type: 'number' },
+            totalVariantesAfectadas: { type: 'number' },
+            ajustePromedio: { type: 'number' },
+            operacion: { type: 'string' },
+            valorAjuste: { type: 'number' },
+          },
+        },
+        cambios: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              productoId: { type: 'string' },
+              nombre: { type: 'string' },
+              precioAnterior: { type: 'number' },
+              precioNuevo: { type: 'number' },
+              diferencia: { type: 'number' },
+              diferenciaPercentual: { type: 'number' },
+              varianteId: { type: 'string', nullable: true },
+              varianteNombre: { type: 'string', nullable: true },
+            },
+          },
+        },
+        advertencias: {
+          type: 'array',
+          items: { type: 'string' },
+          nullable: true,
+        },
+        esPreview: { type: 'boolean' },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o no hay productos para ajustar' })
+  @ApiResponse({ status: 403, description: 'Sin permisos' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async ajusteMasivoPrecios(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @Body() dto: AjusteMasivoPreciosDto,
+  ): Promise<AjusteMasivoPreciosResponseDto> {
+    return await this.productoService.ajusteMasivoPrecios(
+      empresaId,
+      user.sub,
+      dto,
+    );
+  }
+
   // =========================================
   // ENDPOINTS DINÁMICOS CON :id
   // =========================================
@@ -396,6 +483,114 @@ export class ProductoController {
   ): Promise<{ stockTotal: number }> {
     const stockTotal = await this.productoService.getStockTotal(id, empresaId);
     return { stockTotal };
+  }
+
+  @Get(':id/historial-precios')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Obtener el historial de cambios de precio de un producto',
+    description: 'Retorna todos los cambios de precio registrados para auditoría y trazabilidad'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Historial de precios obtenido exitosamente',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          productoId: { type: 'string', nullable: true },
+          varianteId: { type: 'string', nullable: true },
+          precioAnterior: { type: 'number', nullable: true },
+          precioNuevo: { type: 'number' },
+          precioCostoAnterior: { type: 'number', nullable: true },
+          precioCostoNuevo: { type: 'number', nullable: true },
+          tipoCambio: {
+            type: 'string',
+            enum: ['MANUAL', 'OFERTA_ACTIVADA', 'OFERTA_DESACTIVADA', 'COSTO_ACTUALIZADO', 'AJUSTE_MASIVO', 'CORRECCION']
+          },
+          razon: { type: 'string', nullable: true },
+          origenModulo: { type: 'string', nullable: true },
+          creadoEn: { type: 'string', format: 'date-time' },
+          usuario: {
+            type: 'object',
+            properties: {
+              persona: {
+                type: 'object',
+                properties: {
+                  nombre: { type: 'string' },
+                  apellido: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiQuery({
+    name: 'varianteId',
+    description: 'ID de la variante (opcional). Si se proporciona, obtiene el historial de la variante específica.',
+    required: false,
+    type: String,
+  })
+  async getHistorialPrecios(
+    @Param('id') productoId: string,
+    @Query('varianteId') varianteId?: string,
+  ) {
+    return await this.precioHistorialService.getHistorial(productoId, varianteId);
+  }
+
+  @Get(':id/historial-precios/estadisticas')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Obtener estadísticas del historial de precios',
+    description: 'Retorna métricas agregadas sobre los cambios de precio: precio inicial, actual, variación, promedios, etc.'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Estadísticas obtenidas exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        totalCambios: { type: 'number' },
+        precioInicial: { type: 'number', nullable: true },
+        precioActual: { type: 'number', nullable: true },
+        variacionPorcentaje: { type: 'number', nullable: true },
+        promedioPrecios: { type: 'number', nullable: true },
+        precioMinimo: { type: 'number', nullable: true },
+        precioMaximo: { type: 'number', nullable: true },
+        cambiosPorTipo: {
+          type: 'object',
+          description: 'Cantidad de cambios por cada tipo',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiQuery({
+    name: 'varianteId',
+    description: 'ID de la variante (opcional). Si se proporciona, obtiene estadísticas de la variante específica.',
+    required: false,
+    type: String,
+  })
+  async getEstadisticasPrecios(
+    @Param('id') productoId: string,
+    @Query('varianteId') varianteId?: string,
+  ) {
+    return await this.precioHistorialService.getEstadisticas(productoId, varianteId);
   }
 
   // =========================================

@@ -136,16 +136,20 @@ model Usuario {
   dniVerificado          Boolean      @default(false)
   ultimoCambioPassword   DateTime?
 
-  creadoEn                DateTime            @default(now())
-  actualizadoEn           DateTime            @updatedAt
+  // Sede por defecto (última sede accedida o asignada)
+  sedeDefaultId String? // ID de la sede por defecto para este usuario
+
+  creadoEn                DateTime                  @default(now())
+  actualizadoEn           DateTime                  @updatedAt
   authProviders           AuthProvider[]
   empresas                EmpresaUsuarioRol[]
-  metodosPagoConfigurados MetodoPago[]        @relation("MetodoPagoUsuario")
+  metodosPagoConfigurados MetodoPago[]              @relation("MetodoPagoUsuario")
   ordenesServicio         OrdenServicio[]
   registrosComoCliente    RegistroCliente[]
   transacciones           TransaccionPago[]
-  persona                 Persona             @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  persona                 Persona                   @relation(fields: [personaId], references: [id], onDelete: Restrict)
   sedes                   UsuarioSedeRol[]
+  historialPreciosCambios ProductoPrecioHistorial[]
 
   @@index([email])
   @@index([telefono])
@@ -158,6 +162,7 @@ model Usuario {
   @@index([emailVerificationToken])
   @@index([deletedAt])
   @@index([metodoPrincipalLogin])
+  @@index([sedeDefaultId])
 }
 
 model AuthProvider {
@@ -263,23 +268,39 @@ model EmpresaUsuarioRol {
 }
 
 model UsuarioSedeRol {
-  id            String    @id @default(cuid())
-  usuarioId     String
-  sedeId        String
-  rol           Rol
-  isActive      Boolean   @default(true)
-  deletedAt     DateTime?
+  id        String   @id @default(cuid())
+  usuarioId String
+  sedeId    String
+  rol       SedeRole // Rol específico del usuario en esta sede
+
+  // Permisos y configuración
+  permisos  String[]  @default([]) // Permisos específicos adicionales
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+
+  // Configuración de acceso
+  puedeAbrirCaja     Boolean  @default(false)
+  puedeCerrarCaja    Boolean  @default(false)
+  limiteCreditoVenta Decimal? @db.Decimal(10, 2) // Límite de crédito que puede autorizar
+
+  // Auditoría
   creadoPor     String?
   modificadoPor String?
-  creadoEn      DateTime  @default(now())
-  actualizadoEn DateTime  @updatedAt
-  sede          Sede      @relation(fields: [sedeId], references: [id])
-  usuario       Usuario   @relation(fields: [usuarioId], references: [id])
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  sede    Sede    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 
   @@unique([usuarioId, sedeId])
   @@index([sedeId])
+  @@index([usuarioId])
   @@index([rol])
+  @@index([isActive])
   @@index([deletedAt])
+  @@index([sedeId, isActive])
+  @@index([usuarioId, isActive])
 }
 
 // ============================================
@@ -489,6 +510,9 @@ model Producto {
   preciosNivel        PrecioNivel[]
   configuracionPrecio ConfiguracionPrecio? @relation(fields: [configuracionPrecioId], references: [id], onDelete: SetNull)
 
+  // Relación para historial de precios
+  historialPrecios ProductoPrecioHistorial[]
+
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
   @@index([empresaId])
@@ -515,6 +539,42 @@ model Producto {
   @@index([empresaId, esCombo])
   @@index([empresaId, isActive, deletedAt])
   @@index([empresaId, visibleMarketplace, isActive])
+}
+
+/// Historial de cambios de precios de productos
+/// Registra auditoría completa de cambios significativos en precios
+model ProductoPrecioHistorial {
+  id String @id @default(cuid())
+
+  // Referencia al producto o variante
+  productoId String?
+  varianteId String?
+
+  // Precios (registro del cambio)
+  precioAnterior      Decimal? @db.Decimal(10, 2)
+  precioNuevo         Decimal  @db.Decimal(10, 2)
+  precioCostoAnterior Decimal? @db.Decimal(10, 2)
+  precioCostoNuevo    Decimal? @db.Decimal(10, 2)
+
+  // Contexto del cambio
+  tipoCambio   TipoCambioPrecio // MANUAL, OFERTA, COSTO, MASIVO, etc.
+  razon        String? // Descripción opcional del motivo
+  origenModulo String? // PRODUCTO, VENTA, IMPORTACION, etc.
+
+  // Auditoría
+  usuarioId String
+  creadoEn  DateTime @default(now())
+
+  // Relaciones
+  producto Producto?         @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  variante ProductoVariante? @relation(fields: [varianteId], references: [id], onDelete: Cascade)
+  usuario  Usuario           @relation(fields: [usuarioId], references: [id])
+
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([creadoEn])
+  @@index([usuarioId])
+  @@index([tipoCambio])
 }
 
 model Servicio {
@@ -713,6 +773,10 @@ model OrdenServicio {
   @@index([estadoDiagnostico])
   @@index([tipoServicio])
   @@index([fechaEntrega])
+  // Índices compuestos para queries comunes
+  @@index([empresaId, estado])
+  @@index([empresaId, creadoEn])
+  @@index([empresaId, estado, creadoEn])
 }
 
 model ServicioComponente {
@@ -1022,6 +1086,10 @@ model ComprobanteElectronico {
   @@index([tipoComprobante])
   @@index([fechaEmision])
   @@index([estado])
+  // Índices compuestos para queries comunes
+  @@index([empresaId, estado])
+  @@index([empresaId, fechaEmision])
+  @@index([empresaId, estado, fechaEmision])
 }
 
 model DetalleComprobante {
@@ -1105,27 +1173,70 @@ model PagoComprobante {
 }
 
 model Sede {
-  id            String           @id @default(cuid())
-  empresaId     String
-  nombre        String
-  telefono      String?
-  email         String?
-  direccion     String?
-  isActive      Boolean          @default(true)
-  deletedAt     DateTime?
-  esPrincipal   Boolean          @default(false)
-  creadoEn      DateTime         @default(now())
-  actualizadoEn DateTime         @updatedAt
-  direcciones   DireccionSede[]
-  productos     Producto[]
-  empresa       Empresa          @relation(fields: [empresaId], references: [id])
-  servicios     Servicio[]
-  usuarios      UsuarioSedeRol[]
+  id        String   @id @default(cuid())
+  empresaId String
+  codigo    String   @default("SEDE-001") // Código único de la sede (ej: "SEDE-001", "LIMA-CENTRO")
+  nombre    String
+  telefono  String?
+  email     String?
+  tipoSede  TipoSede @default(OPERATIVA_COMPLETA) // Tipo de operación de la sede
 
+  // Ubicación completa
+  direccion    String?
+  referencia   String?
+  distrito     String?
+  provincia    String?
+  departamento String?
+  pais         String? @default("PERU")
+  coordenadas  Json? // {lat: -12.0464, lon: -77.0428} para geolocalización
+
+  // Configuración operativa
+  horarioAtencion Json? // {"lunes": {"inicio": "09:00", "fin": "18:00"}, ...}
+  configuracion   Json? // Configuraciones específicas de la sede
+
+  // Series de comprobantes por sede
+  serieFactura      String  @default("F001")
+  serieBoleta       String  @default("B001")
+  serieNotaCredito  String  @default("NC01")
+  serieNotaDebito   String  @default("ND01")
+  serieGuiaRemision String? @default("GR01")
+
+  // Contadores de documentos por sede
+  ultimoNumeroFactura      Int @default(0)
+  ultimoNumeroBoleta       Int @default(0)
+  ultimoNumeroNotaCredito  Int @default(0)
+  ultimoNumeroNotaDebito   Int @default(0)
+  ultimoNumeroGuiaRemision Int @default(0)
+
+  // Estado
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  esPrincipal Boolean   @default(false)
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  direcciones DireccionSede[]
+  productos   Producto[]
+  empresa     Empresa          @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  servicios   Servicio[]
+  usuarios    UsuarioSedeRol[]
+
+  // Relaciones futuras (descomentar cuando se implementen)
+  // ventas      Venta[]
+  // cotizaciones Cotizacion[]
+  // cajas       Caja[]
+  // movimientosStock MovimientoStock[]
+
+  @@unique([empresaId, codigo])
   @@index([empresaId])
+  @@index([codigo])
   @@index([isActive])
   @@index([esPrincipal])
   @@index([deletedAt])
+  @@index([empresaId, isActive])
 }
 
 model Archivo {
@@ -1229,6 +1340,31 @@ enum Rol {
   OPERADOR
   CLIENTE
   CLIENTE_EMPRESA
+}
+
+// Roles específicos para gestión de sedes
+// Estos roles son más granulares y se asignan a usuarios dentro de cada sede
+enum SedeRole {
+  GERENTE_SEDE // Gerente de la sede, acceso completo a operaciones de la sede
+  ADMINISTRADOR // Administrador de sede, puede gestionar usuarios y configuraciones
+  SUPERVISOR // Supervisor de operaciones, supervisa vendedores y cajeros
+  CAJERO // Cajero, puede realizar ventas y manejar caja
+  VENDEDOR // Vendedor, puede realizar ventas pero no manejar caja
+  ALMACENERO // Encargado de almacén/inventario
+  TECNICO_SERVICIO // Técnico para órdenes de servicio
+  REPARTIDOR // Repartidor/delivery
+  CONTADOR_SEDE // Contador asignado a la sede
+  ASISTENTE // Asistente general
+  CONSULTOR // Consultor, solo lectura y reportes
+  PRACTICANTE // Practicante, acceso limitado
+}
+
+// Tipos de sede según su función operativa
+enum TipoSede {
+  OPERATIVA_COMPLETA // Ventas + Almacén + Servicios (sede completa)
+  SOLO_ALMACEN // Solo inventario y transferencias (sin ventas directas)
+  PUNTO_VENTA // Solo ventas (recibe stock por transferencia)
+  OFICINA_ADMINISTRATIVA // Solo administración (sin operaciones comerciales)
 }
 
 enum EstadoCliente {
@@ -1557,6 +1693,9 @@ model ProductoVariante {
   // Relaciones para precios por volumen
   preciosNivel PrecioNivel[]
 
+  // Relación para historial de precios
+  historialPrecios ProductoPrecioHistorial[]
+
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
   @@index([productoId])
@@ -1564,6 +1703,9 @@ model ProductoVariante {
   @@index([sku])
   @@index([isActive])
   @@index([stock])
+  // Índices compuestos para queries comunes
+  @@index([productoId, isActive])
+  @@index([empresaId, isActive])
 }
 
 /// Definición de atributos configurables para productos
@@ -1802,6 +1944,16 @@ enum TipoPrecioCombo {
   CALCULADO_CON_DESCUENTO // Suma de componentes con descuento aplicado
 }
 
+/// Tipo de cambio de precio para auditoría
+enum TipoCambioPrecio {
+  MANUAL // Cambio manual por usuario
+  OFERTA_ACTIVADA // Se activó una oferta
+  OFERTA_DESACTIVADA // Se desactivó una oferta
+  COSTO_ACTUALIZADO // Se actualizó el precio de costo
+  AJUSTE_MASIVO // Cambio masivo/importación
+  CORRECCION // Corrección de error
+}
+
 // =========================================
 // 💰 SISTEMA DE PRECIOS POR VOLUMEN
 // =========================================
@@ -1827,8 +1979,8 @@ model PrecioNivel {
   porcentajeDesc Decimal?        @db.Decimal(5, 2) // Si es PORCENTAJE_DESCUENTO (0-100)
 
   // Metadata
-  orden       Int      @default(0) // Orden de visualización
-  isActive    Boolean  @default(true)
+  orden       Int     @default(0) // Orden de visualización
+  isActive    Boolean @default(true)
   descripcion String? // Descripción opcional para el usuario
 
   // Auditoría
@@ -1855,18 +2007,18 @@ enum TipoPrecioNivel {
 
 /// Configuración/Plantilla de precios reutilizable
 model ConfiguracionPrecio {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   empresaId   String
   nombre      String // "Estándar 3 Niveles", "Solo Mayoreo", etc.
   descripcion String? // Descripción de cuándo usar esta configuración
-  isActive    Boolean  @default(true)
+  isActive    Boolean @default(true)
 
   // Auditoría
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa   Empresa                     @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresa   Empresa                    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   niveles   ConfiguracionPrecioNivel[] // Los niveles de esta configuración
   productos Producto[] // Productos que usan esta configuración
 
@@ -1900,3 +2052,337 @@ model ConfiguracionPrecioNivel {
   @@index([configuracionId])
   @@index([cantidadMinima])
 }
+
+// =========================================
+// 🏢 MODELOS FUTUROS - SISTEMA MULTI-SEDE
+// =========================================
+//
+// Los siguientes modelos serán implementados en las próximas fases
+// del sistema multi-sede. Se documentan aquí como referencia y roadmap.
+//
+// IMPORTANTE: Descomentar y adaptar cuando se implementen los módulos
+// correspondientes (Ventas, Cotizaciones, Inventario por Sede)
+//
+// =========================================
+
+/**
+ * // =========================================
+ * // 💰 MÓDULO DE VENTAS POR SEDE
+ * // =========================================
+ * /// Ventas realizadas en una sede específica
+ * /// Reemplaza o complementa el módulo de ComprobantesElectronicos
+ * /// con contexto de sede para operaciones de caja y punto de venta
+ * model Venta {
+ * id        String   @id @default(cuid())
+ * sedeId    String   // REQUERIDO: Toda venta pertenece a una sede
+ * empresaId String
+ * // Identificación de la venta
+ * codigo           String   // VTA-SEDE001-00001
+ * numeroComprobante String?
+ * // Cliente
+ * clienteId String?
+ * nombreCliente String
+ * documentoCliente String?
+ * // Vendedor y caja
+ * vendedorId String // Usuario que realizó la venta
+ * cajaId     String? // Caja donde se registró (si aplica)
+ * // Montos
+ * subtotal  Decimal @db.Decimal(10, 2)
+ * descuento Decimal @db.Decimal(10, 2) @default(0)
+ * impuestos Decimal @db.Decimal(10, 2) @default(0)
+ * total     Decimal @db.Decimal(10, 2)
+ * // Estado
+ * estado EstadoVenta @default(COMPLETADA)
+ * // Auditoría
+ * creadoEn      DateTime @default(now())
+ * actualizadoEn DateTime @updatedAt
+ * // Relaciones
+ * sede      Sede             @relation(fields: [sedeId], references: [id])
+ * empresa   Empresa          @relation(fields: [empresaId], references: [id])
+ * // cliente   Cliente?         @relation(fields: [clienteId], references: [id])
+ * // vendedor  Usuario          @relation("VentasRealizadas", fields: [vendedorId], references: [id])
+ * // caja      Caja?            @relation(fields: [cajaId], references: [id])
+ * detalles  VentaDetalle[]
+ * pagos     VentaPago[]
+ * @@unique([sedeId, codigo])
+ * @@index([sedeId])
+ * @@index([empresaId])
+ * @@index([vendedorId])
+ * @@index([cajaId])
+ * @@index([estado])
+ * @@index([creadoEn])
+ * }
+ * /// Detalle de items vendidos
+ * model VentaDetalle {
+ * id       String @id @default(cuid())
+ * ventaId  String
+ * // Puede ser producto o variante
+ * productoId String?
+ * varianteId String?
+ * descripcion    String
+ * cantidad       Decimal @db.Decimal(10, 2)
+ * precioUnitario Decimal @db.Decimal(10, 2)
+ * descuento      Decimal @db.Decimal(10, 2) @default(0)
+ * subtotal       Decimal @db.Decimal(10, 2)
+ * venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+ * @@index([ventaId])
+ * @@index([productoId])
+ * @@index([varianteId])
+ * }
+ * /// Pagos asociados a una venta
+ * model VentaPago {
+ * id        String @id @default(cuid())
+ * ventaId   String
+ * metodoPago     String  // EFECTIVO, TARJETA, YAPE, etc.
+ * monto          Decimal @db.Decimal(10, 2)
+ * referencia     String?
+ * creadoEn DateTime @default(now())
+ * venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+ * @@index([ventaId])
+ * }
+ * enum EstadoVenta {
+ * BORRADOR
+ * COMPLETADA
+ * ANULADA
+ * PENDIENTE_PAGO
+ * }
+ * // =========================================
+ * // 📋 MÓDULO DE COTIZACIONES POR SEDE
+ * // =========================================
+ * /// Cotizaciones generadas en una sede
+ * model Cotizacion {
+ * id        String @id @default(cuid())
+ * sedeId    String // REQUERIDO: Toda cotización pertenece a una sede
+ * empresaId String
+ * codigo        String
+ * clienteId     String?
+ * nombreCliente String
+ * // Vendedor
+ * vendedorId String
+ * // Montos
+ * subtotal  Decimal @db.Decimal(10, 2)
+ * descuento Decimal @db.Decimal(10, 2) @default(0)
+ * impuestos Decimal @db.Decimal(10, 2) @default(0)
+ * total     Decimal @db.Decimal(10, 2)
+ * // Vigencia
+ * fechaEmision    DateTime @default(now())
+ * fechaVencimiento DateTime?
+ * // Estado
+ * estado EstadoCotizacion @default(PENDIENTE)
+ * // Observaciones
+ * observaciones String?
+ * condiciones   String?
+ * // Auditoría
+ * creadoEn      DateTime @default(now())
+ * actualizadoEn DateTime @updatedAt
+ * // Relaciones
+ * sede     Sede               @relation(fields: [sedeId], references: [id])
+ * empresa  Empresa            @relation(fields: [empresaId], references: [id])
+ * detalles CotizacionDetalle[]
+ * @@unique([sedeId, codigo])
+ * @@index([sedeId])
+ * @@index([empresaId])
+ * @@index([vendedorId])
+ * @@index([estado])
+ * @@index([creadoEn])
+ * }
+ * model CotizacionDetalle {
+ * id           String @id @default(cuid())
+ * cotizacionId String
+ * productoId String?
+ * varianteId String?
+ * descripcion    String
+ * cantidad       Decimal @db.Decimal(10, 2)
+ * precioUnitario Decimal @db.Decimal(10, 2)
+ * descuento      Decimal @db.Decimal(10, 2) @default(0)
+ * subtotal       Decimal @db.Decimal(10, 2)
+ * cotizacion Cotizacion @relation(fields: [cotizacionId], references: [id], onDelete: Cascade)
+ * @@index([cotizacionId])
+ * }
+ * enum EstadoCotizacion {
+ * BORRADOR
+ * PENDIENTE
+ * APROBADA
+ * RECHAZADA
+ * VENCIDA
+ * CONVERTIDA_A_VENTA
+ * }
+ * // =========================================
+ * // 📦 MÓDULO DE INVENTARIO POR SEDE
+ * // =========================================
+ * /// Stock de productos por sede
+ * /// Permite gestionar inventario independiente en cada sede
+ * model ProductoStock {
+ * id         String @id @default(cuid())
+ * sedeId     String
+ * productoId String?
+ * varianteId String?
+ * empresaId  String
+ * // Stock actual
+ * stockActual  Int
+ * stockMinimo  Int?
+ * stockMaximo  Int?
+ * // Ubicación dentro de la sede
+ * ubicacion    String? // Pasillo, estante, etc.
+ * // Auditoría
+ * creadoEn      DateTime @default(now())
+ * actualizadoEn DateTime @updatedAt
+ * // Relaciones
+ * sede      Sede             @relation(fields: [sedeId], references: [id])
+ * empresa   Empresa          @relation(fields: [empresaId], references: [id])
+ * // producto  Producto?        @relation(fields: [productoId], references: [id])
+ * // variante  ProductoVariante? @relation(fields: [varianteId], references: [id])
+ * movimientos MovimientoStock[]
+ * @@unique([sedeId, productoId, varianteId])
+ * @@index([sedeId])
+ * @@index([productoId])
+ * @@index([varianteId])
+ * @@index([stockActual])
+ * }
+ * /// Registro de movimientos de stock (entradas, salidas, ajustes)
+ * model MovimientoStock {
+ * id             String @id @default(cuid())
+ * sedeId         String
+ * productoStockId String
+ * empresaId      String
+ * // Tipo de movimiento
+ * tipo           TipoMovimientoStock
+ * tipoDocumento  String? // COMPRA, VENTA, AJUSTE, TRANSFERENCIA, etc.
+ * numeroDocumento String?
+ * // Cantidades
+ * cantidadAnterior Int
+ * cantidad         Int // Positivo = entrada, Negativo = salida
+ * cantidadNueva    Int
+ * // Motivo
+ * motivo      String?
+ * observaciones String?
+ * // Relación con transferencias (si aplica)
+ * transferenciaId String?
+ * // Usuario responsable
+ * usuarioId String
+ * // Auditoría
+ * creadoEn DateTime @default(now())
+ * // Relaciones
+ * sede          Sede           @relation(fields: [sedeId], references: [id])
+ * productoStock ProductoStock  @relation(fields: [productoStockId], references: [id])
+ * // transferencia TransferenciaStock? @relation(fields: [transferenciaId], references: [id])
+ * @@index([sedeId])
+ * @@index([productoStockId])
+ * @@index([tipo])
+ * @@index([creadoEn])
+ * @@index([transferenciaId])
+ * }
+ * /// Transferencias de stock entre sedes
+ * model TransferenciaStock {
+ * id              String @id @default(cuid())
+ * empresaId       String
+ * sedeOrigenId    String
+ * sedeDestinoId   String
+ * // Identificación
+ * codigo          String @unique
+ * // Productos transferidos
+ * productoId      String?
+ * varianteId      String?
+ * cantidad        Int
+ * // Estado
+ * estado          EstadoTransferencia @default(PENDIENTE)
+ * // Usuarios responsables
+ * solicitadoPor   String
+ * aprobadoPor     String?
+ * recibidoPor     String?
+ * // Fechas
+ * fechaSolicitud  DateTime @default(now())
+ * fechaAprobacion DateTime?
+ * fechaEnvio      DateTime?
+ * fechaRecepcion  DateTime?
+ * // Observaciones
+ * motivo          String?
+ * observaciones   String?
+ * // Auditoría
+ * creadoEn        DateTime @default(now())
+ * actualizadoEn   DateTime @updatedAt
+ * // Relaciones
+ * empresa      Empresa @relation(fields: [empresaId], references: [id])
+ * sedeOrigen   Sede    @relation("TransferenciasOrigen", fields: [sedeOrigenId], references: [id])
+ * sedeDestino  Sede    @relation("TransferenciasDestino", fields: [sedeDestinoId], references: [id])
+ * @@index([empresaId])
+ * @@index([sedeOrigenId])
+ * @@index([sedeDestinoId])
+ * @@index([estado])
+ * @@index([creadoEn])
+ * }
+ * enum TipoMovimientoStock {
+ * ENTRADA_COMPRA      // Entrada por compra
+ * ENTRADA_TRANSFERENCIA // Entrada por transferencia de otra sede
+ * ENTRADA_AJUSTE      // Ajuste de inventario (entrada)
+ * ENTRADA_DEVOLUCION  // Devolución de cliente
+ * SALIDA_VENTA        // Salida por venta
+ * SALIDA_TRANSFERENCIA // Salida por transferencia a otra sede
+ * SALIDA_AJUSTE       // Ajuste de inventario (salida)
+ * SALIDA_MERMA        // Merma o pérdida
+ * SALIDA_ROBO         // Robo
+ * SALIDA_DONACION     // Donación
+ * }
+ * enum EstadoTransferencia {
+ * BORRADOR      // En creación
+ * PENDIENTE     // Solicitada, esperando aprobación
+ * APROBADA      // Aprobada, lista para envío
+ * EN_TRANSITO   // Enviada, en camino
+ * RECIBIDA      // Recibida en sede destino
+ * RECHAZADA     // Rechazada
+ * CANCELADA     // Cancelada
+ * }
+ * // =========================================
+ * // 💵 MÓDULO DE CAJA POR SEDE
+ * // =========================================
+ * /// Cajas registradoras en cada sede
+ * model Caja {
+ * id     String @id @default(cuid())
+ * sedeId String
+ * nombre       String // "Caja 1", "Caja Principal"
+ * codigo       String
+ * descripcion  String?
+ * // Estado
+ * isActive Boolean @default(true)
+ * // Auditoría
+ * creadoEn      DateTime @default(now())
+ * actualizadoEn DateTime @updatedAt
+ * // Relaciones
+ * sede      Sede           @relation(fields: [sedeId], references: [id])
+ * aperturas AperturaCaja[]
+ * @@unique([sedeId, codigo])
+ * @@index([sedeId])
+ * @@index([isActive])
+ * }
+ * /// Aperturas y cierres de caja
+ * model AperturaCaja {
+ * id     String @id @default(cuid())
+ * cajaId String
+ * sedeId String
+ * // Usuario responsable
+ * usuarioId String
+ * // Montos
+ * montoInicial Decimal  @db.Decimal(10, 2)
+ * montoFinal   Decimal? @db.Decimal(10, 2)
+ * // Fechas
+ * fechaApertura DateTime @default(now())
+ * fechaCierre   DateTime?
+ * // Estado
+ * estado EstadoCaja @default(ABIERTA)
+ * // Observaciones
+ * observacionesApertura String?
+ * observacionesCierre   String?
+ * caja Caja @relation(fields: [cajaId], references: [id])
+ * @@index([cajaId])
+ * @@index([sedeId])
+ * @@index([usuarioId])
+ * @@index([estado])
+ * @@index([fechaApertura])
+ * }
+ * enum EstadoCaja {
+ * ABIERTA
+ * CERRADA
+ * CUADRADA    // Cerrada con cuadre correcto
+ * DESCUADRADA // Cerrada con diferencia
+ * }
+ */

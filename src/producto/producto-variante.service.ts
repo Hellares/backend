@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { CacheService } from '../redis/cache.service';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
@@ -12,6 +13,7 @@ export class ProductoVarianteService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -166,6 +168,9 @@ export class ProductoVarianteService {
 
     // Copiar niveles de precio de otra variante del mismo producto
     await this.copiarNivelesDeOtraVariante(productoId, variante.id);
+
+    // Invalidar cache de productos (las variantes afectan el stock total)
+    await this.cache.invalidateProductosLists(empresaId);
 
     this.logger.success('Product variant created', { varianteId: variante.id });
 
@@ -418,6 +423,9 @@ export class ProductoVarianteService {
       }
     }
 
+    // Invalidar cache de productos (las variantes afectan el stock total y datos del producto)
+    await this.cache.invalidateProductosLists(empresaId);
+
     this.logger.success('Variant updated', { varianteId });
 
     return this.mapToResponseDto(variante);
@@ -547,6 +555,9 @@ export class ProductoVarianteService {
       data: { deletedAt: new Date() },
     });
 
+    // Invalidar cache de productos
+    await this.cache.invalidateProductosLists(empresaId);
+
     this.logger.success('Variant deleted', { varianteId });
   }
 
@@ -601,6 +612,9 @@ export class ProductoVarianteService {
         },
       },
     });
+
+    // Invalidar cache de productos (el stock de variantes afecta el stock total del producto)
+    await this.cache.invalidateProductosLists(empresaId);
 
     this.logger.success('Variant stock updated', { varianteId, newStock });
 

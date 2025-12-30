@@ -28,6 +28,7 @@ export interface CreateEmpresaData {
   web?: string;
   subdominio?: string;
   logo?: string;
+  direccion?: string;
 }
 
 export interface EmpresaResponse {
@@ -219,14 +220,32 @@ export class EmpresaService {
     });
 
     // Crear sede principal por defecto
+    const codigoSede = `SEDE-${String(1).padStart(3, '0')}`; // SEDE-001
+
     await this.prisma.sede.create({
       data: {
         empresaId: empresa.id,
+        codigo: codigoSede,
         nombre: 'Sede Principal',
         telefono: data.telefono,
         email: data.email,
-        direccion: 'Dirección por configurar',
+        direccion: data.direccion || 'Dirección por configurar',
         esPrincipal: true,
+        tipoSede: 'OPERATIVA_COMPLETA',
+
+        // Series de comprobantes por sede
+        serieFactura: 'F001',
+        serieBoleta: 'B001',
+        serieNotaCredito: 'NC01',
+        serieNotaDebito: 'ND01',
+        serieGuiaRemision: 'GR01',
+
+        // Contadores inicializados en 0
+        ultimoNumeroFactura: 0,
+        ultimoNumeroBoleta: 0,
+        ultimoNumeroNotaCredito: 0,
+        ultimoNumeroNotaDebito: 0,
+        ultimoNumeroGuiaRemision: 0,
       },
     });
 
@@ -570,14 +589,32 @@ export class EmpresaService {
     });
 
     // Crear sede principal por defecto
+    const codigoSede = `SEDE-${String(1).padStart(3, '0')}`; // SEDE-001
+
     await this.prisma.sede.create({
       data: {
         empresaId: empresa.id,
+        codigo: codigoSede,
         nombre: 'Sede Principal',
         telefono: data.telefono,
         email: data.email,
-        direccion: 'Dirección por configurar',
+        direccion: data.direccion || 'Dirección por configurar',
         esPrincipal: true,
+        tipoSede: 'OPERATIVA_COMPLETA',
+
+        // Series de comprobantes por sede
+        serieFactura: 'F001',
+        serieBoleta: 'B001',
+        serieNotaCredito: 'NC01',
+        serieNotaDebito: 'ND01',
+        serieGuiaRemision: 'GR01',
+
+        // Contadores inicializados en 0
+        ultimoNumeroFactura: 0,
+        ultimoNumeroBoleta: 0,
+        ultimoNumeroNotaCredito: 0,
+        ultimoNumeroNotaDebito: 0,
+        ultimoNumeroGuiaRemision: 0,
       },
     });
 

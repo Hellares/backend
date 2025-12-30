@@ -21,6 +21,7 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 import { StorageService } from './storage.service';
+import { CacheService } from '../redis/cache.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -35,7 +36,10 @@ import { EntidadTipo, ProveedorStorage } from '@prisma/client';
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class StorageController {
-  constructor(private readonly storageService: StorageService) {}
+  constructor(
+    private readonly storageService: StorageService,
+    private readonly cache: CacheService,
+  ) {}
 
   @Post('upload')
   @RequiresPermission(Permission.MANAGE_SETTINGS)
@@ -73,7 +77,7 @@ export class StorageController {
       throw new BadRequestException('No se proporcionó ningún archivo');
     }
 
-    return await this.storageService.uploadArchivo({
+    const result = await this.storageService.uploadArchivo({
       empresaId: uploadDto.empresaId,
       file,
       entidadTipo: uploadDto.entidadTipo,
@@ -82,6 +86,13 @@ export class StorageController {
       orden: uploadDto.orden,
       subidoPor: user.sub,
     });
+
+    // Invalidar cache de productos si se subió archivo a un producto o variante
+    if (uploadDto.entidadTipo === 'PRODUCTO' || uploadDto.entidadTipo === 'PRODUCTO_VARIANTE') {
+      await this.cache.invalidateProductosLists(uploadDto.empresaId);
+    }
+
+    return result;
   }
 
   @Delete(':archivoId')
@@ -92,7 +103,20 @@ export class StorageController {
     @Param('archivoId') archivoId: string,
     @Query('empresaId') empresaId: string,
   ) {
-    return await this.storageService.deleteArchivo(archivoId, empresaId);
+    // Obtener el archivo antes de eliminarlo para saber su entidadTipo
+    const archivo = await this.storageService['prisma'].archivo.findUnique({
+      where: { id: archivoId },
+      select: { entidadTipo: true },
+    });
+
+    const result = await this.storageService.deleteArchivo(archivoId, empresaId);
+
+    // Invalidar cache de productos si se eliminó archivo de un producto o variante
+    if (archivo?.entidadTipo === 'PRODUCTO' || archivo?.entidadTipo === 'PRODUCTO_VARIANTE') {
+      await this.cache.invalidateProductosLists(empresaId);
+    }
+
+    return result;
   }
 
   @Get('entidad/:entidadTipo/:entidadId')

@@ -13,14 +13,20 @@ import {
   ProductoResponseDto,
   PaginatedProductoResponseDto,
 } from './dto/producto-response.dto';
+import {
+  AjusteMasivoPreciosDto,
+  AjusteMasivoPreciosResponseDto,
+} from './dto/ajuste-masivo-precios.dto';
 import { AppLoggerService } from 'src/common/logger';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
+import { SedeContextHelper } from '../common/helpers/sede-context.helper';
 // Servicios especializados (Modular Monolith)
 import { ProductoCatalogService } from './producto-catalog.service';
 import { ProductoInventoryService } from './producto-inventory.service';
 import { ProductoPricingService } from './producto-pricing.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
+import { ProductoPrecioHistorialService } from './producto-precio-historial.service';
 
 /**
  * ProductoService - FACADE (Orquestador)
@@ -45,6 +51,8 @@ export class ProductoService {
     private pricingService: ProductoPricingService,
     private variantService: ProductoVarianteService,
     private atributoService: ProductoAtributoService,
+    private precioHistorialService: ProductoPrecioHistorialService,
+    private sedeContextHelper: SedeContextHelper,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -59,12 +67,19 @@ export class ProductoService {
     createDto: CreateProductoDto,
     userId: string,
   ): Promise<ProductoResponseDto> {
-    const { empresaId, imagenesIds, ...productoData } = createDto;
+    const { empresaId, imagenesIds, sedeId, ...productoData } = createDto;
 
     // 1. Verificar permisos del usuario (mantener en Facade)
     await this.verifyUserPermissions(userId, empresaId);
 
-    // 2. Validaciones (delegar a CatalogService)
+    // 2. Resolver sedeId automáticamente o validar el proporcionado
+    const sedeIdResuelto = await this.sedeContextHelper.resolveSedeId(
+      empresaId,
+      userId,
+      sedeId,
+    );
+
+    // 3. Validaciones (delegar a CatalogService)
     if (productoData.empresaCategoriaId) {
       await this.catalogService.validateEmpresaCategoria(
         productoData.empresaCategoriaId,
@@ -79,7 +94,7 @@ export class ProductoService {
       );
     }
 
-    // 3. Validar relación XOR entre esCombo y tieneVariantes (lógica de negocio - mantener en Facade)
+    // 4. Validar relación XOR entre esCombo y tieneVariantes (lógica de negocio - mantener en Facade)
     if (productoData.esCombo === true && productoData.tieneVariantes === true) {
       throw new BadRequestException(
         'Un producto no puede ser combo y tener variantes al mismo tiempo. ' +
@@ -102,7 +117,7 @@ export class ProductoService {
       productoData.esCombo = false;
     }
 
-    // 4. Validar atributosEstructurados (lógica de negocio - mantener en Facade)
+    // 5. Validar atributosEstructurados (lógica de negocio - mantener en Facade)
     if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
       // Solo permitir atributos en productos sin variantes y sin combo
       if (productoData.tieneVariantes === true) {
@@ -132,19 +147,20 @@ export class ProductoService {
     }
 
     try {
-      // 5-9. Transacción atómica (coordinar servicios especializados)
+      // 6-11. Transacción atómica (coordinar servicios especializados)
       const producto = await this.prisma.$transaction(async (tx) => {
-        // 5. Generar códigos únicos (delegar a CatalogService, pasar tx)
+        // 6. Generar códigos únicos (delegar a CatalogService, pasar tx)
         const { codigoEmpresa, codigoSistema } = await this.catalogService.generateCodigos(
           empresaId,
-          createDto.sedeId,
+          sedeIdResuelto,
           tx,
         );
 
-        // 6. Preparar datos para crear producto
+        // 7. Preparar datos para crear producto
         const dataToCreate = {
           ...productoData,
           empresaId,
+          sedeId: sedeIdResuelto,
           codigoEmpresa,
           codigoSistema,
           precio: precioFinal,
@@ -160,13 +176,13 @@ export class ProductoService {
           }),
         };
 
-        // 7. Crear producto usando include clause del CatalogService
+        // 8. Crear producto usando include clause del CatalogService
         const productoCreado = await tx.producto.create({
           data: dataToCreate,
           include: this.catalogService.buildIncludeClause(true, true, false),
         });
 
-        // 8. Sincronizar niveles de precio (delegar a PricingService, pasar tx)
+        // 9. Sincronizar niveles de precio (delegar a PricingService, pasar tx)
         if (productoData.configuracionPrecioId) {
           await this.pricingService.sincronizarNivelesDesdeConfiguracion(
             productoCreado.id,
@@ -176,7 +192,7 @@ export class ProductoService {
           );
         }
 
-        // 9. Crear atributos (delegar a AtributoService, pasar tx)
+        // 10. Crear atributos (delegar a AtributoService, pasar tx)
         if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
           await this.atributoService.createProductoAtributosFromStructured(
             productoCreado.id,
@@ -186,7 +202,7 @@ export class ProductoService {
           );
         }
 
-        // 10. Asociar imágenes (delegar a CatalogService, pasar tx)
+        // 11. Asociar imágenes (delegar a CatalogService, pasar tx)
         if (imagenesIds && imagenesIds.length > 0) {
           await this.catalogService.asociarImagenes(
             productoCreado.id,
@@ -203,13 +219,13 @@ export class ProductoService {
         `Producto creado: ${producto.id} (${producto.codigoEmpresa})`,
       );
 
-      // 11. Invalidar cache de estadísticas de la empresa (mantener en Facade)
+      // 12. Invalidar cache de estadísticas de la empresa (mantener en Facade)
       await this.invalidateEmpresaStats(empresaId);
 
-      // 12. Obtener producto completo con archivos para respuesta (delegar a CatalogService)
+      // 13. Obtener producto completo con archivos para respuesta (delegar a CatalogService)
       const archivos = await this.catalogService.getProductoArchivos(producto.id, empresaId);
 
-      // 13. Convertir a DTO (delegar a CatalogService)
+      // 14. Convertir a DTO (delegar a CatalogService)
       return this.catalogService.toResponseDto(producto, archivos);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -404,6 +420,15 @@ export class ProductoService {
 
     const { imagenesIds, ...productoData } = updateDto;
 
+    // DEBUG: Log para verificar qué datos llegan
+    this.logger.debug('Datos recibidos para actualización', {
+      productoId: id,
+      enOferta: productoData.enOferta,
+      precioOferta: productoData.precioOferta,
+      fechaInicioOferta: productoData.fechaInicioOferta,
+      fechaFinOferta: productoData.fechaFinOferta,
+    });
+
     // 3. Validaciones (delegar a CatalogService)
     if (productoData.empresaCategoriaId) {
       await this.catalogService.validateEmpresaCategoria(
@@ -529,6 +554,46 @@ export class ProductoService {
             varianteId,
             tx,
           );
+
+          // Migrar archivos/imágenes del producto base a la variante
+          // Obtener los archivos que necesitan migración
+          const archivosAMigrar = await tx.archivo.findMany({
+            where: {
+              entidadTipo: 'PRODUCTO',
+              entidadId: id,
+              empresaId,
+              deletedAt: null,
+            },
+            select: { id: true },
+          });
+
+          // Actualizar cada archivo individualmente para asegurar que todos los campos se actualicen
+          if (archivosAMigrar.length > 0) {
+            this.logger.debug(`Iniciando migración de ${archivosAMigrar.length} archivos...`);
+
+            for (const archivo of archivosAMigrar) {
+              this.logger.debug(`Actualizando archivo ${archivo.id}: entidadTipo -> PRODUCTO_VARIANTE, entidadId -> ${varianteId}`);
+
+              await tx.archivo.update({
+                where: { id: archivo.id },
+                data: {
+                  entidadTipo: 'PRODUCTO_VARIANTE',
+                  entidadId: varianteId,
+                  varianteId: varianteId,
+                },
+              });
+
+              // Verificar que se actualizó correctamente
+              const verificacion = await tx.archivo.findUnique({
+                where: { id: archivo.id },
+                select: { entidadTipo: true, entidadId: true, varianteId: true },
+              });
+
+              this.logger.debug(`Archivo ${archivo.id} actualizado. Verificación: entidadTipo=${verificacion?.entidadTipo}, entidadId=${verificacion?.entidadId}, varianteId=${verificacion?.varianteId}`);
+            }
+
+            this.logger.debug(`${archivosAMigrar.length} archivos migrados del producto ${id} a la variante ${varianteId}`);
+          }
         });
 
         // Limpiar stock base del producto para evitar confusión en BD
@@ -564,7 +629,8 @@ export class ProductoService {
     }
 
     // Convertir fechas de string a Date si están presentes
-    const dataToUpdate = {
+    // Convertir campos numéricos a tipos adecuados para Prisma Decimal
+    const dataToUpdate: any = {
       ...productoData,
       ...(precioParaUpdate !== undefined && { precio: precioParaUpdate }),
       ...(productoData.fechaInicioOferta && {
@@ -575,6 +641,25 @@ export class ProductoService {
       }),
     };
 
+    // Procesar precioOferta de forma especial si está presente
+    if ('precioOferta' in productoData) {
+      const valorPrecioOferta: any = productoData.precioOferta;
+
+      // Si es null, undefined, string vacío, o un valor inválido, establecer como null
+      if (
+        valorPrecioOferta === null ||
+        valorPrecioOferta === undefined ||
+        valorPrecioOferta === '' ||
+        (typeof valorPrecioOferta === 'number' && isNaN(valorPrecioOferta))
+      ) {
+        dataToUpdate.precioOferta = null;
+      } else {
+        // Asegurar que sea un número válido
+        const precioNumero = Number(valorPrecioOferta);
+        dataToUpdate.precioOferta = isNaN(precioNumero) ? null : precioNumero;
+      }
+    }
+
     try {
       // 5. Actualizar producto usando include clause del CatalogService
       const producto = await this.prisma.producto.update({
@@ -582,6 +667,13 @@ export class ProductoService {
         data: dataToUpdate,
         include: this.catalogService.buildIncludeClause(true, true, false),
       });
+
+      // 5.1 Registrar cambios de precio en el historial (si aplica)
+      await this.registrarCambiosPrecio(
+        productoExistente,
+        producto,
+        userId,
+      );
 
       // Si se desactivó el producto (era activo y ahora es inactivo) y tiene variantes,
       // desactivar todas las variantes automáticamente
@@ -636,7 +728,9 @@ export class ProductoService {
       }
 
       // 7. Actualizar imágenes (delegar a CatalogService)
-      if (imagenesIds !== undefined) {
+      // IMPORTANTE: Solo actualizar imágenes si el producto NO tiene variantes
+      // Si tiene variantes, las imágenes están asociadas a las variantes, no al producto base
+      if (imagenesIds !== undefined && !producto.tieneVariantes) {
         await this.catalogService.actualizarImagenes(id, empresaId, imagenesIds);
       }
 
@@ -940,6 +1034,235 @@ export class ProductoService {
   }
 
   /**
+   * Ajuste masivo de precios
+   * Permite incrementar o decrementar precios por porcentaje de forma masiva
+   */
+  async ajusteMasivoPrecios(
+    empresaId: string,
+    usuarioId: string,
+    dto: AjusteMasivoPreciosDto,
+  ): Promise<AjusteMasivoPreciosResponseDto> {
+    // 1. Verificar permisos
+    await this.verifyUserPermissions(usuarioId, empresaId);
+
+    // 2. Obtener productos según el alcance
+    let productos: any[];
+
+    if (dto.alcance === 'TODOS') {
+      // Obtener todos los productos activos de la empresa
+      productos = await this.prisma.producto.findMany({
+        where: {
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+        include: {
+          variantes: dto.incluirVariantes
+            ? {
+                where: {
+                  isActive: true,
+                  deletedAt: null,
+                },
+              }
+            : false,
+        },
+      });
+    } else {
+      // SELECCIONADOS: obtener productos por IDs
+      productos = await this.prisma.producto.findMany({
+        where: {
+          id: { in: dto.productosIds },
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+        include: {
+          variantes: dto.incluirVariantes
+            ? {
+                where: {
+                  isActive: true,
+                  deletedAt: null,
+                },
+              }
+            : false,
+        },
+      });
+    }
+
+    if (productos.length === 0) {
+      throw new BadRequestException('No se encontraron productos para ajustar');
+    }
+
+    // 3. Calcular nuevos precios
+    const cambios: any[] = [];
+    const advertencias: string[] = [];
+    let totalProductosAfectados = 0;
+    let totalVariantesAfectadas = 0;
+
+    for (const producto of productos) {
+      // Calcular nuevo precio del producto
+      const precioAnterior = producto.precio.toNumber();
+      const precioNuevo = this.calcularNuevoPrecio(
+        precioAnterior,
+        dto.valor,
+        dto.operacion,
+        dto.redondeo,
+      );
+
+      // Validar que el precio no sea negativo
+      if (precioNuevo <= 0) {
+        advertencias.push(
+          `El producto "${producto.nombre}" quedaría con precio negativo o cero. Se omite.`,
+        );
+        continue;
+      }
+
+      // Agregar cambio del producto
+      cambios.push({
+        productoId: producto.id,
+        nombre: producto.nombre,
+        precioAnterior,
+        precioNuevo,
+        diferencia: precioNuevo - precioAnterior,
+        diferenciaPercentual: ((precioNuevo - precioAnterior) / precioAnterior) * 100,
+      });
+
+      totalProductosAfectados++;
+
+      // Si incluye variantes, procesarlas
+      if (dto.incluirVariantes && producto.variantes && producto.variantes.length > 0) {
+        for (const variante of producto.variantes) {
+          const variantePrecioAnterior = variante.precio.toNumber();
+          const variantePrecioNuevo = this.calcularNuevoPrecio(
+            variantePrecioAnterior,
+            dto.valor,
+            dto.operacion,
+            dto.redondeo,
+          );
+
+          if (variantePrecioNuevo <= 0) {
+            advertencias.push(
+              `La variante "${variante.nombre}" del producto "${producto.nombre}" quedaría con precio negativo. Se omite.`,
+            );
+            continue;
+          }
+
+          cambios.push({
+            productoId: producto.id,
+            nombre: producto.nombre,
+            varianteId: variante.id,
+            varianteNombre: variante.nombre,
+            precioAnterior: variantePrecioAnterior,
+            precioNuevo: variantePrecioNuevo,
+            diferencia: variantePrecioNuevo - variantePrecioAnterior,
+            diferenciaPercentual:
+              ((variantePrecioNuevo - variantePrecioAnterior) / variantePrecioAnterior) * 100,
+          });
+
+          totalVariantesAfectadas++;
+        }
+      }
+    }
+
+    // 4. Si es preview, solo retornar los cambios calculados
+    if (dto.preview) {
+      return {
+        resumen: {
+          totalProductosAfectados,
+          totalVariantesAfectadas,
+          ajustePromedio: dto.valor,
+          operacion: dto.operacion,
+          valorAjuste: dto.valor,
+        },
+        cambios,
+        advertencias: advertencias.length > 0 ? advertencias : undefined,
+        esPreview: true,
+      };
+    }
+
+    // 5. Si NO es preview, aplicar los cambios
+    const razonAjuste = dto.razon || `Ajuste masivo: ${dto.operacion === 'INCREMENTO' ? '+' : '-'}${dto.valor}%`;
+
+    for (const cambio of cambios) {
+      if (cambio.varianteId) {
+        // Actualizar variante
+        const varianteAntes = await this.prisma.productoVariante.findUnique({
+          where: { id: cambio.varianteId },
+        });
+
+        await this.prisma.productoVariante.update({
+          where: { id: cambio.varianteId },
+          data: { precio: cambio.precioNuevo },
+        });
+
+        // Registrar en historial
+        if (varianteAntes) {
+          await this.precioHistorialService.registrarCambio({
+            productoId: cambio.productoId,
+            varianteId: cambio.varianteId,
+            precioAnterior: cambio.precioAnterior,
+            precioNuevo: cambio.precioNuevo,
+            tipoCambio: 'AJUSTE_MASIVO',
+            razon: razonAjuste,
+            origenModulo: 'PRODUCTO',
+            usuarioId,
+          });
+        }
+      } else {
+        // Actualizar producto
+        const productoAntes = await this.prisma.producto.findUnique({
+          where: { id: cambio.productoId },
+        });
+
+        await this.prisma.producto.update({
+          where: { id: cambio.productoId },
+          data: { precio: cambio.precioNuevo },
+        });
+
+        // Registrar en historial
+        if (productoAntes) {
+          await this.precioHistorialService.registrarCambio({
+            productoId: cambio.productoId,
+            precioAnterior: cambio.precioAnterior,
+            precioNuevo: cambio.precioNuevo,
+            tipoCambio: 'AJUSTE_MASIVO',
+            razon: razonAjuste,
+            origenModulo: 'PRODUCTO',
+            usuarioId,
+          });
+        }
+      }
+    }
+
+    // 6. Invalidar cache
+    await this.invalidateEmpresaStats(empresaId);
+
+    // 7. Log de la operación
+    this.logger.info('Ajuste masivo de precios aplicado', {
+      empresaId,
+      usuarioId,
+      totalProductos: totalProductosAfectados,
+      totalVariantes: totalVariantesAfectadas,
+      operacion: dto.operacion,
+      valor: dto.valor,
+    });
+
+    // 8. Retornar resultado
+    return {
+      resumen: {
+        totalProductosAfectados,
+        totalVariantesAfectadas,
+        ajustePromedio: dto.valor,
+        operacion: dto.operacion,
+        valorAjuste: dto.valor,
+      },
+      cambios,
+      advertencias: advertencias.length > 0 ? advertencias : undefined,
+      esPreview: false,
+    };
+  }
+
+  /**
    * Invalidar cache de estadísticas y listas de productos de la empresa
    * Se llama automáticamente cuando se crea, actualiza o elimina un producto
    */
@@ -960,5 +1283,154 @@ export class ProductoService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.warn(`⚠️ Error al invalidar cache: ${errorMessage}`);
     }
+  }
+
+  /**
+   * Registrar cambios de precio en el historial
+   * Detecta y registra cambios en: precio base, precio de oferta, precio de costo
+   */
+  private async registrarCambiosPrecio(
+    productoAntes: any,
+    productoDespues: any,
+    usuarioId: string,
+  ): Promise<void> {
+    try {
+      // 1. Detectar cambio en precio base
+      const precioAnterior = productoAntes.precio?.toNumber();
+      const precioNuevo = productoDespues.precio?.toNumber();
+
+      if (precioAnterior !== undefined && precioNuevo !== undefined && precioAnterior !== precioNuevo) {
+        await this.precioHistorialService.registrarCambio({
+          productoId: productoDespues.id,
+          precioAnterior,
+          precioNuevo,
+          tipoCambio: 'MANUAL',
+          razon: 'Actualización manual del precio base',
+          origenModulo: 'PRODUCTO',
+          usuarioId,
+        });
+      }
+
+      // 2. Detectar cambio en precio de costo
+      const precioCostoAnterior = productoAntes.precioCosto?.toNumber();
+      const precioCostoNuevo = productoDespues.precioCosto?.toNumber();
+
+      if (
+        precioCostoAnterior !== undefined &&
+        precioCostoNuevo !== undefined &&
+        precioCostoAnterior !== precioCostoNuevo
+      ) {
+        await this.precioHistorialService.registrarCambio({
+          productoId: productoDespues.id,
+          precioNuevo: precioNuevo || precioAnterior || 0,
+          precioCostoAnterior,
+          precioCostoNuevo,
+          tipoCambio: 'COSTO_ACTUALIZADO',
+          razon: 'Actualización del precio de costo',
+          origenModulo: 'PRODUCTO',
+          usuarioId,
+        });
+      }
+
+      // 3. Detectar activación de oferta
+      const ofertaActivada =
+        productoAntes.enOferta === false &&
+        productoDespues.enOferta === true &&
+        productoDespues.precioOferta !== null;
+
+      if (ofertaActivada) {
+        const precioOfertaNuevo = productoDespues.precioOferta?.toNumber();
+
+        await this.precioHistorialService.registrarCambio({
+          productoId: productoDespues.id,
+          precioAnterior: precioNuevo || precioAnterior || 0,
+          precioNuevo: precioOfertaNuevo || 0,
+          tipoCambio: 'OFERTA_ACTIVADA',
+          razon: `Oferta activada: ${productoDespues.fechaInicioOferta ? 'desde ' + productoDespues.fechaInicioOferta.toISOString().split('T')[0] : ''} ${productoDespues.fechaFinOferta ? 'hasta ' + productoDespues.fechaFinOferta.toISOString().split('T')[0] : ''}`.trim(),
+          origenModulo: 'PRODUCTO',
+          usuarioId,
+        });
+      }
+
+      // 4. Detectar desactivación de oferta
+      const ofertaDesactivada =
+        productoAntes.enOferta === true &&
+        productoDespues.enOferta === false;
+
+      if (ofertaDesactivada) {
+        const precioOfertaAnterior = productoAntes.precioOferta?.toNumber();
+
+        await this.precioHistorialService.registrarCambio({
+          productoId: productoDespues.id,
+          precioAnterior: precioOfertaAnterior || 0,
+          precioNuevo: precioNuevo || precioAnterior || 0,
+          tipoCambio: 'OFERTA_DESACTIVADA',
+          razon: 'Oferta desactivada - retorno a precio normal',
+          origenModulo: 'PRODUCTO',
+          usuarioId,
+        });
+      }
+
+      // 5. Detectar cambio en precio de oferta (mientras la oferta está activa)
+      if (
+        productoAntes.enOferta === true &&
+        productoDespues.enOferta === true
+      ) {
+        const precioOfertaAnterior = productoAntes.precioOferta?.toNumber();
+        const precioOfertaNuevo = productoDespues.precioOferta?.toNumber();
+
+        if (
+          precioOfertaAnterior !== undefined &&
+          precioOfertaNuevo !== undefined &&
+          precioOfertaAnterior !== precioOfertaNuevo
+        ) {
+          await this.precioHistorialService.registrarCambio({
+            productoId: productoDespues.id,
+            precioAnterior: precioOfertaAnterior,
+            precioNuevo: precioOfertaNuevo,
+            tipoCambio: 'MANUAL',
+            razon: 'Actualización del precio de oferta',
+            origenModulo: 'PRODUCTO',
+            usuarioId,
+          });
+        }
+      }
+    } catch (error) {
+      // No lanzar error si falla el registro del historial
+      // El sistema debe seguir funcionando aunque falle el historial
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Error al registrar cambios de precio en historial para producto ${productoDespues.id}: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
+  /**
+   * Calcular nuevo precio aplicando el ajuste y redondeo
+   */
+  private calcularNuevoPrecio(
+    precioActual: number,
+    valor: number,
+    operacion: string,
+    tipoRedondeo: string,
+  ): number {
+    let precioNuevo: number;
+
+    // Calcular ajuste por porcentaje
+    const factor = valor / 100;
+    if (operacion === 'INCREMENTO') {
+      precioNuevo = precioActual * (1 + factor);
+    } else {
+      // DECREMENTO
+      precioNuevo = precioActual * (1 - factor);
+    }
+
+    // Aplicar redondeo a 2 decimales
+    if (tipoRedondeo === 'DOS_DECIMALES') {
+      precioNuevo = Math.round(precioNuevo * 100) / 100;
+    }
+
+    return precioNuevo;
   }
 }

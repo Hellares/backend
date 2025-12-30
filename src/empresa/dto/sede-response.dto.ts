@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Rol } from '@prisma/client';
+import { SedeRole } from '@prisma/client';
 
 /**
  * DTO para la información de una sede
@@ -46,11 +46,11 @@ export class SedeResponseDto {
 
   @ApiProperty({
     description: 'Rol del usuario en esta sede (si tiene asignación específica)',
-    enum: Rol,
-    example: Rol.SEDE_ADMIN,
+    enum: SedeRole,
+    example: SedeRole.GERENTE_SEDE,
     required: false,
   })
-  userRole?: Rol;
+  userRole?: SedeRole;
 
   @ApiProperty({
     description: 'Indica si la sede está activa',
