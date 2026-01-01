@@ -35,6 +35,18 @@ export class EmpresaPermissionsDto {
   canManageServices: boolean;
 
   @ApiProperty({
+    description: 'Puede ver políticas de descuento',
+    example: true,
+  })
+  canViewDiscounts: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar políticas de descuento (crear, editar, eliminar)',
+    example: true,
+  })
+  canManageDiscounts: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de clientes',
     example: true,
   })

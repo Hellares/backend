@@ -1065,6 +1065,13 @@ export class EmpresaService {
       // Gestionar servicios: Admins y TECNICO
       canManageServices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
 
+      // DESCUENTOS - Separado en VIEW y MANAGE
+      // Ver políticas de descuento: Administradores
+      canViewDiscounts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+
+      // Gestionar políticas de descuento: Solo administradores de empresa
+      canManageDiscounts: isSuperAdmin || isEmpresaAdmin,
+
       // CLIENTES - Separado en VIEW y MANAGE
       // Ver clientes: Todos los roles que interactúan con clientes
       canViewClients: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor || isCajero || isTecnico,

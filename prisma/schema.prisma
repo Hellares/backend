@@ -100,6 +100,11 @@ model Empresa {
   plantillasAtributos      ProductoAtributoPlantilla[]
   configuracionesPrecios   ConfiguracionPrecio[]
 
+  // Relaciones para sistema de descuentos
+  politicasDescuento   PoliticaDescuento[]
+  usuariosConDescuento UsuarioDescuento[]
+  historialDescuentos  DescuentoUsoHistorial[]
+
   @@index([subdominio])
   @@index([isActive])
   @@index([ruc])
@@ -150,6 +155,12 @@ model Usuario {
   persona                 Persona                   @relation(fields: [personaId], references: [id], onDelete: Restrict)
   sedes                   UsuarioSedeRol[]
   historialPreciosCambios ProductoPrecioHistorial[]
+
+  // Relaciones para sistema de descuentos
+  descuentosAsignados   UsuarioDescuento[]      @relation("UsuarioConDescuento")
+  familiaresRegistrados UsuarioDescuento[]      @relation("FamiliarDe")
+  usosDescuento         DescuentoUsoHistorial[] @relation("UsuarioUsaDescuento")
+  descuentosProcesados  DescuentoUsoHistorial[] @relation("CajeroDescuentos")
 
   @@index([email])
   @@index([telefono])
@@ -401,6 +412,9 @@ model EmpresaCategoria {
   atributos                  ProductoAtributo[] // Atributos asociados a esta categoría
   productoAtributoPlantillas ProductoAtributoPlantilla[]
 
+  // Relaciones para sistema de descuentos
+  descuentosAplicables PoliticaDescuentoCategoria[]
+
   @@unique([empresaId, categoriaMaestraId])
   @@index([empresaId])
   @@index([categoriaMaestraId])
@@ -512,6 +526,10 @@ model Producto {
 
   // Relación para historial de precios
   historialPrecios ProductoPrecioHistorial[]
+
+  // Relaciones para sistema de descuentos
+  descuentosAplicables PoliticaDescuentoProducto[]
+  historialDescuentos  DescuentoUsoHistorial[]
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
@@ -1224,6 +1242,9 @@ model Sede {
   servicios   Servicio[]
   usuarios    UsuarioSedeRol[]
 
+  // Relaciones para sistema de descuentos
+  historialDescuentos DescuentoUsoHistorial[]
+
   // Relaciones futuras (descomentar cuando se implementen)
   // ventas      Venta[]
   // cotizaciones Cotizacion[]
@@ -1696,6 +1717,9 @@ model ProductoVariante {
   // Relación para historial de precios
   historialPrecios ProductoPrecioHistorial[]
 
+  // Relaciones para sistema de descuentos
+  historialDescuentos DescuentoUsoHistorial[]
+
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
   @@index([productoId])
@@ -2005,6 +2029,47 @@ enum TipoPrecioNivel {
   PORCENTAJE_DESCUENTO // Descuento porcentual sobre precio base
 }
 
+// =========================================
+// 🎁 SISTEMA DE DESCUENTOS POR USUARIO
+// =========================================
+
+/// Tipo de descuento aplicable
+enum TipoDescuento {
+  TRABAJADOR // Descuento para trabajadores de la empresa
+  FAMILIAR_TRABAJADOR // Descuento para familiares de trabajadores
+  VIP // Clientes VIP
+  PROMOCIONAL // Promociones temporales
+  LEALTAD // Programa de lealtad
+  CUMPLEANIOS // Descuento de cumpleaños
+}
+
+/// Tipo de cálculo del descuento
+enum TipoCalculoDescuento {
+  PORCENTAJE // Descuento en porcentaje (15%)
+  MONTO_FIJO // Descuento de monto fijo (S/50)
+}
+
+/// Parentesco familiar para descuentos
+enum Parentesco {
+  CONYUGE
+  HIJO
+  HIJA
+  PADRE
+  MADRE
+  HERMANO
+  HERMANA
+  ABUELO
+  ABUELA
+  NIETO
+  NIETA
+  TIO
+  TIA
+  SOBRINO
+  SOBRINA
+  PRIMO
+  PRIMA
+}
+
 /// Configuración/Plantilla de precios reutilizable
 model ConfiguracionPrecio {
   id          String  @id @default(cuid())
@@ -2051,6 +2116,197 @@ model ConfiguracionPrecioNivel {
   @@unique([configuracionId, cantidadMinima])
   @@index([configuracionId])
   @@index([cantidadMinima])
+}
+
+/// Política de descuento configurable
+/// Permite crear descuentos especiales para trabajadores, familiares, VIP, etc.
+model PoliticaDescuento {
+  id          String  @id @default(cuid())
+  empresaId   String
+  nombre      String // "Descuento Trabajadores", "Descuento Familiares"
+  descripcion String?
+
+  // Tipo de descuento
+  tipoDescuento TipoDescuento // TRABAJADOR, FAMILIAR, VIP, etc.
+
+  // Configuración del descuento
+  tipoCalculo    TipoCalculoDescuento // PORCENTAJE, MONTO_FIJO
+  valorDescuento Decimal              @db.Decimal(10, 2) // 15.00 = 15% o S/15.00
+
+  // Límites y restricciones
+  descuentoMaximo Decimal? @db.Decimal(10, 2) // Descuento máximo permitido en monto
+  montoMinCompra  Decimal? @db.Decimal(10, 2) // Monto mínimo de compra requerido
+  cantidadMaxUsos Int? // Límite de usos por usuario (opcional)
+
+  // Vigencia temporal
+  fechaInicio DateTime?
+  fechaFin    DateTime?
+
+  // Aplicabilidad
+  aplicarATodos Boolean @default(false) // Si true, aplica a todos los productos
+
+  // Prioridad cuando hay múltiples descuentos aplicables
+  prioridad Int @default(0) // Mayor número = mayor prioridad
+
+  // Control de familiares (solo para FAMILIAR_TRABAJADOR)
+  maxFamiliaresPorTrabajador Int? // Límite de familiares por trabajador
+
+  // Control
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  empresa              Empresa                      @relation(fields: [empresaId], references: [id])
+  usuariosConDescuento UsuarioDescuento[] // Usuarios que tienen este descuento
+  productosAplicables  PoliticaDescuentoProducto[] // Productos donde aplica
+  categoriasAplicables PoliticaDescuentoCategoria[] // Categorías donde aplica
+  usosHistorial        DescuentoUsoHistorial[] // Historial de usos
+
+  @@index([empresaId])
+  @@index([tipoDescuento])
+  @@index([isActive])
+  @@index([fechaInicio, fechaFin])
+  @@index([empresaId, tipoDescuento])
+  @@index([empresaId, isActive])
+}
+
+/// Asignación de políticas de descuento a usuarios
+/// Controla qué usuarios tienen acceso a qué descuentos
+model UsuarioDescuento {
+  id         String @id @default(cuid())
+  usuarioId  String
+  politicaId String
+  empresaId  String
+
+  // Relación con trabajador (si es familiar)
+  esFamiliar   Boolean     @default(false)
+  trabajadorId String? // ID del trabajador principal (si es familiar)
+  parentesco   Parentesco? // CONYUGE, HIJO, PADRE, etc.
+
+  // Límites personalizados (override de la política)
+  limiteMensualUsos Int? // Límite de usos por mes para este usuario
+  usosDisponibles   Int? // Usos restantes en el período actual
+
+  // Documentación de verificación
+  documentoVerificacion String? // Path al documento que verifica el parentesco
+  aprobadoPor           String? // ID del usuario que aprobó este descuento
+  fechaAprobacion       DateTime?
+
+  // Control
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  usuario    Usuario           @relation("UsuarioConDescuento", fields: [usuarioId], references: [id])
+  politica   PoliticaDescuento @relation(fields: [politicaId], references: [id])
+  empresa    Empresa           @relation(fields: [empresaId], references: [id])
+  trabajador Usuario?          @relation("FamiliarDe", fields: [trabajadorId], references: [id])
+
+  @@unique([usuarioId, politicaId])
+  @@index([usuarioId])
+  @@index([empresaId])
+  @@index([politicaId])
+  @@index([trabajadorId])
+  @@index([isActive])
+  @@index([esFamiliar])
+}
+
+/// Relación M2M entre políticas de descuento y productos
+/// Define en qué productos específicos aplica cada política
+model PoliticaDescuentoProducto {
+  id         String @id @default(cuid())
+  politicaId String
+  productoId String
+
+  // Override de descuento para este producto específico
+  descuentoOverride Decimal? @db.Decimal(10, 2)
+
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  politica PoliticaDescuento @relation(fields: [politicaId], references: [id], onDelete: Cascade)
+  producto Producto          @relation(fields: [productoId], references: [id], onDelete: Cascade)
+
+  @@unique([politicaId, productoId])
+  @@index([politicaId])
+  @@index([productoId])
+}
+
+/// Relación M2M entre políticas de descuento y categorías
+/// Permite aplicar descuentos a toda una categoría de productos
+model PoliticaDescuentoCategoria {
+  id          String @id @default(cuid())
+  politicaId  String
+  categoriaId String
+
+  // Override de descuento para esta categoría
+  descuentoOverride Decimal? @db.Decimal(10, 2)
+
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  politica  PoliticaDescuento @relation(fields: [politicaId], references: [id], onDelete: Cascade)
+  categoria EmpresaCategoria  @relation(fields: [categoriaId], references: [id], onDelete: Cascade)
+
+  @@unique([politicaId, categoriaId])
+  @@index([politicaId])
+  @@index([categoriaId])
+}
+
+/// Historial de uso de descuentos
+/// Auditoría completa de cuándo y cómo se aplicaron los descuentos
+model DescuentoUsoHistorial {
+  id         String @id @default(cuid())
+  politicaId String
+  usuarioId  String
+  empresaId  String
+
+  // Información de la venta/cotización (futuro)
+  ventaId      String? // ID de la venta (cuando se implemente)
+  cotizacionId String? // ID de la cotización (cuando se implemente)
+
+  // Productos con descuento aplicado
+  productoId String?
+  varianteId String?
+  cantidad   Int
+
+  // Precios
+  precioOriginal    Decimal @db.Decimal(10, 2) // Precio antes del descuento
+  descuentoAplicado Decimal @db.Decimal(10, 2) // Monto del descuento
+  precioFinal       Decimal @db.Decimal(10, 2) // Precio después del descuento
+
+  // Detalles del descuento aplicado
+  tipoCalculo    TipoCalculoDescuento
+  valorDescuento Decimal              @db.Decimal(10, 2)
+
+  // Contexto de la operación
+  sedeId   String? // Sede donde se realizó la operación
+  cajeroId String? // Usuario que procesó la venta
+
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  politica PoliticaDescuento @relation(fields: [politicaId], references: [id])
+  usuario  Usuario           @relation("UsuarioUsaDescuento", fields: [usuarioId], references: [id])
+  empresa  Empresa           @relation(fields: [empresaId], references: [id])
+  producto Producto?         @relation(fields: [productoId], references: [id])
+  variante ProductoVariante? @relation(fields: [varianteId], references: [id])
+  sede     Sede?             @relation(fields: [sedeId], references: [id])
+  cajero   Usuario?          @relation("CajeroDescuentos", fields: [cajeroId], references: [id])
+
+  @@index([politicaId])
+  @@index([usuarioId])
+  @@index([empresaId])
+  @@index([ventaId])
+  @@index([cotizacionId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([creadoEn])
+  @@index([sedeId])
 }
 
 // =========================================

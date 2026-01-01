@@ -12,6 +12,7 @@ import { StorageModule } from './storage/storage.module';
 import { ProductoModule } from './producto/producto.module';
 import { CatalogosModule } from './catalogos/catalogos.module';
 import { ClientesModule } from './clientes/clientes.module';
+import { PoliticaDescuentoModule } from './politica-descuento/politica-descuento.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -34,6 +35,7 @@ import { validate } from './config/validation';
     ProductoModule,
     CatalogosModule,
     ClientesModule,
+    PoliticaDescuentoModule,
   ],
   controllers: [AppController],
   providers: [

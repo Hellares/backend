@@ -177,6 +177,16 @@ export class PermissionsGuard implements CanActivate {
 
       // Cambiar plan de suscripción: Solo SUPER_ADMIN y EMPRESA_ADMIN
       canChangePlan: isSuperAdmin || isEmpresaAdmin,
+
+      // DESCUENTOS - Separado en VIEW, MANAGE y ASSIGN
+      // Ver políticas de descuento: Administradores
+      canViewDiscounts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+
+      // Gestionar políticas de descuento: Solo administradores de empresa
+      canManageDiscounts: isSuperAdmin || isEmpresaAdmin,
+
+      // Asignar usuarios y productos a políticas de descuento: Administradores de empresa
+      canAssignDiscounts: isSuperAdmin || isEmpresaAdmin,
     };
   }
 }
