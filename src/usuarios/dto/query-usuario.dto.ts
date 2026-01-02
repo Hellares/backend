@@ -1,47 +1,85 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsInt, Min, IsString, IsBoolean, IsEnum } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsInt,
+  Min,
+  IsBoolean,
+  IsEnum,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { Rol } from '@prisma/client';
 
+export enum OrdenUsuario {
+  NOMBRE_ASC = 'nombre_asc',
+  NOMBRE_DESC = 'nombre_desc',
+  RECIENTES = 'recientes',
+  ANTIGUOS = 'antiguos',
+}
+
 export class QueryUsuarioDto {
-  @ApiPropertyOptional({ description: 'Número de página', default: 1, minimum: 1 })
+  @ApiPropertyOptional({
+    description: 'Página actual',
+    example: 1,
+    default: 1,
+  })
   @IsOptional()
-  @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Type(() => Number)
   page?: number = 1;
 
-  @ApiPropertyOptional({ description: 'Registros por página', default: 10, minimum: 1, maximum: 100 })
+  @ApiPropertyOptional({
+    description: 'Elementos por página',
+    example: 10,
+    default: 10,
+  })
   @IsOptional()
-  @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Type(() => Number)
   limit?: number = 10;
 
-  @ApiPropertyOptional({ description: 'Búsqueda por email, teléfono o nombre' })
+  @ApiPropertyOptional({
+    description: 'Búsqueda por nombre, apellido, DNI, teléfono o email',
+    example: 'Juan',
+  })
   @IsOptional()
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Filtrar por estado activo', type: Boolean })
+  @ApiPropertyOptional({
+    description: 'Filtrar solo usuarios activos',
+    example: true,
+  })
   @IsOptional()
-  @Type(() => Boolean)
   @IsBoolean()
+  @Type(() => Boolean)
   isActive?: boolean;
 
-  @ApiPropertyOptional({ description: 'Filtrar por email verificado', type: Boolean })
-  @IsOptional()
-  @Type(() => Boolean)
-  @IsBoolean()
-  emailVerificado?: boolean;
-
-  @ApiPropertyOptional({ description: 'Filtrar por rol global', enum: Rol })
+  @ApiPropertyOptional({
+    description: 'Filtrar por rol en la empresa',
+    enum: Rol,
+    example: Rol.CAJERO,
+  })
   @IsOptional()
   @IsEnum(Rol)
-  rolGlobal?: Rol;
+  rol?: Rol;
 
-  @ApiPropertyOptional({ description: 'Filtrar por empresa ID' })
+  @ApiPropertyOptional({
+    description: 'Filtrar por sede específica',
+    example: 'cuid123',
+  })
   @IsOptional()
   @IsString()
-  empresaId?: string;
+  sedeId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Ordenamiento',
+    enum: OrdenUsuario,
+    example: OrdenUsuario.NOMBRE_ASC,
+  })
+  @IsOptional()
+  @IsEnum(OrdenUsuario)
+  orden?: OrdenUsuario;
 }

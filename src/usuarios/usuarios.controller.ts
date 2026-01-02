@@ -1,104 +1,127 @@
 import {
   Controller,
-  Get,
   Post,
+  Get,
   Body,
-  Patch,
   Param,
-  Delete,
   Query,
   UseGuards,
+  Headers,
 } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
-  ApiResponse,
   ApiBearerAuth,
-  ApiQuery,
+  ApiResponse,
+  ApiHeader,
 } from '@nestjs/swagger';
 import { UsuariosService } from './usuarios.service';
-import { CreateUsuarioDto } from './dto/create-usuario.dto';
-import { UpdateUsuarioDto } from './dto/update-usuario.dto';
-import { QueryUsuarioDto } from './dto/query-usuario.dto';
 import {
+  CreateUsuarioDto,
+  QueryUsuarioDto,
+  RegistroUsuarioResponseDto,
   UsuarioResponseDto,
   PaginatedUsuarioResponseDto,
-} from './dto/usuario-response.dto';
+} from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
-@ApiTags('usuarios')
-@ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@ApiTags('Usuarios')
 @Controller('usuarios')
+@UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
+@ApiBearerAuth()
 export class UsuariosController {
   constructor(private readonly usuariosService: UsuariosService) {}
 
-  @Post()
+  /**
+   * POST /usuarios/registrar
+   * Registrar un nuevo usuario/trabajador o asignar uno existente
+   */
+  @Post('registrar')
   @RequiresPermission(Permission.MANAGE_USERS)
-  @ApiOperation({ summary: 'Crear un nuevo usuario' })
+  @ApiOperation({
+    summary: 'Registrar un nuevo usuario/trabajador o asignar uno existente',
+    description:
+      'Detecta si el usuario ya existe (por DNI) y crea solo las relaciones necesarias. Si no existe, crea todo el registro completo incluyendo cuenta de acceso.',
+  })
   @ApiResponse({
     status: 201,
-    description: 'Usuario creado exitosamente',
+    description: 'Usuario registrado exitosamente',
+    type: RegistroUsuarioResponseDto,
   })
-  create(@Body() createUsuarioDto: CreateUsuarioDto) {
-    return this.usuariosService.create(createUsuarioDto);
+  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 403, description: 'Sin permisos para esta empresa' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async registrarUsuario(
+    @Body() createUsuarioDto: CreateUsuarioDto,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+  ): Promise<RegistroUsuarioResponseDto> {
+    return this.usuariosService.registrarUsuario(
+      empresaId,
+      createUsuarioDto,
+      user.sub,
+    );
   }
 
+  /**
+   * GET /usuarios
+   * Obtener lista de usuarios de la empresa con paginación
+   */
   @Get()
-  @RequiresPermission(Permission.MANAGE_USERS)
-  @ApiOperation({ summary: 'Obtener lista de usuarios con paginación y filtros' })
+  @RequiresPermission(Permission.VIEW_USERS)
+  @ApiOperation({
+    summary: 'Obtener lista de usuarios/trabajadores de la empresa',
+    description:
+      'Lista paginada con filtros de búsqueda y ordenamiento',
+  })
   @ApiResponse({
     status: 200,
-    description: 'Lista paginada de usuarios',
+    description: 'Lista de usuarios obtenida exitosamente',
     type: PaginatedUsuarioResponseDto,
   })
-  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Número de página' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Registros por página' })
-  @ApiQuery({ name: 'search', required: false, type: String, description: 'Búsqueda por email, teléfono o nombre' })
-  @ApiQuery({ name: 'isActive', required: false, type: Boolean, description: 'Filtrar por estado activo' })
-  @ApiQuery({ name: 'emailVerificado', required: false, type: Boolean, description: 'Filtrar por email verificado' })
-  @ApiQuery({ name: 'empresaId', required: false, type: String, description: 'Filtrar por empresa' })
-  async findAll(@Query() queryDto: QueryUsuarioDto): Promise<PaginatedUsuarioResponseDto> {
-    return this.usuariosService.findAll(queryDto);
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async obtenerUsuarios(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() queryDto: QueryUsuarioDto,
+  ): Promise<PaginatedUsuarioResponseDto> {
+    return this.usuariosService.obtenerUsuarios(empresaId, queryDto);
   }
 
+  /**
+   * GET /usuarios/:id
+   * Obtener un usuario específico
+   */
   @Get(':id')
-  @RequiresPermission(Permission.MANAGE_USERS)
-  @ApiOperation({ summary: 'Obtener un usuario por ID' })
+  @RequiresPermission(Permission.VIEW_USERS)
+  @ApiOperation({ summary: 'Obtener un usuario/trabajador por ID' })
   @ApiResponse({
     status: 200,
-    description: 'Usuario encontrado',
+    description: 'Usuario obtenido exitosamente',
     type: UsuarioResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
-  async findOne(@Param('id') id: string): Promise<UsuarioResponseDto> {
-    return this.usuariosService.findOne(id);
-  }
-
-  @Patch(':id')
-  @RequiresPermission(Permission.MANAGE_USERS)
-  @ApiOperation({ summary: 'Actualizar un usuario' })
-  @ApiResponse({
-    status: 200,
-    description: 'Usuario actualizado exitosamente',
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
   })
-  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
-  update(@Param('id') id: string, @Body() updateUsuarioDto: UpdateUsuarioDto) {
-    return this.usuariosService.update(id, updateUsuarioDto);
-  }
-
-  @Delete(':id')
-  @RequiresPermission(Permission.MANAGE_USERS)
-  @ApiOperation({ summary: 'Eliminar un usuario (soft delete)' })
-  @ApiResponse({
-    status: 200,
-    description: 'Usuario eliminado exitosamente',
-  })
-  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
-  remove(@Param('id') id: string) {
-    return this.usuariosService.remove(id);
+  async obtenerUsuario(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<UsuarioResponseDto> {
+    return this.usuariosService.obtenerUsuario(empresaId, id);
   }
 }

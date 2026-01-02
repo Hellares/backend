@@ -1,16 +1,37 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginationMeta } from '../../common/utils/pagination.util';
-import { Rol } from '@prisma/client';
+import { Rol, SedeRole } from '@prisma/client';
 
 export class UsuarioResponseDto {
   @ApiProperty()
   id: string;
 
   @ApiProperty()
-  email: string;
+  personaId: string;
+
+  @ApiProperty()
+  dni: string;
+
+  @ApiProperty()
+  nombres: string;
+
+  @ApiProperty()
+  apellidos: string;
+
+  @ApiProperty()
+  nombreCompleto: string;
+
+  @ApiPropertyOptional()
+  email?: string;
 
   @ApiPropertyOptional()
   telefono?: string;
+
+  @ApiProperty({ enum: Rol })
+  rolEnEmpresa: Rol;
+
+  @ApiPropertyOptional({ enum: Rol })
+  rolGlobal?: Rol;
 
   @ApiProperty()
   isActive: boolean;
@@ -21,11 +42,23 @@ export class UsuarioResponseDto {
   @ApiProperty()
   telefonoVerificado: boolean;
 
-  @ApiPropertyOptional({ enum: Rol })
-  rolGlobal?: Rol;
+  @ApiProperty()
+  dniVerificado: boolean;
+
+  @ApiProperty()
+  requiereCambioPassword: boolean;
 
   @ApiPropertyOptional()
   lastLoginAt?: Date;
+
+  @ApiProperty()
+  estado: string;
+
+  @ApiPropertyOptional()
+  registradoPor?: string;
+
+  @ApiPropertyOptional()
+  registradoPorNombre?: string;
 
   @ApiProperty()
   creadoEn: Date;
@@ -33,28 +66,36 @@ export class UsuarioResponseDto {
   @ApiProperty()
   actualizadoEn: Date;
 
-  // Información de persona
-  @ApiPropertyOptional()
-  persona?: {
-    id: string;
-    nombres: string;
-    apellidos: string;
-    dni?: string;
-  };
-
-  // Empresas del usuario
+  // Sedes asignadas
   @ApiPropertyOptional({
     type: [Object],
-    description: 'Empresas y roles del usuario',
+    description: 'Sedes donde trabaja el usuario',
   })
-  empresas?: Array<{
+  sedes?: Array<{
     id: string;
-    empresaId: string;
-    empresaNombre: string;
-    rol: Rol;
+    sedeId: string;
+    sedeNombre: string;
+    rol: SedeRole;
+    puedeAbrirCaja: boolean;
+    puedeCerrarCaja: boolean;
+    limiteCreditoVenta?: number;
+    permisos: string[];
     isActive: boolean;
-    estado: string;
   }>;
+}
+
+export class RegistroUsuarioResponseDto {
+  @ApiProperty({ type: UsuarioResponseDto })
+  usuario: UsuarioResponseDto;
+
+  @ApiProperty()
+  yaExistia: boolean;
+
+  @ApiProperty()
+  yaEraEmpleadoEmpresa: boolean;
+
+  @ApiProperty()
+  mensaje: string;
 }
 
 export class PaginatedUsuarioResponseDto {

@@ -162,6 +162,9 @@ model Usuario {
   usosDescuento         DescuentoUsoHistorial[] @relation("UsuarioUsaDescuento")
   descuentosProcesados  DescuentoUsoHistorial[] @relation("CajeroDescuentos")
 
+  // Relación inversa para registrados por este usuario
+  usuariosRegistrados EmpresaUsuarioRol[] @relation("RegistradoPor")
+
   @@index([email])
   @@index([telefono])
   @@index([personaId])
@@ -266,6 +269,7 @@ model EmpresaUsuarioRol {
   actualizadoEn      DateTime                 @updatedAt
   empresa            Empresa                  @relation(fields: [empresaId], references: [id])
   usuario            Usuario                  @relation(fields: [usuarioId], references: [id])
+  registrador        Usuario?                 @relation("RegistradoPor", fields: [registradoPor], references: [id], onDelete: SetNull)
   historialEstados   HistorialEstadoCliente[]
 
   @@unique([usuarioId, empresaId, rol])
@@ -276,6 +280,7 @@ model EmpresaUsuarioRol {
   @@index([empresaId, rol])
   @@index([empresaId, estado])
   @@index([deletedAt])
+  @@index([registradoPor])
 }
 
 model UsuarioSedeRol {
@@ -1474,6 +1479,7 @@ enum RubroEmpresa {
 enum RolPersona {
   CLIENTE
   PROVEEDOR
+  EMPLEADO
 }
 
 enum EstadoPago {

@@ -7,7 +7,8 @@
  */
 export enum Permission {
   // Usuarios
-  MANAGE_USERS = 'canManageUsers',
+  VIEW_USERS = 'canViewUsers',            // Ver lista de usuarios/trabajadores
+  MANAGE_USERS = 'canManageUsers',        // Crear, editar, eliminar usuarios
 
   // Productos
   VIEW_PRODUCTS = 'canViewProducts',      // Ver catálogo de productos

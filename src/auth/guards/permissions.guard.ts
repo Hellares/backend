@@ -95,6 +95,11 @@ export class PermissionsGuard implements CanActivate {
     const isContador = roles.includes(Rol.CONTADOR);
 
     return {
+      // USUARIOS - Separado en VIEW y MANAGE
+      // Ver usuarios: Administradores y contadores
+      canViewUsers:
+        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
+
       // Gestión de usuarios: Solo SUPER_ADMIN y EMPRESA_ADMIN
       canManageUsers: isSuperAdmin || isEmpresaAdmin,
 

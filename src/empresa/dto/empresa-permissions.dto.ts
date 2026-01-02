@@ -5,6 +5,12 @@ import { ApiProperty } from '@nestjs/swagger';
  */
 export class EmpresaPermissionsDto {
   @ApiProperty({
+    description: 'Puede ver la lista de usuarios de la empresa',
+    example: true,
+  })
+  canViewUsers: boolean;
+
+  @ApiProperty({
     description: 'Puede gestionar usuarios de la empresa',
     example: true,
   })

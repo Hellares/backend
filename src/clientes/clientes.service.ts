@@ -386,6 +386,7 @@ export class ClientesService {
 
   /**
    * Obtiene la lista de clientes de una empresa con filtros y paginación
+   * OPTIMIZADO: Usa includes para evitar N+1 queries
    */
   async findAll(
     empresaId: string,
@@ -453,6 +454,21 @@ export class ClientesService {
                   telefonoVerificado: true,
                   dniVerificado: true,
                   isActive: true,
+                  // Incluir registros de cliente para evitar query extra
+                  registrosComoCliente: {
+                    where: { empresaId },
+                    orderBy: { creadoEn: 'asc' },
+                    take: 1,
+                  },
+                  // Incluir relación empresa-usuario-rol para evitar query extra
+                  empresas: {
+                    where: {
+                      empresaId,
+                      rol: 'CLIENTE',
+                      deletedAt: null,
+                    },
+                    take: 1,
+                  },
                 },
               },
             },
@@ -462,8 +478,39 @@ export class ClientesService {
       this.prisma.empresaPersona.count({ where }),
     ]);
 
-    const data = await Promise.all(
-      clientes.map((c) => this.toResponseDto(c, empresaId)),
+    // Obtener todos los IDs de registradores únicos para una sola query
+    const registradorIds = new Set<string>();
+    clientes.forEach((c) => {
+      const registro = c.persona.usuario?.registrosComoCliente?.[0];
+      if (registro?.registradoPor) {
+        registradorIds.add(registro.registradoPor);
+      }
+    });
+
+    // Query única para obtener todos los registradores
+    const registradores =
+      registradorIds.size > 0
+        ? await this.prisma.usuario.findMany({
+            where: { id: { in: Array.from(registradorIds) } },
+            include: {
+              persona: {
+                select: {
+                  nombres: true,
+                  apellidos: true,
+                },
+              },
+            },
+          })
+        : [];
+
+    // Crear mapa de registradores para acceso O(1)
+    const registradoresMap = new Map(
+      registradores.map((r) => [r.id, r]),
+    );
+
+    // Transformar datos sin queries adicionales
+    const data = clientes.map((c) =>
+      this.toResponseDto(c, empresaId, registradoresMap),
     );
 
     return createPaginatedResponse(data, total, page, limit);
@@ -471,6 +518,7 @@ export class ClientesService {
 
   /**
    * Obtiene un cliente específico por ID
+   * OPTIMIZADO: Incluye todas las relaciones para evitar N+1 queries
    */
   async findOne(
     clienteId: string,
@@ -494,6 +542,21 @@ export class ClientesService {
                 telefonoVerificado: true,
                 dniVerificado: true,
                 isActive: true,
+                // Incluir registros de cliente
+                registrosComoCliente: {
+                  where: { empresaId },
+                  orderBy: { creadoEn: 'asc' },
+                  take: 1,
+                },
+                // Incluir relación empresa-usuario-rol
+                empresas: {
+                  where: {
+                    empresaId,
+                    rol: 'CLIENTE',
+                    deletedAt: null,
+                  },
+                  take: 1,
+                },
               },
             },
           },
@@ -507,7 +570,29 @@ export class ClientesService {
       );
     }
 
-    return this.toResponseDto(cliente, empresaId);
+    // Obtener registrador si existe
+    const registroInfo = cliente.persona.usuario?.registrosComoCliente?.[0];
+    let registradoresMap: Map<string, any> | undefined = undefined;
+
+    if (registroInfo?.registradoPor) {
+      const registrador = await this.prisma.usuario.findUnique({
+        where: { id: registroInfo.registradoPor },
+        include: {
+          persona: {
+            select: {
+              nombres: true,
+              apellidos: true,
+            },
+          },
+        },
+      });
+
+      if (registrador) {
+        registradoresMap = new Map([[registrador.id, registrador]]);
+      }
+    }
+
+    return this.toResponseDto(cliente, empresaId, registradoresMap);
   }
 
   /**
@@ -592,6 +677,7 @@ export class ClientesService {
 
   /**
    * Obtiene datos completos de un cliente para la respuesta
+   * OPTIMIZADO: Incluye todas las relaciones para evitar N+1 queries
    */
   private async obtenerClienteCompleto(
     personaId: string,
@@ -615,6 +701,21 @@ export class ClientesService {
                 telefonoVerificado: true,
                 dniVerificado: true,
                 isActive: true,
+                // Incluir registros de cliente
+                registrosComoCliente: {
+                  where: { empresaId },
+                  orderBy: { creadoEn: 'asc' },
+                  take: 1,
+                },
+                // Incluir relación empresa-usuario-rol
+                empresas: {
+                  where: {
+                    empresaId,
+                    rol: 'CLIENTE',
+                    deletedAt: null,
+                  },
+                  take: 1,
+                },
               },
             },
           },
@@ -626,66 +727,62 @@ export class ClientesService {
       throw new NotFoundException('Cliente no encontrado');
     }
 
-    return this.toResponseDto(empresaPersona, empresaId);
+    // Obtener registrador si existe
+    const registroInfo = empresaPersona.persona.usuario?.registrosComoCliente?.[0];
+    let registradoresMap: Map<string, any> | undefined = undefined;
+
+    if (registroInfo?.registradoPor) {
+      const registrador = await this.prisma.usuario.findUnique({
+        where: { id: registroInfo.registradoPor },
+        include: {
+          persona: {
+            select: {
+              nombres: true,
+              apellidos: true,
+            },
+          },
+        },
+      });
+
+      if (registrador) {
+        registradoresMap = new Map([[registrador.id, registrador]]);
+      }
+    }
+
+    return this.toResponseDto(empresaPersona, empresaId, registradoresMap);
   }
 
   /**
    * Convierte entidad a DTO de respuesta
+   * OPTIMIZADO: Usa datos precargados para evitar queries adicionales
+   *
+   * @param empresaPersona - Entidad con datos precargados via includes
+   * @param empresaId - ID de la empresa
+   * @param registradoresMap - Mapa opcional de registradores precargados (para evitar N+1)
    */
-  private async toResponseDto(
+  private toResponseDto(
     empresaPersona: any,
     empresaId: string,
-  ): Promise<ClienteResponseDto> {
+    registradoresMap?: Map<string, any>,
+  ): ClienteResponseDto {
     const persona = empresaPersona.persona;
     const usuario = persona.usuario;
 
-    // Obtener información del registro
-    let registroInfo: any = null;
+    // Usar información del registro precargada (si está disponible)
+    const registroInfo = usuario?.registrosComoCliente?.[0] || null;
+
+    // Obtener nombre del registrador desde el mapa (si está disponible)
     let registradorNombre: string | undefined = undefined;
-    if (usuario) {
-      registroInfo = await this.prisma.registroCliente.findFirst({
-        where: {
-          usuarioId: usuario.id,
-          empresaId,
-        },
-        orderBy: { creadoEn: 'asc' }, // Primer registro
-      });
-
-      // Obtener nombre del registrador si existe
-      if (registroInfo?.registradoPor) {
-        const registrador = await this.prisma.usuario.findUnique({
-          where: { id: registroInfo.registradoPor },
-          include: {
-            persona: {
-              select: {
-                nombres: true,
-                apellidos: true,
-              },
-            },
-          },
-        });
-        if (registrador?.persona) {
-          registradorNombre = `${registrador.persona.nombres} ${registrador.persona.apellidos}`;
-        }
+    if (registroInfo?.registradoPor && registradoresMap) {
+      const registrador = registradoresMap.get(registroInfo.registradoPor);
+      if (registrador?.persona) {
+        registradorNombre = `${registrador.persona.nombres} ${registrador.persona.apellidos}`;
       }
     }
 
-    // Obtener estado de la relación usuario-empresa
-    let estadoCliente = 'ACTIVO';
-    if (usuario) {
-      const empresaUsuarioRol =
-        await this.prisma.empresaUsuarioRol.findFirst({
-          where: {
-            usuarioId: usuario.id,
-            empresaId,
-            rol: 'CLIENTE',
-            deletedAt: null,
-          },
-        });
-      if (empresaUsuarioRol) {
-        estadoCliente = empresaUsuarioRol.estado;
-      }
-    }
+    // Usar estado de la relación usuario-empresa precargada (si está disponible)
+    const empresaUsuarioRol = usuario?.empresas?.[0];
+    const estadoCliente = empresaUsuarioRol?.estado || 'ACTIVO';
 
     return {
       id: empresaPersona.id,
