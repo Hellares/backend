@@ -776,4 +776,250 @@ export class UsuariosService {
   async obtenerUsuario(empresaId: string, usuarioId: string) {
     return this.obtenerUsuarioCompleto(usuarioId, empresaId);
   }
+
+  /**
+   * Actualizar datos de un usuario en una empresa
+   */
+  async actualizarUsuario(
+    empresaId: string,
+    usuarioId: string,
+    updateUsuarioDto: any,
+    modificadoPor?: string,
+  ): Promise<UsuarioResponseDto> {
+    // Verificar que el usuario existe en esta empresa
+    const empresaUsuario = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        usuarioId,
+        empresaId,
+        deletedAt: null,
+      },
+      include: {
+        usuario: {
+          include: {
+            persona: true,
+          },
+        },
+      },
+    });
+
+    if (!empresaUsuario) {
+      throw new NotFoundException('Usuario no encontrado en esta empresa');
+    }
+
+    const {
+      nombres,
+      apellidos,
+      email,
+      telefono,
+      rol,
+      sedeIds,
+      puedeAbrirCaja,
+      puedeCerrarCaja,
+      limiteCreditoVenta,
+      permisos,
+    } = updateUsuarioDto;
+
+    // Validar email único (si está cambiando)
+    if (email && email !== empresaUsuario.usuario.email) {
+      const usuarioConEmail = await this.prisma.usuario.findUnique({
+        where: { email },
+      });
+      if (usuarioConEmail && usuarioConEmail.id !== usuarioId) {
+        throw new ConflictException(
+          'Ya existe un usuario registrado con ese email',
+        );
+      }
+    }
+
+    // Validar teléfono único (si está cambiando)
+    if (telefono && telefono !== empresaUsuario.usuario.telefono) {
+      const usuarioConTelefono = await this.prisma.usuario.findUnique({
+        where: { telefono },
+      });
+      if (usuarioConTelefono && usuarioConTelefono.id !== usuarioId) {
+        throw new ConflictException(
+          'Ya existe un usuario registrado con ese teléfono',
+        );
+      }
+    }
+
+    // Validar sedes si se están actualizando
+    if (sedeIds && sedeIds.length > 0) {
+      await this.validarSedesEmpresa(sedeIds, empresaId);
+    }
+
+    // Actualizar en transacción
+    await this.prisma.$transaction(async (prisma) => {
+      // Actualizar datos de la persona si hay cambios
+      if (nombres || apellidos || email || telefono) {
+        await prisma.persona.update({
+          where: { id: empresaUsuario.usuario.personaId },
+          data: {
+            ...(nombres && { nombres }),
+            ...(apellidos && { apellidos }),
+            ...(email && { email }),
+            ...(telefono && { telefono }),
+          },
+        });
+      }
+
+      // Actualizar datos del usuario
+      if (email || telefono) {
+        await prisma.usuario.update({
+          where: { id: usuarioId },
+          data: {
+            ...(email && { email }),
+            ...(telefono && { telefono }),
+          },
+        });
+      }
+
+      // Actualizar rol en la empresa si cambió
+      if (rol && rol !== empresaUsuario.rol) {
+        await prisma.empresaUsuarioRol.update({
+          where: { id: empresaUsuario.id },
+          data: {
+            rol,
+            modificadoPor,
+          },
+        });
+      }
+
+      // Actualizar sedes si se proporcionaron
+      if (sedeIds) {
+        // Eliminar sedes actuales (soft delete)
+        await prisma.usuarioSedeRol.updateMany({
+          where: {
+            usuarioId,
+            deletedAt: null,
+          },
+          data: {
+            deletedAt: new Date(),
+            modificadoPor,
+          },
+        });
+
+        // Crear nuevas asignaciones de sedes
+        if (sedeIds.length > 0) {
+          const sedeRole = this.mapRolToSedeRole(rol || empresaUsuario.rol);
+
+          await prisma.usuarioSedeRol.createMany({
+            data: sedeIds.map((sedeId) => ({
+              usuarioId,
+              sedeId,
+              rol: sedeRole,
+              puedeAbrirCaja: puedeAbrirCaja ?? false,
+              puedeCerrarCaja: puedeCerrarCaja ?? false,
+              limiteCreditoVenta,
+              permisos: permisos ?? [],
+              creadoPor: modificadoPor,
+            })),
+          });
+        }
+      } else if (
+        puedeAbrirCaja !== undefined ||
+        puedeCerrarCaja !== undefined ||
+        limiteCreditoVenta !== undefined ||
+        permisos !== undefined
+      ) {
+        // Si no se cambian sedes pero sí configuración de caja/permisos
+        await prisma.usuarioSedeRol.updateMany({
+          where: {
+            usuarioId,
+            isActive: true,
+            deletedAt: null,
+          },
+          data: {
+            ...(puedeAbrirCaja !== undefined && { puedeAbrirCaja }),
+            ...(puedeCerrarCaja !== undefined && { puedeCerrarCaja }),
+            ...(limiteCreditoVenta !== undefined && { limiteCreditoVenta }),
+            ...(permisos !== undefined && { permisos }),
+            modificadoPor,
+          },
+        });
+      }
+    });
+
+    this.logger.log(
+      `Usuario ${usuarioId} actualizado en empresa ${empresaId} por usuario ${modificadoPor}`,
+    );
+
+    // Retornar usuario actualizado
+    return this.obtenerUsuarioCompleto(usuarioId, empresaId);
+  }
+
+  /**
+   * Desactivar un usuario de una empresa (soft delete)
+   */
+  async desactivarUsuario(
+    empresaId: string,
+    usuarioId: string,
+    modificadoPor?: string,
+  ): Promise<{ mensaje: string }> {
+    // Verificar que el usuario existe en esta empresa
+    const empresaUsuario = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        usuarioId,
+        empresaId,
+        deletedAt: null,
+      },
+    });
+
+    if (!empresaUsuario) {
+      throw new NotFoundException('Usuario no encontrado en esta empresa');
+    }
+
+    // Desactivar en transacción
+    await this.prisma.$transaction(async (prisma) => {
+      // Soft delete en EmpresaUsuarioRol
+      await prisma.empresaUsuarioRol.update({
+        where: { id: empresaUsuario.id },
+        data: {
+          deletedAt: new Date(),
+          estado: 'INACTIVO',
+          modificadoPor,
+        },
+      });
+
+      // Soft delete en todas las UsuarioSedeRol de esta empresa
+      const sedes = await prisma.usuarioSedeRol.findMany({
+        where: {
+          usuarioId,
+          deletedAt: null,
+        },
+        include: {
+          sede: {
+            select: {
+              empresaId: true,
+            },
+          },
+        },
+      });
+
+      const sedesEmpresa = sedes
+        .filter((s) => s.sede.empresaId === empresaId)
+        .map((s) => s.id);
+
+      if (sedesEmpresa.length > 0) {
+        await prisma.usuarioSedeRol.updateMany({
+          where: {
+            id: { in: sedesEmpresa },
+          },
+          data: {
+            deletedAt: new Date(),
+            isActive: false,
+            modificadoPor,
+          },
+        });
+      }
+    });
+
+    this.logger.log(
+      `Usuario ${usuarioId} desactivado en empresa ${empresaId} por usuario ${modificadoPor}`,
+    );
+
+    return {
+      mensaje: 'Usuario desactivado exitosamente de la empresa',
+    };
+  }
 }

@@ -10,6 +10,7 @@ import { EmpresaModule } from './empresa/empresa.module';
 import { MarketplaceModule } from './marketplace/marketplace.module';
 import { StorageModule } from './storage/storage.module';
 import { ProductoModule } from './producto/producto.module';
+import { ConfiguracionCodigosModule } from './configuracion-codigos/configuracion-codigos.module';
 import { CatalogosModule } from './catalogos/catalogos.module';
 import { ClientesModule } from './clientes/clientes.module';
 import { PoliticaDescuentoModule } from './politica-descuento/politica-descuento.module';
@@ -32,6 +33,7 @@ import { validate } from './config/validation';
     EmpresaModule,
     MarketplaceModule,
     StorageModule,
+    ConfiguracionCodigosModule,
     ProductoModule,
     CatalogosModule,
     ClientesModule,

@@ -7,6 +7,7 @@ import { AppLoggerService } from '../common/logger/logger.service';
 import { AuditLoggerService, AuditAction } from '../common/logger/audit-logger.service';
 import { CatalogosService } from '../catalogos/catalogos.service';
 import { CacheService } from '../redis/cache.service';
+import { PermissionsService } from '../auth/services/permissions.service';
 import {
   EmpresaContextResponseDto,
   EmpresaPermissionsDto,
@@ -68,6 +69,7 @@ export class EmpresaService {
     private readonly auditLogger: AuditLoggerService,
     private readonly catalogosService: CatalogosService,
     private readonly cache: CacheService,
+    private readonly permissionsService: PermissionsService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(EmpresaService.name);
@@ -1035,78 +1037,11 @@ export class EmpresaService {
 
   /**
    * Calcular permisos del usuario basado en sus roles en la empresa
+   * Usa el PermissionsService centralizado
    */
   private calculatePermissions(userRoles: EmpresaUsuarioRol[]): EmpresaPermissionsDto {
     const roles = userRoles.map(r => r.rol);
-
-    const isSuperAdmin = roles.includes(Rol.SUPER_ADMIN);
-    const isEmpresaAdmin = roles.includes(Rol.EMPRESA_ADMIN);
-    const isSedeAdmin = roles.includes(Rol.SEDE_ADMIN);
-    const isCajero = roles.includes(Rol.CAJERO);
-    const isVendedor = roles.includes(Rol.VENDEDOR);
-    const isTecnico = roles.includes(Rol.TECNICO);
-    const isContador = roles.includes(Rol.CONTADOR);
-
-    return {
-      // USUARIOS - Separado en VIEW y MANAGE
-      // Ver usuarios: Administradores y contadores
-      canViewUsers: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
-
-      // Gestión de usuarios: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManageUsers: isSuperAdmin || isEmpresaAdmin,
-
-      // PRODUCTOS - Separado en VIEW y MANAGE
-      // Ver productos: Todos los roles que trabajan con productos
-      canViewProducts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor || isCajero || isTecnico,
-
-      // Gestionar productos: Solo administradores
-      canManageProducts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
-
-      // SERVICIOS - Separado en VIEW y MANAGE
-      // Ver servicios: Todos los roles que trabajan con servicios
-      canViewServices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico || isCajero,
-
-      // Gestionar servicios: Admins y TECNICO
-      canManageServices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
-
-      // DESCUENTOS - Separado en VIEW y MANAGE
-      // Ver políticas de descuento: Administradores
-      canViewDiscounts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
-
-      // Gestionar políticas de descuento: Solo administradores de empresa
-      canManageDiscounts: isSuperAdmin || isEmpresaAdmin,
-
-      // CLIENTES - Separado en VIEW y MANAGE
-      // Ver clientes: Todos los roles que interactúan con clientes
-      canViewClients: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor || isCajero || isTecnico,
-
-      // Gestionar clientes: Admins, VENDEDOR y CAJERO
-      canManageClients: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isVendedor || isCajero,
-
-      // Gestión de sedes: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManageSedes: isSuperAdmin || isEmpresaAdmin,
-
-      // Ver reportes: Todos excepto roles muy básicos
-      canViewReports: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador || isCajero,
-
-      // Gestión de comprobantes/facturas: Admins, CAJERO, CONTADOR
-      canManageInvoices: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isCajero || isContador,
-
-      // Gestión de órdenes de servicio: Admins, SEDE_ADMIN, TECNICO
-      canManageOrders: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
-
-      // Ver estadísticas: Admins y CONTADOR
-      canViewStatistics: isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
-
-      // Gestión de configuración: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManageSettings: isSuperAdmin || isEmpresaAdmin,
-
-      // Gestión de métodos de pago: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManagePaymentMethods: isSuperAdmin || isEmpresaAdmin,
-
-      // Cambiar plan de suscripción: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canChangePlan: isSuperAdmin || isEmpresaAdmin,
-    };
+    return this.permissionsService.calculatePermissions(roles);
   }
 
   /**

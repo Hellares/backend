@@ -4,6 +4,7 @@ import {
   IsString,
   IsInt,
   Min,
+  Max,
   IsBoolean,
   IsEnum,
 } from 'class-validator';
@@ -37,6 +38,7 @@ export class QueryUsuarioDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(100)
   @Type(() => Number)
   limit?: number = 10;
 

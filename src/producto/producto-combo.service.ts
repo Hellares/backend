@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
+import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateComponenteComboDto } from './dto/create-producto-combo.dto';
 import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
@@ -17,6 +19,7 @@ export class ProductoComboService {
 
   constructor(
     private prisma: PrismaService,
+    private configCodigosService: ConfiguracionCodigosService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -81,17 +84,23 @@ export class ProductoComboService {
         );
       }
 
-      // Generar códigos únicos
-      const { codigoEmpresa, codigoSistema } = await this.generateCodigos(empresaId, dto.sedeId);
-
       // Determinar el precio inicial según el tipo
       let precioInicial = 0;
       if (dto.tipoPrecioCombo === TipoPrecioCombo.FIJO && precioFijo) {
         precioInicial = precioFijo;
       }
 
-      // Crear el combo como un producto
-      const combo = await this.prisma.producto.create({
+      // Crear combo dentro de transacción para evitar race conditions
+      const combo = await this.prisma.$transaction(async (tx) => {
+        // Generar códigos únicos (usando servicio centralizado)
+        const { codigoEmpresa, codigoSistema } = await this.configCodigosService.generarCodigoProducto(
+          empresaId,
+          dto.sedeId,
+          tx,
+        );
+
+        // Crear el combo como un producto
+        return await tx.producto.create({
         data: {
           empresaId,
           sedeId: comboData.sedeId,
@@ -136,9 +145,10 @@ export class ProductoComboService {
           },
           sede: true,
         },
+        });
       });
 
-      // Asociar imágenes si se proporcionaron
+      // Asociar imágenes si se proporcionaron (fuera de transacción)
       if (imagenesIds && imagenesIds.length > 0) {
         await this.prisma.archivo.updateMany({
           where: {
@@ -188,39 +198,11 @@ export class ProductoComboService {
   }
 
   /**
-   * Genera códigos únicos para el combo
+   * NOTA: El método generateCodigos() ha sido migrado a ConfiguracionCodigosService
+   * para centralizar toda la lógica de generación de códigos.
+   *
+   * Usar: configCodigosService.generarCodigoProducto()
    */
-  private async generateCodigos(
-    empresaId: string,
-    sedeId?: string,
-  ): Promise<{ codigoEmpresa: string; codigoSistema: string }> {
-    const configuracion = await this.prisma.configuracionCodigos.findUnique({
-      where: { empresaId },
-    });
-
-    let prefijo = configuracion?.productoCodigo || 'COMBO';
-    let longitud = configuracion?.productoLongitud || 6;
-
-    // Obtener el último código de la empresa
-    const ultimoProducto = await this.prisma.producto.findFirst({
-      where: { empresaId },
-      orderBy: { creadoEn: 'desc' },
-      select: { codigoEmpresa: true },
-    });
-
-    let siguienteNumero = 1;
-    if (ultimoProducto?.codigoEmpresa) {
-      const match = ultimoProducto.codigoEmpresa.match(/\d+$/);
-      if (match) {
-        siguienteNumero = parseInt(match[0], 10) + 1;
-      }
-    }
-
-    const codigoEmpresa = `${prefijo}-${siguienteNumero.toString().padStart(longitud, '0')}`;
-    const codigoSistema = `SYS-COMBO-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
-    return { codigoEmpresa, codigoSistema };
-  }
 
   /**
    * Agrega un componente a un combo existente

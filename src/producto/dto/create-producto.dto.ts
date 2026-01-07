@@ -150,10 +150,11 @@ export class CreateProductoDto {
   @ApiPropertyOptional({
     description: 'URL de video demostrativo',
     example: 'https://youtube.com/watch?v=abc123',
+    nullable: true,
   })
   @IsOptional()
   @IsString()
-  videoUrl?: string;
+  videoUrl?: string | null;
 
   @ApiPropertyOptional({
     description: 'Porcentaje de impuesto',

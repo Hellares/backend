@@ -9,6 +9,7 @@ import { EmailModule } from '../email/email.module';
 import { AuthService } from './auth.service';
 import { AuthSessionService } from './auth.session.service';
 import { AuthSecurityService } from './services/auth.security.service';
+import { PermissionsService } from './services/permissions.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy, LocalStrategy } from './strategies';
 import { TenantAuthGuard } from './guards';
@@ -38,11 +39,12 @@ import { throttlerConfig } from '../config/throttler.config';
     AuthService,
     AuthSessionService,
     AuthSecurityService,
+    PermissionsService,
     JwtStrategy,
     LocalStrategy,
     // Los guards básicos no necesitan ser registrados como providers
     // TenantAuthGuard necesita PrismaService, así que debe ser importado donde se use
   ],
-  exports: [AuthService, AuthSessionService, JwtModule, JwtStrategy, LocalStrategy],
+  exports: [AuthService, AuthSessionService, PermissionsService, JwtModule, JwtStrategy, LocalStrategy],
 })
 export class AuthModule {}

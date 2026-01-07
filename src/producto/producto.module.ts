@@ -14,7 +14,9 @@ import { ConfiguracionPrecioService } from './configuracion-precio.service';
 import { ConfiguracionPrecioController } from './configuracion-precio.controller';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AuthModule } from '../auth/auth.module';
 import { SedeContextHelper } from '../common/helpers/sede-context.helper';
+import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
 // Nuevos servicios especializados (Modular Monolith)
 import { ProductoCatalogService } from './producto-catalog.service';
 import { ProductoInventoryService } from './producto-inventory.service';
@@ -22,7 +24,7 @@ import { ProductoPricingService } from './producto-pricing.service';
 import { ProductoPrecioHistorialService } from './producto-precio-historial.service';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule],
   controllers: [
     ProductoController,
     ProductoComboController,

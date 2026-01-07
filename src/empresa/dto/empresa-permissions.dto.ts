@@ -53,6 +53,12 @@ export class EmpresaPermissionsDto {
   canManageDiscounts: boolean;
 
   @ApiProperty({
+    description: 'Puede asignar usuarios y productos a políticas de descuento',
+    example: true,
+  })
+  canAssignDiscounts: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de clientes',
     example: true,
   })

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { EmpresaService } from './empresa.service';
 import { EmpresaController } from './empresa.controller';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AuthModule } from '../auth/auth.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SeedPlanesService } from './scripts/seed-planes.service';
@@ -10,6 +11,7 @@ import { CatalogosModule } from '../catalogos/catalogos.module';
 @Module({
   imports: [
     PrismaModule,
+    AuthModule,
     CatalogosModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

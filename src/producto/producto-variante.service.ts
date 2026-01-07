@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
@@ -14,6 +15,7 @@ export class ProductoVarianteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
+    private readonly configCodigosService: ConfiguracionCodigosService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -75,8 +77,8 @@ export class ProductoVarianteService {
       );
     }
 
-    // Generar código de empresa único
-    const codigoEmpresa = await this.generateCodigoEmpresa(empresaId);
+    // Generar código de empresa único (usando servicio centralizado)
+    const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId);
 
     // Crear la variante (SIN campo atributos)
     const variante = await this.prisma.productoVariante.create({
@@ -622,40 +624,11 @@ export class ProductoVarianteService {
   }
 
   /**
-   * Generar código único de empresa para variante
-   * Usa incremento atómico en ConfiguracionCodigos para garantizar unicidad
+   * NOTA: El método generateCodigoEmpresa() ha sido migrado a ConfiguracionCodigosService
+   * para centralizar toda la lógica de generación de códigos.
+   *
+   * Usar: configCodigosService.generarCodigoVariante()
    */
-  private async generateCodigoEmpresa(empresaId: string): Promise<string> {
-    // Obtener o crear configuración de códigos
-    let config = await this.prisma.configuracionCodigos.findUnique({
-      where: { empresaId },
-    });
-
-    if (!config) {
-      // Crear configuración por defecto
-      config = await this.prisma.configuracionCodigos.create({
-        data: { empresaId },
-      });
-    }
-
-    // Incrementar contador atómicamente (evita race conditions)
-    const updated = await this.prisma.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimaVariante: {
-          increment: 1,
-        },
-      },
-    });
-
-    const nuevoContador = updated.ultimaVariante;
-
-    // Generar código usando la configuración
-    const numero = nuevoContador.toString().padStart(config.varianteLongitud, '0');
-    const codigoEmpresa = `${config.varianteCodigo}${config.varianteSeparador}${numero}`;
-
-    return codigoEmpresa;
-  }
 
   /**
    * Mapear a DTO de respuesta (formato estructurado)

@@ -20,6 +20,7 @@ import {
 import { AppLoggerService } from 'src/common/logger';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
 import { SedeContextHelper } from '../common/helpers/sede-context.helper';
+import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 // Servicios especializados (Modular Monolith)
 import { ProductoCatalogService } from './producto-catalog.service';
 import { ProductoInventoryService } from './producto-inventory.service';
@@ -53,6 +54,7 @@ export class ProductoService {
     private atributoService: ProductoAtributoService,
     private precioHistorialService: ProductoPrecioHistorialService,
     private sedeContextHelper: SedeContextHelper,
+    private configCodigosService: ConfiguracionCodigosService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -149,8 +151,8 @@ export class ProductoService {
     try {
       // 6-11. Transacción atómica (coordinar servicios especializados)
       const producto = await this.prisma.$transaction(async (tx) => {
-        // 6. Generar códigos únicos (delegar a CatalogService, pasar tx)
-        const { codigoEmpresa, codigoSistema } = await this.catalogService.generateCodigos(
+        // 6. Generar códigos únicos (usando servicio centralizado)
+        const { codigoEmpresa, codigoSistema } = await this.configCodigosService.generarCodigoProducto(
           empresaId,
           sedeIdResuelto,
           tx,
@@ -535,8 +537,8 @@ export class ProductoService {
               dimensiones: productoExistente.dimensiones,
               codigoEmpresa: productoExistente.codigoEmpresa,
             },
-            // Pasar función para generar código (evita dependencia circular)
-            (empresaId, tx) => this.catalogService.generateCodigoVariante(empresaId, false, tx),
+            // Pasar función para generar código (usando servicio centralizado)
+            (empresaId, tx) => this.configCodigosService.generarCodigoVariante(empresaId, tx),
             tx,
           );
 
@@ -657,6 +659,23 @@ export class ProductoService {
         // Asegurar que sea un número válido
         const precioNumero = Number(valorPrecioOferta);
         dataToUpdate.precioOferta = isNaN(precioNumero) ? null : precioNumero;
+      }
+    }
+
+    // Procesar videoUrl de forma especial si está presente
+    if ('videoUrl' in productoData) {
+      const valorVideoUrl: any = productoData.videoUrl;
+
+      // Si es null, undefined, o string vacío, establecer como null para eliminar el video
+      if (
+        valorVideoUrl === null ||
+        valorVideoUrl === undefined ||
+        (typeof valorVideoUrl === 'string' && valorVideoUrl.trim() === '')
+      ) {
+        dataToUpdate.videoUrl = null;
+      } else {
+        // Mantener el valor si es una string válida
+        dataToUpdate.videoUrl = valorVideoUrl;
       }
     }
 
