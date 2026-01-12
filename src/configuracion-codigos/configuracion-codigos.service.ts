@@ -9,6 +9,7 @@ import { RedisService } from '../redis/redis.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { UpdateConfigProductosDto } from './dto/update-config-productos.dto';
 import { UpdateConfigVariantesDto } from './dto/update-config-variantes.dto';
+import { UpdateConfigVentasDto } from './dto/update-config-ventas.dto';
 import {
   PreviewCodigoDto,
   PreviewCodigoResponseDto,
@@ -93,6 +94,13 @@ export class ConfiguracionCodigosService {
       config.servicioLongitud,
     );
 
+    const proximaVenta = this.formatCodigo(
+      config.ventaCodigo,
+      config.ventaSeparador,
+      config.ultimaVenta + 1,
+      config.ventaLongitud,
+    );
+
     // Verificar restricciones (si existen entidades, no se puede cambiar prefijo)
     const [countProductos, countVariantes, countServicios] =
       await Promise.all([
@@ -132,6 +140,14 @@ export class ConfiguracionCodigosService {
         incluirSede: config.servicioIncluirSede,
         ultimoContador: config.ultimoServicio,
         proximoCodigo: proximoServicio,
+      },
+      ventas: {
+        codigo: config.ventaCodigo,
+        separador: config.ventaSeparador,
+        longitud: config.ventaLongitud,
+        incluirSede: config.ventaIncluirSede,
+        ultimoContador: config.ultimaVenta,
+        proximoCodigo: proximaVenta,
       },
       documentos: {
         factura: {
@@ -253,6 +269,36 @@ export class ConfiguracionCodigosService {
         );
       }
     }
+
+    await this.prisma.configuracionCodigos.update({
+      where: { empresaId },
+      data: dto,
+    });
+
+    await this.redis.del(`config:codigos:${empresaId}`);
+
+    return this.getConfiguracion(empresaId);
+  }
+
+  /**
+   * Actualizar configuración de ventas (Notas de Venta)
+   */
+  async updateConfigVentas(
+    empresaId: string,
+    dto: UpdateConfigVentasDto,
+  ): Promise<ConfiguracionResponseDto> {
+    // TODO: Cuando se implemente el modelo Venta, validar que no existan ventas
+    // si se intenta cambiar el código, similar a productos y variantes
+    // if (dto.ventaCodigo !== undefined) {
+    //   const count = await this.prisma.venta.count({
+    //     where: { empresaId, deletedAt: null },
+    //   });
+    //   if (count > 0) {
+    //     throw new BadRequestException(
+    //       `No se puede cambiar el prefijo de ventas. Existen ${count} ventas activas.`,
+    //     );
+    //   }
+    // }
 
     await this.prisma.configuracionCodigos.update({
       where: { empresaId },
@@ -510,6 +556,158 @@ export class ConfiguracionCodigosService {
     return { codigoEmpresa };
   }
 
+  /**
+   * GENERAR CÓDIGO DE SEDE
+   * @param empresaId ID de la empresa
+   * @param tx Transacción de Prisma (opcional)
+   * @returns Código de sede generado (ej: SEDE-002)
+   */
+  async generarCodigoSede(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ codigoSede: string }> {
+    if (tx) {
+      return await this._generarCodigoSedeInTransaction(tx, empresaId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoSedeInTransaction(txInner, empresaId);
+    });
+  }
+
+  /**
+   * Lógica interna de generación de código de sede
+   * Busca el número más alto usado (incluidas eliminadas) para evitar conflictos
+   */
+  private async _generarCodigoSedeInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<{ codigoSede: string }> {
+    // Obtener todas las sedes (incluidas eliminadas) para evitar conflictos de código
+    const sedes = await tx.sede.findMany({
+      where: { empresaId },
+      select: { codigo: true },
+      orderBy: { codigo: 'desc' },
+    });
+
+    let maxNumero = 0;
+
+    // Buscar el número más alto en los códigos existentes
+    for (const sede of sedes) {
+      const match = sede.codigo.match(/\d+$/);
+      if (match) {
+        const numero = parseInt(match[0], 10);
+        if (numero > maxNumero) {
+          maxNumero = numero;
+        }
+      }
+    }
+
+    const siguiente = maxNumero + 1;
+    const codigoSede = `SEDE-${String(siguiente).padStart(3, '0')}`;
+
+    // Verificación final de duplicados
+    const existe = await tx.sede.findFirst({
+      where: {
+        empresaId,
+        codigo: codigoSede,
+      },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de sede ${codigoSede} ya existe. Reintentando...`,
+      );
+      // Reintentar recursivamente
+      return this._generarCodigoSedeInTransaction(tx, empresaId);
+    }
+
+    return { codigoSede };
+  }
+
+  /**
+   * GENERAR CÓDIGO DE VENTA (Nota de Venta)
+   * @param empresaId ID de la empresa
+   * @param sedeId ID de la sede (opcional, se incluye si ventaIncluirSede = true)
+   * @param tx Transacción de Prisma (opcional)
+   * @returns Código de venta generado (ej: VTA-00000001 o VTA-SEDE001-00000001)
+   */
+  async generarCodigoVenta(
+    empresaId: string,
+    sedeId?: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ codigoVenta: string }> {
+    if (tx) {
+      return await this._generarCodigoVentaInTransaction(tx, empresaId, sedeId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoVentaInTransaction(
+        txInner,
+        empresaId,
+        sedeId,
+      );
+    });
+  }
+
+  /**
+   * Lógica interna de generación de código de venta
+   * NOTA: No verifica duplicados ya que el modelo Venta aún no está implementado
+   */
+  private async _generarCodigoVentaInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    sedeId?: string,
+  ): Promise<{ codigoVenta: string }> {
+    // Obtener o crear configuración
+    let config = await tx.configuracionCodigos.findUnique({
+      where: { empresaId },
+    });
+
+    if (!config) {
+      config = await tx.configuracionCodigos.create({
+        data: { empresaId },
+      });
+    }
+
+    // TODO: Cuando se implemente el modelo Venta, sincronizar contador con BD
+    // como se hace en generarCodigoProducto y generarCodigoVariante
+
+    // Incrementar contador atómicamente
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: {
+        ultimaVenta: {
+          increment: 1,
+        },
+      },
+    });
+
+    const nuevoContador = updated.ultimaVenta;
+
+    // Generar código
+    const numero = nuevoContador.toString().padStart(config.ventaLongitud, '0');
+    let codigoVenta = `${config.ventaCodigo}${config.ventaSeparador}${numero}`;
+
+    // Si incluye sede
+    if (config.ventaIncluirSede && sedeId) {
+      const sede = await tx.sede.findUnique({
+        where: { id: sedeId },
+        select: { nombre: true },
+      });
+      if (sede) {
+        const sedeCode = sede.nombre.substring(0, 3).toUpperCase();
+        codigoVenta = `${config.ventaCodigo}${config.ventaSeparador}${sedeCode}${config.ventaSeparador}${numero}`;
+      }
+    }
+
+    // TODO: Cuando se implemente el modelo Venta, agregar verificación de duplicados
+    // como se hace en generarCodigoProducto y generarCodigoVariante
+
+    return { codigoVenta };
+  }
+
   // =====================================================
   // VISTA PREVIA Y UTILIDADES
   // =====================================================
@@ -584,6 +782,41 @@ export class ConfiguracionCodigosService {
         separador = config.documentoSeparador;
         longitud = config.documentoLongitud;
         codigo = this.formatCodigo(prefijo, separador, numero, longitud);
+        break;
+
+      case TipoCodigo.NOTA_CREDITO:
+        prefijo = config.notaCreditoCodigo;
+        separador = config.documentoSeparador;
+        longitud = config.documentoLongitud;
+        codigo = this.formatCodigo(prefijo, separador, numero, longitud);
+        break;
+
+      case TipoCodigo.NOTA_DEBITO:
+        prefijo = config.notaDebitoCodigo;
+        separador = config.documentoSeparador;
+        longitud = config.documentoLongitud;
+        codigo = this.formatCodigo(prefijo, separador, numero, longitud);
+        break;
+
+      case TipoCodigo.VENTA:
+        prefijo = config.ventaCodigo;
+        separador = config.ventaSeparador;
+        longitud = config.ventaLongitud;
+
+        if (config.ventaIncluirSede && dto.sedeId) {
+          const sede = await this.prisma.sede.findUnique({
+            where: { id: dto.sedeId },
+            select: { nombre: true },
+          });
+          if (sede) {
+            sedeCode = sede.nombre.substring(0, 3).toUpperCase();
+            codigo = `${prefijo}${separador}${sedeCode}${separador}${numero.toString().padStart(longitud, '0')}`;
+          } else {
+            codigo = this.formatCodigo(prefijo, separador, numero, longitud);
+          }
+        } else {
+          codigo = this.formatCodigo(prefijo, separador, numero, longitud);
+        }
         break;
 
       default:

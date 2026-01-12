@@ -19,6 +19,7 @@ import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { ConfiguracionCodigosService } from './configuracion-codigos.service';
 import { UpdateConfigProductosDto } from './dto/update-config-productos.dto';
 import { UpdateConfigVariantesDto } from './dto/update-config-variantes.dto';
+import { UpdateConfigVentasDto } from './dto/update-config-ventas.dto';
 import {
   PreviewCodigoDto,
   PreviewCodigoResponseDto,
@@ -96,6 +97,25 @@ export class ConfiguracionCodigosController {
     @Body() dto: UpdateConfigVariantesDto,
   ): Promise<ConfiguracionResponseDto> {
     return this.service.updateConfigVariantes(empresaId, dto);
+  }
+
+  @Put(':empresaId/ventas')
+  @ApiOperation({
+    summary: 'Actualizar configuración de ventas (Notas de Venta)',
+    description:
+      'Actualiza la configuración de nomenclatura para códigos de ventas (Notas de Venta internas).',
+  })
+  @ApiParam({ name: 'empresaId', description: 'ID de la empresa' })
+  @ApiResponse({
+    status: 200,
+    description: 'Configuración actualizada exitosamente',
+    type: ConfiguracionResponseDto,
+  })
+  updateConfigVentas(
+    @Param('empresaId') empresaId: string,
+    @Body() dto: UpdateConfigVentasDto,
+  ): Promise<ConfiguracionResponseDto> {
+    return this.service.updateConfigVentas(empresaId, dto);
   }
 
   @Post(':empresaId/preview')

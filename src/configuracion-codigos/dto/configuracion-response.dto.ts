@@ -89,6 +89,9 @@ export class ConfiguracionResponseDto {
   @ApiProperty({ description: 'Configuración de códigos de servicios', type: ConfigProductosDto })
   servicios: ConfigProductosDto;
 
+  @ApiProperty({ description: 'Configuración de códigos de ventas (Notas de Venta)', type: ConfigProductosDto })
+  ventas: ConfigProductosDto;
+
   @ApiProperty({ description: 'Configuración de códigos de documentos', type: ConfigDocumentosDto })
   documentos: ConfigDocumentosDto;
 

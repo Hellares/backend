@@ -209,6 +209,10 @@ model ConfiguracionCodigos {
   varianteCodigo      String   @default("VAR")
   varianteSeparador   String   @default("-")
   varianteLongitud    Int      @default(6)
+  ventaCodigo         String   @default("VTA")
+  ventaSeparador      String   @default("-")
+  ventaLongitud       Int      @default(8)
+  ventaIncluirSede    Boolean  @default(true)
   facturaCodigo       String   @default("FAC")
   boletaCodigo        String   @default("BOL")
   notaCreditoCodigo   String   @default("NCR")
@@ -218,6 +222,7 @@ model ConfiguracionCodigos {
   ultimoProducto      Int      @default(0)
   ultimoServicio      Int      @default(0)
   ultimaVariante      Int      @default(0)
+  ultimaVenta         Int      @default(0)
   ultimoFactura       Int      @default(0)
   ultimaBoleta        Int      @default(0)
   ultimaNotaCredito   Int      @default(0)
@@ -1102,6 +1107,7 @@ model ComprobanteElectronico {
   componentes      ServicioComponente[] @relation("ComprobanteComponente")
   productos        Producto[]           @relation("ProductoComprobante")
   servicios        Servicio[]           @relation("ServicioComprobante")
+  // ventas           Venta[]              // Relación inversa: ventas que generaron este comprobante (comentado hasta implementar módulo Venta)
 
   @@unique([empresaId, tipoComprobante, serie, correlativo])
   @@unique([empresaId, codigoGenerado])
@@ -1262,7 +1268,10 @@ model Sede {
   @@index([isActive])
   @@index([esPrincipal])
   @@index([deletedAt])
+  @@index([tipoSede])
   @@index([empresaId, isActive])
+  @@index([empresaId, deletedAt])
+  @@index([empresaId, isActive, deletedAt])
 }
 
 model Archivo {
@@ -1391,6 +1400,7 @@ enum TipoSede {
   SOLO_ALMACEN // Solo inventario y transferencias (sin ventas directas)
   PUNTO_VENTA // Solo ventas (recibe stock por transferencia)
   OFICINA_ADMINISTRATIVA // Solo administración (sin operaciones comerciales)
+  TALLER_LABORATORIO // Taller de reparación o laboratorio de servicios
 }
 
 enum EstadoCliente {
@@ -2329,84 +2339,139 @@ model DescuentoUsoHistorial {
 
 /**
  * // =========================================
- * // 💰 MÓDULO DE VENTAS POR SEDE
+ * // 💰 MÓDULO DE VENTAS POR SEDE (Notas de Venta)
  * // =========================================
- * /// Ventas realizadas en una sede específica
- * /// Reemplaza o complementa el módulo de ComprobantesElectronicos
- * /// con contexto de sede para operaciones de caja y punto de venta
+ * ///
+ * /// IMPORTANTE - FLUJO DE NEGOCIO:
+ * /// ==============================
+ * ///
+ * /// La Venta (Nota de Venta) es el REGISTRO COMERCIAL de la operación de venta.
+ * /// El ComprobanteElectronico (Factura/Boleta) es solo DOCUMENTACIÓN FISCAL.
+ * ///
+ * /// FLUJO:
+ * /// 1. Día 1: Cliente compra → Se crea VENTA (VTA-00001)
+ * ///           - Se descuenta stock
+ * ///           - Se registra pago
+ * ///           - Se genera nota de venta interna
+ * ///
+ * /// 2. Día 2: Cliente pide factura → Se crea COMPROBANTE ELECTRONICO (FAC-00001)
+ * ///           - NO se descuenta stock (ya descontado en venta)
+ * ///           - NO se registra pago (ya registrado en venta)
+ * ///           - Solo se emite documentación fiscal
+ * ///           - Se linkea: venta.comprobanteId = comprobante.id
+ * ///
+ * /// REGLAS CRÍTICAS:
+ * /// ================
+ * /// - El STOCK solo se descuenta en Venta, NUNCA en Comprobante
+ * /// - El PAGO solo se registra en Venta, NUNCA en Comprobante
+ * /// - Una Venta puede existir sin Comprobante (cliente no lo solicita)
+ * /// - Un Comprobante SIEMPRE está vinculado a una Venta previa
+ * /// - EVITAR DOBLE DESCUENTO: usar campo stockDescontado = true
+ * /// - EVITAR DOBLE PAGO: validar tieneComprobante antes de crear comprobante
+ * ///
+ * /// Ventas realizadas en una sede específica (Notas de Venta internas)
  * model Venta {
  * id        String   @id @default(cuid())
  * sedeId    String   // REQUERIDO: Toda venta pertenece a una sede
  * empresaId String
+ *
  * // Identificación de la venta
- * codigo           String   // VTA-SEDE001-00001
- * numeroComprobante String?
+ * codigo           String   // VTA-SEDE001-00001 (generado por ConfiguracionCodigos)
+ * numeroComprobante String? // Número de comprobante interno adicional (opcional)
+ *
  * // Cliente
  * clienteId String?
  * nombreCliente String
  * documentoCliente String?
+ *
  * // Vendedor y caja
  * vendedorId String // Usuario que realizó la venta
  * cajaId     String? // Caja donde se registró (si aplica)
- * // Montos
+ *
+ * // Montos (registrados UNA SOLA VEZ aquí)
  * subtotal  Decimal @db.Decimal(10, 2)
  * descuento Decimal @db.Decimal(10, 2) @default(0)
  * impuestos Decimal @db.Decimal(10, 2) @default(0)
  * total     Decimal @db.Decimal(10, 2)
+ *
  * // Estado
  * estado EstadoVenta @default(COMPLETADA)
+ *
+ * // ⚠️ CAMPOS CRÍTICOS PARA EVITAR DUPLICACIÓN ⚠️
+ * comprobanteId    String?  // ID del comprobante electrónico si fue emitido
+ * tieneComprobante Boolean  @default(false) // true si ya se emitió factura/boleta
+ * stockDescontado  Boolean  @default(false) // true cuando se descuenta stock (en creación de venta)
+ *
  * // Auditoría
  * creadoEn      DateTime @default(now())
  * actualizadoEn DateTime @updatedAt
+ *
  * // Relaciones
- * sede      Sede             @relation(fields: [sedeId], references: [id])
- * empresa   Empresa          @relation(fields: [empresaId], references: [id])
+ * sede        Sede                    @relation(fields: [sedeId], references: [id])
+ * empresa     Empresa                 @relation(fields: [empresaId], references: [id])
+ * comprobante ComprobanteElectronico? @relation(fields: [comprobanteId], references: [id])
  * // cliente   Cliente?         @relation(fields: [clienteId], references: [id])
  * // vendedor  Usuario          @relation("VentasRealizadas", fields: [vendedorId], references: [id])
  * // caja      Caja?            @relation(fields: [cajaId], references: [id])
  * detalles  VentaDetalle[]
  * pagos     VentaPago[]
+ *
  * @@unique([sedeId, codigo])
  * @@index([sedeId])
  * @@index([empresaId])
  * @@index([vendedorId])
  * @@index([cajaId])
  * @@index([estado])
+ * @@index([comprobanteId])
+ * @@index([tieneComprobante])
  * @@index([creadoEn])
  * }
+ *
  * /// Detalle de items vendidos
+ * /// IMPORTANTE: Stock se descuenta cuando se crea la venta, NO cuando se crea comprobante
  * model VentaDetalle {
  * id       String @id @default(cuid())
  * ventaId  String
+ *
  * // Puede ser producto o variante
  * productoId String?
  * varianteId String?
+ *
  * descripcion    String
  * cantidad       Decimal @db.Decimal(10, 2)
  * precioUnitario Decimal @db.Decimal(10, 2)
  * descuento      Decimal @db.Decimal(10, 2) @default(0)
  * subtotal       Decimal @db.Decimal(10, 2)
+ *
  * venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+ *
  * @@index([ventaId])
  * @@index([productoId])
  * @@index([varianteId])
  * }
+ *
  * /// Pagos asociados a una venta
+ * /// IMPORTANTE: Pagos se registran UNA SOLA VEZ en la venta, NO en comprobante
  * model VentaPago {
  * id        String @id @default(cuid())
  * ventaId   String
- * metodoPago     String  // EFECTIVO, TARJETA, YAPE, etc.
+ *
+ * metodoPago     String  // EFECTIVO, TARJETA, YAPE, PLIN, TRANSFERENCIA, etc.
  * monto          Decimal @db.Decimal(10, 2)
- * referencia     String?
+ * referencia     String? // Número de operación/voucher
+ *
  * creadoEn DateTime @default(now())
+ *
  * venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+ *
  * @@index([ventaId])
  * }
+ *
  * enum EstadoVenta {
- * BORRADOR
- * COMPLETADA
- * ANULADA
- * PENDIENTE_PAGO
+ * BORRADOR       // Venta en proceso de creación
+ * COMPLETADA     // Venta finalizada (con o sin comprobante)
+ * ANULADA        // Venta cancelada
+ * PENDIENTE_PAGO // Venta pendiente de completar pago
  * }
  * // =========================================
  * // 📋 MÓDULO DE COTIZACIONES POR SEDE
