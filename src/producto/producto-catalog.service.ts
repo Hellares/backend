@@ -190,7 +190,7 @@ export class ProductoCatalogService {
     }
 
     // Desestructurar para excluir campos relacionados
-    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, ...productoData } = producto;
+    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, ...productoData } = producto;
 
     return {
       ...productoData,
@@ -228,6 +228,37 @@ export class ProductoCatalogService {
               producto.empresaMarca.marcaMaestra?.logo,
           }
         : null,
+      // Información de unidad de medida
+      unidadMedida: unidadMedida ? {
+        id: unidadMedida.id,
+        empresaId: unidadMedida.empresaId,
+        unidadMaestraId: unidadMedida.unidadMaestraId,
+        nombrePersonalizado: unidadMedida.nombrePersonalizado,
+        simboloPersonalizado: unidadMedida.simboloPersonalizado,
+        codigoPersonalizado: unidadMedida.codigoPersonalizado,
+        descripcion: unidadMedida.descripcion,
+        nombreLocal: unidadMedida.nombreLocal,
+        simboloLocal: unidadMedida.simboloLocal,
+        orden: unidadMedida.orden,
+        isVisible: unidadMedida.isVisible,
+        isActive: unidadMedida.isActive,
+        deletedAt: unidadMedida.deletedAt,
+        creadoEn: unidadMedida.creadoEn,
+        actualizadoEn: unidadMedida.actualizadoEn,
+        unidadMaestra: unidadMedida.unidadMaestra ? {
+          id: unidadMedida.unidadMaestra.id,
+          codigo: unidadMedida.unidadMaestra.codigo,
+          nombre: unidadMedida.unidadMaestra.nombre,
+          simbolo: unidadMedida.unidadMaestra.simbolo,
+          descripcion: unidadMedida.unidadMaestra.descripcion,
+          categoria: unidadMedida.unidadMaestra.categoria,
+          esPopular: unidadMedida.unidadMaestra.esPopular,
+          orden: unidadMedida.unidadMaestra.orden,
+          isActive: unidadMedida.unidadMaestra.isActive,
+          creadoEn: unidadMedida.unidadMaestra.creadoEn,
+          actualizadoEn: unidadMedida.unidadMaestra.actualizadoEn,
+        } : null,
+      } : null,
       imagenes: archivos?.map((a) => a.url) || [],
       archivos: archivos?.map((a) => ({
         id: a.id,
@@ -401,20 +432,63 @@ export class ProductoCatalogService {
           nombre: true,
         },
       },
+      unidadMedida: {
+        include: {
+          unidadMaestra: {
+            select: {
+              id: true,
+              codigo: true,
+              nombre: true,
+              simbolo: true,
+              descripcion: true,
+              categoria: true,
+              esPopular: true,
+              orden: true,
+              isActive: true,
+              creadoEn: true,
+              actualizadoEn: true,
+            },
+          },
+        },
+      },
     };
 
     if (includeVariantes) {
+      const varianteInclude: any = {
+        unidadMedida: {
+          include: {
+            unidadMaestra: {
+              select: {
+                id: true,
+                codigo: true,
+                nombre: true,
+                simbolo: true,
+                descripcion: true,
+                categoria: true,
+                esPopular: true,
+                orden: true,
+                isActive: true,
+                creadoEn: true,
+                actualizadoEn: true,
+              },
+            },
+          },
+        },
+      };
+
+      if (includeAtributos) {
+        varianteInclude.atributosValores = {
+          include: {
+            atributo: true,
+          },
+        };
+      }
+
       include.variantes = {
         where: {
           deletedAt: null,
         },
-        include: includeAtributos ? {
-          atributosValores: {
-            include: {
-              atributo: true,
-            },
-          },
-        } : undefined,
+        include: varianteInclude,
         orderBy: {
           orden: 'asc',
         },

@@ -22,6 +22,11 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
+import {
+  ActivarUnidadMedidaDto,
+  ActivarCategoriaDto,
+  ActivarMarcaDto,
+} from './dto';
 
 @ApiTags('Catálogos')
 @Controller('catalogos')
@@ -97,18 +102,18 @@ export class CatalogosController {
   @ApiResponse({ status: 201, description: 'Categoría activada exitosamente' })
   @ApiResponse({ status: 400, description: 'Categoría ya activada' })
   async activarCategoria(
-    @Body()
-    body: {
-      empresaId: string;
-      categoriaMaestraId?: string;
-      nombrePersonalizado?: string;
-      descripcionPersonalizada?: string;
-      nombreLocal?: string;
-      orden?: number;
-    },
+    @Body() body: ActivarCategoriaDto,
     @CurrentUser() user: any,
   ) {
     // TODO: Verificar que el usuario tenga permisos en la empresa
+    // Descomentar cuando tengas el método de validación:
+    // const tieneAcceso = await this.authService.userBelongsToEmpresa(
+    //   user.id,
+    //   body.empresaId,
+    // );
+    // if (!tieneAcceso) {
+    //   throw new ForbiddenException('No tienes acceso a esta empresa');
+    // }
     return await this.catalogosService.activarCategoriaParaEmpresa(body);
   }
 
@@ -199,17 +204,17 @@ export class CatalogosController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Activar marca para una empresa' })
   @ApiResponse({ status: 201, description: 'Marca activada exitosamente' })
-  async activarMarca(
-    @Body()
-    body: {
-      empresaId: string;
-      marcaMaestraId?: string;
-      nombrePersonalizado?: string;
-      descripcionPersonalizada?: string;
-      nombreLocal?: string;
-      orden?: number;
-    },
-  ) {
+  @ApiResponse({ status: 400, description: 'Marca ya activada' })
+  async activarMarca(@Body() body: ActivarMarcaDto, @CurrentUser() user: any) {
+    // TODO: Verificar que el usuario tenga permisos en la empresa
+    // Descomentar cuando tengas el método de validación:
+    // const tieneAcceso = await this.authService.userBelongsToEmpresa(
+    //   user.id,
+    //   body.empresaId,
+    // );
+    // if (!tieneAcceso) {
+    //   throw new ForbiddenException('No tienes acceso a esta empresa');
+    // }
     return await this.catalogosService.activarMarcaParaEmpresa(body);
   }
 
@@ -291,5 +296,152 @@ export class CatalogosController {
   })
   async getPreviewCatalogosPorRubro(@Param('rubro') rubro: string) {
     return await this.catalogosService.getPreviewCatalogosPorRubro(rubro);
+  }
+
+  // ============================================
+  // UNIDADES DE MEDIDA MAESTRAS (Públicas)
+  // ============================================
+
+  @Get('unidades-maestras')
+  @Public()
+  @ApiOperation({
+    summary: 'Obtener catálogo global de unidades de medida SUNAT',
+    description:
+      'Retorna todas las unidades de medida estándar (SUNAT) disponibles en el sistema',
+  })
+  @ApiQuery({
+    name: 'categoria',
+    required: false,
+    type: String,
+    description: 'Filtrar por categoría (CANTIDAD, MASA, LONGITUD, etc.)',
+  })
+  @ApiQuery({
+    name: 'soloPopulares',
+    required: false,
+    type: Boolean,
+    description: 'Solo unidades populares',
+  })
+  @ApiResponse({ status: 200, description: 'Catálogo de unidades de medida' })
+  async getUnidadesMaestras(
+    @Query('categoria') categoria?: string,
+    @Query('soloPopulares') soloPopulares?: boolean,
+  ) {
+    return await this.catalogosService.getUnidadesMaestras({
+      categoria,
+      soloPopulares: soloPopulares === true,
+    });
+  }
+
+  // ============================================
+  // UNIDADES DE MEDIDA POR EMPRESA (Privadas)
+  // ============================================
+
+  @Get('unidades/empresa/:empresaId')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Obtener unidades de medida activas de una empresa',
+    description:
+      'Retorna unidades de medida activadas para la empresa (maestras + personalizadas)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Unidades de medida disponibles para la empresa',
+  })
+  async getUnidadesEmpresa(@Param('empresaId') empresaId: string) {
+    return await this.catalogosService.getUnidadesDisponiblesParaEmpresa(
+      empresaId,
+    );
+  }
+
+  @Post('unidades/activar')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Activar unidad de medida para una empresa',
+    description:
+      'Activa una unidad de medida maestra o crea una personalizada para la empresa',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Unidad de medida activada exitosamente',
+    schema: {
+      example: {
+        id: 'clx123456',
+        empresaId: 'clx789012',
+        unidadMaestraId: 'clx345678',
+        nombreLocal: 'Kilogramo',
+        simboloLocal: null,
+        orden: 1,
+        isVisible: true,
+        isActive: true,
+        creadoEn: '2024-01-15T10:30:00.000Z',
+        actualizadoEn: '2024-01-15T10:30:00.000Z',
+        unidadMaestra: {
+          id: 'clx345678',
+          codigo: 'KGM',
+          nombre: 'Kilogramo',
+          simbolo: 'kg',
+          categoria: 'MASA',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Unidad ya activada' })
+  async activarUnidadMedida(
+    @Body() body: ActivarUnidadMedidaDto,
+    @CurrentUser() user: any,
+  ) {
+    // TODO: Verificar que el usuario tenga permisos en la empresa
+    // Descomentar cuando tengas el método de validación:
+    // const tieneAcceso = await this.authService.userBelongsToEmpresa(
+    //   user.id,
+    //   body.empresaId,
+    // );
+    // if (!tieneAcceso) {
+    //   throw new ForbiddenException('No tienes acceso a esta empresa');
+    // }
+    return await this.catalogosService.activarUnidadMedidaParaEmpresa(body);
+  }
+
+  @Delete('unidades/empresa/:empresaId/:unidadId')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Desactivar unidad de medida de una empresa' })
+  @ApiResponse({
+    status: 200,
+    description: 'Unidad de medida desactivada exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'No se puede desactivar - hay productos/servicios asociados',
+  })
+  async desactivarUnidadMedida(
+    @Param('empresaId') empresaId: string,
+    @Param('unidadId') unidadId: string,
+  ) {
+    return await this.catalogosService.desactivarUnidadMedidaParaEmpresa(
+      unidadId,
+      empresaId,
+    );
+  }
+
+  @Post('unidades/activar-populares')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Activar unidades de medida populares automáticamente',
+    description:
+      'Activa todas las unidades de medida marcadas como populares para la empresa (Unidad, Kilogramo, Metro, Litro, etc.)',
+  })
+  @ApiResponse({ status: 201, description: 'Unidades activadas' })
+  async activarUnidadesPopulares(@Body() body: { empresaId: string }) {
+    return await this.catalogosService.activarUnidadesPopularesParaEmpresa(
+      body.empresaId,
+    );
   }
 }

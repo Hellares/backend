@@ -95,6 +95,7 @@ model Empresa {
   archivos                 Archivo[]
   empresaCategorias        EmpresaCategoria[]
   empresaMarcas            EmpresaMarca[]
+  empresasUnidades         EmpresaUnidadMedida[]
   productoVariantes        ProductoVariante[]
   productoAtributos        ProductoAtributo[]
   plantillasAtributos      ProductoAtributoPlantilla[]
@@ -387,6 +388,45 @@ model MarcaMaestra {
   @@index([slug])
 }
 
+/// Unidades de medida maestras (Catálogo SUNAT)
+/// Códigos estándar para facturación electrónica
+model UnidadMedidaMaestra {
+  id          String  @id @default(cuid())
+  codigo      String  @unique // "NIU", "KGM", "MTR", "LTR", "ZZ" (Códigos SUNAT)
+  nombre      String  @unique // "Unidad", "Kilogramo", "Metro", "Litro", "Servicio"
+  simbolo     String? // "und", "kg", "m", "L", "svc"
+  descripcion String?
+  categoria   CategoriaUnidad // CANTIDAD, MASA, LONGITUD, AREA, VOLUMEN, TIEMPO, SERVICIO
+
+  // Metadata
+  esPopular Boolean @default(false)
+  orden     Int?
+
+  // Auditoría
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relación con empresas
+  empresasUnidades EmpresaUnidadMedida[]
+
+  @@index([codigo])
+  @@index([categoria])
+  @@index([esPopular])
+  @@index([isActive])
+}
+
+/// Categorías de unidades de medida
+enum CategoriaUnidad {
+  CANTIDAD  // unidad, docena, ciento, millar
+  MASA      // gramo, kilogramo, tonelada, libra
+  LONGITUD  // metro, centímetro, kilómetro, pulgada
+  AREA      // metro cuadrado, hectárea
+  VOLUMEN   // litro, mililitro, metro cúbico, galón
+  TIEMPO    // hora, día, semana, mes, año
+  SERVICIO  // servicio, sesión, consulta
+}
+
 // ============================================
 // RELACIÓN EMPRESA-CATÁLOGO (Activación)
 // ============================================
@@ -468,12 +508,55 @@ model EmpresaMarca {
   @@index([isVisible])
 }
 
+/// Unidades de medida activadas por empresa
+/// Permite personalizar nombres y agregar unidades propias
+model EmpresaUnidadMedida {
+  id              String  @id @default(cuid())
+  empresaId       String
+  unidadMaestraId String? // NULL = unidad personalizada
+
+  // Campos para unidades PERSONALIZADAS
+  nombrePersonalizado  String? // Ej: "Caja de 12 unidades"
+  simboloPersonalizado String? // Ej: "cja12"
+  codigoPersonalizado  String? // Ej: "CJ12"
+  descripcion          String?
+
+  // Personalización
+  nombreLocal  String? // Override del nombre maestro
+  simboloLocal String? // Override del símbolo maestro
+
+  // Configuración
+  orden     Int?
+  isVisible Boolean   @default(true)
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa       Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  unidadMaestra UnidadMedidaMaestra?  @relation(fields: [unidadMaestraId], references: [id], onDelete: Restrict)
+  productos     Producto[]
+  variantes     ProductoVariante[]
+  servicios     Servicio[]
+  detallesComprobante DetalleComprobante[]
+
+  @@unique([empresaId, unidadMaestraId])
+  @@index([empresaId])
+  @@index([unidadMaestraId])
+  @@index([isActive])
+  @@index([isVisible])
+}
+
 model Producto {
   id                 String   @id @default(cuid())
   empresaId          String
   sedeId             String?
   empresaCategoriaId String?
   empresaMarcaId     String?
+  unidadMedidaId     String? // Unidad de medida del producto
   codigoEmpresa      String
   codigoSistema      String
   sku                String?
@@ -518,6 +601,7 @@ model Producto {
   detallesComprobante DetalleComprobante[]     @relation("DetalleProducto")
   empresaCategoria    EmpresaCategoria?        @relation(fields: [empresaCategoriaId], references: [id])
   empresaMarca        EmpresaMarca?            @relation(fields: [empresaMarcaId], references: [id])
+  unidadMedida        EmpresaUnidadMedida?     @relation(fields: [unidadMedidaId], references: [id])
   empresa             Empresa                  @relation(fields: [empresaId], references: [id])
   sede                Sede?                    @relation(fields: [sedeId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ProductoComprobante")
@@ -547,6 +631,7 @@ model Producto {
   @@index([empresaId, codigoEmpresa])
   @@index([empresaCategoriaId])
   @@index([empresaMarcaId])
+  @@index([unidadMedidaId])
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])
@@ -610,6 +695,7 @@ model Servicio {
   empresaId             String
   sedeId                String?
   empresaCategoriaId    String?
+  unidadMedidaId        String? // Unidad de medida del servicio (ej: hora, día, sesión)
   codigoEmpresa         String   @unique
   codigoSistema         String   @unique
   nombre                String
@@ -643,6 +729,7 @@ model Servicio {
   actualizadoEn       DateTime                 @updatedAt
   detallesComprobante DetalleComprobante[]     @relation("DetalleServicio")
   empresaCategoria    EmpresaCategoria?        @relation(fields: [empresaCategoriaId], references: [id])
+  unidadMedida        EmpresaUnidadMedida?     @relation(fields: [unidadMedidaId], references: [id])
   empresa             Empresa                  @relation(fields: [empresaId], references: [id])
   sede                Sede?                    @relation(fields: [sedeId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ServicioComprobante")
@@ -651,6 +738,7 @@ model Servicio {
   @@index([empresaId])
   @@index([empresaId, codigoEmpresa])
   @@index([empresaCategoriaId])
+  @@index([unidadMedidaId])
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])
@@ -1122,12 +1210,13 @@ model ComprobanteElectronico {
 }
 
 model DetalleComprobante {
-  id             String                 @id @default(cuid())
-  comprobanteId  String
-  productoId     String?
-  servicioId     String?
-  descripcion    String
-  unidadMedida   String                 @default("NIU")
+  id              String  @id @default(cuid())
+  comprobanteId   String
+  productoId      String?
+  servicioId      String?
+  unidadMedidaId  String? // Relación a EmpresaUnidadMedida
+  descripcion     String
+  unidadMedida    String  @default("NIU") // Código SUNAT directo (para compatibilidad)
   cantidad       Decimal                @db.Decimal(12, 2)
   valorUnitario  Decimal                @db.Decimal(12, 2)
   precioUnitario Decimal                @db.Decimal(12, 2)
@@ -1141,13 +1230,15 @@ model DetalleComprobante {
   total          Decimal                @db.Decimal(12, 2)
   creadoEn       DateTime               @default(now())
   actualizadoEn  DateTime               @updatedAt
-  comprobante    ComprobanteElectronico @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
-  producto       Producto?              @relation("DetalleProducto", fields: [productoId], references: [id])
-  servicio       Servicio?              @relation("DetalleServicio", fields: [servicioId], references: [id])
+  comprobante      ComprobanteElectronico  @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  producto         Producto?               @relation("DetalleProducto", fields: [productoId], references: [id])
+  servicio         Servicio?               @relation("DetalleServicio", fields: [servicioId], references: [id])
+  unidadMedidaRef  EmpresaUnidadMedida?    @relation(fields: [unidadMedidaId], references: [id])
 
   @@index([comprobanteId])
   @@index([productoId])
   @@index([servicioId])
+  @@index([unidadMedidaId])
 }
 
 model PlantillaComprobante {
@@ -1686,9 +1777,10 @@ enum TipoArchivo {
 
 /// Variantes de un producto (ej: diferentes colores, tallas, conexiones)
 model ProductoVariante {
-  id         String @id @default(cuid())
-  productoId String
-  empresaId  String
+  id             String  @id @default(cuid())
+  productoId     String
+  empresaId      String
+  unidadMedidaId String? // Unidad de medida específica de la variante
 
   // Identificación de la variante
   nombre        String // "Negro - USB", "Blanco - Bluetooth"
@@ -1719,8 +1811,9 @@ model ProductoVariante {
   actualizadoEn DateTime  @updatedAt
 
   // Relaciones
-  producto      Producto        @relation(fields: [productoId], references: [id], onDelete: Cascade)
-  empresa       Empresa         @relation(fields: [empresaId], references: [id])
+  producto      Producto             @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  empresa       Empresa              @relation(fields: [empresaId], references: [id])
+  unidadMedida  EmpresaUnidadMedida? @relation(fields: [unidadMedidaId], references: [id])
   archivos      Archivo[]
   usadoEnCombos ProductoCombo[] @relation("ComponenteVariante")
 
@@ -1740,6 +1833,7 @@ model ProductoVariante {
   @@unique([empresaId, codigoEmpresa])
   @@index([productoId])
   @@index([empresaId])
+  @@index([unidadMedidaId])
   @@index([sku])
   @@index([isActive])
   @@index([stock])

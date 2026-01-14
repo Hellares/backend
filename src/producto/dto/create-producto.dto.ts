@@ -53,6 +53,14 @@ export class CreateProductoDto {
   empresaMarcaId?: string;
 
   @ApiPropertyOptional({
+    description: 'ID de la unidad de medida (EmpresaUnidadMedida)',
+    example: 'unidad-medida-id-123',
+  })
+  @IsOptional()
+  @IsString()
+  unidadMedidaId?: string;
+
+  @ApiPropertyOptional({
     description: 'SKU del producto',
     example: 'SKU-12345',
   })

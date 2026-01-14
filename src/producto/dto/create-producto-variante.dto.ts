@@ -23,6 +23,10 @@ export class CreateProductoVarianteDto {
 
   @IsString()
   @IsOptional()
+  unidadMedidaId?: string; // ID de la unidad de medida (EmpresaUnidadMedida)
+
+  @IsString()
+  @IsOptional()
   codigoBarras?: string;
 
   // ✅ Atributos estructurados (recomendado)

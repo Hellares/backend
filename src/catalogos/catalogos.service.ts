@@ -1034,4 +1034,290 @@ export class CatalogosService {
       total: categorias.length + marcas.length,
     };
   }
+
+  // ============================================
+  // UNIDADES DE MEDIDA MAESTRAS
+  // ============================================
+
+  /**
+   * Listar todas las unidades de medida maestras (catálogo global SUNAT)
+   */
+  async getUnidadesMaestras(opciones?: {
+    categoria?: string;
+    soloPopulares?: boolean;
+    soloActivas?: boolean;
+  }) {
+    const where: any = {};
+
+    if (opciones?.soloActivas !== false) {
+      where.isActive = true;
+    }
+
+    if (opciones?.soloPopulares) {
+      where.esPopular = true;
+    }
+
+    if (opciones?.categoria) {
+      where.categoria = opciones.categoria;
+    }
+
+    return await this.prisma.unidadMedidaMaestra.findMany({
+      where,
+      orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+    });
+  }
+
+  /**
+   * Listar unidades de medida disponibles para una empresa
+   * (Ya activadas por la empresa)
+   */
+  async getUnidadesDisponiblesParaEmpresa(empresaId: string) {
+    const unidadesEmpresa = await this.prisma.empresaUnidadMedida.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+      },
+      include: {
+        unidadMaestra: true,
+      },
+      orderBy: [{ orden: 'asc' }, { creadoEn: 'asc' }],
+    });
+
+    // Devolver entidad completa para que el frontend pueda usar sus getters
+    return unidadesEmpresa.map((eu) => ({
+      id: eu.id,
+      empresaId: eu.empresaId,
+      unidadMaestraId: eu.unidadMaestraId,
+      nombrePersonalizado: eu.nombrePersonalizado,
+      simboloPersonalizado: eu.simboloPersonalizado,
+      codigoPersonalizado: eu.codigoPersonalizado,
+      descripcion: eu.descripcion,
+      nombreLocal: eu.nombreLocal,
+      simboloLocal: eu.simboloLocal,
+      orden: eu.orden,
+      isVisible: eu.isVisible,
+      isActive: eu.isActive,
+      deletedAt: eu.deletedAt,
+      creadoEn: eu.creadoEn,
+      actualizadoEn: eu.actualizadoEn,
+      // Datos maestros incluidos
+      unidadMaestra: eu.unidadMaestra,
+    }));
+  }
+
+  /**
+   * Activar una unidad de medida maestra para la empresa
+   */
+  async activarUnidadMedidaParaEmpresa(dto: {
+    empresaId: string;
+    unidadMaestraId?: string;
+    nombrePersonalizado?: string;
+    simboloPersonalizado?: string;
+    codigoPersonalizado?: string;
+    descripcion?: string;
+    nombreLocal?: string;
+    simboloLocal?: string;
+    orden?: number;
+  }) {
+    // Ejecutar en transacción para evitar race conditions
+    return await this.prisma.$transaction(async (prisma) => {
+      // Validar que la empresa existe
+      const empresa = await prisma.empresa.findUnique({
+        where: { id: dto.empresaId },
+      });
+
+      if (!empresa) {
+        throw new NotFoundException('Empresa no encontrada');
+      }
+
+      // Si es una unidad maestra, validar que existe
+      if (dto.unidadMaestraId) {
+        const unidadMaestra = await prisma.unidadMedidaMaestra.findUnique({
+          where: { id: dto.unidadMaestraId },
+        });
+
+        if (!unidadMaestra) {
+          throw new NotFoundException('Unidad de medida maestra no encontrada');
+        }
+
+        // Verificar si ya está activada (dentro de la transacción)
+        const existe = await prisma.empresaUnidadMedida.findFirst({
+          where: {
+            empresaId: dto.empresaId,
+            unidadMaestraId: dto.unidadMaestraId,
+            deletedAt: null,
+          },
+        });
+
+        if (existe) {
+          throw new BadRequestException('Esta unidad ya está activada');
+        }
+      } else {
+        // Es una unidad personalizada, validar que tiene nombre y símbolo
+        if (!dto.nombrePersonalizado || !dto.simboloPersonalizado) {
+          throw new BadRequestException(
+            'Las unidades personalizadas requieren nombre y símbolo',
+          );
+        }
+
+        // Validar que no exista otra unidad personalizada con el mismo nombre
+        const duplicadoPersonalizado =
+          await prisma.empresaUnidadMedida.findFirst({
+            where: {
+              empresaId: dto.empresaId,
+              nombrePersonalizado: dto.nombrePersonalizado,
+              deletedAt: null,
+            },
+          });
+
+        if (duplicadoPersonalizado) {
+          throw new BadRequestException(
+            'Ya existe una unidad personalizada con ese nombre',
+          );
+        }
+      }
+
+      // Crear la activación
+      const unidadActivada = await prisma.empresaUnidadMedida.create({
+        data: {
+          empresaId: dto.empresaId,
+          unidadMaestraId: dto.unidadMaestraId,
+          nombrePersonalizado: dto.nombrePersonalizado,
+          simboloPersonalizado: dto.simboloPersonalizado,
+          codigoPersonalizado: dto.codigoPersonalizado,
+          descripcion: dto.descripcion,
+          nombreLocal: dto.nombreLocal,
+          simboloLocal: dto.simboloLocal,
+          orden: dto.orden,
+        },
+        include: {
+          unidadMaestra: true,
+        },
+      });
+
+      this.logger.log(
+        `Unidad de medida ${dto.unidadMaestraId ? 'maestra' : 'personalizada'} activada para empresa ${dto.empresaId}`,
+        {
+          empresaId: dto.empresaId,
+          unidadId: unidadActivada.id,
+          tipo: dto.unidadMaestraId ? 'maestra' : 'personalizada',
+        },
+      );
+
+      return unidadActivada;
+    });
+  }
+
+  /**
+   * Desactivar una unidad de medida para la empresa (soft delete)
+   */
+  async desactivarUnidadMedidaParaEmpresa(
+    id: string,
+    empresaId: string,
+  ): Promise<void> {
+    const unidad = await this.prisma.empresaUnidadMedida.findFirst({
+      where: { id, empresaId },
+    });
+
+    if (!unidad) {
+      throw new NotFoundException('Unidad de medida no encontrada');
+    }
+
+    // Verificar que no esté en uso por productos o servicios
+    const productosConUnidad = await this.prisma.producto.count({
+      where: {
+        empresaId,
+        unidadMedidaId: id,
+        deletedAt: null,
+      },
+    });
+
+    if (productosConUnidad > 0) {
+      throw new BadRequestException(
+        `No se puede desactivar la unidad porque está en uso por ${productosConUnidad} producto(s)`,
+      );
+    }
+
+    const serviciosConUnidad = await this.prisma.servicio.count({
+      where: {
+        empresaId,
+        unidadMedidaId: id,
+        deletedAt: null,
+      },
+    });
+
+    if (serviciosConUnidad > 0) {
+      throw new BadRequestException(
+        `No se puede desactivar la unidad porque está en uso por ${serviciosConUnidad} servicio(s)`,
+      );
+    }
+
+    // Soft delete
+    await this.prisma.empresaUnidadMedida.update({
+      where: { id },
+      data: {
+        deletedAt: new Date(),
+        isActive: false,
+      },
+    });
+
+    this.logger.log(
+      `Unidad de medida desactivada para empresa ${empresaId}: ${id}`,
+    );
+  }
+
+  /**
+   * Activar unidades de medida más comunes automáticamente
+   * (útil al crear una nueva empresa)
+   */
+  async activarUnidadesPopularesParaEmpresa(empresaId: string) {
+    this.logger.log(
+      `Activando unidades de medida populares para empresa ${empresaId}`,
+    );
+
+    const unidadesPopulares = await this.prisma.unidadMedidaMaestra.findMany({
+      where: {
+        esPopular: true,
+        isActive: true,
+      },
+      orderBy: { orden: 'asc' },
+    });
+
+    const unidadesActivadas = [];
+
+    for (const unidad of unidadesPopulares) {
+      try {
+        // Verificar si ya está activada
+        const existe = await this.prisma.empresaUnidadMedida.findFirst({
+          where: {
+            empresaId,
+            unidadMaestraId: unidad.id,
+            deletedAt: null,
+          },
+        });
+
+        if (!existe) {
+          const activada = await this.activarUnidadMedidaParaEmpresa({
+            empresaId,
+            unidadMaestraId: unidad.id,
+          });
+          unidadesActivadas.push(activada);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Error activando unidad ${unidad.nombre}: ${error.message}`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `${unidadesActivadas.length} unidades populares activadas para empresa ${empresaId}`,
+    );
+
+    return {
+      unidades: unidadesActivadas,
+      total: unidadesActivadas.length,
+    };
+  }
 }

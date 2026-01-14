@@ -268,6 +268,22 @@ export class EmpresaService {
       // No lanzar error, continuar con la creación de empresa
     }
 
+    // Activar unidades de medida populares por defecto
+    try {
+      const resultado = await this.catalogosService.activarUnidadesPopularesParaEmpresa(
+        empresa.id
+      );
+      this.logger.log(
+        `Unidades de medida populares activadas: ${resultado.total} unidades`
+      );
+    } catch (error) {
+      this.logger.warn('Error al activar unidades de medida populares', {
+        error: error.message,
+        empresaId: empresa.id
+      });
+      // No lanzar error, continuar con la creación de empresa
+    }
+
     this.logger.success('Empresa created successfully', {
       empresaId: empresa.id,
       nombre: empresa.nombre,
@@ -424,6 +440,22 @@ export class EmpresaService {
       }
     } catch (error) {
       this.logger.warn(`Error al activar catálogos: ${error.message}`);
+      // No lanzar error, la empresa ya fue creada
+    }
+
+    // Activar unidades de medida populares por defecto
+    try {
+      const unidadesActivadas = await this.catalogosService.activarUnidadesPopularesParaEmpresa(
+        empresa.id
+      );
+      this.logger.log(
+        `Unidades de medida populares activadas: ${unidadesActivadas.total} unidades`
+      );
+    } catch (error) {
+      this.logger.warn('Error al activar unidades de medida populares', {
+        error: error.message,
+        empresaId: empresa.id
+      });
       // No lanzar error, la empresa ya fue creada
     }
 
