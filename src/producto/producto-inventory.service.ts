@@ -10,11 +10,14 @@ import { ProductoComboService } from './producto-combo.service';
 /**
  * Servicio especializado para gestión de inventario
  * Responsabilidades:
- * - Stock de productos y variantes
- * - Actualización de stock
+ * - Stock de productos y variantes (MIGRADO A ProductoStock)
+ * - Actualización de stock por sede
  * - Cálculo de stock total
  * - Validaciones de stock
  * - Stock de combos (delegando a ProductoComboService)
+ *
+ * IMPORTANTE: Este servicio ahora usa ProductoStock (sistema nuevo)
+ * Los campos legacy Producto.stock y ProductoVariante.stock están deprecated
  */
 @Injectable()
 export class ProductoInventoryService {
@@ -35,15 +38,25 @@ export class ProductoInventoryService {
 
   /**
    * Actualiza el stock de un producto sin variantes
+   * MIGRADO: Ahora usa ProductoStock en lugar de Producto.stock
+   *
+   * @param id - ID del producto
+   * @param empresaId - ID de la empresa
+   * @param sedeId - ID de la sede donde actualizar el stock
+   * @param cantidad - Cantidad a agregar/quitar
+   * @param operacion - 'agregar' o 'quitar'
+   * @param usuarioId - ID del usuario que realiza la operación
    * @throws BadRequestException si el producto tiene variantes
-   * @throws NotFoundException si el producto no existe
+   * @throws NotFoundException si el producto no existe o no tiene stock en la sede
    */
   async updateStock(
     id: string,
     empresaId: string,
+    sedeId: string,
     cantidad: number,
     operacion: 'agregar' | 'quitar',
-  ): Promise<{ stock: number }> {
+    usuarioId: string,
+  ): Promise<{ stock: number; stockTotal: number }> {
     const producto = await this.prisma.producto.findFirst({
       where: { id, empresaId, isActive: true, deletedAt: null },
     });
@@ -56,32 +69,72 @@ export class ProductoInventoryService {
     if (producto.tieneVariantes) {
       throw new BadRequestException(
         'No se puede actualizar el stock directamente en productos con variantes. ' +
-        'Actualice el stock de cada variante individualmente.',
+          'Actualice el stock de cada variante individualmente.',
       );
     }
 
-    const nuevoStock =
-      operacion === 'agregar'
-        ? producto.stock + cantidad
-        : producto.stock - cantidad;
-
-    if (nuevoStock < 0) {
-      throw new BadRequestException('Stock insuficiente');
-    }
-
-    const productoActualizado = await this.prisma.producto.update({
-      where: { id },
-      data: { stock: nuevoStock },
+    // Buscar ProductoStock en la sede específica
+    const productoStock = await this.prisma.productoStock.findFirst({
+      where: {
+        productoId: id,
+        sedeId,
+        empresaId,
+      },
     });
 
-    this.logger.info(`Stock actualizado para producto ${id}`, {
-      stockAnterior: producto.stock,
+    if (!productoStock) {
+      throw new NotFoundException(
+        `El producto no tiene stock registrado en la sede especificada. ` +
+          `Use el endpoint POST /producto-stock para crear el stock inicial.`,
+      );
+    }
+
+    // Calcular nuevo stock
+    const cantidadAjuste = operacion === 'agregar' ? cantidad : -cantidad;
+    const nuevoStock = productoStock.stockActual + cantidadAjuste;
+
+    if (nuevoStock < 0) {
+      throw new BadRequestException(
+        `Stock insuficiente. Disponible: ${productoStock.stockActual}, Solicitado: ${cantidad}`,
+      );
+    }
+
+    // Actualizar stock en transacción
+    await this.prisma.$transaction(async (tx) => {
+      await tx.productoStock.update({
+        where: { id: productoStock.id },
+        data: { stockActual: nuevoStock },
+      });
+
+      // Registrar movimiento
+      await tx.movimientoStock.create({
+        data: {
+          sedeId,
+          empresaId,
+          productoStockId: productoStock.id,
+          tipo: operacion === 'agregar' ? 'ENTRADA_AJUSTE' : 'SALIDA_AJUSTE',
+          tipoDocumento: 'AJUSTE_MANUAL',
+          cantidadAnterior: productoStock.stockActual,
+          cantidad: cantidadAjuste,
+          cantidadNueva: nuevoStock,
+          motivo: `Ajuste ${operacion === 'agregar' ? 'entrada' : 'salida'} manual`,
+          usuarioId,
+        },
+      });
+    });
+
+    // Calcular stock total (todas las sedes)
+    const stockTotal = await this.getStockTotal(id, empresaId);
+
+    this.logger.info(`Stock actualizado para producto ${id} en sede ${sedeId}`, {
+      stockAnterior: productoStock.stockActual,
       stockNuevo: nuevoStock,
       operacion,
       cantidad,
+      stockTotal,
     });
 
-    return { stock: productoActualizado.stock };
+    return { stock: nuevoStock, stockTotal };
   }
 
   // =====================================================
@@ -89,9 +142,11 @@ export class ProductoInventoryService {
   // =====================================================
 
   /**
-   * Obtiene el stock total de un producto
-   * - Si tiene variantes: suma el stock de todas las variantes activas
-   * - Si no tiene variantes: retorna el stock del producto base
+   * Obtiene el stock total de un producto en TODAS las sedes
+   * MIGRADO: Ahora usa ProductoStock (suma de todas las sedes)
+   *
+   * - Si tiene variantes: suma el stock de todas las variantes en todas las sedes
+   * - Si no tiene variantes: suma el stock del producto en todas las sedes
    */
   async getStockTotal(productoId: string, empresaId: string): Promise<number> {
     const producto = await this.prisma.producto.findFirst({
@@ -106,24 +161,46 @@ export class ProductoInventoryService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    // Si tiene variantes, sumar stock de todas las variantes activas
+    // Si tiene variantes, sumar stock de todas las variantes en todas las sedes
     if (producto.tieneVariantes) {
-      const result = await this.prisma.productoVariante.aggregate({
+      const variantes = await this.prisma.productoVariante.findMany({
         where: {
           productoId,
           isActive: true,
           deletedAt: null,
         },
-        _sum: {
-          stock: true,
+        select: {
+          id: true,
         },
       });
 
-      return result._sum.stock || 0;
+      const varianteIds = variantes.map((v) => v.id);
+
+      const result = await this.prisma.productoStock.aggregate({
+        where: {
+          varianteId: { in: varianteIds },
+          empresaId,
+        },
+        _sum: {
+          stockActual: true,
+        },
+      });
+
+      return result._sum.stockActual || 0;
     }
 
-    // Si no tiene variantes, retornar stock del producto base
-    return producto.stock;
+    // Si no tiene variantes, sumar stock del producto en todas las sedes
+    const result = await this.prisma.productoStock.aggregate({
+      where: {
+        productoId,
+        empresaId,
+      },
+      _sum: {
+        stockActual: true,
+      },
+    });
+
+    return result._sum.stockActual || 0;
   }
 
   /**
@@ -155,30 +232,108 @@ export class ProductoInventoryService {
 
   /**
    * Obtiene productos con stock bajo (menor o igual al stock mínimo)
+   * MIGRADO: Ahora usa ProductoStock
+   * @deprecated Use ProductoStockService.getProductosBajoMinimo() en su lugar
    */
   async getProductosStockBajo(
     empresaId: string,
-  ): Promise<Array<{ id: string; nombre: string; stock: number; stockMinimo: number }>> {
-    const productos = await this.prisma.producto.findMany({
-      where: {
-        empresaId,
-        deletedAt: null,
-        isActive: true,
-        stock: {
-          lte: this.prisma.producto.fields.stockMinimo,
+    sedeId?: string,
+  ): Promise<
+    Array<{
+      id: string;
+      nombre: string;
+      stock: number;
+      stockMinimo: number;
+      sedeId: string;
+      sedeName: string;
+    }>
+  > {
+    const where: any = {
+      empresaId,
+      stockMinimo: { not: null },
+    };
+
+    if (sedeId) {
+      where.sedeId = sedeId;
+    }
+
+    const productosBajos = await this.prisma.productoStock.findMany({
+      where,
+      include: {
+        producto: {
+          select: {
+            id: true,
+            nombre: true,
+          },
+        },
+        variante: {
+          select: {
+            id: true,
+            nombre: true,
+          },
+        },
+        sede: {
+          select: {
+            id: true,
+            nombre: true,
+          },
         },
       },
-      select: {
-        id: true,
-        nombre: true,
-        stock: true,
-        stockMinimo: true,
-      },
       orderBy: {
-        stock: 'asc',
+        stockActual: 'asc',
       },
     });
 
-    return productos;
+    // Filtrar donde stockActual <= stockMinimo
+    const filtrados = productosBajos
+      .filter((p) => p.stockMinimo && p.stockActual <= p.stockMinimo)
+      .map((p) => ({
+        id: p.producto?.id || p.variante?.id || '',
+        nombre: p.producto?.nombre || p.variante?.nombre || '',
+        stock: p.stockActual,
+        stockMinimo: p.stockMinimo || 0,
+        sedeId: p.sedeId,
+        sedeName: p.sede.nombre,
+      }));
+
+    return filtrados;
+  }
+
+  /**
+   * Obtiene el stock de un producto en una sede específica
+   */
+  async getStockPorSede(
+    productoId: string,
+    sedeId: string,
+    empresaId: string,
+  ): Promise<number> {
+    const stock = await this.prisma.productoStock.findFirst({
+      where: {
+        productoId,
+        sedeId,
+        empresaId,
+      },
+    });
+
+    return stock?.stockActual || 0;
+  }
+
+  /**
+   * Obtiene el stock de una variante en una sede específica
+   */
+  async getStockVariantePorSede(
+    varianteId: string,
+    sedeId: string,
+    empresaId: string,
+  ): Promise<number> {
+    const stock = await this.prisma.productoStock.findFirst({
+      where: {
+        varianteId,
+        sedeId,
+        empresaId,
+      },
+    });
+
+    return stock?.stockActual || 0;
   }
 }

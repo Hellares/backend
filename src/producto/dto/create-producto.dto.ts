@@ -29,12 +29,14 @@ export class CreateProductoDto {
   empresaId: string;
 
   @ApiPropertyOptional({
-    description: 'ID de la sede (opcional)',
-    example: 'sede-id-123',
+    description: 'IDs de las sedes donde se creará el producto. Si no se proporciona, se asigna a la sede por defecto del usuario',
+    example: ['sede-id-123', 'sede-id-456'],
+    type: [String],
   })
   @IsOptional()
-  @IsString()
-  sedeId?: string;
+  @IsArray()
+  @IsString({ each: true })
+  sedesIds?: string[];
 
   @ApiPropertyOptional({
     description: 'ID de la categoría activada para la empresa (EmpresaCategoria)',
@@ -117,26 +119,28 @@ export class CreateProductoDto {
   @Type(() => Number)
   precioCosto?: number;
 
-  @ApiPropertyOptional({
-    description: 'Stock disponible',
-    example: 50,
-    default: 0,
-  })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Type(() => Number)
-  stock?: number;
+  // DEPRECATED: Stock ahora se maneja mediante ProductoStock por sede
+  // Para agregar stock inicial, use POST /producto-stock después de crear el producto
+  // @ApiPropertyOptional({
+  //   description: 'Stock disponible',
+  //   example: 50,
+  //   default: 0,
+  // })
+  // @IsOptional()
+  // @IsInt()
+  // @Min(0)
+  // @Type(() => Number)
+  // stock?: number;
 
-  @ApiPropertyOptional({
-    description: 'Stock mínimo antes de reorden',
-    example: 10,
-  })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Type(() => Number)
-  stockMinimo?: number;
+  // @ApiPropertyOptional({
+  //   description: 'Stock mínimo antes de reorden',
+  //   example: 10,
+  // })
+  // @IsOptional()
+  // @IsInt()
+  // @Min(0)
+  // @Type(() => Number)
+  // stockMinimo?: number;
 
   @ApiPropertyOptional({
     description: 'Peso en kilogramos',

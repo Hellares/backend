@@ -30,8 +30,17 @@ export class ProductoVarianteResponseDto {
   precioCosto?: number;
   precioOferta?: number;
 
-  stock: number;
-  stockMinimo?: number;
+  // DEPRECATED: Stock ahora se maneja mediante ProductoStock por sede
+  stock: number; // Stock total calculado desde ProductoStock
+  stockMinimo?: number; // Deprecated, se mantiene por compatibilidad
+
+  // Stock desglosado por sede (nuevo sistema)
+  stocksPorSede?: {
+    sedeId: string;
+    sedeNombre: string;
+    sedeCodigo: string;
+    cantidad: number;
+  }[];
 
   peso?: number;
   dimensiones?: Record<string, number>;

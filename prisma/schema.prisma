@@ -106,6 +106,11 @@ model Empresa {
   usuariosConDescuento UsuarioDescuento[]
   historialDescuentos  DescuentoUsoHistorial[]
 
+  // Relaciones para inventario por sede
+  stocksProductos     ProductoStock[]
+  movimientosStock    MovimientoStock[]
+  transferenciasStock TransferenciaStock[]
+
   @@index([subdominio])
   @@index([isActive])
   @@index([ruc])
@@ -565,8 +570,14 @@ model Producto {
   descripcion        String?
   precio             Decimal  @db.Decimal(10, 2)
   precioCosto        Decimal? @db.Decimal(10, 2)
+
+  // @deprecated Stock global sin separación por sede. Usar stocksPorSede[] en su lugar
+  // Este campo se mantiene por compatibilidad temporal y será removido en futuras versiones
   stock              Int      @default(0)
+
+  // @deprecated Mínimo global. Ahora se configura por sede en ProductoStock.stockMinimo
   stockMinimo        Int?
+
   peso               Decimal? @db.Decimal(10, 3)
   dimensiones        Json?
   videoUrl           String?
@@ -624,6 +635,9 @@ model Producto {
   // Relaciones para sistema de descuentos
   descuentosAplicables PoliticaDescuentoProducto[]
   historialDescuentos  DescuentoUsoHistorial[]
+
+  // Relaciones para inventario por sede
+  stocksPorSede ProductoStock[]
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
@@ -1347,11 +1361,16 @@ model Sede {
   // Relaciones para sistema de descuentos
   historialDescuentos DescuentoUsoHistorial[]
 
+  // Relaciones para inventario por sede
+  stocksProductos         ProductoStock[]
+  movimientosStock        MovimientoStock[]
+  transferenciasOrigen    TransferenciaStock[] @relation("TransferenciasOrigen")
+  transferenciasDestino   TransferenciaStock[] @relation("TransferenciasDestino")
+
   // Relaciones futuras (descomentar cuando se implementen)
   // ventas      Venta[]
   // cotizaciones Cotizacion[]
   // cajas       Caja[]
-  // movimientosStock MovimientoStock[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId])
@@ -1363,6 +1382,167 @@ model Sede {
   @@index([empresaId, isActive])
   @@index([empresaId, deletedAt])
   @@index([empresaId, isActive, deletedAt])
+}
+
+// =========================================
+// 📦 MÓDULO DE INVENTARIO POR SEDE
+// =========================================
+/// Stock de productos por sede
+/// Permite gestionar inventario independiente en cada sede
+model ProductoStock {
+  id         String @id @default(cuid())
+  sedeId     String
+  productoId String?
+  varianteId String?
+  empresaId  String
+
+  // Stock actual
+  stockActual  Int
+  stockMinimo  Int?
+  stockMaximo  Int?
+
+  // Ubicación dentro de la sede
+  ubicacion    String? // Pasillo, estante, etc.
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  sede        Sede              @relation(fields: [sedeId], references: [id])
+  empresa     Empresa           @relation(fields: [empresaId], references: [id])
+  producto    Producto?         @relation(fields: [productoId], references: [id])
+  variante    ProductoVariante? @relation(fields: [varianteId], references: [id])
+  movimientos MovimientoStock[]
+
+  @@unique([sedeId, productoId, varianteId])
+  @@index([sedeId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([stockActual])
+  @@index([empresaId, sedeId]) // Consultas de stock por empresa y sede
+  @@index([sedeId, stockActual]) // Ordenar por stock en sede
+}
+
+/// Registro de movimientos de stock (entradas, salidas, ajustes)
+model MovimientoStock {
+  id              String @id @default(cuid())
+  sedeId          String
+  productoStockId String
+  empresaId       String
+
+  // Tipo de movimiento
+  tipo            TipoMovimientoStock
+  tipoDocumento   String? // COMPRA, VENTA, AJUSTE, TRANSFERENCIA, etc.
+  numeroDocumento String?
+
+  // Cantidades
+  cantidadAnterior Int
+  cantidad         Int // Positivo = entrada, Negativo = salida
+  cantidadNueva    Int
+
+  // Motivo
+  motivo        String?
+  observaciones String?
+
+  // Relación con transferencias (si aplica)
+  transferenciaId String?
+
+  // Usuario responsable
+  usuarioId String
+
+  // Auditoría
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  sede               Sede                  @relation(fields: [sedeId], references: [id])
+  empresa            Empresa               @relation(fields: [empresaId], references: [id])
+  productoStock      ProductoStock         @relation(fields: [productoStockId], references: [id])
+  transferencia      TransferenciaStock?   @relation(fields: [transferenciaId], references: [id])
+
+  @@index([sedeId])
+  @@index([empresaId])
+  @@index([productoStockId])
+  @@index([tipo])
+  @@index([creadoEn])
+  @@index([transferenciaId])
+  @@index([productoStockId, creadoEn]) // Historial de movimientos ordenado
+  @@index([sedeId, tipo]) // Filtrar movimientos por sede y tipo
+}
+
+/// Transferencias de stock entre sedes
+model TransferenciaStock {
+  id             String @id @default(cuid())
+  empresaId      String
+  sedeOrigenId   String
+  sedeDestinoId  String
+
+  // Identificación
+  codigo String @unique
+
+  // Productos transferidos
+  productoId String?
+  varianteId String?
+  cantidad   Int
+
+  // Estado
+  estado EstadoTransferencia @default(PENDIENTE)
+
+  // Usuarios responsables
+  solicitadoPor String
+  aprobadoPor   String?
+  recibidoPor   String?
+
+  // Fechas
+  fechaSolicitud  DateTime  @default(now())
+  fechaAprobacion DateTime?
+  fechaEnvio      DateTime?
+  fechaRecepcion  DateTime?
+
+  // Observaciones
+  motivo        String?
+  observaciones String?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa       Empresa            @relation(fields: [empresaId], references: [id])
+  sedeOrigen    Sede               @relation("TransferenciasOrigen", fields: [sedeOrigenId], references: [id])
+  sedeDestino   Sede               @relation("TransferenciasDestino", fields: [sedeDestinoId], references: [id])
+  movimientos   MovimientoStock[]
+
+  @@index([empresaId])
+  @@index([sedeOrigenId])
+  @@index([sedeDestinoId])
+  @@index([estado])
+  @@index([creadoEn])
+  @@index([empresaId, estado]) // Filtrar transferencias por empresa y estado
+  @@index([codigo]) // Búsqueda por código de transferencia
+}
+
+enum TipoMovimientoStock {
+  ENTRADA_COMPRA        // Entrada por compra
+  ENTRADA_TRANSFERENCIA // Entrada por transferencia de otra sede
+  ENTRADA_AJUSTE        // Ajuste de inventario (entrada)
+  ENTRADA_DEVOLUCION    // Devolución de cliente
+  SALIDA_VENTA          // Salida por venta
+  SALIDA_TRANSFERENCIA  // Salida por transferencia a otra sede
+  SALIDA_AJUSTE         // Ajuste de inventario (salida)
+  SALIDA_MERMA          // Merma o pérdida
+  SALIDA_ROBO           // Robo
+  SALIDA_DONACION       // Donación
+}
+
+enum EstadoTransferencia {
+  BORRADOR      // En creación
+  PENDIENTE     // Solicitada, esperando aprobación
+  APROBADA      // Aprobada, lista para envío
+  EN_TRANSITO   // Enviada, en camino
+  RECIBIDA      // Recibida en sede destino
+  RECHAZADA     // Rechazada
+  CANCELADA     // Cancelada
 }
 
 model Archivo {
@@ -1793,8 +1973,12 @@ model ProductoVariante {
   precioCosto  Decimal? @db.Decimal(10, 2)
   precioOferta Decimal? @db.Decimal(10, 2)
 
-  // Inventario específico de la variante
+  // @deprecated Inventario específico de la variante (sistema legacy)
+  // Stock global sin separación por sede. Usar stocksPorSede[] en su lugar
+  // Este campo se mantiene por compatibilidad temporal y será removido en futuras versiones
   stock       Int  @default(0)
+
+  // @deprecated Mínimo global. Ahora se configura por sede en ProductoStock.stockMinimo
   stockMinimo Int?
 
   // Características físicas (si difieren del producto base)
@@ -1828,6 +2012,9 @@ model ProductoVariante {
 
   // Relaciones para sistema de descuentos
   historialDescuentos DescuentoUsoHistorial[]
+
+  // Relaciones para inventario por sede
+  stocksPorSede ProductoStock[]
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
@@ -2627,131 +2814,6 @@ model DescuentoUsoHistorial {
  * RECHAZADA
  * VENCIDA
  * CONVERTIDA_A_VENTA
- * }
- * // =========================================
- * // 📦 MÓDULO DE INVENTARIO POR SEDE
- * // =========================================
- * /// Stock de productos por sede
- * /// Permite gestionar inventario independiente en cada sede
- * model ProductoStock {
- * id         String @id @default(cuid())
- * sedeId     String
- * productoId String?
- * varianteId String?
- * empresaId  String
- * // Stock actual
- * stockActual  Int
- * stockMinimo  Int?
- * stockMaximo  Int?
- * // Ubicación dentro de la sede
- * ubicacion    String? // Pasillo, estante, etc.
- * // Auditoría
- * creadoEn      DateTime @default(now())
- * actualizadoEn DateTime @updatedAt
- * // Relaciones
- * sede      Sede             @relation(fields: [sedeId], references: [id])
- * empresa   Empresa          @relation(fields: [empresaId], references: [id])
- * // producto  Producto?        @relation(fields: [productoId], references: [id])
- * // variante  ProductoVariante? @relation(fields: [varianteId], references: [id])
- * movimientos MovimientoStock[]
- * @@unique([sedeId, productoId, varianteId])
- * @@index([sedeId])
- * @@index([productoId])
- * @@index([varianteId])
- * @@index([stockActual])
- * }
- * /// Registro de movimientos de stock (entradas, salidas, ajustes)
- * model MovimientoStock {
- * id             String @id @default(cuid())
- * sedeId         String
- * productoStockId String
- * empresaId      String
- * // Tipo de movimiento
- * tipo           TipoMovimientoStock
- * tipoDocumento  String? // COMPRA, VENTA, AJUSTE, TRANSFERENCIA, etc.
- * numeroDocumento String?
- * // Cantidades
- * cantidadAnterior Int
- * cantidad         Int // Positivo = entrada, Negativo = salida
- * cantidadNueva    Int
- * // Motivo
- * motivo      String?
- * observaciones String?
- * // Relación con transferencias (si aplica)
- * transferenciaId String?
- * // Usuario responsable
- * usuarioId String
- * // Auditoría
- * creadoEn DateTime @default(now())
- * // Relaciones
- * sede          Sede           @relation(fields: [sedeId], references: [id])
- * productoStock ProductoStock  @relation(fields: [productoStockId], references: [id])
- * // transferencia TransferenciaStock? @relation(fields: [transferenciaId], references: [id])
- * @@index([sedeId])
- * @@index([productoStockId])
- * @@index([tipo])
- * @@index([creadoEn])
- * @@index([transferenciaId])
- * }
- * /// Transferencias de stock entre sedes
- * model TransferenciaStock {
- * id              String @id @default(cuid())
- * empresaId       String
- * sedeOrigenId    String
- * sedeDestinoId   String
- * // Identificación
- * codigo          String @unique
- * // Productos transferidos
- * productoId      String?
- * varianteId      String?
- * cantidad        Int
- * // Estado
- * estado          EstadoTransferencia @default(PENDIENTE)
- * // Usuarios responsables
- * solicitadoPor   String
- * aprobadoPor     String?
- * recibidoPor     String?
- * // Fechas
- * fechaSolicitud  DateTime @default(now())
- * fechaAprobacion DateTime?
- * fechaEnvio      DateTime?
- * fechaRecepcion  DateTime?
- * // Observaciones
- * motivo          String?
- * observaciones   String?
- * // Auditoría
- * creadoEn        DateTime @default(now())
- * actualizadoEn   DateTime @updatedAt
- * // Relaciones
- * empresa      Empresa @relation(fields: [empresaId], references: [id])
- * sedeOrigen   Sede    @relation("TransferenciasOrigen", fields: [sedeOrigenId], references: [id])
- * sedeDestino  Sede    @relation("TransferenciasDestino", fields: [sedeDestinoId], references: [id])
- * @@index([empresaId])
- * @@index([sedeOrigenId])
- * @@index([sedeDestinoId])
- * @@index([estado])
- * @@index([creadoEn])
- * }
- * enum TipoMovimientoStock {
- * ENTRADA_COMPRA      // Entrada por compra
- * ENTRADA_TRANSFERENCIA // Entrada por transferencia de otra sede
- * ENTRADA_AJUSTE      // Ajuste de inventario (entrada)
- * ENTRADA_DEVOLUCION  // Devolución de cliente
- * SALIDA_VENTA        // Salida por venta
- * SALIDA_TRANSFERENCIA // Salida por transferencia a otra sede
- * SALIDA_AJUSTE       // Ajuste de inventario (salida)
- * SALIDA_MERMA        // Merma o pérdida
- * SALIDA_ROBO         // Robo
- * SALIDA_DONACION     // Donación
- * }
- * enum EstadoTransferencia {
- * BORRADOR      // En creación
- * PENDIENTE     // Solicitada, esperando aprobación
- * APROBADA      // Aprobada, lista para envío
- * EN_TRANSITO   // Enviada, en camino
- * RECIBIDA      // Recibida en sede destino
- * RECHAZADA     // Rechazada
- * CANCELADA     // Cancelada
  * }
  * // =========================================
  * // 💵 MÓDULO DE CAJA POR SEDE

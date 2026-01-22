@@ -30,6 +30,7 @@ import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission, Permission } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { QueryProductoDto } from './dto/query-producto.dto';
@@ -425,13 +426,30 @@ export class ProductoController {
 
   @Patch(':id/stock')
   @RequiresPermission(Permission.MANAGE_PRODUCTS)
-  @ApiOperation({ summary: 'Actualizar stock de un producto' })
+  @ApiOperation({
+    summary: 'Actualizar stock de un producto (MIGRADO a ProductoStock)',
+    description:
+      'Actualiza el stock de un producto en una sede específica. ' +
+      'IMPORTANTE: Ahora requiere sedeId. Usa ProductoStock en lugar del sistema legacy.',
+  })
   @ApiResponse({
     status: 200,
     description: 'Stock actualizado exitosamente',
-    type: ProductoResponseDto,
+    schema: {
+      type: 'object',
+      properties: {
+        stock: {
+          type: 'number',
+          description: 'Stock actualizado en la sede especificada',
+        },
+        stockTotal: {
+          type: 'number',
+          description: 'Stock total del producto en todas las sedes',
+        },
+      },
+    },
   })
-  @ApiResponse({ status: 400, description: 'Stock insuficiente' })
+  @ApiResponse({ status: 400, description: 'Stock insuficiente o producto no tiene stock en sede' })
   @ApiResponse({ status: 404, description: 'Producto no encontrado' })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -441,17 +459,21 @@ export class ProductoController {
   async updateStock(
     @Param('id') id: string,
     @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
     @Body()
     body: {
+      sedeId: string;
       cantidad: number;
       operacion: 'agregar' | 'quitar';
     },
-  ): Promise<ProductoResponseDto> {
+  ): Promise<{ stock: number; stockTotal: number }> {
     return await this.productoService.updateStock(
       id,
       empresaId,
+      body.sedeId,
       body.cantidad,
       body.operacion,
+      user.sub,
     );
   }
 

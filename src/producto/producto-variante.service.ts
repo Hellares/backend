@@ -117,6 +117,18 @@ export class ProductoVarianteService {
             },
           },
         },
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -141,6 +153,18 @@ export class ProductoVarianteService {
                   clave: true,
                   tipo: true,
                   unidad: true,
+                },
+              },
+            },
+          },
+          stocksPorSede: {
+            select: {
+              stockActual: true,
+              sede: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  codigo: true,
                 },
               },
             },
@@ -214,6 +238,18 @@ export class ProductoVarianteService {
             },
           },
         },
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        },
       },
       orderBy: { orden: 'asc' },
     });
@@ -250,6 +286,18 @@ export class ProductoVarianteService {
                 clave: true,
                 tipo: true,
                 unidad: true,
+              },
+            },
+          },
+        },
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
               },
             },
           },
@@ -353,6 +401,18 @@ export class ProductoVarianteService {
             },
           },
         },
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -385,6 +445,18 @@ export class ProductoVarianteService {
                   clave: true,
                   tipo: true,
                   unidad: true,
+                },
+              },
+            },
+          },
+          stocksPorSede: {
+            select: {
+              stockActual: true,
+              sede: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  codigo: true,
                 },
               },
             },
@@ -612,6 +684,18 @@ export class ProductoVarianteService {
             },
           },
         },
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -634,6 +718,29 @@ export class ProductoVarianteService {
    * Mapear a DTO de respuesta (formato estructurado)
    */
   private mapToResponseDto(variante: any): ProductoVarianteResponseDto {
+    // Calcular stock total desde ProductoStock (nuevo sistema multi-sede)
+    let stockTotal = 0;
+    let stocksPorSede: any[] | undefined = undefined;
+
+    if (variante.stocksPorSede && variante.stocksPorSede.length > 0) {
+      // Calcular total sumando todas las sedes
+      stockTotal = variante.stocksPorSede.reduce(
+        (sum: number, stock: any) => sum + stock.stockActual,
+        0,
+      );
+
+      // Preparar desglose por sede
+      stocksPorSede = variante.stocksPorSede.map((stock: any) => ({
+        sedeId: stock.sede.id,
+        sedeNombre: stock.sede.nombre,
+        sedeCodigo: stock.sede.codigo,
+        cantidad: stock.stockActual,
+      }));
+    } else {
+      // Fallback para variantes legacy que aún usan el campo deprecated
+      stockTotal = variante.stock || 0;
+    }
+
     return {
       id: variante.id,
       productoId: variante.productoId,
@@ -657,8 +764,9 @@ export class ProductoVarianteService {
       precio: Number(variante.precio),
       precioCosto: variante.precioCosto ? Number(variante.precioCosto) : undefined,
       precioOferta: variante.precioOferta ? Number(variante.precioOferta) : undefined,
-      stock: variante.stock,
-      stockMinimo: variante.stockMinimo,
+      stock: stockTotal, // Stock total calculado desde ProductoStock
+      stockMinimo: variante.stockMinimo, // Deprecated, se mantiene por compatibilidad
+      stocksPorSede: stocksPorSede, // Desglose de stock por sede
       peso: variante.peso ? Number(variante.peso) : undefined,
       dimensiones: variante.dimensiones as Record<string, number> | undefined,
       isActive: variante.isActive,
@@ -899,5 +1007,84 @@ export class ProductoVarianteService {
     );
 
     this.logger.debug(`Migrados ${atributosProducto.length} atributos del producto ${productoId} a variante ${varianteId}`);
+  }
+
+  /**
+   * Migra registros de ProductoStock de un producto base a una variante
+   * Esto se ejecuta cuando se habilitan variantes y se crea la variante por defecto
+   * Preserva el stock de todas las sedes y genera movimientos de auditoría
+   *
+   * @param productoId ID del producto origen
+   * @param varianteId ID de la variante destino
+   * @param empresaId ID de la empresa
+   * @param usuarioId ID del usuario que realiza la operación
+   * @param tx Transacción de Prisma (opcional)
+   */
+  async migrarProductoStockAVariante(
+    productoId: string,
+    varianteId: string,
+    empresaId: string,
+    usuarioId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const prisma = tx || this.prisma;
+
+    // Buscar todos los ProductoStock del producto
+    const stocksDelProducto = await prisma.productoStock.findMany({
+      where: {
+        productoId,
+        empresaId,
+        varianteId: null,
+      },
+      include: {
+        sede: {
+          select: {
+            nombre: true,
+          },
+        },
+      },
+    });
+
+    if (stocksDelProducto.length === 0) {
+      this.logger.debug(`No hay registros de ProductoStock para migrar del producto ${productoId} a variante ${varianteId}`);
+      return;
+    }
+
+    this.logger.info(`Migrando ${stocksDelProducto.length} registros de ProductoStock del producto ${productoId} a variante ${varianteId}`);
+
+    // Migrar cada registro a la variante
+    for (const stock of stocksDelProducto) {
+      // Actualizar ProductoStock: desvincular del producto y vincular a variante
+      await prisma.productoStock.update({
+        where: { id: stock.id },
+        data: {
+          productoId: null,     // Quitar del producto
+          varianteId: varianteId, // Asignar a variante
+        },
+      });
+
+      // Registrar movimiento de auditoría (sin cambio de cantidad)
+      await prisma.movimientoStock.create({
+        data: {
+          sedeId: stock.sedeId,
+          empresaId,
+          productoStockId: stock.id,
+          tipo: 'ENTRADA_AJUSTE',
+          tipoDocumento: 'MIGRACION_VARIANTE',
+          cantidadAnterior: stock.stockActual,
+          cantidad: 0, // No cambia cantidad
+          cantidadNueva: stock.stockActual,
+          motivo: `Migración de stock al habilitar variantes en producto. Stock preservado en variante por defecto.`,
+          observaciones: `Sede: ${stock.sede.nombre} | Stock migrado: ${stock.stockActual} unidades`,
+          usuarioId,
+        },
+      });
+
+      this.logger.debug(
+        `Stock migrado en sede ${stock.sede.nombre}: ${stock.stockActual} unidades (ProductoStock ID: ${stock.id})`,
+      );
+    }
+
+    this.logger.info(`Migración completada: ${stocksDelProducto.length} registros de ProductoStock migrados exitosamente`);
   }
 }

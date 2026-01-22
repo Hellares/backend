@@ -180,21 +180,42 @@ export class ProductoCatalogService {
       producto.empresaMarca?.nombrePersonalizado ||
       null;
 
-    // Calcular stock total si tiene variantes
-    let stockTotal = producto.stock;
-    if (producto.tieneVariantes && producto.variantes?.length > 0) {
-      stockTotal = producto.variantes.reduce(
-        (sum: number, variante: any) => sum + variante.stock,
+    // Calcular stock total desde ProductoStock (nuevo sistema multi-sede)
+    let stockTotal = 0;
+    let stocksPorSede: any[] | undefined = undefined;
+
+    if (producto.stocksPorSede && producto.stocksPorSede.length > 0) {
+      // Calcular total sumando todas las sedes
+      stockTotal = producto.stocksPorSede.reduce(
+        (sum: number, stock: any) => sum + stock.stockActual,
         0,
       );
+
+      // Preparar desglose por sede
+      stocksPorSede = producto.stocksPorSede.map((stock: any) => ({
+        sedeId: stock.sede.id,
+        sedeNombre: stock.sede.nombre,
+        sedeCodigo: stock.sede.codigo,
+        cantidad: stock.stockActual,
+      }));
+    } else {
+      // Fallback para productos legacy que aún usan el campo deprecated
+      stockTotal = producto.stock || 0;
+      if (producto.tieneVariantes && producto.variantes?.length > 0) {
+        stockTotal = producto.variantes.reduce(
+          (sum: number, variante: any) => sum + (variante.stock || 0),
+          0,
+        );
+      }
     }
 
     // Desestructurar para excluir campos relacionados
-    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, ...productoData } = producto;
+    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, stocksPorSede: _, ...productoData } = producto;
 
     return {
       ...productoData,
       stock: stockTotal,
+      stocksPorSede: stocksPorSede, // Desglose de stock por sede (si se solicitó)
       precio: Number(producto.precio),
       precioCosto: producto.precioCosto
         ? Number(producto.precioCosto)
@@ -404,6 +425,7 @@ export class ProductoCatalogService {
     includeVariantes: boolean = false,
     includeAtributos: boolean = false,
     includeArchivos: boolean = false,
+    includeStock: boolean = false,
   ): Prisma.ProductoInclude {
     const include: Prisma.ProductoInclude = {
       empresaCategoria: {
@@ -499,6 +521,22 @@ export class ProductoCatalogService {
       include.atributosValores = {
         include: {
           atributo: true,
+        },
+      };
+    }
+
+    // Incluir stock por sedes para calcular stock total
+    if (includeStock) {
+      include.stocksPorSede = {
+        select: {
+          stockActual: true,
+          sede: {
+            select: {
+              id: true,
+              nombre: true,
+              codigo: true,
+            },
+          },
         },
       };
     }

@@ -15,6 +15,8 @@ import { CatalogosModule } from './catalogos/catalogos.module';
 import { ClientesModule } from './clientes/clientes.module';
 import { PoliticaDescuentoModule } from './politica-descuento/politica-descuento.module';
 import { SedeModule } from './sede/sede.module';
+import { ProductoStockModule } from './producto-stock/producto-stock.module';
+import { TransferenciaStockModule } from './transferencia-stock/transferencia-stock.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -40,6 +42,8 @@ import { validate } from './config/validation';
     ClientesModule,
     PoliticaDescuentoModule,
     SedeModule,
+    ProductoStockModule,
+    TransferenciaStockModule,
   ],
   controllers: [AppController],
   providers: [

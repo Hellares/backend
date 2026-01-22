@@ -69,17 +69,56 @@ export class ProductoService {
     createDto: CreateProductoDto,
     userId: string,
   ): Promise<ProductoResponseDto> {
-    const { empresaId, imagenesIds, sedeId, ...productoData } = createDto;
+    const { empresaId, imagenesIds, sedesIds, ...productoData } = createDto;
 
     // 1. Verificar permisos del usuario (mantener en Facade)
     await this.verifyUserPermissions(userId, empresaId);
 
-    // 2. Resolver sedeId automáticamente o validar el proporcionado
-    const sedeIdResuelto = await this.sedeContextHelper.resolveSedeId(
-      empresaId,
-      userId,
-      sedeId,
-    );
+    // 2. Resolver sedes: múltiples o única
+    let sedesResueltas: string[] = [];
+
+    if (sedesIds && sedesIds.length > 0) {
+      // Validar acceso a cada sede proporcionada
+      for (const sedeId of sedesIds) {
+        const sede = await this.prisma.sede.findFirst({
+          where: {
+            id: sedeId,
+            empresaId,
+            isActive: true,
+            deletedAt: null,
+          },
+        });
+
+        if (!sede) {
+          throw new BadRequestException(
+            `La sede con ID ${sedeId} no existe o no está activa.`,
+          );
+        }
+
+        // Validar acceso del usuario a esta sede
+        const sedesUsuario = await this.sedeContextHelper.getSedesUsuario(
+          empresaId,
+          userId,
+        );
+
+        const tieneAcceso = sedesUsuario.some((s) => s.id === sedeId);
+        if (!tieneAcceso) {
+          throw new ForbiddenException(
+            `No tienes acceso a la sede ${sede.nombre}.`,
+          );
+        }
+      }
+
+      sedesResueltas = sedesIds;
+    } else {
+      // Resolver sede automáticamente usando la lógica existente
+      const sedeIdResuelto = await this.sedeContextHelper.resolveSedeId(
+        empresaId,
+        userId,
+        undefined,
+      );
+      sedesResueltas = [sedeIdResuelto];
+    }
 
     // 3. Validaciones (delegar a CatalogService)
     if (productoData.empresaCategoriaId) {
@@ -149,77 +188,96 @@ export class ProductoService {
     }
 
     try {
-      // 6-11. Transacción atómica (coordinar servicios especializados)
-      const producto = await this.prisma.$transaction(async (tx) => {
-        // 6. Generar códigos únicos (usando servicio centralizado)
-        const { codigoEmpresa, codigoSistema } = await this.configCodigosService.generarCodigoProducto(
-          empresaId,
-          sedeIdResuelto,
-          tx,
-        );
+      // 6-11. Transacción atómica para crear productos en múltiples sedes
+      const productosCreados = await this.prisma.$transaction(async (tx) => {
+        const productos = [];
 
-        // 7. Preparar datos para crear producto
-        const dataToCreate = {
-          ...productoData,
-          empresaId,
-          sedeId: sedeIdResuelto,
-          codigoEmpresa,
-          codigoSistema,
-          precio: precioFinal,
-          stock: productoData.stock ?? 0,
-          visibleMarketplace: productoData.visibleMarketplace ?? true,
-          destacado: productoData.destacado ?? false,
-          enOferta: productoData.enOferta ?? false,
-          ...(productoData.fechaInicioOferta && {
-            fechaInicioOferta: new Date(productoData.fechaInicioOferta),
-          }),
-          ...(productoData.fechaFinOferta && {
-            fechaFinOferta: new Date(productoData.fechaFinOferta),
-          }),
-        };
-
-        // 8. Crear producto usando include clause del CatalogService
-        const productoCreado = await tx.producto.create({
-          data: dataToCreate,
-          include: this.catalogService.buildIncludeClause(true, true, false),
-        });
-
-        // 9. Sincronizar niveles de precio (delegar a PricingService, pasar tx)
-        if (productoData.configuracionPrecioId) {
-          await this.pricingService.sincronizarNivelesDesdeConfiguracion(
-            productoCreado.id,
-            productoData.configuracionPrecioId,
+        for (const sedeId of sedesResueltas) {
+          // 6. Generar códigos únicos para esta sede
+          const { codigoEmpresa, codigoSistema } = await this.configCodigosService.generarCodigoProducto(
             empresaId,
+            sedeId,
             tx,
           );
-        }
 
-        // 10. Crear atributos (delegar a AtributoService, pasar tx)
-        if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
-          await this.atributoService.createProductoAtributosFromStructured(
-            productoCreado.id,
+          // 7. Preparar datos para crear producto
+          const dataToCreate = {
+            ...productoData,
             empresaId,
-            productoData.atributosEstructurados,
-            tx,
-          );
+            sedeId,
+            codigoEmpresa,
+            codigoSistema,
+            precio: precioFinal,
+            // Stock ahora se maneja mediante ProductoStock por sede
+            // Para agregar stock inicial, usar POST /producto-stock después de crear el producto
+            stock: 0,
+            stockMinimo: null,
+            visibleMarketplace: productoData.visibleMarketplace ?? true,
+            destacado: productoData.destacado ?? false,
+            enOferta: productoData.enOferta ?? false,
+            ...(productoData.fechaInicioOferta && {
+              fechaInicioOferta: new Date(productoData.fechaInicioOferta),
+            }),
+            ...(productoData.fechaFinOferta && {
+              fechaFinOferta: new Date(productoData.fechaFinOferta),
+            }),
+          };
+
+          // 8. Crear producto usando include clause del CatalogService
+          const productoCreado = await tx.producto.create({
+            data: dataToCreate,
+            include: this.catalogService.buildIncludeClause(true, true, false, true),
+          });
+
+          // 9. Sincronizar niveles de precio (delegar a PricingService, pasar tx)
+          if (productoData.configuracionPrecioId) {
+            await this.pricingService.sincronizarNivelesDesdeConfiguracion(
+              productoCreado.id,
+              productoData.configuracionPrecioId,
+              empresaId,
+              tx,
+            );
+          }
+
+          // 10. Crear atributos (delegar a AtributoService, pasar tx)
+          if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
+            await this.atributoService.createProductoAtributosFromStructured(
+              productoCreado.id,
+              empresaId,
+              productoData.atributosEstructurados,
+              tx,
+            );
+          }
+
+          // 11. Asociar imágenes (delegar a CatalogService, pasar tx)
+          if (imagenesIds && imagenesIds.length > 0) {
+            await this.catalogService.asociarImagenes(
+              productoCreado.id,
+              empresaId,
+              imagenesIds,
+              tx,
+            );
+          }
+
+          productos.push(productoCreado);
         }
 
-        // 11. Asociar imágenes (delegar a CatalogService, pasar tx)
-        if (imagenesIds && imagenesIds.length > 0) {
-          await this.catalogService.asociarImagenes(
-            productoCreado.id,
-            empresaId,
-            imagenesIds,
-            tx,
-          );
-        }
-
-        return productoCreado;
+        return productos;
       });
 
-      this.logger.log(
-        `Producto creado: ${producto.id} (${producto.codigoEmpresa})`,
-      );
+      // Log de productos creados
+      if (productosCreados.length > 1) {
+        this.logger.log(
+          `Productos creados en ${productosCreados.length} sedes: ${productosCreados.map(p => `${p.id} (${p.codigoEmpresa})`).join(', ')}`,
+        );
+      } else {
+        this.logger.log(
+          `Producto creado: ${productosCreados[0].id} (${productosCreados[0].codigoEmpresa})`,
+        );
+      }
+
+      // Retornar el primer producto creado (para mantener compatibilidad con el tipo de retorno)
+      const producto = productosCreados[0];
 
       // 12. Invalidar cache de estadísticas de la empresa (mantener en Facade)
       await this.invalidateEmpresaStats(empresaId);
@@ -291,7 +349,7 @@ export class ProductoService {
         skip,
         take: limit,
         orderBy,
-        include: this.catalogService.buildIncludeClause(true, true, false),
+        include: this.catalogService.buildIncludeClause(true, true, false, true),
       }),
       this.prisma.producto.count({ where }),
     ]);
@@ -384,7 +442,7 @@ export class ProductoService {
         isActive: true,
         deletedAt: null,
       },
-      include: this.catalogService.buildIncludeClause(true, true, false),
+      include: this.catalogService.buildIncludeClause(true, true, false, true),
     });
 
     if (!producto) {
@@ -531,8 +589,9 @@ export class ProductoService {
             {
               precio: productoExistente.precio,
               precioCosto: productoExistente.precioCosto,
-              stock: productoExistente.stock,
-              stockMinimo: productoExistente.stockMinimo,
+              // Stock ahora se migra mediante ProductoStock (ver migrarProductoStockAVariante)
+              stock: 0,
+              stockMinimo: null,
               peso: productoExistente.peso,
               dimensiones: productoExistente.dimensiones,
               codigoEmpresa: productoExistente.codigoEmpresa,
@@ -547,6 +606,16 @@ export class ProductoService {
             id,
             varianteId,
             empresaId,
+            tx,
+          );
+
+          // Migrar registros de ProductoStock del producto base a la variante
+          // Esto preserva el stock de todas las sedes y genera movimientos de auditoría
+          await this.variantService.migrarProductoStockAVariante(
+            id,
+            varianteId,
+            empresaId,
+            userId,
             tx,
           );
 
@@ -598,14 +667,11 @@ export class ProductoService {
           }
         });
 
-        // Limpiar stock base del producto para evitar confusión en BD
-        // (El stock ahora se maneja a nivel de variantes)
-        productoData.stock = 0;
+        // El stock del producto base ya fue migrado a ProductoStock de la variante
+        // Los campos deprecated (stock/stockMinimo) ya no se usan en el DTO
 
         variantePorDefectoCreada = true;
-        this.logger.success('Variante por defecto creada exitosamente', {
-          stockTransferido: productoExistente.stock,
-        });
+        this.logger.success('Variante por defecto creada exitosamente. Stock migrado a ProductoStock de la variante.');
       }
     }
 
@@ -684,7 +750,7 @@ export class ProductoService {
       const producto = await this.prisma.producto.update({
         where: { id },
         data: dataToUpdate,
-        include: this.catalogService.buildIncludeClause(true, true, false),
+        include: this.catalogService.buildIncludeClause(true, true, false, true),
       });
 
       // 5.1 Registrar cambios de precio en el historial (si aplica)
@@ -810,23 +876,27 @@ export class ProductoService {
    * Actualizar stock de un producto
    * Método delegador (Facade) - delega a InventoryService
    */
+  /**
+   * Actualiza el stock de un producto
+   * MIGRADO: Ahora requiere sedeId y usuarioId para usar ProductoStock
+   */
   async updateStock(
     id: string,
     empresaId: string,
+    sedeId: string,
     cantidad: number,
     operacion: 'agregar' | 'quitar',
-  ): Promise<ProductoResponseDto> {
-    // Delegar actualización de stock a InventoryService
-    const productoActualizado = await this.inventoryService.updateStock(
+    usuarioId: string,
+  ): Promise<{ stock: number; stockTotal: number }> {
+    // Delegar actualización de stock a InventoryService (ahora usa ProductoStock)
+    return await this.inventoryService.updateStock(
       id,
       empresaId,
+      sedeId,
       cantidad,
       operacion,
+      usuarioId,
     );
-
-    // Obtener archivos y convertir a DTO (delegar a CatalogService)
-    const archivos = await this.catalogService.getProductoArchivos(id, empresaId);
-    return this.catalogService.toResponseDto(productoActualizado, archivos);
   }
 
   // Métodos auxiliares privados
@@ -909,7 +979,7 @@ export class ProductoService {
             ? { descuentoMaximo: descuentoPorcentaje }
             : {}),
         },
-        include: this.catalogService.buildIncludeClause(false, false, false),
+        include: this.catalogService.buildIncludeClause(false, false, false, true),
       });
 
       this.logger.log(`Producto ${productoId} convertido a combo tipo ${tipoPrecioCombo}`);
@@ -995,7 +1065,7 @@ export class ProductoService {
           where,
           skip,
           take: limit,
-          include: this.catalogService.buildIncludeClause(true, false, false),
+          include: this.catalogService.buildIncludeClause(true, false, false, true),
           orderBy: {
             nombre: 'asc',
           },

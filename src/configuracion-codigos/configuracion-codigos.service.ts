@@ -708,6 +708,32 @@ export class ConfiguracionCodigosService {
     return { codigoVenta };
   }
 
+  /**
+   * Genera código para transferencia de stock entre sedes
+   * Formato: TRANS-2026-00001
+   */
+  async generarCodigoTransferencia(
+    empresaId: string,
+    tx?: any,
+  ): Promise<string> {
+    const prisma = tx || this.prisma;
+
+    // Obtener contador del año actual
+    const year = new Date().getFullYear();
+    const contador = await prisma.transferenciaStock.count({
+      where: {
+        empresaId,
+        creadoEn: {
+          gte: new Date(`${year}-01-01`),
+          lt: new Date(`${year + 1}-01-01`),
+        },
+      },
+    });
+
+    const numero = (contador + 1).toString().padStart(5, '0');
+    return `TRANS-${year}-${numero}`;
+  }
+
   // =====================================================
   // VISTA PREVIA Y UTILIDADES
   // =====================================================
