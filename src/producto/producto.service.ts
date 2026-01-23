@@ -337,7 +337,7 @@ export class ProductoService {
     const skip = (page - 1) * limit;
 
     // 1. Construir filtros dinámicos (delegar a CatalogService)
-    const where = this.catalogService.buildWhereClause(empresaId, queryDto);
+    const where = await this.catalogService.buildWhereClause(empresaId, queryDto);
 
     // 2. Obtener ordenamiento (delegar a CatalogService)
     const orderBy = this.catalogService.getOrderBy(queryDto.orden);
@@ -576,22 +576,20 @@ export class ProductoService {
       if (variantesExistentes === 0) {
         this.logger.info('Convirtiendo producto a variantes, creando variante por defecto', {
           productoId: id,
-          stockActual: productoExistente.stock,
           precioActual: productoExistente.precio,
+          // Stock ahora se maneja en ProductoStock por sede
         });
 
         // Usar transacción para garantizar atomicidad en la conversión a variantes
         await this.prisma.$transaction(async (tx) => {
           // Crear variante por defecto con datos del producto (delegar a VariantService)
+          // NOTA: El stock se migra separadamente usando migrarProductoStockAVariante()
           const { varianteId } = await this.variantService.createVariantePorDefecto(
             id,
             empresaId,
             {
               precio: productoExistente.precio,
               precioCosto: productoExistente.precioCosto,
-              // Stock ahora se migra mediante ProductoStock (ver migrarProductoStockAVariante)
-              stock: 0,
-              stockMinimo: null,
               peso: productoExistente.peso,
               dimensiones: productoExistente.dimensiones,
               codigoEmpresa: productoExistente.codigoEmpresa,

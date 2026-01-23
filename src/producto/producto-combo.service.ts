@@ -118,10 +118,10 @@ export class ProductoComboService {
           tieneVariantes: false, // Los combos no pueden tener variantes
           tipoPrecioCombo: dto.tipoPrecioCombo,
 
-          // Precio y stock iniciales
+          // Precio inicial
           precio: precioInicial,
-          stock: 0, // El stock se calculará de los componentes
-          stockMinimo: comboData.stockMinimo,
+          // TODO: Implementar stock de combos con ProductoStock
+          // El stock de combos se calculará dinámicamente desde los componentes
 
           // Descuento (se usa descuentoMaximo para almacenar el porcentaje del combo)
           descuentoMaximo: descuentoPorcentaje,
@@ -173,8 +173,9 @@ export class ProductoComboService {
         tipoPrecioCombo: combo.tipoPrecioCombo,
         precio: Number(combo.precio),
         precioCalculado: Number(combo.precio), // Precio inicial = precio
-        stockDisponible: combo.stock, // Stock inicial = 0
-        stock: combo.stock,
+        // TODO: Calcular stock desde ProductoStock
+        stockDisponible: 0,
+        stock: 0,
         descuentoPorcentaje: descuentoPorcentaje ? Number(descuentoPorcentaje) : null,
         descuentoAplicado: null,
         componentes: [], // Nuevo combo no tiene componentes todavía
@@ -737,26 +738,30 @@ export class ProductoComboService {
         return 0;
       }
 
-      // El stock del combo es el mínimo entre todos los componentes
+      // TODO: Implementar cálculo de stock con ProductoStock
+      // El stock del combo debe calcularse desde stocksPorSede de cada componente
+      // Por ahora retornamos 0 para evitar errores
+      /*
       let stockMinimo = Infinity;
 
       for (const componente of componentes) {
         let stockComponente = 0;
 
         if (componente.componenteVariante) {
-          // Usar stock de la variante específica
-          stockComponente = componente.componenteVariante.stock;
+          // Necesita consultar componente.componenteVariante.stocksPorSede
+          stockComponente = ?
         } else if (componente.componenteProducto) {
-          // Usar stock del producto (solo productos sin variantes pueden llegar aquí)
-          stockComponente = componente.componenteProducto.stock;
+          // Necesita consultar componente.componenteProducto.stocksPorSede
+          stockComponente = ?
         }
 
-        // Calcular cuántos combos se pueden hacer con este componente
         const maxCombos = Math.floor(stockComponente / componente.cantidad);
         stockMinimo = Math.min(stockMinimo, maxCombos);
       }
 
       return stockMinimo === Infinity ? 0 : stockMinimo;
+      */
+      return 0;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al calcular stock de combo: ${errorMessage}`);
@@ -832,6 +837,9 @@ export class ProductoComboService {
         },
       });
 
+      // TODO: Implementar verificación de stock con ProductoStock
+      // Verificar stocksPorSede de cada componente
+      /*
       const sinStock: string[] = [];
 
       for (const componente of componentes) {
@@ -839,10 +847,12 @@ export class ProductoComboService {
         let nombre = '';
 
         if (componente.componenteVariante) {
-          stockComponente = componente.componenteVariante.stock;
+          // Necesita consultar stocksPorSede
+          stockComponente = ?
           nombre = componente.componenteVariante.nombre;
         } else if (componente.componenteProducto) {
-          stockComponente = componente.componenteProducto.stock;
+          // Necesita consultar stocksPorSede
+          stockComponente = ?
           nombre = componente.componenteProducto.nombre;
         }
 
@@ -852,6 +862,8 @@ export class ProductoComboService {
       }
 
       return sinStock;
+      */
+      return [];
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al obtener componentes sin stock: ${errorMessage}`);
@@ -888,6 +900,15 @@ export class ProductoComboService {
           throw new BadRequestException('El combo no tiene componentes configurados');
         }
 
+        // TODO: Implementar descuento de stock con ProductoStock y MovimientoStock
+        // El descuento debe hacerse en la tabla ProductoStock por sede
+        // y registrarse en MovimientoStock para auditoría
+        throw new BadRequestException(
+          'El descuento de stock de combos aún no está implementado con el nuevo sistema ProductoStock. ' +
+          'Se debe implementar usando ProductoStock por sede y MovimientoStock.'
+        );
+
+        /*
         // Calcular stock disponible y validar dentro de la transacción
         let stockDisponible = Number.MAX_SAFE_INTEGER;
 
@@ -895,18 +916,11 @@ export class ProductoComboService {
           let stockComponente = 0;
 
           if (componente.componenteVariante) {
-            stockComponente = componente.componenteVariante.stock;
+            // Necesita consultar stocksPorSede y sumar
+            stockComponente = ?
           } else if (componente.componenteProducto) {
-            // Si el componente tiene variantes, sumar el stock de todas
-            if (componente.componenteProducto.tieneVariantes &&
-                componente.componenteProducto.variantes?.length > 0) {
-              stockComponente = componente.componenteProducto.variantes.reduce(
-                (sum, v) => sum + v.stock,
-                0,
-              );
-            } else {
-              stockComponente = componente.componenteProducto.stock;
-            }
+            // Necesita consultar stocksPorSede
+            stockComponente = ?
           }
 
           const combosDisponibles = Math.floor(stockComponente / componente.cantidad);
@@ -920,35 +934,14 @@ export class ProductoComboService {
           );
         }
 
-        // Descontar stock de cada componente
+        // Descontar stock de cada componente usando ProductoStock
         for (const componente of componentes) {
           const cantidadDescontar = componente.cantidad * cantidad;
 
-          if (componente.componenteVariante) {
-            await tx.productoVariante.update({
-              where: { id: componente.componenteVarianteId! },
-              data: {
-                stock: {
-                  decrement: cantidadDescontar,
-                },
-              },
-            });
-          } else if (componente.componenteProducto) {
-            // Si tiene variantes, no descontar del producto base
-            if (!componente.componenteProducto.tieneVariantes) {
-              await tx.producto.update({
-                where: { id: componente.componenteProductoId! },
-                data: {
-                  stock: {
-                    decrement: cantidadDescontar,
-                  },
-                },
-              });
-            }
-            // NOTA: Si tiene variantes, el stock se maneja a nivel de variantes
-            // y debería especificarse qué variante usar en el componente
-          }
+          // Actualizar ProductoStock y crear MovimientoStock
+          // TODO: Implementar lógica de descuento por sede
         }
+        */
 
         this.logger.log(`Stock descontado para ${cantidad} unidad(es) del combo ${comboId}`);
       });
@@ -991,7 +984,7 @@ export class ProductoComboService {
         nombre: variante.nombre,
         sku: variante.sku,
         precio: Number(variante.precio),
-        stock: variante.stock,
+        stock: 0, // TODO: Calcular desde variante.stocksPorSede
         esVariante: true,
         productoNombre: producto?.nombre, // Nombre del producto padre
         varianteNombre: variante.nombre,  // Nombre de la variante
@@ -1002,7 +995,7 @@ export class ProductoComboService {
         nombre: componente.componenteProducto.nombre,
         sku: componente.componenteProducto.sku,
         precio: Number(componente.componenteProducto.precio),
-        stock: componente.componenteProducto.stock,
+        stock: 0, // TODO: Calcular desde componenteProducto.stocksPorSede
         esVariante: false,
       };
     }

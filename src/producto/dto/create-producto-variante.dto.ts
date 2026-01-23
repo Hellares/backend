@@ -54,17 +54,8 @@ export class CreateProductoVarianteDto {
   @IsOptional()
   precioOferta?: number;
 
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  @IsOptional()
-  stock?: number;
-
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  @IsOptional()
-  stockMinimo?: number;
+  // NOTA: Los campos stock y stockMinimo han sido removidos.
+  // Use ProductoStockRepository para gestionar stock por sede después de crear la variante.
 
   @IsNumber()
   @Type(() => Number)

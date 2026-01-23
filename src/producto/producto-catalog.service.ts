@@ -201,11 +201,26 @@ export class ProductoCatalogService {
     } else {
       // Fallback para productos legacy que aún usan el campo deprecated
       stockTotal = producto.stock || 0;
+
+      // Si el producto tiene variantes, calcular stock total desde las variantes
       if (producto.tieneVariantes && producto.variantes?.length > 0) {
-        stockTotal = producto.variantes.reduce(
-          (sum: number, variante: any) => sum + (variante.stock || 0),
+        // Intentar calcular desde stocksPorSede de las variantes (nuevo sistema)
+        const stockDesdeVariantes = producto.variantes.reduce(
+          (sum: number, variante: any) => {
+            if (variante.stocksPorSede && variante.stocksPorSede.length > 0) {
+              // Sumar stock de todas las sedes de esta variante
+              return sum + variante.stocksPorSede.reduce(
+                (varianteSum: number, stock: any) => varianteSum + stock.stockActual,
+                0,
+              );
+            } else {
+              // Fallback al campo legacy de la variante
+              return sum + (variante.stock || 0);
+            }
+          },
           0,
         );
+        stockTotal = stockDesdeVariantes;
       }
     }
 
@@ -302,27 +317,59 @@ export class ProductoCatalogService {
         },
       })) || [],
       // Información de variantes con atributos estructurados
-      variantes: variantes?.map((v: any) => ({
-        id: v.id,
-        nombre: v.nombre,
-        sku: v.sku,
-        atributosValores: v.atributosValores?.map((av: any) => ({
-          id: av.id,
-          atributoId: av.atributoId,
-          valor: av.valor,
-          atributo: {
-            id: av.atributo.id,
-            nombre: av.atributo.nombre,
-            clave: av.atributo.clave,
-            tipo: av.atributo.tipo,
-            unidad: av.atributo.unidad,
-          },
-        })) || [],
-        precio: Number(v.precio),
-        stock: v.stock,
-        isActive: v.isActive,
-        orden: v.orden,
-      })),
+      variantes: variantes?.map((v: any) => {
+        // Calcular stock de la variante desde stocksPorSede
+        let varianteStock = 0;
+        let varianteStocksPorSede: any[] | undefined = undefined;
+
+        if (v.stocksPorSede && v.stocksPorSede.length > 0) {
+          // Calcular total sumando todas las sedes
+          varianteStock = v.stocksPorSede.reduce(
+            (sum: number, stock: any) => sum + stock.stockActual,
+            0,
+          );
+
+          // Preparar desglose por sede
+          varianteStocksPorSede = v.stocksPorSede.map((stock: any) => ({
+            sedeId: stock.sede.id,
+            sedeNombre: stock.sede.nombre,
+            sedeCodigo: stock.sede.codigo,
+            cantidad: stock.stockActual,
+            stockMinimo: stock.stockMinimo,
+            stockMaximo: stock.stockMaximo,
+            ubicacion: stock.ubicacion,
+          }));
+        }
+
+        return {
+          id: v.id,
+          nombre: v.nombre,
+          sku: v.sku,
+          atributosValores: v.atributosValores?.map((av: any) => ({
+            id: av.id,
+            atributoId: av.atributoId,
+            valor: av.valor,
+            atributo: {
+              id: av.atributo.id,
+              nombre: av.atributo.nombre,
+              clave: av.atributo.clave,
+              tipo: av.atributo.tipo,
+              unidad: av.atributo.unidad,
+            },
+          })) || [],
+          precio: Number(v.precio),
+          stock: varianteStock, // Stock calculado desde stocksPorSede
+          stocksPorSede: varianteStocksPorSede, // Desglose por sede
+          isActive: v.isActive,
+          orden: v.orden,
+          archivos: v.archivos?.map((a: any) => ({
+            id: a.id,
+            url: a.url,
+            urlThumbnail: a.urlThumbnail,
+            orden: a.orden,
+          })) || [],
+        };
+      }),
     };
   }
 
@@ -358,7 +405,7 @@ export class ProductoCatalogService {
   /**
    * Construye la cláusula WHERE para filtrado de productos
    */
-  buildWhereClause(empresaId: string, filters: QueryProductoDto): Prisma.ProductoWhereInput {
+  async buildWhereClause(empresaId: string, filters: QueryProductoDto): Promise<Prisma.ProductoWhereInput> {
     const where: Prisma.ProductoWhereInput = {
       empresaId,
       deletedAt: null,
@@ -399,10 +446,28 @@ export class ProductoCatalogService {
       };
     }
 
+    // Filtro de stock bajo: productos con stock <= stockMinimo en al menos una sede
+    // Nota: Se implementa usando una subquery SQL cruda porque Prisma no soporta
+    // comparaciones directas entre campos del mismo registro
     if (filters.stockBajo === true) {
-      where.stock = {
-        lte: this.prisma.producto.fields.stockMinimo,
-      };
+      // Obtener IDs de productos con stock bajo usando SQL crudo
+      const productosConStockBajo = await this.prisma.$queryRaw<Array<{ productoId: string }>>`
+        SELECT DISTINCT ps."productoId"
+        FROM "ProductoStock" ps
+        WHERE ps."stockMinimo" IS NOT NULL
+        AND ps."stockActual" <= ps."stockMinimo"
+        AND ps."productoId" IS NOT NULL
+      `;
+
+      // Agregar filtro por IDs
+      if (productosConStockBajo.length > 0) {
+        where.id = {
+          in: productosConStockBajo.map(p => p.productoId),
+        };
+      } else {
+        // Si no hay productos con stock bajo, forzar resultado vacío
+        where.id = 'none';
+      }
     }
 
     // Filtrar solo productos simples (excluye combos)
@@ -506,6 +571,25 @@ export class ProductoCatalogService {
         };
       }
 
+      // Incluir stock por sede de cada variante (necesario para calcular stock total)
+      if (includeStock) {
+        varianteInclude.stocksPorSede = {
+          select: {
+            stockActual: true,
+            stockMinimo: true,
+            stockMaximo: true,
+            ubicacion: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        };
+      }
+
       include.variantes = {
         where: {
           deletedAt: null,
@@ -530,6 +614,9 @@ export class ProductoCatalogService {
       include.stocksPorSede = {
         select: {
           stockActual: true,
+          stockMinimo: true,
+          stockMaximo: true,
+          ubicacion: true,
           sede: {
             select: {
               id: true,

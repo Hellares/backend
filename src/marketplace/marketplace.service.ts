@@ -214,13 +214,26 @@ export class MarketplaceService {
           descripcion: true,
           precio: true,
           precioCosto: true,
-          stock: true,
           destacado: true,
           // Campos de ofertas
           enOferta: true,
           precioOferta: true,
           fechaInicioOferta: true,
           fechaFinOferta: true,
+          // Stock por sede
+          stocksPorSede: {
+            select: {
+              stockActual: true,
+              stockMinimo: true,
+              sede: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  codigo: true,
+                },
+              },
+            },
+          },
           empresaCategoria: {
             select: {
               id: true,
@@ -393,10 +406,24 @@ export class MarketplaceService {
         descripcion: true,
         precio: true,
         precioCosto: true,
-        stock: true,
-        stockMinimo: true,
         peso: true,
         dimensiones: true,
+        // Stock por sede
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            stockMinimo: true,
+            stockMaximo: true,
+            ubicacion: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        },
         empresaCategoria: {
           select: {
             id: true,

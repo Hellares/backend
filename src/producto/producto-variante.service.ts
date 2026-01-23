@@ -80,7 +80,7 @@ export class ProductoVarianteService {
     // Generar código de empresa único (usando servicio centralizado)
     const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId);
 
-    // Crear la variante (SIN campo atributos)
+    // Crear la variante (SIN campos de stock legacy - usar ProductoStock)
     const variante = await this.prisma.productoVariante.create({
       data: {
         productoId,
@@ -92,8 +92,6 @@ export class ProductoVarianteService {
         precio: dto.precio,
         precioCosto: dto.precioCosto,
         precioOferta: dto.precioOferta,
-        stock: dto.stock ?? 0,
-        stockMinimo: dto.stockMinimo,
         peso: dto.peso,
         dimensiones: dto.dimensiones,
         isActive: dto.isActive ?? true,
@@ -366,7 +364,7 @@ export class ProductoVarianteService {
       }
     }
 
-    // Actualizar la variante (SIN campo atributos)
+    // Actualizar la variante (SIN campos de stock legacy - usar ProductoStockRepository)
     const variante = await this.prisma.productoVariante.update({
       where: { id: varianteId },
       data: {
@@ -376,8 +374,6 @@ export class ProductoVarianteService {
         ...(dto.precio !== undefined && { precio: dto.precio }),
         ...(dto.precioCosto !== undefined && { precioCosto: dto.precioCosto }),
         ...(dto.precioOferta !== undefined && { precioOferta: dto.precioOferta }),
-        ...(dto.stock !== undefined && { stock: dto.stock }),
-        ...(dto.stockMinimo !== undefined && { stockMinimo: dto.stockMinimo }),
         ...(dto.peso !== undefined && { peso: dto.peso }),
         ...(dto.dimensiones && { dimensiones: dto.dimensiones }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
@@ -636,75 +632,20 @@ export class ProductoVarianteService {
   }
 
   /**
-   * Actualizar stock de una variante
+   * @deprecated Este método está deprecated. Use ProductoStockRepository.ajustarStock() en su lugar.
+   * El sistema legacy de stock global ha sido reemplazado por ProductoStock (stock por sede).
+   *
+   * @throws BadRequestException siempre
    */
   async updateStock(
     varianteId: string,
     empresaId: string,
     cantidad: number,
   ): Promise<ProductoVarianteResponseDto> {
-    this.logger.info('Updating variant stock', { varianteId, cantidad });
-
-    const variante = await this.prisma.productoVariante.findFirst({
-      where: {
-        id: varianteId,
-        empresaId,
-        deletedAt: null,
-      },
-    });
-
-    if (!variante) {
-      throw new NotFoundException(`Variante ${varianteId} no encontrada`);
-    }
-
-    const newStock = variante.stock + cantidad;
-
-    if (newStock < 0) {
-      throw new BadRequestException('El stock no puede ser negativo');
-    }
-
-    const updated = await this.prisma.productoVariante.update({
-      where: { id: varianteId },
-      data: { stock: newStock },
-      include: {
-        archivos: {
-          where: { deletedAt: null },
-          orderBy: { orden: 'asc' },
-        },
-        atributosValores: {
-          include: {
-            atributo: {
-              select: {
-                id: true,
-                nombre: true,
-                clave: true,
-                tipo: true,
-                unidad: true,
-              },
-            },
-          },
-        },
-        stocksPorSede: {
-          select: {
-            stockActual: true,
-            sede: {
-              select: {
-                id: true,
-                nombre: true,
-                codigo: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // Invalidar cache de productos (el stock de variantes afecta el stock total del producto)
-    await this.cache.invalidateProductosLists(empresaId);
-
-    this.logger.success('Variant stock updated', { varianteId, newStock });
-
-    return this.mapToResponseDto(updated);
+    throw new BadRequestException(
+      'Este método está deprecated. Use ProductoStockRepository.ajustarStock() para gestionar stock por sede. ' +
+      'El sistema de stock global ha sido eliminado en favor del sistema multi-sede.'
+    );
   }
 
   /**
@@ -718,7 +659,7 @@ export class ProductoVarianteService {
    * Mapear a DTO de respuesta (formato estructurado)
    */
   private mapToResponseDto(variante: any): ProductoVarianteResponseDto {
-    // Calcular stock total desde ProductoStock (nuevo sistema multi-sede)
+    // Calcular stock total desde ProductoStock (sistema multi-sede)
     let stockTotal = 0;
     let stocksPorSede: any[] | undefined = undefined;
 
@@ -736,9 +677,6 @@ export class ProductoVarianteService {
         sedeCodigo: stock.sede.codigo,
         cantidad: stock.stockActual,
       }));
-    } else {
-      // Fallback para variantes legacy que aún usan el campo deprecated
-      stockTotal = variante.stock || 0;
     }
 
     return {
@@ -765,7 +703,6 @@ export class ProductoVarianteService {
       precioCosto: variante.precioCosto ? Number(variante.precioCosto) : undefined,
       precioOferta: variante.precioOferta ? Number(variante.precioOferta) : undefined,
       stock: stockTotal, // Stock total calculado desde ProductoStock
-      stockMinimo: variante.stockMinimo, // Deprecated, se mantiene por compatibilidad
       stocksPorSede: stocksPorSede, // Desglose de stock por sede
       peso: variante.peso ? Number(variante.peso) : undefined,
       dimensiones: variante.dimensiones as Record<string, number> | undefined,
@@ -847,7 +784,9 @@ export class ProductoVarianteService {
 
   /**
    * Crea una variante por defecto cuando se habilita tieneVariantes en un producto
-   * Migra los datos del producto base a la nueva variante
+   * Migra los datos del producto base a la nueva variante (excepto stock).
+   * IMPORTANTE: El stock se migra separadamente usando migrarProductoStockAVariante()
+   *
    * @param productoId ID del producto que se está convirtiendo a variantes
    * @param empresaId ID de la empresa
    * @param productoData Datos del producto base para copiar
@@ -859,10 +798,8 @@ export class ProductoVarianteService {
     productoId: string,
     empresaId: string,
     productoData: {
-      stock: number;
       precio: any;
       precioCosto?: any;
-      stockMinimo?: number;
       peso?: any;
       dimensiones?: any;
       codigoEmpresa: string;
@@ -887,14 +824,14 @@ export class ProductoVarianteService {
 
     this.logger.info('Creando variante por defecto', {
       productoId,
-      stockActual: productoData.stock,
       precioActual: productoData.precio,
     });
 
     // Generar código único para la variante
     const { codigoEmpresa } = await generateCodigoFn(empresaId, tx);
 
-    // Crear variante por defecto con los datos del producto original
+    // Crear variante por defecto con los datos del producto original (sin stock)
+    // El stock se migra usando migrarProductoStockAVariante() después de crear la variante
     let variantePorDefecto;
     try {
       variantePorDefecto = await prisma.productoVariante.create({
@@ -907,8 +844,6 @@ export class ProductoVarianteService {
           codigoEmpresa,
           precio: productoData.precio,
           precioCosto: productoData.precioCosto,
-          stock: productoData.stock,
-          stockMinimo: productoData.stockMinimo,
           peso: productoData.peso,
           dimensiones: productoData.dimensiones as any,
           isActive: true,
@@ -930,8 +865,6 @@ export class ProductoVarianteService {
             codigoEmpresa: nuevoCodigo,
             precio: productoData.precio,
             precioCosto: productoData.precioCosto,
-            stock: productoData.stock,
-            stockMinimo: productoData.stockMinimo,
             peso: productoData.peso,
             dimensiones: productoData.dimensiones as any,
             isActive: true,
@@ -946,7 +879,6 @@ export class ProductoVarianteService {
     this.logger.success('Variante por defecto creada exitosamente', {
       varianteId: variantePorDefecto.id,
       codigoEmpresa: variantePorDefecto.codigoEmpresa,
-      stockTransferido: productoData.stock,
     });
 
     return {

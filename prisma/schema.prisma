@@ -571,13 +571,6 @@ model Producto {
   precio             Decimal  @db.Decimal(10, 2)
   precioCosto        Decimal? @db.Decimal(10, 2)
 
-  // @deprecated Stock global sin separación por sede. Usar stocksPorSede[] en su lugar
-  // Este campo se mantiene por compatibilidad temporal y será removido en futuras versiones
-  stock              Int      @default(0)
-
-  // @deprecated Mínimo global. Ahora se configura por sede en ProductoStock.stockMinimo
-  stockMinimo        Int?
-
   peso               Decimal? @db.Decimal(10, 3)
   dimensiones        Json?
   videoUrl           String?
@@ -649,7 +642,6 @@ model Producto {
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])
-  @@index([stock])
   @@index([visibleMarketplace])
   @@index([destacado])
   @@index([ordenMarketplace])
@@ -1973,14 +1965,6 @@ model ProductoVariante {
   precioCosto  Decimal? @db.Decimal(10, 2)
   precioOferta Decimal? @db.Decimal(10, 2)
 
-  // @deprecated Inventario específico de la variante (sistema legacy)
-  // Stock global sin separación por sede. Usar stocksPorSede[] en su lugar
-  // Este campo se mantiene por compatibilidad temporal y será removido en futuras versiones
-  stock       Int  @default(0)
-
-  // @deprecated Mínimo global. Ahora se configura por sede en ProductoStock.stockMinimo
-  stockMinimo Int?
-
   // Características físicas (si difieren del producto base)
   peso        Decimal? @db.Decimal(10, 3)
   dimensiones Json? // {"largo": 30, "ancho": 20, "alto": 5} en cm
@@ -2023,7 +2007,6 @@ model ProductoVariante {
   @@index([unidadMedidaId])
   @@index([sku])
   @@index([isActive])
-  @@index([stock])
   // Índices compuestos para queries comunes
   @@index([productoId, isActive])
   @@index([empresaId, isActive])
