@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsInt, IsOptional, Min } from 'class-validator';
+import {
+  IsString,
+  IsInt,
+  IsOptional,
+  Min,
+  IsNumber,
+  IsBoolean,
+  IsDateString,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CrearStockDto {
   @ApiProperty({
@@ -59,4 +68,63 @@ export class CrearStockDto {
   @IsOptional()
   @IsString()
   ubicacion?: string;
+
+  // ==========================================
+  // PRECIOS POR SEDE (opcionales)
+  // Si no se especifican, se usarán los precios del producto/variante base
+  // ==========================================
+
+  @ApiPropertyOptional({
+    description:
+      'Precio de venta en esta sede (si no se especifica, usa precio del producto/variante)',
+    example: 99.99,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  precio?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Precio de costo en esta sede (para cálculo de márgenes)',
+    example: 50.0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  precioCosto?: number;
+
+  @ApiPropertyOptional({
+    description: 'Precio de oferta específico de la sede',
+    example: 79.99,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  precioOferta?: number;
+
+  @ApiPropertyOptional({
+    description: 'Si el producto está en oferta en esta sede',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  enOferta?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Fecha de inicio de oferta en esta sede',
+    example: '2024-01-15T00:00:00Z',
+  })
+  @IsOptional()
+  @IsDateString()
+  fechaInicioOferta?: string;
+
+  @ApiPropertyOptional({
+    description: 'Fecha de fin de oferta en esta sede',
+    example: '2024-01-31T23:59:59Z',
+  })
+  @IsOptional()
+  @IsDateString()
+  fechaFinOferta?: string;
 }

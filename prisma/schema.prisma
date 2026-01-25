@@ -107,9 +107,14 @@ model Empresa {
   historialDescuentos  DescuentoUsoHistorial[]
 
   // Relaciones para inventario por sede
-  stocksProductos     ProductoStock[]
-  movimientosStock    MovimientoStock[]
-  transferenciasStock TransferenciaStock[]
+  stocksProductos         ProductoStock[]
+  movimientosStock        MovimientoStock[]
+  transferenciasStock     TransferenciaStock[]
+  itemsTransferenciaStock TransferenciaStockItem[]
+
+  // Relaciones para devoluciones
+  devoluciones    Devolucion[]
+  devolucionItems DevolucionItem[]
 
   @@index([subdominio])
   @@index([isActive])
@@ -150,17 +155,18 @@ model Usuario {
   // Sede por defecto (última sede accedida o asignada)
   sedeDefaultId String? // ID de la sede por defecto para este usuario
 
-  creadoEn                DateTime                  @default(now())
-  actualizadoEn           DateTime                  @updatedAt
+  creadoEn                DateTime                      @default(now())
+  actualizadoEn           DateTime                      @updatedAt
   authProviders           AuthProvider[]
   empresas                EmpresaUsuarioRol[]
-  metodosPagoConfigurados MetodoPago[]              @relation("MetodoPagoUsuario")
+  metodosPagoConfigurados MetodoPago[]                  @relation("MetodoPagoUsuario")
   ordenesServicio         OrdenServicio[]
   registrosComoCliente    RegistroCliente[]
   transacciones           TransaccionPago[]
-  persona                 Persona                   @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  persona                 Persona                       @relation(fields: [personaId], references: [id], onDelete: Restrict)
   sedes                   UsuarioSedeRol[]
   historialPreciosCambios ProductoPrecioHistorial[]
+  historialPreciosSede    ProductoPrecioHistorialSede[] @relation("UsuarioCambiosPrecioSede")
 
   // Relaciones para sistema de descuentos
   descuentosAsignados   UsuarioDescuento[]      @relation("UsuarioConDescuento")
@@ -396,9 +402,9 @@ model MarcaMaestra {
 /// Unidades de medida maestras (Catálogo SUNAT)
 /// Códigos estándar para facturación electrónica
 model UnidadMedidaMaestra {
-  id          String  @id @default(cuid())
-  codigo      String  @unique // "NIU", "KGM", "MTR", "LTR", "ZZ" (Códigos SUNAT)
-  nombre      String  @unique // "Unidad", "Kilogramo", "Metro", "Litro", "Servicio"
+  id          String          @id @default(cuid())
+  codigo      String          @unique // "NIU", "KGM", "MTR", "LTR", "ZZ" (Códigos SUNAT)
+  nombre      String          @unique // "Unidad", "Kilogramo", "Metro", "Litro", "Servicio"
   simbolo     String? // "und", "kg", "m", "L", "svc"
   descripcion String?
   categoria   CategoriaUnidad // CANTIDAD, MASA, LONGITUD, AREA, VOLUMEN, TIEMPO, SERVICIO
@@ -423,13 +429,13 @@ model UnidadMedidaMaestra {
 
 /// Categorías de unidades de medida
 enum CategoriaUnidad {
-  CANTIDAD  // unidad, docena, ciento, millar
-  MASA      // gramo, kilogramo, tonelada, libra
-  LONGITUD  // metro, centímetro, kilómetro, pulgada
-  AREA      // metro cuadrado, hectárea
-  VOLUMEN   // litro, mililitro, metro cúbico, galón
-  TIEMPO    // hora, día, semana, mes, año
-  SERVICIO  // servicio, sesión, consulta
+  CANTIDAD // unidad, docena, ciento, millar
+  MASA // gramo, kilogramo, tonelada, libra
+  LONGITUD // metro, centímetro, kilómetro, pulgada
+  AREA // metro cuadrado, hectárea
+  VOLUMEN // litro, mililitro, metro cúbico, galón
+  TIEMPO // hora, día, semana, mes, año
+  SERVICIO // servicio, sesión, consulta
 }
 
 // ============================================
@@ -541,11 +547,11 @@ model EmpresaUnidadMedida {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa       Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  unidadMaestra UnidadMedidaMaestra?  @relation(fields: [unidadMaestraId], references: [id], onDelete: Restrict)
-  productos     Producto[]
-  variantes     ProductoVariante[]
-  servicios     Servicio[]
+  empresa             Empresa              @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  unidadMaestra       UnidadMedidaMaestra? @relation(fields: [unidadMaestraId], references: [id], onDelete: Restrict)
+  productos           Producto[]
+  variantes           ProductoVariante[]
+  servicios           Servicio[]
   detallesComprobante DetalleComprobante[]
 
   @@unique([empresaId, unidadMaestraId])
@@ -556,7 +562,7 @@ model EmpresaUnidadMedida {
 }
 
 model Producto {
-  id                 String   @id @default(cuid())
+  id                 String  @id @default(cuid())
   empresaId          String
   sedeId             String?
   empresaCategoriaId String?
@@ -568,8 +574,9 @@ model Producto {
   codigoBarras       String?
   nombre             String
   descripcion        String?
-  precio             Decimal  @db.Decimal(10, 2)
-  precioCosto        Decimal? @db.Decimal(10, 2)
+
+  // ✅ PRECIOS ELIMINADOS - Ahora solo en ProductoStock por sede
+  // Los precios son independientes por sede, gestionados en ProductoStock
 
   peso               Decimal? @db.Decimal(10, 3)
   dimensiones        Json?
@@ -582,11 +589,8 @@ model Producto {
   destacado          Boolean @default(false)
   ordenMarketplace   Int?
 
-  // Sistema de Ofertas
-  enOferta          Boolean   @default(false)
-  precioOferta      Decimal?  @db.Decimal(10, 2)
-  fechaInicioOferta DateTime?
-  fechaFinOferta    DateTime?
+  // ✅ OFERTAS ELIMINADAS - Ahora solo en ProductoStock por sede
+  // Cada sede puede tener sus propias ofertas
 
   // Sistema de Variantes
   tieneVariantes Boolean @default(false)
@@ -632,6 +636,12 @@ model Producto {
   // Relaciones para inventario por sede
   stocksPorSede ProductoStock[]
 
+  // Relaciones para transferencias de stock
+  itemsTransferencia TransferenciaStockItem[]
+
+  // Relaciones para devoluciones
+  devolucionItems DevolucionItem[]
+
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
   @@index([empresaId])
@@ -645,8 +655,8 @@ model Producto {
   @@index([visibleMarketplace])
   @@index([destacado])
   @@index([ordenMarketplace])
-  @@index([enOferta])
-  @@index([fechaFinOferta])
+  // @@index([enOferta])
+  // @@index([fechaFinOferta])
   // Índices para búsqueda optimizada
   @@index([nombre])
   @@index([descripcion])
@@ -694,6 +704,45 @@ model ProductoPrecioHistorial {
   @@index([creadoEn])
   @@index([usuarioId])
   @@index([tipoCambio])
+}
+
+/// Historial de cambios de precios por sede
+/// Registra auditoría completa de cambios de precios específicos de cada sede
+model ProductoPrecioHistorialSede {
+  id String @id @default(cuid())
+
+  // Referencia al stock de producto en sede
+  productoStockId String
+  sedeId          String
+
+  // Precios (registro del cambio)
+  precioAnterior       Decimal? @db.Decimal(10, 2)
+  precioNuevo          Decimal? @db.Decimal(10, 2)
+  precioCostoAnterior  Decimal? @db.Decimal(10, 2)
+  precioCostoNuevo     Decimal? @db.Decimal(10, 2)
+  precioOfertaAnterior Decimal? @db.Decimal(10, 2)
+  precioOfertaNuevo    Decimal? @db.Decimal(10, 2)
+
+  // Contexto del cambio
+  tipoCambio   TipoCambioPrecio // MANUAL, OFERTA, COSTO, MASIVO, etc.
+  razon        String? // Descripción opcional del motivo
+  origenModulo String? // PRODUCTO, INVENTARIO, IMPORTACION, etc.
+
+  // Auditoría
+  usuarioId String
+  creadoEn  DateTime @default(now())
+
+  // Relaciones
+  productoStock ProductoStock @relation(fields: [productoStockId], references: [id], onDelete: Cascade)
+  sede          Sede          @relation("SedeCambiosPrecios", fields: [sedeId], references: [id])
+  usuario       Usuario       @relation("UsuarioCambiosPrecioSede", fields: [usuarioId], references: [id])
+
+  @@index([productoStockId])
+  @@index([sedeId])
+  @@index([creadoEn])
+  @@index([usuarioId])
+  @@index([tipoCambio])
+  @@index([sedeId, creadoEn]) // Consultas de historial por sede
 }
 
 model Servicio {
@@ -1216,30 +1265,30 @@ model ComprobanteElectronico {
 }
 
 model DetalleComprobante {
-  id              String  @id @default(cuid())
+  id              String                 @id @default(cuid())
   comprobanteId   String
   productoId      String?
   servicioId      String?
   unidadMedidaId  String? // Relación a EmpresaUnidadMedida
   descripcion     String
-  unidadMedida    String  @default("NIU") // Código SUNAT directo (para compatibilidad)
-  cantidad       Decimal                @db.Decimal(12, 2)
-  valorUnitario  Decimal                @db.Decimal(12, 2)
-  precioUnitario Decimal                @db.Decimal(12, 2)
-  tipoAfectacion String                 @default("10")
-  porcentajeIGV  Decimal                @default(18.00) @db.Decimal(5, 2)
-  igv            Decimal                @default(0) @db.Decimal(12, 2)
-  valorVenta     Decimal                @default(0) @db.Decimal(12, 2)
-  descuentoItem  Decimal?               @db.Decimal(12, 2)
-  cargoItem      Decimal?               @db.Decimal(12, 2)
-  subtotal       Decimal                @db.Decimal(12, 2)
-  total          Decimal                @db.Decimal(12, 2)
-  creadoEn       DateTime               @default(now())
-  actualizadoEn  DateTime               @updatedAt
-  comprobante      ComprobanteElectronico  @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
-  producto         Producto?               @relation("DetalleProducto", fields: [productoId], references: [id])
-  servicio         Servicio?               @relation("DetalleServicio", fields: [servicioId], references: [id])
-  unidadMedidaRef  EmpresaUnidadMedida?    @relation(fields: [unidadMedidaId], references: [id])
+  unidadMedida    String                 @default("NIU") // Código SUNAT directo (para compatibilidad)
+  cantidad        Decimal                @db.Decimal(12, 2)
+  valorUnitario   Decimal                @db.Decimal(12, 2)
+  precioUnitario  Decimal                @db.Decimal(12, 2)
+  tipoAfectacion  String                 @default("10")
+  porcentajeIGV   Decimal                @default(18.00) @db.Decimal(5, 2)
+  igv             Decimal                @default(0) @db.Decimal(12, 2)
+  valorVenta      Decimal                @default(0) @db.Decimal(12, 2)
+  descuentoItem   Decimal?               @db.Decimal(12, 2)
+  cargoItem       Decimal?               @db.Decimal(12, 2)
+  subtotal        Decimal                @db.Decimal(12, 2)
+  total           Decimal                @db.Decimal(12, 2)
+  creadoEn        DateTime               @default(now())
+  actualizadoEn   DateTime               @updatedAt
+  comprobante     ComprobanteElectronico @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  producto        Producto?              @relation("DetalleProducto", fields: [productoId], references: [id])
+  servicio        Servicio?              @relation("DetalleServicio", fields: [servicioId], references: [id])
+  unidadMedidaRef EmpresaUnidadMedida?   @relation(fields: [unidadMedidaId], references: [id])
 
   @@index([comprobanteId])
   @@index([productoId])
@@ -1354,10 +1403,14 @@ model Sede {
   historialDescuentos DescuentoUsoHistorial[]
 
   // Relaciones para inventario por sede
-  stocksProductos         ProductoStock[]
-  movimientosStock        MovimientoStock[]
-  transferenciasOrigen    TransferenciaStock[] @relation("TransferenciasOrigen")
-  transferenciasDestino   TransferenciaStock[] @relation("TransferenciasDestino")
+  stocksProductos       ProductoStock[]
+  movimientosStock      MovimientoStock[]
+  transferenciasOrigen  TransferenciaStock[]          @relation("TransferenciasOrigen")
+  transferenciasDestino TransferenciaStock[]          @relation("TransferenciasDestino")
+  historialPreciosSede  ProductoPrecioHistorialSede[] @relation("SedeCambiosPrecios")
+
+  // Relaciones para devoluciones
+  devoluciones Devolucion[]
 
   // Relaciones futuras (descomentar cuando se implementen)
   // ventas      Venta[]
@@ -1381,31 +1434,61 @@ model Sede {
 // =========================================
 /// Stock de productos por sede
 /// Permite gestionar inventario independiente en cada sede
+/// INCLUYE precios por sede para manejo independiente de precios en cada ubicación
 model ProductoStock {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   sedeId     String
   productoId String?
   varianteId String?
   empresaId  String
 
-  // Stock actual
-  stockActual  Int
-  stockMinimo  Int?
-  stockMaximo  Int?
+  // ========== STOCK FÍSICO ==========
+  stockActual Int // Stock físico total en la sede
+
+  // ========== RESERVAS ==========
+  stockReservado      Int @default(0) // Reservado para transferencias aprobadas
+  stockReservadoVenta Int @default(0) // Apartado por clientes (pre-ventas, pedidos)
+
+  // ========== MERMA Y ESTADO ==========
+  stockDanado     Int @default(0) // Productos defectuosos/dañados (no vendibles)
+  stockEnGarantia Int @default(0) // Productos en proceso de garantía/reparación
+
+  // ========== CONFIGURACIÓN ==========
+  stockMinimo Int?
+  stockMaximo Int?
+
+  // ========== STOCK CALCULADOS (runtime, no se guardan en BD) ==========
+  // stockDisponibleVenta = stockActual - stockReservado - stockReservadoVenta - stockDanado - stockEnGarantia
+  // stockDisponibleTransferencia = stockActual - stockReservado
 
   // Ubicación dentro de la sede
-  ubicacion    String? // Pasillo, estante, etc.
+  ubicacion String? // Pasillo, estante, etc.
+
+  // Precios por sede (opcionales - pueden configurarse después de crear el stock)
+  // Esto permite que cada sede maneje sus propios precios de forma independiente
+  precio       Decimal? @db.Decimal(10, 2) // Precio de venta en esta sede
+  precioCosto  Decimal? @db.Decimal(10, 2) // Precio de costo en esta sede (para cálculo de márgenes)
+  precioOferta Decimal? @db.Decimal(10, 2) // Precio de oferta específico de la sede
+
+  // Control de ofertas por sede
+  enOferta          Boolean   @default(false) // Si está en oferta en esta sede
+  fechaInicioOferta DateTime? // Inicio de oferta en esta sede
+  fechaFinOferta    DateTime? // Fin de oferta en esta sede
+
+  // Estado de configuración de precio (útil para filtros y dashboards)
+  precioConfigurado Boolean @default(false) // true cuando se ha establecido al menos el precio de venta
 
   // Auditoría
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  sede        Sede              @relation(fields: [sedeId], references: [id])
-  empresa     Empresa           @relation(fields: [empresaId], references: [id])
-  producto    Producto?         @relation(fields: [productoId], references: [id])
-  variante    ProductoVariante? @relation(fields: [varianteId], references: [id])
-  movimientos MovimientoStock[]
+  sede             Sede                          @relation(fields: [sedeId], references: [id])
+  empresa          Empresa                       @relation(fields: [empresaId], references: [id])
+  producto         Producto?                     @relation(fields: [productoId], references: [id])
+  variante         ProductoVariante?             @relation(fields: [varianteId], references: [id])
+  movimientos      MovimientoStock[]
+  preciosHistorial ProductoPrecioHistorialSede[] // Historial de cambios de precio por sede
 
   @@unique([sedeId, productoId, varianteId])
   @@index([sedeId])
@@ -1414,6 +1497,11 @@ model ProductoStock {
   @@index([stockActual])
   @@index([empresaId, sedeId]) // Consultas de stock por empresa y sede
   @@index([sedeId, stockActual]) // Ordenar por stock en sede
+  @@index([precio]) // Búsquedas por precio
+  @@index([enOferta]) // Filtrar productos en oferta por sede
+  @@index([precioConfigurado]) // Filtrar productos con/sin precio configurado
+  @@index([sedeId, precioConfigurado]) // Productos con precio por sede
+  @@index([sedeId, precioConfigurado, stockActual]) // Productos vendibles por sede
 }
 
 /// Registro de movimientos de stock (entradas, salidas, ajustes)
@@ -1440,6 +1528,9 @@ model MovimientoStock {
   // Relación con transferencias (si aplica)
   transferenciaId String?
 
+  // Relación con devoluciones (si aplica)
+  devolucionId String?
+
   // Usuario responsable
   usuarioId String
 
@@ -1447,10 +1538,11 @@ model MovimientoStock {
   creadoEn DateTime @default(now())
 
   // Relaciones
-  sede               Sede                  @relation(fields: [sedeId], references: [id])
-  empresa            Empresa               @relation(fields: [empresaId], references: [id])
-  productoStock      ProductoStock         @relation(fields: [productoStockId], references: [id])
-  transferencia      TransferenciaStock?   @relation(fields: [transferenciaId], references: [id])
+  sede          Sede                @relation(fields: [sedeId], references: [id])
+  empresa       Empresa             @relation(fields: [empresaId], references: [id])
+  productoStock ProductoStock       @relation(fields: [productoStockId], references: [id])
+  transferencia TransferenciaStock? @relation(fields: [transferenciaId], references: [id])
+  devolucion    Devolucion?         @relation(fields: [devolucionId], references: [id])
 
   @@index([sedeId])
   @@index([empresaId])
@@ -1458,27 +1550,29 @@ model MovimientoStock {
   @@index([tipo])
   @@index([creadoEn])
   @@index([transferenciaId])
+  @@index([devolucionId])
   @@index([productoStockId, creadoEn]) // Historial de movimientos ordenado
   @@index([sedeId, tipo]) // Filtrar movimientos por sede y tipo
 }
 
 /// Transferencias de stock entre sedes
 model TransferenciaStock {
-  id             String @id @default(cuid())
-  empresaId      String
-  sedeOrigenId   String
-  sedeDestinoId  String
+  id            String @id @default(cuid())
+  empresaId     String
+  sedeOrigenId  String
+  sedeDestinoId String
 
   // Identificación
-  codigo String @unique
-
-  // Productos transferidos
-  productoId String?
-  varianteId String?
-  cantidad   Int
+  codigo String
 
   // Estado
   estado EstadoTransferencia @default(PENDIENTE)
+
+  // Resumen de items
+  totalItems      Int @default(0)
+  itemsAprobados  Int @default(0)
+  itemsRechazados Int @default(0)
+  itemsRecibidos  Int @default(0)
 
   // Usuarios responsables
   solicitadoPor String
@@ -1492,7 +1586,7 @@ model TransferenciaStock {
   fechaRecepcion  DateTime?
 
   // Observaciones
-  motivo        String?
+  motivo        String? // Motivo general de la transferencia
   observaciones String?
 
   // Auditoría
@@ -1500,41 +1594,248 @@ model TransferenciaStock {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa       Empresa            @relation(fields: [empresaId], references: [id])
-  sedeOrigen    Sede               @relation("TransferenciasOrigen", fields: [sedeOrigenId], references: [id])
-  sedeDestino   Sede               @relation("TransferenciasDestino", fields: [sedeDestinoId], references: [id])
-  movimientos   MovimientoStock[]
+  empresa     Empresa                  @relation(fields: [empresaId], references: [id])
+  sedeOrigen  Sede                     @relation("TransferenciasOrigen", fields: [sedeOrigenId], references: [id])
+  sedeDestino Sede                     @relation("TransferenciasDestino", fields: [sedeDestinoId], references: [id])
+  items       TransferenciaStockItem[] // Items de la transferencia
+  movimientos MovimientoStock[]
 
+  @@unique([empresaId, codigo]) // Código único por empresa
   @@index([empresaId])
   @@index([sedeOrigenId])
   @@index([sedeDestinoId])
   @@index([estado])
   @@index([creadoEn])
   @@index([empresaId, estado]) // Filtrar transferencias por empresa y estado
-  @@index([codigo]) // Búsqueda por código de transferencia
+}
+
+// Items individuales de una transferencia
+model TransferenciaStockItem {
+  id              String @id @default(cuid())
+  transferenciaId String
+  empresaId       String // Para filtros multi-tenant
+
+  // Producto o variante
+  productoId String?
+  varianteId String?
+
+  // Cantidades
+  cantidadSolicitada Int
+  cantidadAprobada   Int? // Puede ser menor a la solicitada
+  cantidadEnviada    Int? // Puede ser menor a la aprobada
+  cantidadRecibida   Int? // Puede ser menor a la enviada
+
+  // Estado del item
+  estado EstadoItemTransferencia @default(PENDIENTE)
+
+  // Observaciones específicas del item
+  motivo        String? // Motivo específico de este item (anula el general)
+  observaciones String? // Observaciones específicas del item
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  transferencia TransferenciaStock @relation(fields: [transferenciaId], references: [id], onDelete: Cascade)
+  empresa       Empresa            @relation(fields: [empresaId], references: [id])
+  producto      Producto?          @relation(fields: [productoId], references: [id])
+  variante      ProductoVariante?  @relation(fields: [varianteId], references: [id])
+
+  @@index([transferenciaId])
+  @@index([empresaId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([estado])
+  @@index([empresaId, estado]) // Filtrar items por empresa y estado
 }
 
 enum TipoMovimientoStock {
-  ENTRADA_COMPRA        // Entrada por compra
+  // === COMPRAS ===
+  ENTRADA_COMPRA // Compra a proveedor
+  SALIDA_DEVOLUCION_PROVEEDOR // Devolución a proveedor
+  AJUSTE_ENTRADA_COMPRA // Ajuste por diferencia en recepción
+
+  // === VENTAS ===
+  SALIDA_VENTA // Venta a cliente
+  ENTRADA_DEVOLUCION_CLIENTE // Cliente devuelve producto
+  AJUSTE_SALIDA_VENTA // Ajuste por error en venta
+  RESERVA_VENTA // Reservar stock para venta (stockReservadoVenta++)
+  LIBERAR_RESERVA_VENTA // Liberar reserva de venta (stockReservadoVenta--)
+
+  // === TRANSFERENCIAS ===
   ENTRADA_TRANSFERENCIA // Entrada por transferencia de otra sede
-  ENTRADA_AJUSTE        // Ajuste de inventario (entrada)
-  ENTRADA_DEVOLUCION    // Devolución de cliente
-  SALIDA_VENTA          // Salida por venta
-  SALIDA_TRANSFERENCIA  // Salida por transferencia a otra sede
-  SALIDA_AJUSTE         // Ajuste de inventario (salida)
-  SALIDA_MERMA          // Merma o pérdida
-  SALIDA_ROBO           // Robo
-  SALIDA_DONACION       // Donación
+  SALIDA_TRANSFERENCIA // Salida por transferencia a otra sede
+
+  // === MERMA Y AJUSTES ===
+  AJUSTE_ENTRADA // Ajuste de inventario (entrada)
+  AJUSTE_SALIDA // Ajuste de inventario (salida)
+  AJUSTE_MERMA // Marcar producto como dañado (stockDanado++)
+  AJUSTE_REPARACION // Producto reparado (stockDanado--, disponible de nuevo)
+  AJUSTE_PERDIDA // Producto perdido/robado
+  AJUSTE_ENCONTRADO // Producto encontrado (corrección)
+  SALIDA_BAJA // Dar de baja definitiva (descarte)
+
+  // === GARANTÍA ===
+  ENTRADA_GARANTIA // Producto recibido para garantía (stockEnGarantia++)
+  SALIDA_GARANTIA // Enviar producto a reparación/proveedor
+  RETORNO_GARANTIA // Producto reparado regresa (stockEnGarantia--)
+
+  // === OTROS (Legacy - mantener compatibilidad) ===
+  ENTRADA_AJUSTE // (DEPRECADO) Usar AJUSTE_ENTRADA
+  SALIDA_AJUSTE // (DEPRECADO) Usar AJUSTE_SALIDA
+  ENTRADA_DEVOLUCION // Devolución genérica (deprecado, usar ENTRADA_DEVOLUCION_CLIENTE)
+  SALIDA_MERMA // Merma genérica (deprecado, usar AJUSTE_MERMA)
+  SALIDA_ROBO // Robo (deprecado, usar AJUSTE_PERDIDA)
+  SALIDA_DONACION // Donación
 }
 
 enum EstadoTransferencia {
-  BORRADOR      // En creación
-  PENDIENTE     // Solicitada, esperando aprobación
-  APROBADA      // Aprobada, lista para envío
-  EN_TRANSITO   // Enviada, en camino
-  RECIBIDA      // Recibida en sede destino
-  RECHAZADA     // Rechazada
-  CANCELADA     // Cancelada
+  BORRADOR // En creación
+  PENDIENTE // Solicitada, esperando aprobación
+  APROBADA // Aprobada, lista para envío
+  EN_TRANSITO // Enviada, en camino
+  RECIBIDA // Recibida en sede destino
+  RECHAZADA // Rechazada
+  CANCELADA // Cancelada
+}
+
+enum EstadoItemTransferencia {
+  PENDIENTE // Item pendiente de aprobación
+  APROBADO // Item aprobado para envío
+  RECHAZADO // Item rechazado (no se enviará)
+  ENVIADO // Item enviado
+  RECIBIDO // Item recibido completo
+  RECIBIDO_PARCIAL // Item recibido parcialmente (menos cantidad)
+}
+
+// ========================================
+// MODELOS DE DEVOLUCIONES
+// ========================================
+
+model Devolucion {
+  id        String           @id @default(cuid())
+  codigo    String           @unique // Ej: DEV-00001
+  empresaId String
+  sedeId    String // Sede que recibe/procesa la devolución
+  tipo      TipoDevolucion
+  estado    EstadoDevolucion @default(PENDIENTE)
+
+  // Referencias según tipo
+  ventaId     String? // Si es devolución de cliente (futuro)
+  compraId    String? // Si es devolución a proveedor (futuro)
+  clienteId   String? // Cliente que devuelve (futuro)
+  proveedorId String? // Proveedor al que se devuelve (futuro)
+
+  // Detalles
+  motivo        String? // Motivo general de la devolución
+  observaciones String? // Observaciones adicionales
+
+  // Auditoría
+  creadoPor     String
+  aprobadoPor   String?
+  procesadoPor  String?
+  creadoEn      DateTime  @default(now())
+  aprobadoEn    DateTime?
+  procesadoEn   DateTime?
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  empresa     Empresa           @relation(fields: [empresaId], references: [id])
+  sede        Sede              @relation(fields: [sedeId], references: [id])
+  items       DevolucionItem[]
+  movimientos MovimientoStock[]
+
+  @@index([empresaId, sedeId, estado])
+  @@index([codigo])
+  @@index([tipo])
+  @@index([estado])
+  @@index([ventaId])
+  @@index([compraId])
+}
+
+model DevolucionItem {
+  id           String  @id @default(cuid())
+  devolucionId String
+  empresaId    String
+  productoId   String?
+  varianteId   String?
+
+  // Cantidades
+  cantidad Int // Cantidad devuelta
+
+  // Clasificación
+  motivo         MotivoDevolucion
+  estadoProducto EstadoProductoDevolucion
+  accion         AccionDevolucion
+
+  // Detalles
+  observaciones String? // Observaciones específicas del item
+  imagenes      String[] // URLs de fotos del producto (evidencia)
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  devolucion Devolucion        @relation(fields: [devolucionId], references: [id], onDelete: Cascade)
+  empresa    Empresa           @relation(fields: [empresaId], references: [id])
+  producto   Producto?         @relation(fields: [productoId], references: [id])
+  variante   ProductoVariante? @relation(fields: [varianteId], references: [id])
+
+  @@index([devolucionId])
+  @@index([empresaId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([motivo])
+  @@index([estadoProducto])
+  @@index([accion])
+}
+
+// ========================================
+// ENUMS DE DEVOLUCIONES
+// ========================================
+
+enum TipoDevolucion {
+  CLIENTE_A_TIENDA // Cliente devuelve a la tienda
+  TIENDA_A_PROVEEDOR // Tienda devuelve al proveedor
+  ENTRE_SEDES // Devolución entre sedes (raro, pero posible)
+}
+
+enum EstadoDevolucion {
+  PENDIENTE // Creada, esperando aprobación
+  APROBADA // Aprobada, lista para procesar
+  PROCESADA // Ya se procesó el stock
+  RECHAZADA // Rechazada
+  CANCELADA // Cancelada
+}
+
+enum MotivoDevolucion {
+  DEFECTUOSO // Producto defectuoso/dañado
+  DANADO_TRANSPORTE // Dañado durante el envío
+  ERROR_ENVIO // Error en el pedido (producto incorrecto)
+  CAMBIO_OPINION // Cliente cambió de opinión
+  GARANTIA // Reclamo de garantía
+  PRODUCTO_VENCIDO // Producto caducado
+  NO_CONFORME // No cumple expectativas
+  OTRO // Otro motivo
+}
+
+enum EstadoProductoDevolucion {
+  BUENO // Producto en buen estado, puede revenderse
+  DANADO // Producto dañado, no vendible
+  REPARABLE // Puede repararse
+  VENCIDO // Producto caducado
+  INCOMPLETO // Falta accesorios o partes
+}
+
+enum AccionDevolucion {
+  REINGRESAR_STOCK // Producto vuelve a stock disponible
+  MARCAR_DANADO // Va a stockDanado
+  ENVIAR_REPARACION // Va a stockEnGarantia
+  DAR_DE_BAJA // Descarte definitivo (reduce stockActual)
+  DEVOLVER_PROVEEDOR // Se devolverá al proveedor
+  CAMBIO_PRODUCTO // Se cambia por otro (gestiona venta + devolución)
 }
 
 model Archivo {
@@ -1960,10 +2261,8 @@ model ProductoVariante {
   codigoBarras  String? // Código de barras único
   codigoEmpresa String // Código interno de la empresa
 
-  // Pricing específico de la variante
-  precio       Decimal  @db.Decimal(10, 2)
-  precioCosto  Decimal? @db.Decimal(10, 2)
-  precioOferta Decimal? @db.Decimal(10, 2)
+  // ✅ PRECIOS ELIMINADOS - Ahora solo en ProductoStock por sede
+  // Los precios son independientes por sede, gestionados en ProductoStock
 
   // Características físicas (si difieren del producto base)
   peso        Decimal? @db.Decimal(10, 3)
@@ -1983,7 +2282,7 @@ model ProductoVariante {
   empresa       Empresa              @relation(fields: [empresaId], references: [id])
   unidadMedida  EmpresaUnidadMedida? @relation(fields: [unidadMedidaId], references: [id])
   archivos      Archivo[]
-  usadoEnCombos ProductoCombo[] @relation("ComponenteVariante")
+  usadoEnCombos ProductoCombo[]      @relation("ComponenteVariante")
 
   // Relaciones para atributos estructurados
   atributosValores ProductoAtributoValor[]
@@ -1999,6 +2298,12 @@ model ProductoVariante {
 
   // Relaciones para inventario por sede
   stocksPorSede ProductoStock[]
+
+  // Relaciones para transferencias de stock
+  itemsTransferencia TransferenciaStockItem[]
+
+  // Relaciones para devoluciones
+  devolucionItems DevolucionItem[]
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
@@ -2251,10 +2556,15 @@ enum TipoPrecioCombo {
 /// Tipo de cambio de precio para auditoría
 enum TipoCambioPrecio {
   MANUAL // Cambio manual por usuario
-  OFERTA_ACTIVADA // Se activó una oferta
-  OFERTA_DESACTIVADA // Se desactivó una oferta
-  COSTO_ACTUALIZADO // Se actualizó el precio de costo
-  AJUSTE_MASIVO // Cambio masivo/importación
+  OFERTA // Cambio relacionado con ofertas (activación/desactivación)
+  OFERTA_ACTIVADA // Se activó una oferta (legacy - usar OFERTA)
+  OFERTA_DESACTIVADA // Se desactivó una oferta (legacy - usar OFERTA)
+  COSTO // Actualización de precio de costo
+  COSTO_ACTUALIZADO // Se actualizó el precio de costo (legacy - usar COSTO)
+  MASIVO // Cambio masivo de precios por sede
+  AJUSTE_MASIVO // Cambio masivo/importación (legacy - usar MASIVO)
+  AJUSTE_MERCADO // Ajuste por condiciones de mercado
+  COMPETENCIA // Ajuste por competencia
   CORRECCION // Corrección de error
 }
 
@@ -2638,38 +2948,30 @@ model DescuentoUsoHistorial {
  * id        String   @id @default(cuid())
  * sedeId    String   // REQUERIDO: Toda venta pertenece a una sede
  * empresaId String
- *
  * // Identificación de la venta
  * codigo           String   // VTA-SEDE001-00001 (generado por ConfiguracionCodigos)
  * numeroComprobante String? // Número de comprobante interno adicional (opcional)
- *
  * // Cliente
  * clienteId String?
  * nombreCliente String
  * documentoCliente String?
- *
  * // Vendedor y caja
  * vendedorId String // Usuario que realizó la venta
  * cajaId     String? // Caja donde se registró (si aplica)
- *
  * // Montos (registrados UNA SOLA VEZ aquí)
  * subtotal  Decimal @db.Decimal(10, 2)
  * descuento Decimal @db.Decimal(10, 2) @default(0)
  * impuestos Decimal @db.Decimal(10, 2) @default(0)
  * total     Decimal @db.Decimal(10, 2)
- *
  * // Estado
  * estado EstadoVenta @default(COMPLETADA)
- *
  * // ⚠️ CAMPOS CRÍTICOS PARA EVITAR DUPLICACIÓN ⚠️
  * comprobanteId    String?  // ID del comprobante electrónico si fue emitido
  * tieneComprobante Boolean  @default(false) // true si ya se emitió factura/boleta
  * stockDescontado  Boolean  @default(false) // true cuando se descuenta stock (en creación de venta)
- *
  * // Auditoría
  * creadoEn      DateTime @default(now())
  * actualizadoEn DateTime @updatedAt
- *
  * // Relaciones
  * sede        Sede                    @relation(fields: [sedeId], references: [id])
  * empresa     Empresa                 @relation(fields: [empresaId], references: [id])
@@ -2679,7 +2981,6 @@ model DescuentoUsoHistorial {
  * // caja      Caja?            @relation(fields: [cajaId], references: [id])
  * detalles  VentaDetalle[]
  * pagos     VentaPago[]
- *
  * @@unique([sedeId, codigo])
  * @@index([sedeId])
  * @@index([empresaId])
@@ -2690,47 +2991,36 @@ model DescuentoUsoHistorial {
  * @@index([tieneComprobante])
  * @@index([creadoEn])
  * }
- *
  * /// Detalle de items vendidos
  * /// IMPORTANTE: Stock se descuenta cuando se crea la venta, NO cuando se crea comprobante
  * model VentaDetalle {
  * id       String @id @default(cuid())
  * ventaId  String
- *
  * // Puede ser producto o variante
  * productoId String?
  * varianteId String?
- *
  * descripcion    String
  * cantidad       Decimal @db.Decimal(10, 2)
  * precioUnitario Decimal @db.Decimal(10, 2)
  * descuento      Decimal @db.Decimal(10, 2) @default(0)
  * subtotal       Decimal @db.Decimal(10, 2)
- *
  * venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
- *
  * @@index([ventaId])
  * @@index([productoId])
  * @@index([varianteId])
  * }
- *
  * /// Pagos asociados a una venta
  * /// IMPORTANTE: Pagos se registran UNA SOLA VEZ en la venta, NO en comprobante
  * model VentaPago {
  * id        String @id @default(cuid())
  * ventaId   String
- *
  * metodoPago     String  // EFECTIVO, TARJETA, YAPE, PLIN, TRANSFERENCIA, etc.
  * monto          Decimal @db.Decimal(10, 2)
  * referencia     String? // Número de operación/voucher
- *
  * creadoEn DateTime @default(now())
- *
  * venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
- *
  * @@index([ventaId])
  * }
- *
  * enum EstadoVenta {
  * BORRADOR       // Venta en proceso de creación
  * COMPLETADA     // Venta finalizada (con o sin comprobante)

@@ -226,10 +226,15 @@ export class ProductoPrecioHistorialService {
   private generarRazonDefecto(tipoCambio: TipoCambioPrecio): string {
     const razones: Record<TipoCambioPrecio, string> = {
       MANUAL: 'Actualización manual del precio',
+      OFERTA: 'Cambio relacionado con oferta',
       OFERTA_ACTIVADA: 'Oferta activada',
       OFERTA_DESACTIVADA: 'Oferta desactivada',
+      COSTO: 'Actualización de precio de costo',
       COSTO_ACTUALIZADO: 'Actualización de precio de costo',
+      MASIVO: 'Ajuste masivo de precios por sede',
       AJUSTE_MASIVO: 'Ajuste masivo de precios',
+      AJUSTE_MERCADO: 'Ajuste por condiciones de mercado',
+      COMPETENCIA: 'Ajuste por competencia',
       CORRECCION: 'Corrección de precio',
     };
 

@@ -295,10 +295,12 @@ export class PrecioNivelService {
 
   /**
    * Calcular el precio según la cantidad para un producto o variante
+   * @param sedeId - Requerido para obtener el precio base desde ProductoStock
    */
   async calcularPrecioSegunCantidad(
     productoId: string | null,
     varianteId: string | null,
+    sedeId: string,
     cantidad: number,
   ): Promise<{
     precioUnitario: number;
@@ -309,30 +311,53 @@ export class PrecioNivelService {
     this.logger.info('Calculating price by quantity', {
       productoId,
       varianteId,
+      sedeId,
       cantidad,
     });
 
-    // Obtener el precio base
-    let precioBase: Prisma.Decimal;
+    // Obtener el precio base desde ProductoStock
+    let precioBase: Prisma.Decimal | null = null;
     let itemNombre: string;
 
     if (varianteId) {
       const variante = await this.prisma.productoVariante.findUnique({
         where: { id: varianteId },
+        include: {
+          stocksPorSede: {
+            where: { sedeId },
+          },
+        },
       });
       if (!variante) {
         throw new NotFoundException(`Variante ${varianteId} no encontrada`);
       }
-      precioBase = variante.precio;
+      const stock = variante.stocksPorSede[0];
+      if (!stock || !stock.precio) {
+        throw new BadRequestException(
+          `No se ha configurado precio para la variante ${variante.nombre} en esta sede`,
+        );
+      }
+      precioBase = stock.precio;
       itemNombre = variante.nombre;
     } else if (productoId) {
       const producto = await this.prisma.producto.findUnique({
         where: { id: productoId },
+        include: {
+          stocksPorSede: {
+            where: { sedeId },
+          },
+        },
       });
       if (!producto) {
         throw new NotFoundException(`Producto ${productoId} no encontrado`);
       }
-      precioBase = producto.precio;
+      const stock = producto.stocksPorSede[0];
+      if (!stock || !stock.precio) {
+        throw new BadRequestException(
+          `No se ha configurado precio para el producto ${producto.nombre} en esta sede`,
+        );
+      }
+      precioBase = stock.precio;
       itemNombre = producto.nombre;
     } else {
       throw new BadRequestException(

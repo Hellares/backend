@@ -69,6 +69,16 @@ export class QueryProductoDto {
   sedeId?: string;
 
   @ApiPropertyOptional({
+    description: 'Mostrar todos los productos, incluso si no tienen stock en la sede seleccionada (por defecto: false)',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  mostrarTodos?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Filtrar solo productos visibles en marketplace',
     example: true,
   })

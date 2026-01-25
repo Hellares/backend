@@ -18,8 +18,10 @@ import {
 } from '@nestjs/swagger';
 import { TransferenciaStockService } from './transferencia-stock.service';
 import { CrearTransferenciaDto } from './dto/crear-transferencia.dto';
+import { CrearTransferenciasMultiplesDto } from './dto/crear-transferencias-multiples.dto';
 import { AprobarTransferenciaDto } from './dto/aprobar-transferencia.dto';
 import { RecibirTransferenciaDto } from './dto/recibir-transferencia.dto';
+import { ProcesarCompletoTransferenciaDto } from './dto/procesar-completo-transferencia.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -51,6 +53,31 @@ export class TransferenciaStockController {
     @CurrentUser() user: JwtPayload,
   ) {
     return await this.transferenciaService.crear(empresaId, dto, user.sub);
+  }
+
+  @Post('multiples')
+  @ApiOperation({
+    summary: 'Crear múltiples transferencias',
+    description:
+      'Crea múltiples transferencias de diferentes productos en una sola operación. ' +
+      'Todas las transferencias usan las mismas sedes (origen y destino). ' +
+      'Valida stock de todos los productos antes de crear las transferencias.',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async crearMultiples(
+    @Body() dto: CrearTransferenciasMultiplesDto,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return await this.transferenciaService.crearMultiples(
+      empresaId,
+      dto,
+      user.sub,
+    );
   }
 
   @Get()
@@ -161,6 +188,33 @@ export class TransferenciaStockController {
     @CurrentUser() user: JwtPayload,
   ) {
     return await this.transferenciaService.recibir(
+      id,
+      empresaId,
+      user.sub,
+      dto,
+    );
+  }
+
+  @Put(':id/procesar-completo')
+  @ApiOperation({
+    summary: 'Procesar completamente transferencia (aprobar + enviar + recibir)',
+    description:
+      'Ejecuta todo el flujo de la transferencia en una sola operación: aprueba, envía y recibe la transferencia. ' +
+      'Útil cuando se sabe que todo es correcto y se quiere acelerar el proceso. ' +
+      'Descuenta stock de origen, crea/actualiza stock en destino y marca la transferencia como recibida.',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async procesarCompleto(
+    @Param('id') id: string,
+    @Body() dto: ProcesarCompletoTransferenciaDto,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return await this.transferenciaService.procesarCompleto(
       id,
       empresaId,
       user.sub,

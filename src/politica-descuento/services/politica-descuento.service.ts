@@ -151,7 +151,7 @@ export class PoliticaDescuentoService {
               select: {
                 id: true,
                 nombre: true,
-                precio: true,
+                // ❌ precio - DEPRECATED: Precio ahora en ProductoStock por sede
                 sku: true,
               },
             },

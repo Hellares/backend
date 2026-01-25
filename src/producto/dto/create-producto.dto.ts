@@ -97,27 +97,32 @@ export class CreateProductoDto {
   @IsString()
   descripcion?: string;
 
-  @ApiPropertyOptional({
-    description: 'Precio de venta (requerido solo si NO es combo con precio calculado)',
-    example: 2999.99,
-  })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @IsPrecioRequeridoCondicional()
-  @IsPrecioMayorQueCosto()
-  @Type(() => Number)
-  precio?: number;
-
-  @ApiPropertyOptional({
-    description: 'Precio de costo',
-    example: 2200.00,
-  })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  precioCosto?: number;
+  // ❌ DEPRECATED: Precios ahora se gestionan en ProductoStock por sede
+  // Los precios son independientes por cada sede
+  // Para configurar precios, use POST /producto-stock al crear el stock
+  // o PATCH /producto-stock/:id/precios para actualizar precios por sede
+  //
+  // @ApiPropertyOptional({
+  //   description: 'Precio de venta (requerido solo si NO es combo con precio calculado)',
+  //   example: 2999.99,
+  // })
+  // @IsOptional()
+  // @IsNumber()
+  // @Min(0)
+  // @IsPrecioRequeridoCondicional()
+  // @IsPrecioMayorQueCosto()
+  // @Type(() => Number)
+  // precio?: number;
+  //
+  // @ApiPropertyOptional({
+  //   description: 'Precio de costo',
+  //   example: 2200.00,
+  // })
+  // @IsOptional()
+  // @IsNumber()
+  // @Min(0)
+  // @Type(() => Number)
+  // precioCosto?: number;
 
   // DEPRECATED: Stock ahora se maneja mediante ProductoStock por sede
   // Para agregar stock inicial, use POST /producto-stock después de crear el producto
@@ -206,40 +211,44 @@ export class CreateProductoDto {
   @IsBoolean()
   destacado?: boolean;
 
-  @ApiPropertyOptional({
-    description: 'Producto en oferta',
-    example: false,
-    default: false,
-  })
-  @IsOptional()
-  @IsBoolean()
-  enOferta?: boolean;
-
-  @ApiPropertyOptional({
-    description: 'Precio de oferta',
-    example: 2499.99,
-  })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  @Type(() => Number)
-  precioOferta?: number;
-
-  @ApiPropertyOptional({
-    description: 'Fecha de inicio de la oferta',
-    example: '2025-12-01T00:00:00Z',
-  })
-  @IsOptional()
-  @IsDateString()
-  fechaInicioOferta?: string;
-
-  @ApiPropertyOptional({
-    description: 'Fecha de fin de la oferta',
-    example: '2025-12-31T23:59:59Z',
-  })
-  @IsOptional()
-  @IsDateString()
-  fechaFinOferta?: string;
+  // ❌ DEPRECATED: Ofertas ahora se gestionan en ProductoStock por sede
+  // Cada sede puede tener sus propias ofertas independientes
+  // Para configurar ofertas por sede, use PATCH /producto-stock/:id/precios
+  //
+  // @ApiPropertyOptional({
+  //   description: 'Producto en oferta',
+  //   example: false,
+  //   default: false,
+  // })
+  // @IsOptional()
+  // @IsBoolean()
+  // enOferta?: boolean;
+  //
+  // @ApiPropertyOptional({
+  //   description: 'Precio de oferta',
+  //   example: 2499.99,
+  // })
+  // @IsOptional()
+  // @IsNumber()
+  // @Min(0)
+  // @Type(() => Number)
+  // precioOferta?: number;
+  //
+  // @ApiPropertyOptional({
+  //   description: 'Fecha de inicio de la oferta',
+  //   example: '2025-12-01T00:00:00Z',
+  // })
+  // @IsOptional()
+  // @IsDateString()
+  // fechaInicioOferta?: string;
+  //
+  // @ApiPropertyOptional({
+  //   description: 'Fecha de fin de la oferta',
+  //   example: '2025-12-31T23:59:59Z',
+  // })
+  // @IsOptional()
+  // @IsDateString()
+  // fechaFinOferta?: string;
 
   @ApiPropertyOptional({
     description: 'IDs de archivos/imágenes asociados',

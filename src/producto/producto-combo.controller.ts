@@ -7,7 +7,9 @@ import {
   Body,
   Param,
   Headers,
+  Query,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -49,7 +51,7 @@ export class ProductoComboController {
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
     summary: 'Obtener todos los combos de una empresa con información completa',
-    description: 'Retorna todos los combos con componentes, stock calculado y precio calculado',
+    description: 'Retorna todos los combos con componentes, stock calculado y precio calculado por sede',
   })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -61,10 +63,15 @@ export class ProductoComboController {
     description: 'Lista de combos obtenida',
     type: [ComboCompletoResponseDto],
   })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
   async getAllCombos(
     @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
   ): Promise<ComboCompletoResponseDto[]> {
-    return await this.comboService.getAllCombos(empresaId);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.getAllCombos(empresaId, sedeId);
   }
 
   /**
@@ -105,14 +112,18 @@ export class ProductoComboController {
     description: 'Componente agregado exitosamente',
     type: ProductoComboResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o sedeId requerido' })
   @ApiResponse({ status: 404, description: 'Combo no encontrado' })
   async agregarComponente(
     @Param('id') comboId: string,
     @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string | undefined,
     @Body() dto: CreateComponenteComboDto,
   ): Promise<ProductoComboResponseDto> {
-    return await this.comboService.agregarComponente(comboId, empresaId, dto);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.agregarComponente(comboId, empresaId, sedeId, dto);
   }
 
   /**
@@ -131,14 +142,18 @@ export class ProductoComboController {
     description: 'Componentes agregados exitosamente en batch',
     type: [ProductoComboResponseDto],
   })
-  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o sedeId requerido' })
   @ApiResponse({ status: 404, description: 'Combo no encontrado' })
   async agregarComponentesBatch(
     @Param('id') comboId: string,
     @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string | undefined,
     @Body() dto: CreateComponentesComboBatchDto,
   ): Promise<ProductoComboResponseDto[]> {
-    return await this.comboService.agregarComponentesBatch(comboId, empresaId, dto.componentes);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.agregarComponentesBatch(comboId, empresaId, sedeId, dto.componentes);
   }
 
   /**
@@ -146,7 +161,7 @@ export class ProductoComboController {
    */
   @Get(':id/componentes')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
-  @ApiOperation({ summary: 'Obtener componentes de un combo' })
+  @ApiOperation({ summary: 'Obtener componentes de un combo con precios y stock por sede' })
   @ApiHeader({
     name: 'x-tenant-id',
     description: 'ID de la empresa (tenant)',
@@ -157,12 +172,17 @@ export class ProductoComboController {
     description: 'Lista de componentes obtenida',
     type: [ProductoComboResponseDto],
   })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
   @ApiResponse({ status: 404, description: 'Combo no encontrado' })
   async getComponentes(
     @Param('id') comboId: string,
     @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
   ): Promise<ProductoComboResponseDto[]> {
-    return await this.comboService.getComponentesCombo(comboId, empresaId);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.getComponentesCombo(comboId, empresaId, sedeId);
   }
 
   /**
@@ -171,7 +191,7 @@ export class ProductoComboController {
   @Get(':id/combo-completo')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
-    summary: 'Obtener combo completo con componentes, stock y precio calculado',
+    summary: 'Obtener combo completo con componentes, stock y precio calculado por sede',
   })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -183,12 +203,17 @@ export class ProductoComboController {
     description: 'Información completa del combo',
     type: ComboCompletoResponseDto,
   })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
   @ApiResponse({ status: 404, description: 'Combo no encontrado' })
   async getComboCompleto(
     @Param('id') comboId: string,
     @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
   ): Promise<ComboCompletoResponseDto> {
-    return await this.comboService.getComboCompleto(comboId, empresaId);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.getComboCompleto(comboId, empresaId, sedeId);
   }
 
   /**
@@ -197,7 +222,7 @@ export class ProductoComboController {
   @Get(':id/stock-disponible-combo')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
-    summary: 'Calcular stock disponible del combo (máximo de combos que se pueden armar)',
+    summary: 'Calcular stock disponible del combo en una sede (máximo de combos que se pueden armar)',
   })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -208,10 +233,15 @@ export class ProductoComboController {
     status: 200,
     description: 'Stock disponible calculado',
   })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
   async getStockDisponible(
     @Param('id') comboId: string,
+    @Query('sedeId') sedeId?: string,
   ): Promise<{ stockDisponible: number }> {
-    const stock = await this.comboService.getStockDisponibleCombo(comboId);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    const stock = await this.comboService.getStockDisponibleCombo(comboId, sedeId);
     return { stockDisponible: stock };
   }
 
@@ -221,7 +251,7 @@ export class ProductoComboController {
   @Get(':id/precio-calculado-combo')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
-    summary: 'Calcular precio del combo según su tipo (FIJO, CALCULADO, CALCULADO_CON_DESCUENTO)',
+    summary: 'Calcular precio del combo según su tipo (FIJO, CALCULADO, CALCULADO_CON_DESCUENTO) para una sede',
   })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -232,10 +262,15 @@ export class ProductoComboController {
     status: 200,
     description: 'Precio calculado',
   })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
   async getPrecioCalculado(
     @Param('id') comboId: string,
+    @Query('sedeId') sedeId?: string,
   ): Promise<{ precioCalculado: number }> {
-    const precio = await this.comboService.calcularPrecioCombo(comboId);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    const precio = await this.comboService.calcularPrecioCombo(comboId, sedeId);
     return { precioCalculado: precio };
   }
 
@@ -255,13 +290,18 @@ export class ProductoComboController {
     description: 'Componente actualizado exitosamente',
     type: ProductoComboResponseDto,
   })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
   @ApiResponse({ status: 404, description: 'Componente no encontrado' })
   async actualizarComponente(
     @Param('id') componenteId: string,
     @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string | undefined,
     @Body() dto: UpdateComponenteComboDto,
   ): Promise<ProductoComboResponseDto> {
-    return await this.comboService.actualizarComponente(componenteId, empresaId, dto);
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.actualizarComponente(componenteId, empresaId, sedeId, dto);
   }
 
   /**
@@ -294,7 +334,7 @@ export class ProductoComboController {
   @Get(':id/validar-stock-combo/:cantidad')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({
-    summary: 'Validar si el combo tiene stock suficiente para la cantidad solicitada',
+    summary: 'Validar si el combo tiene stock suficiente para la cantidad solicitada en una sede',
   })
   @ApiHeader({
     name: 'x-tenant-id',
@@ -305,13 +345,18 @@ export class ProductoComboController {
     status: 200,
     description: 'Validación de stock',
   })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
   async validarStock(
     @Param('id') comboId: string,
     @Param('cantidad') cantidad: string,
+    @Query('sedeId') sedeId?: string,
   ): Promise<{ tieneStock: boolean; stockDisponible: number }> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
     const cantidadNum = parseInt(cantidad, 10);
-    const tieneStock = await this.comboService.validarStockCombo(comboId, cantidadNum);
-    const stockDisponible = await this.comboService.getStockDisponibleCombo(comboId);
+    const tieneStock = await this.comboService.validarStockCombo(comboId, sedeId, cantidadNum);
+    const stockDisponible = await this.comboService.getStockDisponibleCombo(comboId, sedeId);
 
     return {
       tieneStock,

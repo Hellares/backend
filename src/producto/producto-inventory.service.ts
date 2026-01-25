@@ -209,9 +209,10 @@ export class ProductoInventoryService {
    * Este método resuelve la dependencia circular:
    * - ProductoService necesitaba ProductoComboService
    * - Ahora ProductoInventoryService lo inyecta (sin circular porque ComboService no usa InventoryService)
+   * @param sedeId - Requerido para obtener stock por sede
    */
-  async getStockCombo(comboId: string): Promise<number> {
-    return await this.comboService.getStockDisponibleCombo(comboId);
+  async getStockCombo(comboId: string, sedeId: string): Promise<number> {
+    return await this.comboService.getStockDisponibleCombo(comboId, sedeId);
   }
 
   // =====================================================

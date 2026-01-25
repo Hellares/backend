@@ -89,9 +89,7 @@ export class ProductoVarianteService {
         sku: dto.sku,
         codigoBarras: dto.codigoBarras,
         codigoEmpresa,
-        precio: dto.precio,
-        precioCosto: dto.precioCosto,
-        precioOferta: dto.precioOferta,
+        // ❌ precio/precioCosto/precioOferta - DEPRECATED: Precios ahora solo en ProductoStock
         peso: dto.peso,
         dimensiones: dto.dimensiones,
         isActive: dto.isActive ?? true,
@@ -798,8 +796,7 @@ export class ProductoVarianteService {
     productoId: string,
     empresaId: string,
     productoData: {
-      precio: any;
-      precioCosto?: any;
+      // ❌ precio/precioCosto - DEPRECATED: Precios ahora solo en ProductoStock
       peso?: any;
       dimensiones?: any;
       codigoEmpresa: string;
@@ -822,9 +819,9 @@ export class ProductoVarianteService {
       throw new BadRequestException('El producto ya tiene variantes creadas');
     }
 
-    this.logger.info('Creando variante por defecto', {
+    this.logger.info('Creando variante por defecto (sin precio)', {
       productoId,
-      precioActual: productoData.precio,
+      // Los precios se configurarán en ProductoStock después
     });
 
     // Generar código único para la variante
@@ -842,8 +839,7 @@ export class ProductoVarianteService {
           sku: `${productoData.codigoEmpresa}-ORIGINAL`,
           codigoBarras: null,
           codigoEmpresa,
-          precio: productoData.precio,
-          precioCosto: productoData.precioCosto,
+          // ❌ precio/precioCosto - DEPRECATED: Precios ahora solo en ProductoStock
           peso: productoData.peso,
           dimensiones: productoData.dimensiones as any,
           isActive: true,
@@ -863,8 +859,7 @@ export class ProductoVarianteService {
             sku: `${productoData.codigoEmpresa}-ORIGINAL`,
             codigoBarras: null,
             codigoEmpresa: nuevoCodigo,
-            precio: productoData.precio,
-            precioCosto: productoData.precioCosto,
+            // ❌ precio/precioCosto - DEPRECATED: Precios ahora solo en ProductoStock
             peso: productoData.peso,
             dimensiones: productoData.dimensiones as any,
             isActive: true,

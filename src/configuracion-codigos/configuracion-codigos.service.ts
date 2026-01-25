@@ -709,29 +709,87 @@ export class ConfiguracionCodigosService {
   }
 
   /**
-   * Genera código para transferencia de stock entre sedes
-   * Formato: TRANS-2026-00001
+   * GENERAR CÓDIGO DE TRANSFERENCIA DE STOCK
+   * Formato: TRANS-2026-00001 (basado en año actual)
+   * @param empresaId ID de la empresa
+   * @param tx Transacción de Prisma (opcional)
    */
   async generarCodigoTransferencia(
     empresaId: string,
-    tx?: any,
+    tx?: Prisma.TransactionClient,
   ): Promise<string> {
-    const prisma = tx || this.prisma;
+    if (tx) {
+      return await this._generarCodigoTransferenciaInTransaction(tx, empresaId);
+    }
 
-    // Obtener contador del año actual
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoTransferenciaInTransaction(
+        txInner,
+        empresaId,
+      );
+    });
+  }
+
+  /**
+   * Lógica interna de generación de código de transferencia
+   * Busca el número más alto del año actual para evitar duplicados
+   */
+  private async _generarCodigoTransferenciaInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<string> {
     const year = new Date().getFullYear();
-    const contador = await prisma.transferenciaStock.count({
+    const prefijo = `TRANS-${year}-`;
+
+    // Buscar la última transferencia del año actual
+    const ultimaTransferencia = await tx.transferenciaStock.findFirst({
       where: {
         empresaId,
-        creadoEn: {
-          gte: new Date(`${year}-01-01`),
-          lt: new Date(`${year + 1}-01-01`),
+        codigo: {
+          startsWith: prefijo,
         },
+      },
+      orderBy: {
+        codigo: 'desc',
+      },
+      select: {
+        codigo: true,
       },
     });
 
-    const numero = (contador + 1).toString().padStart(5, '0');
-    return `TRANS-${year}-${numero}`;
+    let nuevoNumero = 1;
+
+    // Si existe una transferencia, extraer el número del código
+    if (ultimaTransferencia) {
+      const match = ultimaTransferencia.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        nuevoNumero = ultimoNumero + 1;
+      }
+    }
+
+    // Generar código
+    const numero = nuevoNumero.toString().padStart(5, '0');
+    const codigo = `${prefijo}${numero}`;
+
+    // Verificación final de duplicados
+    const existe = await tx.transferenciaStock.findFirst({
+      where: {
+        empresaId,
+        codigo,
+      },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de transferencia ${codigo} ya existe. Reintentando...`,
+      );
+      // Reintentar recursivamente
+      return this._generarCodigoTransferenciaInTransaction(tx, empresaId);
+    }
+
+    return codigo;
   }
 
   // =====================================================

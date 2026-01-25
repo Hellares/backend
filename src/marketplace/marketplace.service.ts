@@ -212,19 +212,22 @@ export class MarketplaceService {
           nombre: true,
           codigoEmpresa: true,
           descripcion: true,
-          precio: true,
-          precioCosto: true,
+          // ❌ precio/precioCosto - DEPRECATED: Ahora en ProductoStock
+          // ❌ enOferta/precioOferta/fechas - DEPRECATED: Ahora en ProductoStock
           destacado: true,
-          // Campos de ofertas
-          enOferta: true,
-          precioOferta: true,
-          fechaInicioOferta: true,
-          fechaFinOferta: true,
-          // Stock por sede
+          // Stock por sede (ahora incluye precios)
           stocksPorSede: {
             select: {
               stockActual: true,
               stockMinimo: true,
+              // ✅ Precios ahora vienen de ProductoStock
+              precio: true,
+              precioCosto: true,
+              precioOferta: true,
+              enOferta: true,
+              fechaInicioOferta: true,
+              fechaFinOferta: true,
+              precioConfigurado: true,
               sede: {
                 select: {
                   id: true,
@@ -266,7 +269,7 @@ export class MarketplaceService {
         orderBy: [
           { destacado: 'desc' }, // Destacados primero
           { ordenMarketplace: 'asc' }, // Orden personalizado
-          { enOferta: 'desc' }, // Ofertas después
+          // ❌ { enOferta: 'desc' } - DEPRECATED: enOferta ahora en ProductoStock
           { creadoEn: 'desc' }, // Más recientes al final
         ],
       }),
@@ -363,7 +366,7 @@ export class MarketplaceService {
         orderBy: [
           { destacado: 'desc' }, // Destacados primero
           { ordenMarketplace: 'asc' }, // Orden personalizado
-          { enOferta: 'desc' }, // Ofertas después
+          // ❌ { enOferta: 'desc' } - DEPRECATED: enOferta ahora en ProductoStock
           { creadoEn: 'desc' }, // Más recientes al final
         ],
       }),
@@ -404,17 +407,22 @@ export class MarketplaceService {
         sku: true,
         codigoBarras: true,
         descripcion: true,
-        precio: true,
-        precioCosto: true,
+        // ❌ precio/precioCosto - DEPRECATED: Ahora en ProductoStock
         peso: true,
         dimensiones: true,
-        // Stock por sede
+        // Stock por sede (ahora incluye precios)
         stocksPorSede: {
           select: {
             stockActual: true,
             stockMinimo: true,
             stockMaximo: true,
             ubicacion: true,
+            // ✅ Precios ahora vienen de ProductoStock
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            precioConfigurado: true,
             sede: {
               select: {
                 id: true,

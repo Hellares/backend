@@ -174,18 +174,9 @@ export class ProductoService {
       }
     }
 
-    // Determinar el precio final
-    // Si es combo con precio calculado y no se proporciona precio, establecer 0
-    // El precio se calculará automáticamente cuando se agreguen los componentes del combo
-    let precioFinal = productoData.precio ?? 0;
-    if (
-      productoData.esCombo === true &&
-      (productoData.tipoPrecioCombo === 'CALCULADO' ||
-        productoData.tipoPrecioCombo === 'CALCULADO_CON_DESCUENTO') &&
-      (productoData.precio === undefined || productoData.precio === null)
-    ) {
-      precioFinal = 0;
-    }
+    // ❌ DEPRECATED: Precio ahora se gestiona en ProductoStock por sede
+    // Los productos se crean sin precio y se configura después en cada sede
+    // Ver: POST /producto-stock o PATCH /producto-stock/:id/precios
 
     try {
       // 6-11. Transacción atómica para crear productos en múltiples sedes
@@ -207,20 +198,11 @@ export class ProductoService {
             sedeId,
             codigoEmpresa,
             codigoSistema,
-            precio: precioFinal,
-            // Stock ahora se maneja mediante ProductoStock por sede
-            // Para agregar stock inicial, usar POST /producto-stock después de crear el producto
-            stock: 0,
-            stockMinimo: null,
+            // ❌ precio: precioFinal, - DEPRECATED: Precio ahora solo en ProductoStock
+            // ❌ stock/stockMinimo - DEPRECATED: Stock ahora solo en ProductoStock
             visibleMarketplace: productoData.visibleMarketplace ?? true,
             destacado: productoData.destacado ?? false,
-            enOferta: productoData.enOferta ?? false,
-            ...(productoData.fechaInicioOferta && {
-              fechaInicioOferta: new Date(productoData.fechaInicioOferta),
-            }),
-            ...(productoData.fechaFinOferta && {
-              fechaFinOferta: new Date(productoData.fechaFinOferta),
-            }),
+            // ❌ enOferta/fechas - DEPRECATED: Ofertas ahora solo en ProductoStock por sede
           };
 
           // 8. Crear producto usando include clause del CatalogService
@@ -258,6 +240,29 @@ export class ProductoService {
               tx,
             );
           }
+
+          // 12. Crear registro inicial en ProductoStock para esta sede
+          // Esto permite que el producto aparezca en los listados filtrados por sede
+          // aunque aún no tenga precio/stock configurado
+          await tx.productoStock.create({
+            data: {
+              empresaId,
+              sedeId,
+              productoId: productoCreado.id,
+              varianteId: null,
+              stockActual: 0,
+              stockMinimo: null,
+              stockMaximo: null,
+              ubicacion: null,
+              precio: null,
+              precioCosto: null,
+              precioOferta: null,
+              enOferta: false,
+              fechaInicioOferta: null,
+              fechaFinOferta: null,
+              precioConfigurado: false,
+            },
+          });
 
           productos.push(productoCreado);
         }
@@ -349,7 +354,7 @@ export class ProductoService {
         skip,
         take: limit,
         orderBy,
-        include: this.catalogService.buildIncludeClause(true, true, false, true),
+        include: this.catalogService.buildIncludeClause(true, true, false, true, queryDto.sedeId),
       }),
       this.prisma.producto.count({ where }),
     ]);
@@ -393,10 +398,11 @@ export class ProductoService {
     const combosIds = productos.filter(p => p.esCombo).map(p => p.id);
     const stockCombosMap = new Map<string, number>();
 
-    if (combosIds.length > 0) {
+    // Solo calcular stock de combos si se proporciona sedeId
+    if (combosIds.length > 0 && queryDto.sedeId) {
       // Obtener stock de todos los combos en paralelo
       const stockCombosPromises = combosIds.map(async (comboId) => {
-        const stock = await this.inventoryService.getStockCombo(comboId);
+        const stock = await this.inventoryService.getStockCombo(comboId, queryDto.sedeId!);
         return { comboId, stock };
       });
 
@@ -481,13 +487,13 @@ export class ProductoService {
     const { imagenesIds, ...productoData } = updateDto;
 
     // DEBUG: Log para verificar qué datos llegan
-    this.logger.debug('Datos recibidos para actualización', {
-      productoId: id,
-      enOferta: productoData.enOferta,
-      precioOferta: productoData.precioOferta,
-      fechaInicioOferta: productoData.fechaInicioOferta,
-      fechaFinOferta: productoData.fechaFinOferta,
-    });
+    // this.logger.debug('Datos recibidos para actualización', {
+    //   productoId: id,
+    //   enOferta: productoData.enOferta,
+    //   precioOferta: productoData.precioOferta,
+    //   fechaInicioOferta: productoData.fechaInicioOferta,
+    //   fechaFinOferta: productoData.fechaFinOferta,
+    // });
 
     // 3. Validaciones (delegar a CatalogService)
     if (productoData.empresaCategoriaId) {
@@ -576,20 +582,19 @@ export class ProductoService {
       if (variantesExistentes === 0) {
         this.logger.info('Convirtiendo producto a variantes, creando variante por defecto', {
           productoId: id,
-          precioActual: productoExistente.precio,
+          // Los precios ahora se gestionan en ProductoStock por sede
           // Stock ahora se maneja en ProductoStock por sede
         });
 
         // Usar transacción para garantizar atomicidad en la conversión a variantes
         await this.prisma.$transaction(async (tx) => {
           // Crear variante por defecto con datos del producto (delegar a VariantService)
-          // NOTA: El stock se migra separadamente usando migrarProductoStockAVariante()
+          // NOTA: El stock y precios se migran separadamente usando migrarProductoStockAVariante()
           const { varianteId } = await this.variantService.createVariantePorDefecto(
             id,
             empresaId,
             {
-              precio: productoExistente.precio,
-              precioCosto: productoExistente.precioCosto,
+              // Los precios ya no se pasan aquí, se mantienen en ProductoStock
               peso: productoExistente.peso,
               dimensiones: productoExistente.dimensiones,
               codigoEmpresa: productoExistente.codigoEmpresa,
@@ -681,50 +686,18 @@ export class ProductoService {
       ? productoData.tipoPrecioCombo
       : productoExistente.tipoPrecioCombo;
 
-    // Determinar si necesitamos establecer el precio en 0
-    let precioParaUpdate = productoData.precio;
-    if (
-      esComboActual === true &&
-      (tipoPrecioComboActual === 'CALCULADO' ||
-        tipoPrecioComboActual === 'CALCULADO_CON_DESCUENTO')
-    ) {
-      // Si se está cambiando a combo calculado o se está actualizando el tipoPrecioCombo
-      if (productoData.tipoPrecioCombo !== undefined || productoData.esCombo === true) {
-        precioParaUpdate = productoData.precio ?? 0;
-      }
-    }
+    // ❌ DEPRECATED: Precio/ofertas ahora se gestionan en ProductoStock por sede
+    // Para actualizar precios, usar: PATCH /producto-stock/:id/precios
 
-    // Convertir fechas de string a Date si están presentes
-    // Convertir campos numéricos a tipos adecuados para Prisma Decimal
+    // Preparar datos para actualización
     const dataToUpdate: any = {
       ...productoData,
-      ...(precioParaUpdate !== undefined && { precio: precioParaUpdate }),
-      ...(productoData.fechaInicioOferta && {
-        fechaInicioOferta: new Date(productoData.fechaInicioOferta),
-      }),
-      ...(productoData.fechaFinOferta && {
-        fechaFinOferta: new Date(productoData.fechaFinOferta),
-      }),
+      // ❌ precio - DEPRECATED
+      // ❌ precioOferta - DEPRECATED
+      // ❌ enOferta - DEPRECATED
+      // ❌ fechaInicioOferta - DEPRECATED
+      // ❌ fechaFinOferta - DEPRECATED
     };
-
-    // Procesar precioOferta de forma especial si está presente
-    if ('precioOferta' in productoData) {
-      const valorPrecioOferta: any = productoData.precioOferta;
-
-      // Si es null, undefined, string vacío, o un valor inválido, establecer como null
-      if (
-        valorPrecioOferta === null ||
-        valorPrecioOferta === undefined ||
-        valorPrecioOferta === '' ||
-        (typeof valorPrecioOferta === 'number' && isNaN(valorPrecioOferta))
-      ) {
-        dataToUpdate.precioOferta = null;
-      } else {
-        // Asegurar que sea un número válido
-        const precioNumero = Number(valorPrecioOferta);
-        dataToUpdate.precioOferta = isNaN(precioNumero) ? null : precioNumero;
-      }
-    }
 
     // Procesar videoUrl de forma especial si está presente
     if ('videoUrl' in productoData) {
@@ -1124,229 +1097,19 @@ export class ProductoService {
    * Ajuste masivo de precios
    * Permite incrementar o decrementar precios por porcentaje de forma masiva
    */
+  // ❌ DEPRECATED: Este método ya no funciona porque Producto/ProductoVariante no tienen precios
+  // Los precios ahora se gestionan en ProductoStock por sede
+  // Use: POST /producto-stock/sedes/:sedeId/precios/ajuste-masivo
+  // Ver: ProductoStockService.ajusteMasivoPreciosPorSede()
   async ajusteMasivoPrecios(
     empresaId: string,
     usuarioId: string,
     dto: AjusteMasivoPreciosDto,
   ): Promise<AjusteMasivoPreciosResponseDto> {
-    // 1. Verificar permisos
-    await this.verifyUserPermissions(usuarioId, empresaId);
-
-    // 2. Obtener productos según el alcance
-    let productos: any[];
-
-    if (dto.alcance === 'TODOS') {
-      // Obtener todos los productos activos de la empresa
-      productos = await this.prisma.producto.findMany({
-        where: {
-          empresaId,
-          isActive: true,
-          deletedAt: null,
-        },
-        include: {
-          variantes: dto.incluirVariantes
-            ? {
-                where: {
-                  isActive: true,
-                  deletedAt: null,
-                },
-              }
-            : false,
-        },
-      });
-    } else {
-      // SELECCIONADOS: obtener productos por IDs
-      productos = await this.prisma.producto.findMany({
-        where: {
-          id: { in: dto.productosIds },
-          empresaId,
-          isActive: true,
-          deletedAt: null,
-        },
-        include: {
-          variantes: dto.incluirVariantes
-            ? {
-                where: {
-                  isActive: true,
-                  deletedAt: null,
-                },
-              }
-            : false,
-        },
-      });
-    }
-
-    if (productos.length === 0) {
-      throw new BadRequestException('No se encontraron productos para ajustar');
-    }
-
-    // 3. Calcular nuevos precios
-    const cambios: any[] = [];
-    const advertencias: string[] = [];
-    let totalProductosAfectados = 0;
-    let totalVariantesAfectadas = 0;
-
-    for (const producto of productos) {
-      // Calcular nuevo precio del producto
-      const precioAnterior = producto.precio.toNumber();
-      const precioNuevo = this.calcularNuevoPrecio(
-        precioAnterior,
-        dto.valor,
-        dto.operacion,
-        dto.redondeo,
-      );
-
-      // Validar que el precio no sea negativo
-      if (precioNuevo <= 0) {
-        advertencias.push(
-          `El producto "${producto.nombre}" quedaría con precio negativo o cero. Se omite.`,
-        );
-        continue;
-      }
-
-      // Agregar cambio del producto
-      cambios.push({
-        productoId: producto.id,
-        nombre: producto.nombre,
-        precioAnterior,
-        precioNuevo,
-        diferencia: precioNuevo - precioAnterior,
-        diferenciaPercentual: ((precioNuevo - precioAnterior) / precioAnterior) * 100,
-      });
-
-      totalProductosAfectados++;
-
-      // Si incluye variantes, procesarlas
-      if (dto.incluirVariantes && producto.variantes && producto.variantes.length > 0) {
-        for (const variante of producto.variantes) {
-          const variantePrecioAnterior = variante.precio.toNumber();
-          const variantePrecioNuevo = this.calcularNuevoPrecio(
-            variantePrecioAnterior,
-            dto.valor,
-            dto.operacion,
-            dto.redondeo,
-          );
-
-          if (variantePrecioNuevo <= 0) {
-            advertencias.push(
-              `La variante "${variante.nombre}" del producto "${producto.nombre}" quedaría con precio negativo. Se omite.`,
-            );
-            continue;
-          }
-
-          cambios.push({
-            productoId: producto.id,
-            nombre: producto.nombre,
-            varianteId: variante.id,
-            varianteNombre: variante.nombre,
-            precioAnterior: variantePrecioAnterior,
-            precioNuevo: variantePrecioNuevo,
-            diferencia: variantePrecioNuevo - variantePrecioAnterior,
-            diferenciaPercentual:
-              ((variantePrecioNuevo - variantePrecioAnterior) / variantePrecioAnterior) * 100,
-          });
-
-          totalVariantesAfectadas++;
-        }
-      }
-    }
-
-    // 4. Si es preview, solo retornar los cambios calculados
-    if (dto.preview) {
-      return {
-        resumen: {
-          totalProductosAfectados,
-          totalVariantesAfectadas,
-          ajustePromedio: dto.valor,
-          operacion: dto.operacion,
-          valorAjuste: dto.valor,
-        },
-        cambios,
-        advertencias: advertencias.length > 0 ? advertencias : undefined,
-        esPreview: true,
-      };
-    }
-
-    // 5. Si NO es preview, aplicar los cambios
-    const razonAjuste = dto.razon || `Ajuste masivo: ${dto.operacion === 'INCREMENTO' ? '+' : '-'}${dto.valor}%`;
-
-    for (const cambio of cambios) {
-      if (cambio.varianteId) {
-        // Actualizar variante
-        const varianteAntes = await this.prisma.productoVariante.findUnique({
-          where: { id: cambio.varianteId },
-        });
-
-        await this.prisma.productoVariante.update({
-          where: { id: cambio.varianteId },
-          data: { precio: cambio.precioNuevo },
-        });
-
-        // Registrar en historial
-        if (varianteAntes) {
-          await this.precioHistorialService.registrarCambio({
-            productoId: cambio.productoId,
-            varianteId: cambio.varianteId,
-            precioAnterior: cambio.precioAnterior,
-            precioNuevo: cambio.precioNuevo,
-            tipoCambio: 'AJUSTE_MASIVO',
-            razon: razonAjuste,
-            origenModulo: 'PRODUCTO',
-            usuarioId,
-          });
-        }
-      } else {
-        // Actualizar producto
-        const productoAntes = await this.prisma.producto.findUnique({
-          where: { id: cambio.productoId },
-        });
-
-        await this.prisma.producto.update({
-          where: { id: cambio.productoId },
-          data: { precio: cambio.precioNuevo },
-        });
-
-        // Registrar en historial
-        if (productoAntes) {
-          await this.precioHistorialService.registrarCambio({
-            productoId: cambio.productoId,
-            precioAnterior: cambio.precioAnterior,
-            precioNuevo: cambio.precioNuevo,
-            tipoCambio: 'AJUSTE_MASIVO',
-            razon: razonAjuste,
-            origenModulo: 'PRODUCTO',
-            usuarioId,
-          });
-        }
-      }
-    }
-
-    // 6. Invalidar cache
-    await this.invalidateEmpresaStats(empresaId);
-
-    // 7. Log de la operación
-    this.logger.info('Ajuste masivo de precios aplicado', {
-      empresaId,
-      usuarioId,
-      totalProductos: totalProductosAfectados,
-      totalVariantes: totalVariantesAfectadas,
-      operacion: dto.operacion,
-      valor: dto.valor,
-    });
-
-    // 8. Retornar resultado
-    return {
-      resumen: {
-        totalProductosAfectados,
-        totalVariantesAfectadas,
-        ajustePromedio: dto.valor,
-        operacion: dto.operacion,
-        valorAjuste: dto.valor,
-      },
-      cambios,
-      advertencias: advertencias.length > 0 ? advertencias : undefined,
-      esPreview: false,
-    };
+    throw new BadRequestException(
+      'Este método está deprecado. Los precios ahora se gestionan por sede en ProductoStock. ' +
+      'Use el endpoint POST /producto-stock/sedes/:sedeId/precios/ajuste-masivo para ajustar precios por sede.'
+    );
   }
 
   /**

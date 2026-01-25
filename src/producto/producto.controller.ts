@@ -10,6 +10,7 @@ import {
   UseGuards,
   Patch,
   Headers,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -126,6 +127,7 @@ export class ProductoController {
   @ApiQuery({ name: 'empresaCategoriaId', required: false, type: String })
   @ApiQuery({ name: 'empresaMarcaId', required: false, type: String })
   @ApiQuery({ name: 'sedeId', required: false, type: String })
+  @ApiQuery({ name: 'mostrarTodos', required: false, type: Boolean, description: 'Mostrar todos los productos incluso sin stock en la sede seleccionada' })
   @ApiQuery({ name: 'visibleMarketplace', required: false, type: Boolean })
   @ApiQuery({ name: 'destacado', required: false, type: Boolean })
   @ApiQuery({ name: 'enOferta', required: false, type: Boolean })
@@ -1065,13 +1067,24 @@ export class ProductoController {
     description: 'ID de la empresa (tenant)',
     required: true,
   })
+  @ApiQuery({
+    name: 'sedeId',
+    description: 'ID de la sede para obtener precios',
+    required: true,
+    type: String,
+  })
   async calcularPrecioProducto(
     @Param('id') productoId: string,
     @Query('cantidad') cantidad: string,
+    @Query('sedeId') sedeId: string,
   ) {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
     return await this.precioNivelService.calcularPrecioSegunCantidad(
       productoId,
       null,
+      sedeId,
       parseInt(cantidad, 10),
     );
   }
@@ -1105,13 +1118,24 @@ export class ProductoController {
     description: 'ID de la empresa (tenant)',
     required: true,
   })
+  @ApiQuery({
+    name: 'sedeId',
+    description: 'ID de la sede para obtener precios',
+    required: true,
+    type: String,
+  })
   async calcularPrecioVariante(
     @Param('varianteId') varianteId: string,
     @Query('cantidad') cantidad: string,
+    @Query('sedeId') sedeId: string,
   ) {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
     return await this.precioNivelService.calcularPrecioSegunCantidad(
       null,
       varianteId,
+      sedeId,
       parseInt(cantidad, 10),
     );
   }

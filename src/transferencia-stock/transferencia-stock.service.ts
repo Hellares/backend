@@ -6,10 +6,13 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { CrearTransferenciaDto } from './dto/crear-transferencia.dto';
+import { CrearTransferenciasMultiplesDto } from './dto/crear-transferencias-multiples.dto';
 import { AprobarTransferenciaDto } from './dto/aprobar-transferencia.dto';
 import { RecibirTransferenciaDto } from './dto/recibir-transferencia.dto';
+import { ProcesarCompletoTransferenciaDto } from './dto/procesar-completo-transferencia.dto';
 import { EstadoTransferencia, TipoMovimientoStock } from '@prisma/client';
 
 @Injectable()
@@ -19,6 +22,7 @@ export class TransferenciaStockService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly codigosService: ConfiguracionCodigosService,
+    private readonly cache: CacheService,
   ) {}
 
   /**
@@ -92,9 +96,219 @@ export class TransferenciaStockService {
       );
     }
 
-    if (stockOrigen.stockActual < dto.cantidad) {
+    // Verificar stock disponible (stock físico - stock reservado)
+    const stockDisponible = stockOrigen.stockActual - stockOrigen.stockReservado;
+    if (stockDisponible < dto.cantidad) {
       throw new BadRequestException(
-        `Stock insuficiente en sede origen. Disponible: ${stockOrigen.stockActual}, Solicitado: ${dto.cantidad}`,
+        `Stock disponible insuficiente en sede origen. Disponible: ${stockDisponible}, Solicitado: ${dto.cantidad}`,
+      );
+    }
+
+    // Crear transferencia con retry para manejar race conditions
+    const maxRetries = 3;
+    let lastError: Error;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Crear transferencia dentro de una transacción
+        const transferencia = await this.prisma.$transaction(async (tx) => {
+          // Generar código único dentro de la transacción
+          const codigo = await this.codigosService.generarCodigoTransferencia(
+            empresaId,
+            tx,
+          );
+
+          // Crear transferencia con un solo item
+          return await tx.transferenciaStock.create({
+            data: {
+              empresaId,
+              sedeOrigenId: dto.sedeOrigenId,
+              sedeDestinoId: dto.sedeDestinoId,
+              codigo,
+              motivo: dto.motivo,
+              observaciones: dto.observaciones,
+              solicitadoPor: usuarioId,
+              estado: EstadoTransferencia.PENDIENTE,
+              totalItems: 1,
+              itemsAprobados: 0,
+              itemsRechazados: 0,
+              itemsRecibidos: 0,
+              // Crear un item de transferencia
+              items: {
+                create: {
+                  empresaId,
+                  productoId: dto.productoId,
+                  varianteId: dto.varianteId,
+                  cantidadSolicitada: dto.cantidad,
+                },
+              },
+            },
+            include: {
+              sedeOrigen: true,
+              sedeDestino: true,
+              empresa: true,
+              items: {
+                include: {
+                  producto: true,
+                  variante: true,
+                },
+              },
+            },
+          });
+        });
+
+        this.logger.log(
+          `Transferencia creada: ${transferencia.codigo} | ${stockOrigen.producto?.nombre || stockOrigen.variante?.nombre} | ${dto.cantidad} unidades | ${sedeOrigen.nombre} → ${sedeDestino.nombre}`,
+        );
+
+        // Invalidar cache de productos
+        await this.invalidateStockCache(empresaId);
+
+        return transferencia;
+      } catch (error) {
+        lastError = error;
+
+        // Si es error de restricción única y no es el último intento, reintentar
+        if (
+          error.code === 'P2002' &&
+          error.meta?.target?.includes('codigo') &&
+          attempt < maxRetries
+        ) {
+          this.logger.warn(
+            `Conflicto al crear transferencia (código duplicado), reintentando (${attempt}/${maxRetries})...`,
+          );
+          // Pequeño delay aleatorio antes de reintentar (10-50ms)
+          await new Promise((resolve) =>
+            setTimeout(resolve, 10 + Math.random() * 40),
+          );
+          continue;
+        }
+
+        // Si es otro tipo de error o ya se agotaron los intentos, lanzar el error
+        throw error;
+      }
+    }
+
+    // Si llegamos aquí, se agotaron los reintentos
+    this.logger.error(
+      `Error al crear transferencia después de ${maxRetries} intentos`,
+    );
+    throw lastError;
+  }
+
+  /**
+   * Crea múltiples transferencias en una sola operación
+   * Genera UNA transferencia con múltiples items
+   */
+  async crearMultiples(
+    empresaId: string,
+    dto: CrearTransferenciasMultiplesDto,
+    usuarioId: string,
+  ) {
+    // Validaciones iniciales
+    if (dto.sedeOrigenId === dto.sedeDestinoId) {
+      throw new BadRequestException(
+        'La sede origen y destino no pueden ser la misma',
+      );
+    }
+
+    // Verificar que cada producto tenga productoId o varianteId
+    for (const [index, item] of dto.productos.entries()) {
+      if (!item.productoId && !item.varianteId) {
+        throw new BadRequestException(
+          `Producto ${index + 1}: Se requiere productoId o varianteId`,
+        );
+      }
+    }
+
+    // Verificar sedes existen
+    const [sedeOrigen, sedeDestino] = await Promise.all([
+      this.prisma.sede.findFirst({
+        where: { id: dto.sedeOrigenId, empresaId, isActive: true },
+      }),
+      this.prisma.sede.findFirst({
+        where: { id: dto.sedeDestinoId, empresaId, isActive: true },
+      }),
+    ]);
+
+    if (!sedeOrigen) {
+      throw new NotFoundException('Sede origen no encontrada');
+    }
+    if (!sedeDestino) {
+      throw new NotFoundException('Sede destino no encontrada');
+    }
+
+    // Validar stock disponible para TODOS los productos antes de crear la transferencia
+    const stockValidations = await Promise.all(
+      dto.productos.map(async (item, index) => {
+        const stockOrigen = await this.prisma.productoStock.findFirst({
+          where: {
+            sedeId: dto.sedeOrigenId,
+            productoId: item.productoId || null,
+            varianteId: item.varianteId || null,
+          },
+          include: {
+            producto: true,
+            variante: true,
+          },
+        });
+
+        if (!stockOrigen) {
+          return {
+            valid: false,
+            index,
+            error: 'No hay stock registrado en la sede origen',
+            nombre: 'Producto desconocido',
+          };
+        }
+
+        // Validar que el producto o variante esté activo
+        if (stockOrigen.producto && !stockOrigen.producto.isActive) {
+          return {
+            valid: false,
+            index,
+            error: 'Producto inactivo',
+            nombre: stockOrigen.producto.nombre,
+          };
+        }
+
+        if (stockOrigen.variante && !stockOrigen.variante.isActive) {
+          return {
+            valid: false,
+            index,
+            error: 'Variante inactiva',
+            nombre: stockOrigen.variante.nombre,
+          };
+        }
+
+        // Verificar stock disponible (stock físico - stock reservado)
+        const stockDisponible = stockOrigen.stockActual - stockOrigen.stockReservado;
+        if (stockDisponible < item.cantidad) {
+          return {
+            valid: false,
+            index,
+            error: `Stock disponible insuficiente. Disponible: ${stockDisponible}, Solicitado: ${item.cantidad}`,
+            nombre: stockOrigen.producto?.nombre || stockOrigen.variante?.nombre,
+          };
+        }
+
+        return {
+          valid: true,
+          index,
+          stockOrigen,
+          nombre: stockOrigen.producto?.nombre || stockOrigen.variante?.nombre,
+        };
+      }),
+    );
+
+    // Verificar si hay errores de validación
+    const errores = stockValidations.filter((v) => !v.valid);
+    if (errores.length > 0) {
+      const mensajesError = errores
+        .map((e) => `Producto ${e.index + 1} (${e.nombre}): ${e.error}`)
+        .join('; ');
+      throw new BadRequestException(
+        `Errores de validación: ${mensajesError}`,
       );
     }
 
@@ -104,33 +318,55 @@ export class TransferenciaStockService {
       this.prisma,
     );
 
-    // Crear transferencia
+    // Crear UNA transferencia con múltiples items
     const transferencia = await this.prisma.transferenciaStock.create({
       data: {
         empresaId,
         sedeOrigenId: dto.sedeOrigenId,
         sedeDestinoId: dto.sedeDestinoId,
-        productoId: dto.productoId,
-        varianteId: dto.varianteId,
-        cantidad: dto.cantidad,
         codigo,
-        motivo: dto.motivo,
-        observaciones: dto.observaciones,
         solicitadoPor: usuarioId,
-        estado: EstadoTransferencia.PENDIENTE,
+        motivo: dto.motivoGeneral,
+        observaciones: dto.observaciones,
+        totalItems: dto.productos.length,
+        itemsAprobados: 0,
+        itemsRechazados: 0,
+        itemsRecibidos: 0,
+        // Crear los items de la transferencia
+        items: {
+          create: dto.productos.map((item) => ({
+            empresaId,
+            productoId: item.productoId,
+            varianteId: item.varianteId,
+            cantidadSolicitada: item.cantidad,
+            motivo: item.motivo, // Motivo específico del item (opcional)
+          })),
+        },
       },
       include: {
         sedeOrigen: true,
         sedeDestino: true,
-        empresa: true,
+        items: {
+          include: {
+            producto: true,
+            variante: true,
+          },
+        },
       },
     });
 
+    // Log
     this.logger.log(
-      `Transferencia creada: ${codigo} | ${stockOrigen.producto?.nombre || stockOrigen.variante?.nombre} | ${dto.cantidad} unidades | ${sedeOrigen.nombre} → ${sedeDestino.nombre}`,
+      `Transferencia múltiple creada: ${transferencia.codigo} con ${transferencia.totalItems} items | ${sedeOrigen.nombre} → ${sedeDestino.nombre}`,
     );
 
-    return transferencia;
+    // Invalidar cache de productos
+    await this.invalidateStockCache(empresaId);
+
+    return {
+      transferencia,
+      mensaje: `Transferencia creada con ${transferencia.totalItems} productos`,
+    };
   }
 
   /**
@@ -150,6 +386,12 @@ export class TransferenciaStockService {
       include: {
         sedeOrigen: true,
         sedeDestino: true,
+        items: {
+          include: {
+            producto: true,
+            variante: true,
+          },
+        },
       },
     });
 
@@ -163,36 +405,85 @@ export class TransferenciaStockService {
       );
     }
 
-    // Verificar stock nuevamente (por si cambió)
-    const stockOrigen = await this.prisma.productoStock.findFirst({
-      where: {
-        sedeId: transferencia.sedeOrigenId,
-        productoId: transferencia.productoId || null,
-        varianteId: transferencia.varianteId || null,
-      },
-    });
+    // Verificar stock DISPONIBLE (stockActual - stockReservado) para todos los items
+    for (const item of transferencia.items) {
+      const stockOrigen = await this.prisma.productoStock.findFirst({
+        where: {
+          sedeId: transferencia.sedeOrigenId,
+          productoId: item.productoId || null,
+          varianteId: item.varianteId || null,
+        },
+      });
 
-    if (!stockOrigen || stockOrigen.stockActual < transferencia.cantidad) {
-      throw new BadRequestException(
-        'Stock insuficiente en sede origen para aprobar esta transferencia',
-      );
+      if (!stockOrigen) {
+        const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+        throw new BadRequestException(
+          `No hay stock registrado para ${nombreProducto} en la sede origen`,
+        );
+      }
+
+      const stockDisponible = stockOrigen.stockActual - stockOrigen.stockReservado;
+      if (stockDisponible < item.cantidadSolicitada) {
+        const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+        throw new BadRequestException(
+          `Stock disponible insuficiente para ${nombreProducto}. Disponible: ${stockDisponible}, Solicitado: ${item.cantidadSolicitada}`,
+        );
+      }
     }
 
-    const actualizado = await this.prisma.transferenciaStock.update({
-      where: { id: transferenciaId },
-      data: {
-        estado: EstadoTransferencia.APROBADA,
-        aprobadoPor: usuarioId,
-        fechaAprobacion: new Date(),
-        observaciones: dto?.observaciones || transferencia.observaciones,
-      },
-      include: {
-        sedeOrigen: true,
-        sedeDestino: true,
-      },
+    // Aprobar la transferencia y RESERVAR el stock
+    const actualizado = await this.prisma.$transaction(async (tx) => {
+      // Aprobar todos los items y reservar stock
+      for (const item of transferencia.items) {
+        // Marcar item como aprobado
+        await tx.transferenciaStockItem.update({
+          where: { id: item.id },
+          data: {
+            estado: 'APROBADO',
+            cantidadAprobada: item.cantidadSolicitada,
+          },
+        });
+
+        // RESERVAR stock en sede origen (incrementar stockReservado)
+        await tx.productoStock.updateMany({
+          where: {
+            sedeId: transferencia.sedeOrigenId,
+            productoId: item.productoId || null,
+            varianteId: item.varianteId || null,
+          },
+          data: {
+            stockReservado: { increment: item.cantidadSolicitada },
+          },
+        });
+      }
+
+      // Actualizar transferencia
+      return await tx.transferenciaStock.update({
+        where: { id: transferenciaId },
+        data: {
+          estado: EstadoTransferencia.APROBADA,
+          aprobadoPor: usuarioId,
+          fechaAprobacion: new Date(),
+          observaciones: dto?.observaciones || transferencia.observaciones,
+          itemsAprobados: transferencia.totalItems,
+        },
+        include: {
+          sedeOrigen: true,
+          sedeDestino: true,
+          items: {
+            include: {
+              producto: true,
+              variante: true,
+            },
+          },
+        },
+      });
     });
 
-    this.logger.log(`Transferencia aprobada: ${transferencia.codigo}`);
+    this.logger.log(`Transferencia aprobada: ${transferencia.codigo} con ${transferencia.totalItems} items`);
+
+    // Invalidar cache de productos (para reflejar cambios en estado)
+    await this.invalidateStockCache(empresaId);
 
     return actualizado;
   }
@@ -213,6 +504,13 @@ export class TransferenciaStockService {
       include: {
         sedeOrigen: true,
         sedeDestino: true,
+        items: {
+          where: { estado: 'APROBADO' },
+          include: {
+            producto: true,
+            variante: true,
+          },
+        },
       },
     });
 
@@ -226,51 +524,79 @@ export class TransferenciaStockService {
       );
     }
 
-    // Descontar stock de origen y registrar movimiento en transacción
+    if (transferencia.items.length === 0) {
+      throw new BadRequestException(
+        'No hay items aprobados para enviar',
+      );
+    }
+
+    // Descontar stock físico y liberar reserva
     return await this.prisma.$transaction(async (tx) => {
-      // Obtener stock origen
-      const stockOrigen = await tx.productoStock.findFirst({
-        where: {
-          sedeId: transferencia.sedeOrigenId,
-          productoId: transferencia.productoId || null,
-          varianteId: transferencia.varianteId || null,
-        },
-      });
+      // Procesar cada item aprobado
+      for (const item of transferencia.items) {
+        // Obtener stock origen
+        const stockOrigen = await tx.productoStock.findFirst({
+          where: {
+            sedeId: transferencia.sedeOrigenId,
+            productoId: item.productoId || null,
+            varianteId: item.varianteId || null,
+          },
+        });
 
-      if (!stockOrigen) {
-        throw new NotFoundException('Stock origen no encontrado');
+        if (!stockOrigen) {
+          const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+          throw new NotFoundException(`Stock origen no encontrado para ${nombreProducto}`);
+        }
+
+        const cantidadEnviar = item.cantidadAprobada || item.cantidadSolicitada;
+
+        if (stockOrigen.stockActual < cantidadEnviar) {
+          const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+          throw new BadRequestException(
+            `Stock insuficiente para ${nombreProducto}. Disponible: ${stockOrigen.stockActual}, Requerido: ${cantidadEnviar}`,
+          );
+        }
+
+        const nuevoStockActual = stockOrigen.stockActual - cantidadEnviar;
+        const nuevoStockReservado = stockOrigen.stockReservado - cantidadEnviar;
+
+        // Actualizar stock origen: descontar stockActual y decrementar stockReservado
+        await tx.productoStock.update({
+          where: { id: stockOrigen.id },
+          data: {
+            stockActual: nuevoStockActual,
+            stockReservado: nuevoStockReservado,
+          },
+        });
+
+        // Registrar movimiento de salida
+        await tx.movimientoStock.create({
+          data: {
+            sedeId: transferencia.sedeOrigenId,
+            empresaId,
+            productoStockId: stockOrigen.id,
+            tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
+            tipoDocumento: 'TRANSFERENCIA',
+            numeroDocumento: transferencia.codigo,
+            cantidadAnterior: stockOrigen.stockActual,
+            cantidad: -cantidadEnviar,
+            cantidadNueva: nuevoStockActual,
+            motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
+            observaciones: transferencia.observaciones,
+            transferenciaId: transferencia.id,
+            usuarioId,
+          },
+        });
+
+        // Marcar item como enviado
+        await tx.transferenciaStockItem.update({
+          where: { id: item.id },
+          data: {
+            estado: 'ENVIADO',
+            cantidadEnviada: cantidadEnviar,
+          },
+        });
       }
-
-      if (stockOrigen.stockActual < transferencia.cantidad) {
-        throw new BadRequestException('Stock insuficiente para enviar');
-      }
-
-      const nuevoStockOrigen = stockOrigen.stockActual - transferencia.cantidad;
-
-      // Actualizar stock origen
-      await tx.productoStock.update({
-        where: { id: stockOrigen.id },
-        data: { stockActual: nuevoStockOrigen },
-      });
-
-      // Registrar movimiento de salida
-      await tx.movimientoStock.create({
-        data: {
-          sedeId: transferencia.sedeOrigenId,
-          empresaId,
-          productoStockId: stockOrigen.id,
-          tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
-          tipoDocumento: 'TRANSFERENCIA',
-          numeroDocumento: transferencia.codigo,
-          cantidadAnterior: stockOrigen.stockActual,
-          cantidad: -transferencia.cantidad,
-          cantidadNueva: nuevoStockOrigen,
-          motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
-          observaciones: transferencia.observaciones,
-          transferenciaId: transferencia.id,
-          usuarioId,
-        },
-      });
 
       // Actualizar transferencia
       const actualizada = await tx.transferenciaStock.update({
@@ -282,15 +608,24 @@ export class TransferenciaStockService {
         include: {
           sedeOrigen: true,
           sedeDestino: true,
+          items: {
+            include: {
+              producto: true,
+              variante: true,
+            },
+          },
         },
       });
 
       this.logger.log(
-        `Transferencia enviada: ${transferencia.codigo} | Stock origen: ${stockOrigen.stockActual} → ${nuevoStockOrigen}`,
+        `Transferencia enviada: ${transferencia.codigo} con ${transferencia.items.length} items`,
       );
-
+      await this.invalidateStockCache(empresaId);
       return actualizada;
     });
+
+    // Invalidar cache de productos (stock modificado en sede origen)
+    
   }
 
   /**
@@ -312,6 +647,13 @@ export class TransferenciaStockService {
       include: {
         sedeOrigen: true,
         sedeDestino: true,
+        items: {
+          where: { estado: 'ENVIADO' },
+          include: {
+            producto: true,
+            variante: true,
+          },
+        },
       },
     });
 
@@ -325,105 +667,112 @@ export class TransferenciaStockService {
       );
     }
 
-    if (dto.cantidadRecibida > transferencia.cantidad) {
+    if (transferencia.items.length === 0) {
       throw new BadRequestException(
-        'La cantidad recibida no puede ser mayor a la cantidad enviada',
+        'No hay items enviados para recibir',
       );
     }
 
-    // Recibir en transacción
+    // Recibir todos los items en transacción (versión simplificada - cantidad completa)
     return await this.prisma.$transaction(async (tx) => {
-      // Buscar o crear ProductoStock en sede destino
-      let stockDestino = await tx.productoStock.findFirst({
-        where: {
-          sedeId: transferencia.sedeDestinoId,
-          productoId: transferencia.productoId || null,
-          varianteId: transferencia.varianteId || null,
-        },
-      });
+      let itemsRecibidos = 0;
 
-      if (!stockDestino) {
-        // 🎯 AUTO-CREAR ProductoStock si no existe en sede destino
-        stockDestino = await tx.productoStock.create({
-          data: {
-            sedeId: transferencia.sedeDestinoId,
-            empresaId,
-            productoId: transferencia.productoId,
-            varianteId: transferencia.varianteId,
-            stockActual: 0,
-            ubicacion: dto.ubicacion,
-          },
-        });
+      // Procesar cada item enviado
+      for (const item of transferencia.items) {
+        const cantidadRecibir = item.cantidadEnviada || item.cantidadAprobada || item.cantidadSolicitada;
 
-        this.logger.log(
-          `ProductoStock creado automáticamente en ${transferencia.sedeDestino.nombre}`,
-        );
-      }
-
-      const nuevoStockDestino = stockDestino.stockActual + dto.cantidadRecibida;
-
-      // Actualizar stock destino
-      const stockActualizado = await tx.productoStock.update({
-        where: { id: stockDestino.id },
-        data: {
-          stockActual: nuevoStockDestino,
-          ubicacion: dto.ubicacion || stockDestino.ubicacion,
-        },
-      });
-
-      // Registrar movimiento de entrada
-      await tx.movimientoStock.create({
-        data: {
-          sedeId: transferencia.sedeDestinoId,
-          empresaId,
-          productoStockId: stockDestino.id,
-          tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
-          tipoDocumento: 'TRANSFERENCIA',
-          numeroDocumento: transferencia.codigo,
-          cantidadAnterior: stockDestino.stockActual,
-          cantidad: dto.cantidadRecibida,
-          cantidadNueva: nuevoStockDestino,
-          motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
-          observaciones: dto.observaciones,
-          transferenciaId: transferencia.id,
-          usuarioId,
-        },
-      });
-
-      // Si hubo merma, registrar movimiento de salida en origen
-      const merma = transferencia.cantidad - dto.cantidadRecibida;
-      if (merma > 0) {
-        const stockOrigen = await tx.productoStock.findFirst({
+        // Buscar o crear ProductoStock en sede destino
+        let stockDestino = await tx.productoStock.findFirst({
           where: {
-            sedeId: transferencia.sedeOrigenId,
-            productoId: transferencia.productoId || null,
-            varianteId: transferencia.varianteId || null,
+            sedeId: transferencia.sedeDestinoId,
+            productoId: item.productoId || null,
+            varianteId: item.varianteId || null,
           },
         });
 
-        if (stockOrigen) {
-          await tx.movimientoStock.create({
-            data: {
+        if (!stockDestino) {
+          // Obtener el stock origen para copiar configuraciones
+          const stockOrigen = await tx.productoStock.findFirst({
+            where: {
               sedeId: transferencia.sedeOrigenId,
-              empresaId,
-              productoStockId: stockOrigen.id,
-              tipo: TipoMovimientoStock.SALIDA_MERMA,
-              tipoDocumento: 'TRANSFERENCIA',
-              numeroDocumento: transferencia.codigo,
-              cantidadAnterior: 0,
-              cantidad: -merma,
-              cantidadNueva: 0,
-              motivo: `Merma en transferencia ${transferencia.codigo}`,
-              observaciones: `Enviado: ${transferencia.cantidad}, Recibido: ${dto.cantidadRecibida}`,
-              transferenciaId: transferencia.id,
-              usuarioId,
+              productoId: item.productoId || null,
+              varianteId: item.varianteId || null,
             },
           });
 
-          this.logger.warn(
-            `Merma detectada en transferencia ${transferencia.codigo}: ${merma} unidades`,
+          // 🎯 AUTO-CREAR ProductoStock si no existe en sede destino
+          // Copiar todos los datos de configuración del stock origen
+          stockDestino = await tx.productoStock.create({
+            data: {
+              sedeId: transferencia.sedeDestinoId,
+              empresaId,
+              productoId: item.productoId,
+              varianteId: item.varianteId,
+              stockActual: 0,
+              stockReservado: 0,
+              stockReservadoVenta: 0,
+              stockDanado: 0,
+              stockEnGarantia: 0,
+              ubicacion: dto.ubicacion,
+              // Copiar configuraciones del stock origen
+              stockMinimo: stockOrigen?.stockMinimo,
+              stockMaximo: stockOrigen?.stockMaximo,
+              precio: stockOrigen?.precio,
+              precioCosto: stockOrigen?.precioCosto,
+              precioOferta: stockOrigen?.precioOferta,
+              enOferta: stockOrigen?.enOferta || false,
+              fechaInicioOferta: stockOrigen?.fechaInicioOferta,
+              fechaFinOferta: stockOrigen?.fechaFinOferta,
+              precioConfigurado: stockOrigen?.precioConfigurado || false,
+            },
+          });
+
+          const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+          this.logger.log(
+            `ProductoStock creado automáticamente para ${nombreProducto} en ${transferencia.sedeDestino.nombre} con configuraciones copiadas del origen`,
           );
         }
+
+        const nuevoStockDestino = stockDestino.stockActual + cantidadRecibir;
+
+        // Actualizar stock destino
+        await tx.productoStock.update({
+          where: { id: stockDestino.id },
+          data: {
+            stockActual: nuevoStockDestino,
+            ubicacion: dto.ubicacion || stockDestino.ubicacion,
+          },
+        });
+
+        // Registrar movimiento de entrada
+        await tx.movimientoStock.create({
+          data: {
+            sedeId: transferencia.sedeDestinoId,
+            empresaId,
+            productoStockId: stockDestino.id,
+            tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
+            tipoDocumento: 'TRANSFERENCIA',
+            numeroDocumento: transferencia.codigo,
+            cantidadAnterior: stockDestino.stockActual,
+            cantidad: cantidadRecibir,
+            cantidadNueva: nuevoStockDestino,
+            motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
+            observaciones: dto.observaciones,
+            transferenciaId: transferencia.id,
+            usuarioId,
+          },
+        });
+
+        // Marcar item como recibido
+        await tx.transferenciaStockItem.update({
+          where: { id: item.id },
+          data: {
+            estado: 'RECIBIDO',
+            cantidadRecibida: cantidadRecibir,
+          },
+        });
+
+        itemsRecibidos++;
       }
 
       // Actualizar transferencia
@@ -433,20 +782,312 @@ export class TransferenciaStockService {
           estado: EstadoTransferencia.RECIBIDA,
           recibidoPor: usuarioId,
           fechaRecepcion: new Date(),
+          itemsRecibidos,
           observaciones: dto.observaciones || transferencia.observaciones,
         },
         include: {
           sedeOrigen: true,
           sedeDestino: true,
+          items: {
+            include: {
+              producto: true,
+              variante: true,
+            },
+          },
         },
       });
 
       this.logger.log(
-        `Transferencia recibida: ${transferencia.codigo} | Stock destino: ${stockDestino.stockActual} → ${nuevoStockDestino} | Merma: ${merma}`,
+        `Transferencia recibida: ${transferencia.codigo} con ${itemsRecibidos} items`,
+      );
+
+      await this.invalidateStockCache(empresaId);
+
+      return actualizada;
+      
+    });
+
+    // Invalidar cache de productos (stock modificado en sede destino)
+   
+  }
+
+  /**
+   * Procesa completamente una transferencia (aprobar + enviar + recibir) en una sola operación
+   * Útil cuando se sabe que todo es correcto y se quiere acelerar el proceso
+   */
+  async procesarCompleto(
+    transferenciaId: string,
+    empresaId: string,
+    usuarioId: string,
+    dto?: { ubicacion?: string; observaciones?: string },
+  ) {
+    const transferencia = await this.prisma.transferenciaStock.findFirst({
+      where: {
+        id: transferenciaId,
+        empresaId,
+      },
+      include: {
+        sedeOrigen: true,
+        sedeDestino: true,
+        items: {
+          include: {
+            producto: true,
+            variante: true,
+          },
+        },
+      },
+    });
+
+    if (!transferencia) {
+      throw new NotFoundException('Transferencia no encontrada');
+    }
+
+    if (transferencia.estado !== EstadoTransferencia.PENDIENTE) {
+      throw new BadRequestException(
+        `Solo se pueden procesar transferencias PENDIENTES. Estado actual: ${transferencia.estado}`,
+      );
+    }
+
+    if (transferencia.items.length === 0) {
+      throw new BadRequestException('La transferencia no tiene items');
+    }
+
+    // Validar stock disponible para todos los items
+    for (const item of transferencia.items) {
+      const stockOrigen = await this.prisma.productoStock.findFirst({
+        where: {
+          sedeId: transferencia.sedeOrigenId,
+          productoId: item.productoId || null,
+          varianteId: item.varianteId || null,
+        },
+      });
+
+      if (!stockOrigen) {
+        const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+        throw new BadRequestException(
+          `No hay stock registrado para ${nombreProducto} en la sede origen`,
+        );
+      }
+
+      const stockDisponible = stockOrigen.stockActual - stockOrigen.stockReservado;
+      if (stockDisponible < item.cantidadSolicitada) {
+        const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+        throw new BadRequestException(
+          `Stock disponible insuficiente para ${nombreProducto}. Disponible: ${stockDisponible}, Solicitado: ${item.cantidadSolicitada}`,
+        );
+      }
+    }
+
+    // Ejecutar todo el proceso en una sola transacción
+    return await this.prisma.$transaction(async (tx) => {
+      // 1. APROBAR: Aprobar todos los items y RESERVAR stock
+      for (const item of transferencia.items) {
+        await tx.transferenciaStockItem.update({
+          where: { id: item.id },
+          data: {
+            estado: 'APROBADO',
+            cantidadAprobada: item.cantidadSolicitada,
+          },
+        });
+
+        // RESERVAR stock en sede origen (incrementar stockReservado)
+        await tx.productoStock.updateMany({
+          where: {
+            sedeId: transferencia.sedeOrigenId,
+            productoId: item.productoId || null,
+            varianteId: item.varianteId || null,
+          },
+          data: {
+            stockReservado: { increment: item.cantidadSolicitada },
+          },
+        });
+      }
+
+      // 2. ENVIAR: Descontar stock físico y liberar reserva
+      for (const item of transferencia.items) {
+        const stockOrigen = await tx.productoStock.findFirst({
+          where: {
+            sedeId: transferencia.sedeOrigenId,
+            productoId: item.productoId || null,
+            varianteId: item.varianteId || null,
+          },
+        });
+
+        const cantidadEnviar = item.cantidadSolicitada;
+        const nuevoStockActual = stockOrigen.stockActual - cantidadEnviar;
+        const nuevoStockReservado = stockOrigen.stockReservado - cantidadEnviar;
+
+        // Actualizar stock origen: descontar stockActual y decrementar stockReservado
+        await tx.productoStock.update({
+          where: { id: stockOrigen.id },
+          data: {
+            stockActual: nuevoStockActual,
+            stockReservado: nuevoStockReservado,
+          },
+        });
+
+        // Registrar movimiento de salida
+        await tx.movimientoStock.create({
+          data: {
+            sedeId: transferencia.sedeOrigenId,
+            empresaId,
+            productoStockId: stockOrigen.id,
+            tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
+            tipoDocumento: 'TRANSFERENCIA',
+            numeroDocumento: transferencia.codigo,
+            cantidadAnterior: stockOrigen.stockActual,
+            cantidad: -cantidadEnviar,
+            cantidadNueva: nuevoStockActual,
+            motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
+            observaciones: dto?.observaciones,
+            transferenciaId: transferencia.id,
+            usuarioId,
+          },
+        });
+
+        // Marcar item como enviado
+        await tx.transferenciaStockItem.update({
+          where: { id: item.id },
+          data: {
+            estado: 'ENVIADO',
+            cantidadEnviada: cantidadEnviar,
+          },
+        });
+      }
+
+      // 3. RECIBIR: Crear/actualizar stock destino y marcar items como recibidos
+      let itemsRecibidos = 0;
+
+      for (const item of transferencia.items) {
+        const cantidadRecibir = item.cantidadSolicitada;
+
+        // Buscar o crear ProductoStock en sede destino
+        let stockDestino = await tx.productoStock.findFirst({
+          where: {
+            sedeId: transferencia.sedeDestinoId,
+            productoId: item.productoId || null,
+            varianteId: item.varianteId || null,
+          },
+        });
+
+        if (!stockDestino) {
+          // Obtener el stock origen para copiar configuraciones
+          const stockOrigen = await tx.productoStock.findFirst({
+            where: {
+              sedeId: transferencia.sedeOrigenId,
+              productoId: item.productoId || null,
+              varianteId: item.varianteId || null,
+            },
+          });
+
+          // Crear ProductoStock con configuraciones copiadas
+          stockDestino = await tx.productoStock.create({
+            data: {
+              sedeId: transferencia.sedeDestinoId,
+              empresaId,
+              productoId: item.productoId,
+              varianteId: item.varianteId,
+              stockActual: 0,
+              stockReservado: 0,
+              stockReservadoVenta: 0,
+              stockDanado: 0,
+              stockEnGarantia: 0,
+              ubicacion: dto?.ubicacion,
+              stockMinimo: stockOrigen?.stockMinimo,
+              stockMaximo: stockOrigen?.stockMaximo,
+              precio: stockOrigen?.precio,
+              precioCosto: stockOrigen?.precioCosto,
+              precioOferta: stockOrigen?.precioOferta,
+              enOferta: stockOrigen?.enOferta || false,
+              fechaInicioOferta: stockOrigen?.fechaInicioOferta,
+              fechaFinOferta: stockOrigen?.fechaFinOferta,
+              precioConfigurado: stockOrigen?.precioConfigurado || false,
+            },
+          });
+
+          const nombreProducto = item.producto?.nombre || item.variante?.nombre;
+          this.logger.log(
+            `ProductoStock creado automáticamente para ${nombreProducto} en ${transferencia.sedeDestino.nombre}`,
+          );
+        }
+
+        const nuevoStockDestino = stockDestino.stockActual + cantidadRecibir;
+
+        // Actualizar stock destino
+        await tx.productoStock.update({
+          where: { id: stockDestino.id },
+          data: {
+            stockActual: nuevoStockDestino,
+            ubicacion: dto?.ubicacion || stockDestino.ubicacion,
+          },
+        });
+
+        // Registrar movimiento de entrada
+        await tx.movimientoStock.create({
+          data: {
+            sedeId: transferencia.sedeDestinoId,
+            empresaId,
+            productoStockId: stockDestino.id,
+            tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
+            tipoDocumento: 'TRANSFERENCIA',
+            numeroDocumento: transferencia.codigo,
+            cantidadAnterior: stockDestino.stockActual,
+            cantidad: cantidadRecibir,
+            cantidadNueva: nuevoStockDestino,
+            motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
+            observaciones: dto?.observaciones,
+            transferenciaId: transferencia.id,
+            usuarioId,
+          },
+        });
+
+        // Marcar item como recibido
+        await tx.transferenciaStockItem.update({
+          where: { id: item.id },
+          data: {
+            estado: 'RECIBIDO',
+            cantidadRecibida: cantidadRecibir,
+          },
+        });
+
+        itemsRecibidos++;
+      }
+
+      // Actualizar transferencia con todos los estados
+      const actualizada = await tx.transferenciaStock.update({
+        where: { id: transferenciaId },
+        data: {
+          estado: EstadoTransferencia.RECIBIDA,
+          aprobadoPor: usuarioId,
+          recibidoPor: usuarioId,
+          fechaAprobacion: new Date(),
+          fechaEnvio: new Date(),
+          fechaRecepcion: new Date(),
+          itemsAprobados: transferencia.totalItems,
+          itemsRecibidos,
+          observaciones: dto?.observaciones || transferencia.observaciones,
+        },
+        include: {
+          sedeOrigen: true,
+          sedeDestino: true,
+          items: {
+            include: {
+              producto: true,
+              variante: true,
+            },
+          },
+        },
+      });
+
+      this.logger.log(
+        `Transferencia procesada completamente: ${transferencia.codigo} con ${itemsRecibidos} items (${transferencia.sedeOrigen.nombre} → ${transferencia.sedeDestino.nombre})`,
       );
 
       return actualizada;
     });
+
+    // Invalidar cache de productos (stock modificado en ambas sedes)
+    await this.invalidateStockCache(empresaId);
   }
 
   /**
@@ -463,6 +1104,9 @@ export class TransferenciaStockService {
         id: transferenciaId,
         empresaId,
       },
+      include: {
+        items: true,
+      },
     });
 
     if (!transferencia) {
@@ -475,17 +1119,66 @@ export class TransferenciaStockService {
       );
     }
 
-    const actualizada = await this.prisma.transferenciaStock.update({
-      where: { id: transferenciaId },
-      data: {
-        estado: EstadoTransferencia.RECHAZADA,
-        aprobadoPor: usuarioId,
-        fechaAprobacion: new Date(),
-        observaciones: `RECHAZADA: ${motivo}`,
-      },
+    // Rechazar transferencia y todos sus items
+    const actualizada = await this.prisma.$transaction(async (tx) => {
+      // Si la transferencia estaba APROBADA (aunque se rechaza después), liberar el stock reservado
+      // Nota: Este caso es raro pero posible si se aprueba por error y luego se rechaza
+      if (transferencia.estado === EstadoTransferencia.APROBADA) {
+        for (const item of transferencia.items) {
+          if (item.estado === 'APROBADO') {
+            const cantidadAprobada = item.cantidadAprobada || item.cantidadSolicitada;
+
+            // LIBERAR stock reservado (decrementar stockReservado)
+            await tx.productoStock.updateMany({
+              where: {
+                sedeId: transferencia.sedeOrigenId,
+                productoId: item.productoId || null,
+                varianteId: item.varianteId || null,
+              },
+              data: {
+                stockReservado: { decrement: cantidadAprobada },
+              },
+            });
+          }
+        }
+      }
+
+      // Rechazar todos los items pendientes/aprobados
+      await tx.transferenciaStockItem.updateMany({
+        where: {
+          transferenciaId,
+          estado: { in: ['PENDIENTE', 'APROBADO'] },
+        },
+        data: {
+          estado: 'RECHAZADO',
+        },
+      });
+
+      // Actualizar transferencia
+      return await tx.transferenciaStock.update({
+        where: { id: transferenciaId },
+        data: {
+          estado: EstadoTransferencia.RECHAZADA,
+          aprobadoPor: usuarioId,
+          fechaAprobacion: new Date(),
+          itemsRechazados: transferencia.totalItems,
+          observaciones: `RECHAZADA: ${motivo}`,
+        },
+        include: {
+          items: {
+            include: {
+              producto: true,
+              variante: true,
+            },
+          },
+        },
+      });
     });
 
-    this.logger.log(`Transferencia rechazada: ${transferencia.codigo}`);
+    this.logger.log(`Transferencia rechazada: ${transferencia.codigo} con ${transferencia.totalItems} items`);
+
+    // Invalidar cache de productos (para reflejar cambio de estado)
+    await this.invalidateStockCache(empresaId);
 
     return actualizada;
   }
@@ -504,6 +1197,9 @@ export class TransferenciaStockService {
         id: transferenciaId,
         empresaId,
       },
+      include: {
+        items: true,
+      },
     });
 
     if (!transferencia) {
@@ -519,15 +1215,63 @@ export class TransferenciaStockService {
       );
     }
 
-    const actualizada = await this.prisma.transferenciaStock.update({
-      where: { id: transferenciaId },
-      data: {
-        estado: EstadoTransferencia.CANCELADA,
-        observaciones: `CANCELADA: ${motivo}`,
-      },
+    // Cancelar transferencia y todos sus items
+    const actualizada = await this.prisma.$transaction(async (tx) => {
+      // Si la transferencia estaba APROBADA, liberar el stock reservado
+      if (transferencia.estado === EstadoTransferencia.APROBADA) {
+        for (const item of transferencia.items) {
+          if (item.estado === 'APROBADO') {
+            const cantidadAprobada = item.cantidadAprobada || item.cantidadSolicitada;
+
+            // LIBERAR stock reservado (decrementar stockReservado)
+            await tx.productoStock.updateMany({
+              where: {
+                sedeId: transferencia.sedeOrigenId,
+                productoId: item.productoId || null,
+                varianteId: item.varianteId || null,
+              },
+              data: {
+                stockReservado: { decrement: cantidadAprobada },
+              },
+            });
+          }
+        }
+      }
+
+      // Marcar todos los items como rechazados
+      await tx.transferenciaStockItem.updateMany({
+        where: {
+          transferenciaId,
+          estado: { in: ['PENDIENTE', 'APROBADO'] },
+        },
+        data: {
+          estado: 'RECHAZADO',
+        },
+      });
+
+      // Actualizar transferencia
+      return await tx.transferenciaStock.update({
+        where: { id: transferenciaId },
+        data: {
+          estado: EstadoTransferencia.CANCELADA,
+          itemsRechazados: transferencia.totalItems,
+          observaciones: `CANCELADA: ${motivo}`,
+        },
+        include: {
+          items: {
+            include: {
+              producto: true,
+              variante: true,
+            },
+          },
+        },
+      });
     });
 
     this.logger.log(`Transferencia cancelada: ${transferencia.codigo}`);
+
+    // Invalidar cache de productos (para reflejar cambio de estado)
+    await this.invalidateStockCache(empresaId);
 
     return actualizada;
   }
@@ -564,6 +1308,16 @@ export class TransferenciaStockService {
           sedeDestino: {
             select: { id: true, nombre: true, codigo: true },
           },
+          items: {
+            include: {
+              producto: {
+                select: { id: true, nombre: true, codigoEmpresa: true },
+              },
+              variante: {
+                select: { id: true, nombre: true, sku: true },
+              },
+            },
+          },
         },
         orderBy: { creadoEn: 'desc' },
         skip,
@@ -596,6 +1350,13 @@ export class TransferenciaStockService {
         sedeOrigen: true,
         sedeDestino: true,
         empresa: true,
+        items: {
+          include: {
+            producto: true,
+            variante: true,
+          },
+          orderBy: { creadoEn: 'asc' },
+        },
         movimientos: {
           orderBy: { creadoEn: 'desc' },
         },
@@ -607,5 +1368,31 @@ export class TransferenciaStockService {
     }
 
     return transferencia;
+  }
+
+  /**
+   * Invalida el cache de productos y estadísticas después de movimientos de stock
+   * Se llama automáticamente cuando se modifica el stock (aprobar, enviar, recibir, etc.)
+   */
+  private async invalidateStockCache(empresaId: string) {
+    try {
+      // Invalidar estadísticas de la empresa
+      const statsKey = this.cache.getEmpresaStatsKey(empresaId);
+      await this.cache.invalidate(statsKey);
+
+      // Invalidar TODAS las listas de productos de la empresa
+      // Esto invalida todos los caches con diferentes filtros/búsquedas
+      await this.cache.invalidateProductosLists(empresaId);
+
+      this.logger.debug(
+        `✅ Cache invalidado para empresa ${empresaId}: stats + listas de productos`,
+      );
+    } catch (error) {
+      // No lanzar error si falla la invalidación del cache
+      // El sistema debe seguir funcionando aunque Redis falle
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.warn(`⚠️ Error al invalidar cache: ${errorMessage}`);
+    }
   }
 }

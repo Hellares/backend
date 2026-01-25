@@ -197,6 +197,17 @@ export class ProductoCatalogService {
         sedeNombre: stock.sede.nombre,
         sedeCodigo: stock.sede.codigo,
         cantidad: stock.stockActual,
+        stockMinimo: stock.stockMinimo,
+        stockMaximo: stock.stockMaximo,
+        ubicacion: stock.ubicacion,
+        // Incluir precios de ProductoStock
+        precio: stock.precio ? Number(stock.precio) : null,
+        precioCosto: stock.precioCosto ? Number(stock.precioCosto) : null,
+        precioOferta: stock.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: stock.enOferta ?? false,
+        fechaInicioOferta: stock.fechaInicioOferta,
+        fechaFinOferta: stock.fechaFinOferta,
+        precioConfigurado: stock.precioConfigurado ?? false,
       }));
     } else {
       // Fallback para productos legacy que aún usan el campo deprecated
@@ -227,18 +238,28 @@ export class ProductoCatalogService {
     // Desestructurar para excluir campos relacionados
     const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, stocksPorSede: _, ...productoData } = producto;
 
+    // Obtener precio del primer stock con precio configurado, o fallback al producto
+    let precioFinal = Number(producto.precio || 0);
+    let precioCostoFinal = producto.precioCosto ? Number(producto.precioCosto) : undefined;
+    let precioOfertaFinal = producto.precioOferta ? Number(producto.precioOferta) : undefined;
+
+    if (stocksPorSede && stocksPorSede.length > 0) {
+      const stockConPrecio = stocksPorSede.find((s: any) => s.precioConfigurado && s.precio != null);
+      if (stockConPrecio) {
+        precioFinal = stockConPrecio.precio;
+        precioCostoFinal = stockConPrecio.precioCosto || undefined;
+        precioOfertaFinal = stockConPrecio.precioOferta || undefined;
+      }
+    }
+
     return {
       ...productoData,
       stock: stockTotal,
       stocksPorSede: stocksPorSede, // Desglose de stock por sede (si se solicitó)
-      precio: Number(producto.precio),
-      precioCosto: producto.precioCosto
-        ? Number(producto.precioCosto)
-        : undefined,
+      precio: precioFinal,
+      precioCosto: precioCostoFinal,
       peso: producto.peso ? Number(producto.peso) : undefined,
-      precioOferta: producto.precioOferta
-        ? Number(producto.precioOferta)
-        : undefined,
+      precioOferta: precioOfertaFinal,
       // Información de sede (simplificada)
       sede: sede ? {
         id: sede.id,
@@ -338,7 +359,24 @@ export class ProductoCatalogService {
             stockMinimo: stock.stockMinimo,
             stockMaximo: stock.stockMaximo,
             ubicacion: stock.ubicacion,
+            // Incluir precios de ProductoStock
+            precio: stock.precio ? Number(stock.precio) : null,
+            precioCosto: stock.precioCosto ? Number(stock.precioCosto) : null,
+            precioOferta: stock.precioOferta ? Number(stock.precioOferta) : null,
+            enOferta: stock.enOferta ?? false,
+            fechaInicioOferta: stock.fechaInicioOferta,
+            fechaFinOferta: stock.fechaFinOferta,
+            precioConfigurado: stock.precioConfigurado ?? false,
           }));
+        }
+
+        // Obtener precio del primer stock con precio configurado, o fallback a la variante
+        let variantePrecio = Number(v.precio || 0);
+        if (varianteStocksPorSede && varianteStocksPorSede.length > 0) {
+          const stockConPrecio = varianteStocksPorSede.find((s: any) => s.precioConfigurado && s.precio != null);
+          if (stockConPrecio) {
+            variantePrecio = stockConPrecio.precio;
+          }
         }
 
         return {
@@ -357,7 +395,7 @@ export class ProductoCatalogService {
               unidad: av.atributo.unidad,
             },
           })) || [],
-          precio: Number(v.precio),
+          precio: variantePrecio,
           stock: varianteStock, // Stock calculado desde stocksPorSede
           stocksPorSede: varianteStocksPorSede, // Desglose por sede
           isActive: v.isActive,
@@ -431,20 +469,40 @@ export class ProductoCatalogService {
       where.empresaMarcaId = filters.empresaMarcaId;
     }
 
-    if (filters.sedeId) {
-      where.sedeId = filters.sedeId;
+    // ✅ NUEVO: Filtrar productos que tienen stock en la sede especificada
+    // Solo mostrar productos que tienen ProductoStock creado en esa sede
+    // Si mostrarTodos=true, se salta este filtro y se muestran todos los productos
+    if (filters.sedeId && !filters.mostrarTodos) {
+      const productosConStockEnSede = await this.prisma.$queryRaw<Array<{ productoId: string }>>`
+        SELECT DISTINCT ps."productoId"
+        FROM "ProductoStock" ps
+        WHERE ps."sedeId" = ${filters.sedeId}
+        AND ps."productoId" IS NOT NULL
+      `;
+
+      // Agregar filtro por IDs
+      if (productosConStockEnSede.length > 0) {
+        where.id = {
+          in: productosConStockEnSede.map(p => p.productoId),
+        };
+      } else {
+        // Si no hay productos con stock en esta sede, forzar resultado vacío
+        where.id = 'none';
+      }
     }
 
     if (filters.visibleMarketplace !== undefined) {
       where.visibleMarketplace = filters.visibleMarketplace;
     }
 
-    if (filters.enOferta === true) {
-      where.enOferta = true;
-      where.fechaFinOferta = {
-        gte: new Date(), // Ofertas no expiradas
-      };
-    }
+    // ❌ DEPRECATED: enOferta/fechaFinOferta ahora en ProductoStock por sede
+    // Para filtrar productos en oferta, consultar stocksPorSede.enOferta
+    // if (filters.enOferta === true) {
+    //   where.enOferta = true;
+    //   where.fechaFinOferta = {
+    //     gte: new Date(), // Ofertas no expiradas
+    //   };
+    // }
 
     // Filtro de stock bajo: productos con stock <= stockMinimo en al menos una sede
     // Nota: Se implementa usando una subquery SQL cruda porque Prisma no soporta
@@ -491,6 +549,7 @@ export class ProductoCatalogService {
     includeAtributos: boolean = false,
     includeArchivos: boolean = false,
     includeStock: boolean = false,
+    sedeIdFilter?: string, // Nuevo parámetro para filtrar stock por sede
   ): Prisma.ProductoInclude {
     const include: Prisma.ProductoInclude = {
       empresaCategoria: {
@@ -574,11 +633,20 @@ export class ProductoCatalogService {
       // Incluir stock por sede de cada variante (necesario para calcular stock total)
       if (includeStock) {
         varianteInclude.stocksPorSede = {
+          where: sedeIdFilter ? { sedeId: sedeIdFilter } : undefined, // Filtrar por sede si se proporciona
           select: {
             stockActual: true,
             stockMinimo: true,
             stockMaximo: true,
             ubicacion: true,
+            // Incluir precios de ProductoStock
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            fechaInicioOferta: true,
+            fechaFinOferta: true,
+            precioConfigurado: true,
             sede: {
               select: {
                 id: true,
@@ -612,11 +680,20 @@ export class ProductoCatalogService {
     // Incluir stock por sedes para calcular stock total
     if (includeStock) {
       include.stocksPorSede = {
+        where: sedeIdFilter ? { sedeId: sedeIdFilter } : undefined, // Filtrar por sede si se proporciona
         select: {
           stockActual: true,
           stockMinimo: true,
           stockMaximo: true,
           ubicacion: true,
+          // Incluir precios de ProductoStock
+          precio: true,
+          precioCosto: true,
+          precioOferta: true,
+          enOferta: true,
+          fechaInicioOferta: true,
+          fechaFinOferta: true,
+          precioConfigurado: true,
           sede: {
             select: {
               id: true,
