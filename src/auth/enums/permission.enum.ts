@@ -29,6 +29,10 @@ export enum Permission {
   APPROVE_FAMILY = 'canApproveFamily',           // Aprobar familiares de trabajadores
   VIEW_DISCOUNT_REPORTS = 'canViewDiscountReports', // Ver reportes de descuentos
 
+  // Proveedores
+  VIEW_PROVEEDORES = 'canViewProveedores',       // Ver lista de proveedores
+  MANAGE_PROVEEDORES = 'canManageProveedores',   // Crear, editar, eliminar proveedores
+
   // Otros permisos
   MANAGE_SEDES = 'canManageSedes',
   VIEW_REPORTS = 'canViewReports',

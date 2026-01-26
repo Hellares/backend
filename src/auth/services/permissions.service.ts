@@ -131,6 +131,14 @@ export class PermissionsService {
 
       // Asignar usuarios y productos a políticas de descuento: Administradores de empresa
       canAssignDiscounts: isSuperAdmin || isEmpresaAdmin,
+
+      // ==================== PROVEEDORES ====================
+      // Ver proveedores: Administradores y contador
+      canViewProveedores:
+        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
+
+      // Gestionar proveedores: Solo administradores
+      canManageProveedores: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
     };
   }
 
@@ -171,6 +179,8 @@ export class PermissionsService {
       'canViewDiscounts',
       'canManageDiscounts',
       'canAssignDiscounts',
+      'canViewProveedores',
+      'canManageProveedores',
     ];
   }
 }

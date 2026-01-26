@@ -71,6 +71,18 @@ export class EmpresaPermissionsDto {
   canManageClients: boolean;
 
   @ApiProperty({
+    description: 'Puede ver la lista de proveedores',
+    example: true,
+  })
+  canViewProveedores: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar proveedores (crear, editar, eliminar)',
+    example: true,
+  })
+  canManageProveedores: boolean;
+
+  @ApiProperty({
     description: 'Puede gestionar sedes',
     example: true,
   })

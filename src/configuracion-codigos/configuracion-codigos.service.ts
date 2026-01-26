@@ -1019,6 +1019,76 @@ export class ConfiguracionCodigosService {
   // =====================================================
 
   /**
+   * GENERAR CÓDIGO DE PROVEEDOR
+   * @param empresaId ID de la empresa
+   * @param tx Transacción de Prisma (opcional)
+   * @returns Código de proveedor generado (ej: PROV-001)
+   */
+  async generarCodigoProveedor(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ codigoProveedor: string }> {
+    if (tx) {
+      return await this._generarCodigoProveedorInTransaction(tx, empresaId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoProveedorInTransaction(txInner, empresaId);
+    });
+  }
+
+  /**
+   * Lógica interna de generación de código de proveedor
+   * Busca el número más alto usado para evitar conflictos
+   */
+  private async _generarCodigoProveedorInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<{ codigoProveedor: string }> {
+    // Obtener todos los proveedores para evitar conflictos de código
+    const proveedores = await tx.proveedor.findMany({
+      where: { empresaId },
+      select: { codigo: true },
+      orderBy: { codigo: 'desc' },
+    });
+
+    let maxNumero = 0;
+
+    // Buscar el número más alto en los códigos existentes
+    for (const proveedor of proveedores) {
+      const match = proveedor.codigo.match(/\d+$/);
+      if (match) {
+        const numero = parseInt(match[0], 10);
+        if (numero > maxNumero) {
+          maxNumero = numero;
+        }
+      }
+    }
+
+    const siguiente = maxNumero + 1;
+    const codigoProveedor = `PROV-${String(siguiente).padStart(3, '0')}`;
+
+    // Verificación final de duplicados
+    const existe = await tx.proveedor.findFirst({
+      where: {
+        empresaId,
+        codigo: codigoProveedor,
+      },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de proveedor ${codigoProveedor} ya existe. Reintentando...`,
+      );
+      // Reintentar recursivamente
+      return this._generarCodigoProveedorInTransaction(tx, empresaId);
+    }
+
+    return { codigoProveedor };
+  }
+
+  /**
    * Formatear código con prefijo, separador y número
    */
   private formatCodigo(
