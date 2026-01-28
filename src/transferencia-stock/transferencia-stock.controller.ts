@@ -22,6 +22,9 @@ import { CrearTransferenciasMultiplesDto } from './dto/crear-transferencias-mult
 import { AprobarTransferenciaDto } from './dto/aprobar-transferencia.dto';
 import { RecibirTransferenciaDto } from './dto/recibir-transferencia.dto';
 import { ProcesarCompletoTransferenciaDto } from './dto/procesar-completo-transferencia.dto';
+import { RecibirTransferenciaConIncidenciasDto } from './dto/recibir-transferencia-con-incidencias.dto';
+import { ResolverIncidenciaDto } from './dto/resolver-incidencia.dto';
+import { CrearIncidenciaPosteriorDto } from './dto/crear-incidencia-posterior.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -110,6 +113,93 @@ export class TransferenciaStockController {
     );
   }
 
+  // ========================================
+  // ENDPOINTS DE INCIDENCIAS (deben ir ANTES de :id para evitar conflictos)
+  // ========================================
+
+  @Get('incidencias')
+  @ApiOperation({
+    summary: 'Listar incidencias de transferencias',
+    description:
+      'Obtiene la lista de incidencias reportadas en transferencias con filtros opcionales. ' +
+      'Útil para dashboard de gestión logística y reportes de problemas.',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  @ApiQuery({
+    name: 'resuelto',
+    required: false,
+    type: Boolean,
+    description: 'Filtrar por estado (true=resueltas, false=pendientes)',
+  })
+  @ApiQuery({
+    name: 'tipo',
+    required: false,
+    type: String,
+    description:
+      'Filtrar por tipo: FALTANTE, DANADO, CALIDAD_RECHAZADA, EXCEDENTE, EMPAQUE_DANADO, PRODUCTO_INCORRECTO',
+  })
+  @ApiQuery({
+    name: 'sedeId',
+    required: false,
+    type: String,
+    description: 'Filtrar por sede (origen o destino)',
+  })
+  @ApiQuery({
+    name: 'transferenciaId',
+    required: false,
+    type: String,
+    description: 'Filtrar por transferencia específica',
+  })
+  async listarIncidencias(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('resuelto') resuelto?: string,
+    @Query('tipo') tipo?: string,
+    @Query('sedeId') sedeId?: string,
+    @Query('transferenciaId') transferenciaId?: string,
+  ) {
+    return await this.transferenciaService.listarIncidencias(empresaId, {
+      resuelto: resuelto === 'true' ? true : resuelto === 'false' ? false : undefined,
+      tipo,
+      sedeId,
+      transferenciaId,
+    });
+  }
+
+  @Post('incidencias/:incidenciaId/resolver')
+  @ApiOperation({
+    summary: 'Resolver incidencia de transferencia',
+    description:
+      'Toma una acción para resolver una incidencia reportada. ' +
+      'Opciones: DEVOLVER_ORIGEN (crea transferencia inversa), DAR_DE_BAJA (elimina stock), ' +
+      'REPARAR (mueve a garantía), ACEPTAR_CON_DESCUENTO (pasa a vendible), RECLAMAR_PROVEEDOR (solo marca como resuelto).',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async resolverIncidencia(
+    @Param('incidenciaId') incidenciaId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ResolverIncidenciaDto,
+  ) {
+    return await this.transferenciaService.resolverIncidencia(
+      incidenciaId,
+      empresaId,
+      user.sub,
+      dto,
+    );
+  }
+
+  // ========================================
+  // ENDPOINTS POR ID (van después de rutas específicas)
+  // ========================================
+
   @Get(':id')
   @ApiOperation({
     summary: 'Obtener transferencia por ID',
@@ -195,6 +285,36 @@ export class TransferenciaStockController {
     );
   }
 
+  @Post(':id/recibir-con-incidencias')
+  @ApiOperation({
+    summary: 'Recibir transferencia con registro de incidencias',
+    description:
+      'Registra la recepción de una transferencia permitiendo reportar productos dañados, faltantes y otros problemas. ' +
+      'Crea tickets de incidencia para cada problema detectado. ' +
+      'Actualiza el stock destino separando productos buenos (stockActual vendible) de dañados (stockDanado). ' +
+      'Implementa Interpretación A: stockActual incluye todo el físico (buenos + dañados), ' +
+      'stockDisponibleVenta = stockActual - stockDanado - stockEnGarantia - reservas. ' +
+      'Permite recepción parcial item por item.',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async recibirConIncidencias(
+    @Param('id') id: string,
+    @Body() dto: RecibirTransferenciaConIncidenciasDto,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return await this.transferenciaService.recibirConIncidencias(
+      id,
+      empresaId,
+      user.sub,
+      dto,
+    );
+  }
+
   @Put(':id/procesar-completo')
   @ApiOperation({
     summary: 'Procesar completamente transferencia (aprobar + enviar + recibir)',
@@ -267,6 +387,33 @@ export class TransferenciaStockController {
       empresaId,
       user.sub,
       body.motivo,
+    );
+  }
+
+  @Post(':id/crear-incidencia')
+  @ApiOperation({
+    summary: 'Crear incidencia posterior a la recepción',
+    description:
+      'Permite reportar incidencias DESPUÉS de haber recibido una transferencia completamente. ' +
+      'Útil para casos donde se recibió conforme, pero al abrir/verificar cajas se encontraron problemas. ' +
+      'La transferencia debe estar en estado RECIBIDA.',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async crearIncidenciaPosterior(
+    @Param('id') transferenciaId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CrearIncidenciaPosteriorDto,
+  ) {
+    return await this.transferenciaService.crearIncidenciaPosterior(
+      transferenciaId,
+      empresaId,
+      user.sub,
+      dto,
     );
   }
 }

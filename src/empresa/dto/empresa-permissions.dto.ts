@@ -129,4 +129,16 @@ export class EmpresaPermissionsDto {
     example: true,
   })
   canChangePlan: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver reportes de incidencia',
+    example: true,
+  })
+  canViewReportesIncidencia: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar reportes de incidencia (crear, editar, eliminar)',
+    example: true,
+  })
+  canManageReportesIncidencia: boolean;
 }

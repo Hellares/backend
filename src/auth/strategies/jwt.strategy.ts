@@ -45,6 +45,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       id: payload.sub,
       // Mantener también userId por si se usa en otro lugar
       userId: payload.sub,
+      // Mapear tenantId a empresaId para compatibilidad con controllers
+      empresaId: payload.tenantId,
       // Mapear tenantRoles a roles para compatibilidad con RolesGuard
       roles: payload.tenantRoles || [],
     };

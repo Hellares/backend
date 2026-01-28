@@ -139,6 +139,19 @@ export class PermissionsService {
 
       // Gestionar proveedores: Solo administradores
       canManageProveedores: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+
+      // ==================== REPORTES DE INCIDENCIA ====================
+      // Ver reportes de incidencia: Administradores, SEDE_ADMIN, CONTADOR, TECNICO
+      canViewReportesIncidencia:
+        isSuperAdmin ||
+        isEmpresaAdmin ||
+        isSedeAdmin ||
+        isContador ||
+        isTecnico,
+
+      // Gestionar reportes de incidencia: Administradores, SEDE_ADMIN, TECNICO
+      canManageReportesIncidencia:
+        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
     };
   }
 
@@ -181,6 +194,8 @@ export class PermissionsService {
       'canAssignDiscounts',
       'canViewProveedores',
       'canManageProveedores',
+      'canViewReportesIncidencia',
+      'canManageReportesIncidencia',
     ];
   }
 }
