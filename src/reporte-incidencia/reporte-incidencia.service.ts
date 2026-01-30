@@ -5,6 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import {
   EstadoReporteIncidencia,
   EstadoItemIncidencia,
@@ -23,42 +24,10 @@ import {
 
 @Injectable()
 export class ReporteIncidenciaService {
-  constructor(private prisma: PrismaService) {}
-
-  /**
-   * Genera el código único para un reporte de incidencia
-   * Formato: RPI-YYYY-NNNN (Reporte de Productos - Año - Número secuencial)
-   */
-  private async generarCodigoReporte(empresaId: string): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefix = `RPI-${year}`;
-
-    // Buscar el último reporte del año actual
-    const ultimoReporte = await this.prisma.reporteIncidencia.findFirst({
-      where: {
-        empresaId,
-        codigo: {
-          startsWith: prefix,
-        },
-      },
-      orderBy: {
-        codigo: 'desc',
-      },
-    });
-
-    let numeroSecuencial = 1;
-    if (ultimoReporte) {
-      // Extraer el número del último código (RPI-2025-0001 -> 0001)
-      const match = ultimoReporte.codigo.match(/-(\d+)$/);
-      if (match) {
-        numeroSecuencial = parseInt(match[1], 10) + 1;
-      }
-    }
-
-    // Formatear con ceros a la izquierda (4 dígitos)
-    const numero = numeroSecuencial.toString().padStart(4, '0');
-    return `${prefix}-${numero}`;
-  }
+  constructor(
+    private prisma: PrismaService,
+    private configuracionCodigosService: ConfiguracionCodigosService,
+  ) {}
 
   /**
    * Crear un nuevo reporte de incidencia
@@ -68,61 +37,82 @@ export class ReporteIncidenciaService {
     dto: CrearReporteIncidenciaDto,
     usuarioId: string,
   ) {
-    // Validar que la sede pertenezca a la empresa
-    const sede = await this.prisma.sede.findFirst({
-      where: {
-        id: dto.sedeId,
-        empresaId,
-      },
-    });
+    try {
+      // console.log('=== SERVICE CREAR - INICIO ===');
+      // console.log('empresaId:', empresaId);
+      // console.log('usuarioId:', usuarioId);
+      // console.log('dto.sedeId:', dto.sedeId);
 
-    if (!sede) {
-      throw new NotFoundException('Sede no encontrada o no pertenece a la empresa');
-    }
-
-    // Generar código único
-    const codigo = await this.generarCodigoReporte(empresaId);
-
-    // Crear el reporte
-    const reporte = await this.prisma.reporteIncidencia.create({
-      data: {
-        codigo,
-        empresaId,
-        sedeId: dto.sedeId,
-        titulo: dto.titulo,
-        descripcionGeneral: dto.descripcionGeneral,
-        tipoReporte: dto.tipoReporte,
-        fechaIncidente: new Date(dto.fechaIncidente),
-        reportadoPorId: usuarioId,
-        supervisorId: dto.supervisorId,
-        observacionesFinales: dto.observacionesFinales,
-      },
-      include: {
-        sede: true,
-        reportadoPor: {
-          include: {
-            persona: true,
-          },
+      // Validar que la sede pertenezca a la empresa
+      // console.log('Buscando sede...');
+      const sede = await this.prisma.sede.findFirst({
+        where: {
+          id: dto.sedeId,
+          empresaId,
         },
-        supervisor: {
-          include: {
-            persona: true,
-          },
+      });
+
+      if (!sede) {
+        // console.log('Sede no encontrada');
+        throw new NotFoundException('Sede no encontrada o no pertenece a la empresa');
+      }
+
+      // console.log('Sede encontrada:', sede.id);
+
+      // Generar código único usando el servicio centralizado
+      // console.log('Generando código...');
+      const codigo = await this.configuracionCodigosService.generarCodigoReporteIncidencia(empresaId);
+      // console.log('Código generado:', codigo);
+
+      // Crear el reporte
+      // console.log('Creando reporte en BD...');
+      const reporte = await this.prisma.reporteIncidencia.create({
+        data: {
+          codigo,
+          empresaId,
+          sedeId: dto.sedeId,
+          titulo: dto.titulo,
+          descripcionGeneral: dto.descripcionGeneral,
+          tipoReporte: dto.tipoReporte,
+          fechaIncidente: new Date(dto.fechaIncidente),
+          reportadoPorId: usuarioId,
+          supervisorId: dto.supervisorId,
+          observacionesFinales: dto.observacionesFinales,
         },
-        items: {
-          include: {
-            productoStock: {
-              include: {
-                producto: true,
-                variante: true,
+        include: {
+          sede: true,
+          reportadoPor: {
+            include: {
+              persona: true,
+            },
+          },
+          supervisor: {
+            include: {
+              persona: true,
+            },
+          },
+          items: {
+            include: {
+              productoStock: {
+                include: {
+                  producto: true,
+                  variante: true,
+                },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    return reporte;
+      // console.log('Reporte creado exitosamente:', reporte.id);
+      return reporte;
+    } catch (error) {
+      // console.error('=== ERROR EN SERVICE CREAR ===');
+      // console.error('Error:', error);
+      // console.error('Error message:', error.message);
+      // console.error('Error stack:', error.stack);
+      throw error;
+    }
   }
 
   /**

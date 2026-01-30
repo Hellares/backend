@@ -1833,7 +1833,7 @@ model TransferenciaStockIncidencia {
 /// Útil para: Inventarios, revisiones rutinarias, eventos (robos, inundaciones)
 model ReporteIncidencia {
   id        String @id @default(cuid())
-  codigo    String @unique // RPI-2025-001, RPI-2025-002
+  codigo    String // RPI-2025-001, RPI-2025-002 (único por empresa)
   empresaId String
   sedeId    String
 
@@ -1889,6 +1889,7 @@ model ReporteIncidencia {
   aprobadoPor  Usuario?     @relation("ReporteAprobadoPor", fields: [aprobadoPorId], references: [id])
   inventarios  Inventario[] // Inventarios que generaron este reporte de incidencias
 
+  @@unique([empresaId, codigo]) // Código único por empresa
   @@index([empresaId])
   @@index([sedeId])
   @@index([codigo])

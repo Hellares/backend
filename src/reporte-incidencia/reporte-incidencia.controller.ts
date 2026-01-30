@@ -36,9 +36,23 @@ export class ReporteIncidenciaController {
    */
   @Post()
   async crear(@Request() req, @Body() dto: CrearReporteIncidenciaDto) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
-    const usuarioId = req.user.userId;
-    return this.reporteIncidenciaService.crear(empresaId, dto, usuarioId);
+    try {
+      const empresaId = req.user.empresaId || req.get('x-tenant-id');
+      const usuarioId = req.user.userId;
+
+      console.log('=== DEBUG CREAR REPORTE ===');
+      console.log('empresaId:', empresaId);
+      console.log('usuarioId:', usuarioId);
+      console.log('dto:', JSON.stringify(dto, null, 2));
+      console.log('req.user:', JSON.stringify(req.user, null, 2));
+
+      return await this.reporteIncidenciaService.crear(empresaId, dto, usuarioId);
+    } catch (error) {
+      console.error('=== ERROR EN CREAR REPORTE ===');
+      console.error('Error:', error);
+      console.error('Stack:', error.stack);
+      throw error;
+    }
   }
 
   /**

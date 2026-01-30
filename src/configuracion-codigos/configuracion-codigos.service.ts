@@ -1089,6 +1089,90 @@ export class ConfiguracionCodigosService {
   }
 
   /**
+   * GENERAR CÓDIGO DE REPORTE DE INCIDENCIA
+   * Formato: RPI-YYYY-NNNN (Reporte de Productos Incidencia - Año - Número secuencial)
+   * @param empresaId ID de la empresa
+   * @param tx Transacción de Prisma (opcional)
+   */
+  async generarCodigoReporteIncidencia(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoReporteIncidenciaInTransaction(tx, empresaId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoReporteIncidenciaInTransaction(
+        txInner,
+        empresaId,
+      );
+    });
+  }
+
+  /**
+   * Lógica interna de generación de código de reporte de incidencia
+   * Busca el número más alto del año actual para evitar duplicados
+   */
+  private async _generarCodigoReporteIncidenciaInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefijo = `RPI-${year}-`;
+
+    // Buscar el último reporte del año actual
+    const ultimoReporte = await tx.reporteIncidencia.findFirst({
+      where: {
+        empresaId,
+        codigo: {
+          startsWith: prefijo,
+        },
+      },
+      orderBy: {
+        codigo: 'desc',
+      },
+      select: {
+        codigo: true,
+      },
+    });
+
+    let nuevoNumero = 1;
+
+    // Si existe un reporte, extraer el número del código
+    if (ultimoReporte) {
+      const match = ultimoReporte.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        nuevoNumero = ultimoNumero + 1;
+      }
+    }
+
+    // Generar código
+    const numero = nuevoNumero.toString().padStart(4, '0');
+    const codigo = `${prefijo}${numero}`;
+
+    // Verificación final de duplicados
+    const existe = await tx.reporteIncidencia.findFirst({
+      where: {
+        empresaId,
+        codigo,
+      },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de reporte ${codigo} ya existe. Reintentando...`,
+      );
+      // Reintentar recursivamente
+      return this._generarCodigoReporteIncidenciaInTransaction(tx, empresaId);
+    }
+
+    return codigo;
+  }
+
+  /**
    * Formatear código con prefijo, separador y número
    */
   private formatCodigo(
