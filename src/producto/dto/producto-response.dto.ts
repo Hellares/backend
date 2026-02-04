@@ -105,6 +105,11 @@ export class ProductoResponseDto {
   })
   tipoPrecioCombo?: 'FIJO' | 'CALCULADO' | 'CALCULADO_CON_DESCUENTO' | null;
 
+  @ApiPropertyOptional({
+    description: 'Cantidad de combos reservados en la sede consultada (solo combos con reservación activa)',
+  })
+  comboReservado?: number;
+
   @ApiProperty()
   creadoEn: Date;
 
@@ -166,6 +171,27 @@ export class ProductoResponseDto {
       tipo: string;
       unidad?: string;
     };
+  }>;
+
+  @ApiPropertyOptional({
+    description: 'Desglose de stock y precios por sede',
+    type: [Object],
+  })
+  stocksPorSede?: Array<{
+    sedeId: string;
+    sedeNombre: string;
+    sedeCodigo: string;
+    cantidad: number;
+    stockMinimo?: number;
+    stockMaximo?: number;
+    ubicacion?: string;
+    precio?: number;
+    precioCosto?: number;
+    precioOferta?: number;
+    enOferta: boolean;
+    fechaInicioOferta?: Date;
+    fechaFinOferta?: Date;
+    precioConfigurado: boolean;
   }>;
 
   @ApiPropertyOptional({

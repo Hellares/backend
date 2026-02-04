@@ -28,6 +28,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateComponenteComboDto, CreateComponentesComboBatchDto } from './dto/create-producto-combo.dto';
 import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
 import { CreateComboDto } from './dto/create-combo.dto';
+import { ReservarStockComboDto } from './dto/reservar-stock-combo.dto';
 import {
   ProductoComboResponseDto,
   ComboCompletoResponseDto,
@@ -362,5 +363,81 @@ export class ProductoComboController {
       tieneStock,
       stockDisponible,
     };
+  }
+
+  /**
+   * Obtener la reservación actual de un combo en una sede
+   */
+  @Get(':id/reservacion')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Obtener reservación de stock del combo en una sede' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Cantidad de combos reservados' })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
+  async getReservacion(
+    @Param('id') comboId: string,
+    @Query('sedeId') sedeId?: string,
+  ): Promise<{ cantidad: number }> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.getReservacionCombo(comboId, sedeId);
+  }
+
+  /**
+   * Reservar stock para un combo (crear/actualizar reservación)
+   */
+  @Post(':id/reservar-stock')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Reservar stock para un combo',
+    description: 'Crea o actualiza la reservación de stock. La cantidad es el TOTAL de combos a reservar (no delta).',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Reservación actualizada' })
+  @ApiResponse({ status: 400, description: 'Stock insuficiente o datos inválidos' })
+  async reservarStock(
+    @Param('id') comboId: string,
+    @Query('sedeId') sedeId: string | undefined,
+    @Body() dto: ReservarStockComboDto,
+    @CurrentUser() user: any,
+  ): Promise<{ cantidad: number }> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.reservarStockCombo(comboId, sedeId, dto.cantidad, user.sub);
+  }
+
+  /**
+   * Liberar toda la reservación de un combo en una sede
+   */
+  @Delete(':id/reservar-stock')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Liberar reservación de stock del combo' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Reservación liberada' })
+  @ApiResponse({ status: 400, description: 'SedeId es requerido' })
+  async liberarReserva(
+    @Param('id') comboId: string,
+    @Query('sedeId') sedeId: string | undefined,
+    @CurrentUser() user: any,
+  ): Promise<{ cantidad: number; message: string }> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    const result = await this.comboService.liberarReservaCombo(comboId, sedeId, user.sub);
+    return { ...result, message: 'Reservación liberada exitosamente' };
   }
 }

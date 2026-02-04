@@ -28,6 +28,7 @@ import { ProductoPricingService } from './producto-pricing.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoPrecioHistorialService } from './producto-precio-historial.service';
+import { ProductoComboService } from './producto-combo.service';
 
 /**
  * ProductoService - FACADE (Orquestador)
@@ -53,6 +54,7 @@ export class ProductoService {
     private variantService: ProductoVarianteService,
     private atributoService: ProductoAtributoService,
     private precioHistorialService: ProductoPrecioHistorialService,
+    private comboService: ProductoComboService,
     private sedeContextHelper: SedeContextHelper,
     private configCodigosService: ConfiguracionCodigosService,
     loggerService: AppLoggerService,
@@ -394,21 +396,37 @@ export class ProductoService {
       archivosPorProducto.get(archivo.entidadId!)!.push(archivo);
     }
 
-    // 5. OPTIMIZACIÓN: Obtener stock de todos los combos de una vez
+    // 5. OPTIMIZACIÓN: Obtener stock y precio de todos los combos en paralelo
     const combosIds = productos.filter(p => p.esCombo).map(p => p.id);
     const stockCombosMap = new Map<string, number>();
+    const precioCombosMap = new Map<string, number>();
+    const reservacionCombosMap = new Map<string, number>();
 
-    // Solo calcular stock de combos si se proporciona sedeId
+    // Solo calcular stock/precio/reservaciones de combos si se proporciona sedeId
     if (combosIds.length > 0 && queryDto.sedeId) {
-      // Obtener stock de todos los combos en paralelo
-      const stockCombosPromises = combosIds.map(async (comboId) => {
-        const stock = await this.inventoryService.getStockCombo(comboId, queryDto.sedeId!);
-        return { comboId, stock };
-      });
+      const [stockCombos, precioCombos, reservacionCombos] = await Promise.all([
+        Promise.all(combosIds.map(async (comboId) => {
+          const stock = await this.inventoryService.getStockCombo(comboId, queryDto.sedeId!);
+          return { comboId, stock };
+        })),
+        Promise.all(combosIds.map(async (comboId) => {
+          const precio = await this.comboService.calcularPrecioCombo(comboId, queryDto.sedeId!);
+          return { comboId, precio };
+        })),
+        Promise.all(combosIds.map(async (comboId) => {
+          const reservacion = await this.comboService.getReservacionCombo(comboId, queryDto.sedeId!);
+          return { comboId, cantidad: reservacion.cantidad };
+        })),
+      ]);
 
-      const stockCombos = await Promise.all(stockCombosPromises);
       stockCombos.forEach(({ comboId, stock }) => {
         stockCombosMap.set(comboId, stock);
+      });
+      precioCombos.forEach(({ comboId, precio }) => {
+        precioCombosMap.set(comboId, precio);
+      });
+      reservacionCombos.forEach(({ comboId, cantidad }) => {
+        reservacionCombosMap.set(comboId, cantidad);
       });
     }
 
@@ -420,9 +438,24 @@ export class ProductoService {
       // Convertir a DTO (delegar a CatalogService)
       const productoDto = this.catalogService.toResponseDto(producto, archivos);
 
-      // Si es un combo, usar el stock pre-calculado del mapa
+      // Si es un combo, usar el stock y precio pre-calculados del mapa
       if (producto.esCombo && stockCombosMap.has(producto.id)) {
         productoDto.stock = stockCombosMap.get(producto.id)!;
+      }
+      if (producto.esCombo && precioCombosMap.has(producto.id)) {
+        const precioCombo = precioCombosMap.get(producto.id)!;
+        productoDto.precio = precioCombo;
+        // Actualizar precio en stocksPorSede para que el tile lo lea correctamente
+        if (productoDto.stocksPorSede && queryDto.sedeId) {
+          const stockSede = productoDto.stocksPorSede.find((s: any) => s.sedeId === queryDto.sedeId);
+          if (stockSede) {
+            stockSede.precio = precioCombo;
+            stockSede.precioConfigurado = true;
+          }
+        }
+      }
+      if (producto.esCombo && reservacionCombosMap.has(producto.id)) {
+        productoDto.comboReservado = reservacionCombosMap.get(producto.id)!;
       }
 
       return productoDto;

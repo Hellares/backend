@@ -8,6 +8,7 @@ export class ProductoComboResponseDto {
   componenteProductoId?: string;
   componenteVarianteId?: string;
   cantidad: number;
+  precioEnCombo?: number; // Precio override dentro del combo (null = usa precio regular)
   esPersonalizable: boolean;
   categoriaComponente?: string;
   orden: number;
@@ -19,12 +20,13 @@ export class ProductoComboResponseDto {
     id: string;
     nombre: string;
     sku?: string;
-    precio: number;
-    stock: number;
+    precio: number;          // Precio regular del producto (desde ProductoStock)
+    precioEnCombo?: number;  // Precio dentro del combo (override). Null = se usa precio regular.
+    stock: number;           // Stock disponible real (stockActual - reservados - dañados - garantía)
     imagen?: string;
     esVariante: boolean;
-    productoNombre?: string; // Nombre del producto (cuando es variante)
-    varianteNombre?: string; // Nombre de la variante específica
+    productoNombre?: string;
+    varianteNombre?: string;
   };
 }
 
@@ -38,15 +40,15 @@ export class ComboCompletoResponseDto {
   descripcion?: string;
   esCombo: boolean;
   tipoPrecioCombo: string;
-  precio: number;
-  precioCalculado: number; // Suma real de componentes
-  descuentoPorcentaje?: number; // Porcentaje de descuento (si aplica)
-  descuentoAplicado?: number;
-  stockDisponible: number; // Stock máximo de combos que se pueden armar
-  componentes: ProductoComboResponseDto[];
+  precio: number;              // Precio final del combo (lo que paga el cliente)
+  precioCalculado: number;     // Precio calculado desde componentes (con overrides aplicados)
+  precioRegularTotal: number;  // Precio si se comprara cada componente por separado (sin overrides ni descuento)
+  descuentoPorcentaje?: number;
+  descuentoAplicado?: number;  // Ahorro total: precioRegularTotal - precio
+  stockDisponible: number;
 
-  // Validaciones
+  componentes: ProductoComboResponseDto[];
   tieneStockSuficiente: boolean;
-  componentesSinStock?: string[]; // Nombres de componentes sin stock
-  imagen?: string; // URL de la imagen principal
+  componentesSinStock?: string[];
+  imagen?: string;
 }

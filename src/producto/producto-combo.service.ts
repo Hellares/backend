@@ -1,13 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { Prisma, TipoPrecioCombo } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateComponenteComboDto } from './dto/create-producto-combo.dto';
 import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
 import { ProductoComboResponseDto, ComboCompletoResponseDto } from './dto/producto-combo-response.dto';
 import { CreateComboDto } from './dto/create-combo.dto';
-import { TipoPrecioCombo } from '@prisma/client';
+
+const Decimal = Prisma.Decimal;
 
 /**
  * Servicio para gestión de combos/kits de productos
@@ -171,16 +172,14 @@ export class ProductoComboService {
         descripcion: combo.descripcion,
         esCombo: combo.esCombo,
         tipoPrecioCombo: combo.tipoPrecioCombo,
-        // ❌ precio: Number(combo.precio) - DEPRECATED: Precio ahora en ProductoStock
-        precio: 0, // TODO: Obtener desde ProductoStock por sedeId
-        precioCalculado: 0, // TODO: Calcular desde ProductoStock
-        // TODO: Calcular stock desde ProductoStock
+        precio: 0, // Sin componentes aún, se calcula al agregar componentes
+        precioCalculado: 0,
+        precioRegularTotal: 0,
         stockDisponible: 0,
-        stock: 0,
         descuentoPorcentaje: descuentoPorcentaje ? Number(descuentoPorcentaje) : null,
-        descuentoAplicado: null,
-        componentes: [], // Nuevo combo no tiene componentes todavía
-        tieneStockSuficiente: false, // Sin componentes = sin stock suficiente
+        descuentoAplicado: 0,
+        componentes: [],
+        tieneStockSuficiente: false,
         componentesSinStock: [],
         codigoEmpresa: combo.codigoEmpresa,
         codigoSistema: combo.codigoSistema,
@@ -190,7 +189,7 @@ export class ProductoComboService {
         categoria: (combo as any).empresaCategoria,
         marca: (combo as any).empresaMarca,
         sede: (combo as any).sede,
-        imagen: null, // Por ahora sin imagen (se pueden agregar después)
+        imagen: null,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -301,34 +300,81 @@ export class ProductoComboService {
         throw new BadRequestException('Este componente ya existe en el combo');
       }
 
-      // Crear el componente del combo
-      const componente = await this.prisma.productoCombo.create({
-        data: {
-          comboId,
-          componenteProductoId: dto.componenteProductoId,
-          componenteVarianteId: dto.componenteVarianteId,
-          cantidad: dto.cantidad,
-          esPersonalizable: dto.esPersonalizable ?? false,
-          categoriaComponente: dto.categoriaComponente,
-          orden: dto.orden ?? 0,
-        },
-        include: {
-          componenteProducto: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
+      // Crear el componente y ajustar reservaciones existentes dentro de transacción
+      const componente = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.productoCombo.create({
+          data: {
+            comboId,
+            componenteProductoId: dto.componenteProductoId,
+            componenteVarianteId: dto.componenteVarianteId,
+            cantidad: dto.cantidad,
+            precioEnCombo: dto.precioEnCombo !== undefined && dto.precioEnCombo !== null
+              ? new Decimal(dto.precioEnCombo)
+              : null,
+            esPersonalizable: dto.esPersonalizable ?? false,
+            categoriaComponente: dto.categoriaComponente,
+            orden: dto.orden ?? 0,
+          },
+          include: {
+            componenteProducto: {
+              include: {
+                stocksPorSede: {
+                  where: { sedeId },
+                },
+              },
+            },
+            componenteVariante: {
+              include: {
+                producto: true,
+                stocksPorSede: {
+                  where: { sedeId },
+                },
               },
             },
           },
-          componenteVariante: {
-            include: {
-              producto: true,
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-        },
+        });
+
+        // Si el combo tiene reservaciones activas, ajustar stockReservadoCombo del nuevo componente
+        const reservaciones = await tx.comboReservacion.findMany({
+          where: { comboId },
+        });
+
+        if (reservaciones.length > 0) {
+          const targetId = dto.componenteVarianteId ?? dto.componenteProductoId!;
+          const componenteConStocks = dto.componenteVarianteId
+            ? await tx.productoVariante.findUnique({
+                where: { id: targetId },
+                include: { stocksPorSede: true },
+              })
+            : await tx.producto.findUnique({
+                where: { id: targetId },
+                include: { stocksPorSede: true },
+              });
+
+          const stocks = componenteConStocks?.stocksPorSede ?? [];
+          const nombre = componenteConStocks?.nombre ?? 'Componente';
+
+          for (const reservacion of reservaciones) {
+            const stock = stocks.find((s: any) => s.sedeId === reservacion.sedeId);
+            if (!stock) continue;
+
+            const necesario = dto.cantidad * reservacion.cantidad;
+            const disponible = this.getStockDisponibleReal(stock);
+
+            if (disponible < necesario) {
+              throw new BadRequestException(
+                `Stock insuficiente de "${nombre}" en la sede para cubrir la reservación existente de ${reservacion.cantidad} combos. Disponible: ${disponible}, necesario: ${necesario}`,
+              );
+            }
+
+            await tx.productoStock.update({
+              where: { id: stock.id },
+              data: { stockReservadoCombo: { increment: necesario } },
+            });
+          }
+        }
+
+        return created;
       });
 
       this.logger.log(`Componente agregado al combo ${comboId}`);
@@ -446,15 +492,19 @@ export class ProductoComboService {
         componentesValidados.push(dto);
       }
 
-      // Insertar todos los componentes en batch
-      const componentesCreados = await Promise.all(
-        componentesValidados.map(async (dto) => {
-          const componente = await this.prisma.productoCombo.create({
+      // Insertar todos los componentes en batch dentro de una transacción
+      const componentesCreados = await this.prisma.$transaction(async (tx) => {
+        const creados = [];
+        for (const dto of componentesValidados) {
+          const componente = await tx.productoCombo.create({
             data: {
               comboId,
               componenteProductoId: dto.componenteProductoId,
               componenteVarianteId: dto.componenteVarianteId,
               cantidad: dto.cantidad,
+              precioEnCombo: dto.precioEnCombo !== undefined && dto.precioEnCombo !== null
+                ? new Decimal(dto.precioEnCombo)
+                : null,
               esPersonalizable: dto.esPersonalizable ?? false,
               categoriaComponente: dto.categoriaComponente,
               orden: dto.orden ?? 0,
@@ -477,9 +527,53 @@ export class ProductoComboService {
               },
             },
           });
-          return componente;
-        }),
-      );
+          creados.push(componente);
+        }
+
+        // Si el combo tiene reservaciones activas, ajustar stockReservadoCombo de los nuevos componentes
+        const reservaciones = await tx.comboReservacion.findMany({
+          where: { comboId },
+        });
+
+        if (reservaciones.length > 0) {
+          for (const dto of componentesValidados) {
+            const targetId = dto.componenteVarianteId ?? dto.componenteProductoId!;
+            const componenteConStocks = dto.componenteVarianteId
+              ? await tx.productoVariante.findUnique({
+                  where: { id: targetId },
+                  include: { stocksPorSede: true },
+                })
+              : await tx.producto.findUnique({
+                  where: { id: targetId },
+                  include: { stocksPorSede: true },
+                });
+
+            const stocks = componenteConStocks?.stocksPorSede ?? [];
+            const nombre = componenteConStocks?.nombre ?? 'Componente';
+
+            for (const reservacion of reservaciones) {
+              const stock = stocks.find((s: any) => s.sedeId === reservacion.sedeId);
+              if (!stock) continue;
+
+              const necesario = dto.cantidad * reservacion.cantidad;
+              const disponible = this.getStockDisponibleReal(stock);
+
+              if (disponible < necesario) {
+                throw new BadRequestException(
+                  `Stock insuficiente de "${nombre}" en la sede para cubrir la reservación existente de ${reservacion.cantidad} combos. Disponible: ${disponible}, necesario: ${necesario}`,
+                );
+              }
+
+              await tx.productoStock.update({
+                where: { id: stock.id },
+                data: { stockReservadoCombo: { increment: necesario } },
+              });
+            }
+          }
+        }
+
+        return creados;
+      });
 
       this.logger.log(`${componentesCreados.length} componentes agregados al combo ${comboId} en batch`);
       return componentesCreados.map((c) => this.mapToResponseDto(c, sedeId));
@@ -593,13 +687,24 @@ export class ProductoComboService {
       }
 
       const componentes = combo.componentesCombo.map((c) => this.mapToResponseDto(c, sedeId));
-      const precioCalculado = await this.calcularPrecioCombo(comboId, sedeId);
-      const stockDisponible = await this.getStockDisponibleCombo(comboId, sedeId);
-      const componentesSinStock = await this.getComponentesSinStock(comboId, sedeId);
+      const stockDisponible = this.calcularStockDisponibleFromComponentes(combo.componentesCombo);
+      const componentesSinStock = this.getComponentesSinStockFromData(combo.componentesCombo);
 
-      // Obtener precio del combo desde ProductoStock
-      const stockCombo = combo.stocksPorSede[0];
-      const precioCombo = stockCombo?.precio ? Number(stockCombo.precio) : 0;
+      // Calcular precios desde los componentes ya cargados
+      const { precioCalculado, precioRegularTotal } = this.calcularPreciosFromComponentes(combo.componentesCombo);
+
+      // Aplicar descuento global si es CALCULADO_CON_DESCUENTO
+      const descuentoPorcentaje = combo.descuentoMaximo ? Number(combo.descuentoMaximo) : null;
+      let precioFinal = precioCalculado;
+      if (combo.tipoPrecioCombo === TipoPrecioCombo.CALCULADO_CON_DESCUENTO && descuentoPorcentaje) {
+        precioFinal = precioCalculado * (1 - descuentoPorcentaje / 100);
+      }
+
+      // Para FIJO, el precio viene de ProductoStock del combo (si existe)
+      if (combo.tipoPrecioCombo === TipoPrecioCombo.FIJO) {
+        const stockCombo = combo.stocksPorSede[0];
+        precioFinal = stockCombo?.precio ? Number(stockCombo.precio) : precioFinal;
+      }
 
       return {
         id: combo.id,
@@ -607,18 +712,16 @@ export class ProductoComboService {
         descripcion: combo.descripcion,
         esCombo: combo.esCombo,
         tipoPrecioCombo: combo.tipoPrecioCombo || TipoPrecioCombo.CALCULADO,
-        precio: precioCombo,
+        precio: precioFinal,
         precioCalculado,
-        descuentoPorcentaje: combo.descuentoMaximo ? Number(combo.descuentoMaximo) : null,
-        descuentoAplicado:
-          combo.tipoPrecioCombo === TipoPrecioCombo.FIJO
-            ? precioCalculado - precioCombo
-            : null,
+        precioRegularTotal,
+        descuentoPorcentaje,
+        descuentoAplicado: precioRegularTotal - precioFinal,
         stockDisponible,
         componentes,
         tieneStockSuficiente: stockDisponible > 0,
         componentesSinStock: componentesSinStock.length > 0 ? componentesSinStock : undefined,
-        imagen: null, // TODO: Agregar lógica para obtener la primera imagen si existe
+        imagen: null,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -668,39 +771,41 @@ export class ProductoComboService {
         orderBy: { creadoEn: 'desc' },
       });
 
-      // Mapear cada combo con sus cálculos
-      const combosCompletos = await Promise.all(
-        combos.map(async (combo: any) => {
-          const componentes = combo.componentesCombo.map((c: any) => this.mapToResponseDto(c, sedeId));
-          const precioCalculado = await this.calcularPrecioCombo(combo.id, sedeId);
-          const stockDisponible = await this.getStockDisponibleCombo(combo.id, sedeId);
-          const componentesSinStock = await this.getComponentesSinStock(combo.id, sedeId);
+      // Mapear cada combo con sus cálculos (sin queries adicionales, todo viene del include)
+      const combosCompletos = combos.map((combo: any) => {
+        const componentes = combo.componentesCombo.map((c: any) => this.mapToResponseDto(c, sedeId));
+        const stockDisponible = this.calcularStockDisponibleFromComponentes(combo.componentesCombo);
+        const componentesSinStock = this.getComponentesSinStockFromData(combo.componentesCombo);
+        const { precioCalculado, precioRegularTotal } = this.calcularPreciosFromComponentes(combo.componentesCombo);
 
-          // Obtener precio del combo desde ProductoStock
+        const descuentoPorcentaje = combo.descuentoMaximo ? Number(combo.descuentoMaximo) : null;
+        let precioFinal = precioCalculado;
+        if (combo.tipoPrecioCombo === TipoPrecioCombo.CALCULADO_CON_DESCUENTO && descuentoPorcentaje) {
+          precioFinal = precioCalculado * (1 - descuentoPorcentaje / 100);
+        }
+        if (combo.tipoPrecioCombo === TipoPrecioCombo.FIJO) {
           const stockCombo = combo.stocksPorSede[0];
-          const precioCombo = stockCombo?.precio ? Number(stockCombo.precio) : 0;
+          precioFinal = stockCombo?.precio ? Number(stockCombo.precio) : precioFinal;
+        }
 
-          return {
-            id: combo.id,
-            nombre: combo.nombre,
-            descripcion: combo.descripcion,
-            esCombo: combo.esCombo,
-            tipoPrecioCombo: combo.tipoPrecioCombo || TipoPrecioCombo.CALCULADO,
-            precio: precioCombo,
-            precioCalculado,
-            descuentoPorcentaje: combo.descuentoMaximo ? Number(combo.descuentoMaximo) : null,
-            descuentoAplicado:
-              combo.tipoPrecioCombo === TipoPrecioCombo.FIJO
-                ? precioCalculado - precioCombo
-                : null,
-            stockDisponible,
-            componentes,
-            tieneStockSuficiente: stockDisponible > 0,
-            componentesSinStock: componentesSinStock.length > 0 ? componentesSinStock : undefined,
-            imagen: null,
-          };
-        }),
-      );
+        return {
+          id: combo.id,
+          nombre: combo.nombre,
+          descripcion: combo.descripcion,
+          esCombo: combo.esCombo,
+          tipoPrecioCombo: combo.tipoPrecioCombo || TipoPrecioCombo.CALCULADO,
+          precio: precioFinal,
+          precioCalculado,
+          precioRegularTotal,
+          descuentoPorcentaje,
+          descuentoAplicado: precioRegularTotal - precioFinal,
+          stockDisponible,
+          componentes,
+          tieneStockSuficiente: stockDisponible > 0,
+          componentesSinStock: componentesSinStock.length > 0 ? componentesSinStock : undefined,
+          imagen: null,
+        };
+      });
 
       return combosCompletos;
     } catch (error) {
@@ -732,32 +837,83 @@ export class ProductoComboService {
         throw new NotFoundException('Componente de combo no encontrado');
       }
 
-      const actualizado = await this.prisma.productoCombo.update({
-        where: { id: componenteId },
-        data: {
-          ...(dto.cantidad !== undefined && { cantidad: dto.cantidad }),
-          ...(dto.esPersonalizable !== undefined && { esPersonalizable: dto.esPersonalizable }),
-          ...(dto.categoriaComponente !== undefined && {
-            categoriaComponente: dto.categoriaComponente,
-          }),
-          ...(dto.orden !== undefined && { orden: dto.orden }),
-        },
-        include: {
-          componenteProducto: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
+      const actualizado = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.productoCombo.update({
+          where: { id: componenteId },
+          data: {
+            ...(dto.cantidad !== undefined && { cantidad: dto.cantidad }),
+            ...(dto.precioEnCombo !== undefined && {
+              precioEnCombo: dto.precioEnCombo !== null ? new Decimal(dto.precioEnCombo) : null,
+            }),
+            ...(dto.esPersonalizable !== undefined && { esPersonalizable: dto.esPersonalizable }),
+            ...(dto.categoriaComponente !== undefined && {
+              categoriaComponente: dto.categoriaComponente,
+            }),
+            ...(dto.orden !== undefined && { orden: dto.orden }),
+          },
+          include: {
+            componenteProducto: {
+              include: {
+                stocksPorSede: {
+                  where: { sedeId },
+                },
+              },
+            },
+            componenteVariante: {
+              include: {
+                stocksPorSede: {
+                  where: { sedeId },
+                },
               },
             },
           },
-          componenteVariante: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-        },
+        });
+
+        // Si se cambia la cantidad y hay reservaciones, ajustar stockReservadoCombo
+        if (dto.cantidad !== undefined && dto.cantidad !== componente.cantidad) {
+          const reservaciones = await tx.comboReservacion.findMany({
+            where: { comboId: componente.comboId },
+          });
+
+          if (reservaciones.length > 0) {
+            const delta = dto.cantidad - componente.cantidad;
+            const targetId = componente.componenteVarianteId ?? componente.componenteProductoId!;
+            const componenteConStocks = componente.componenteVarianteId
+              ? await tx.productoVariante.findUnique({
+                  where: { id: targetId },
+                  include: { stocksPorSede: true },
+                })
+              : await tx.producto.findUnique({
+                  where: { id: targetId },
+                  include: { stocksPorSede: true },
+                });
+
+            const stocks = componenteConStocks?.stocksPorSede ?? [];
+
+            for (const reservacion of reservaciones) {
+              const stock = stocks.find((s: any) => s.sedeId === reservacion.sedeId);
+              if (!stock) continue;
+
+              const cantidadDelta = delta * reservacion.cantidad;
+
+              if (delta > 0) {
+                const disponible = this.getStockDisponibleReal(stock);
+                if (disponible < cantidadDelta) {
+                  throw new BadRequestException(
+                    `Stock insuficiente para ajustar cantidad. Disponible: ${disponible}, necesario: ${cantidadDelta} adicionales`,
+                  );
+                }
+              }
+
+              await tx.productoStock.update({
+                where: { id: stock.id },
+                data: { stockReservadoCombo: { increment: cantidadDelta } },
+              });
+            }
+          }
+        }
+
+        return updated;
       });
 
       this.logger.log(`Componente ${componenteId} actualizado`);
@@ -774,17 +930,45 @@ export class ProductoComboService {
    */
   async eliminarComponente(componenteId: string, empresaId: string): Promise<void> {
     try {
-      const componente = await this.prisma.productoCombo.findFirst({
-        where: { id: componenteId },
-        include: { combo: true },
-      });
+      await this.prisma.$transaction(async (tx) => {
+        const componente = await tx.productoCombo.findFirst({
+          where: { id: componenteId },
+          include: {
+            combo: true,
+            componenteProducto: { include: { stocksPorSede: true } },
+            componenteVariante: { include: { stocksPorSede: true } },
+          },
+        });
 
-      if (!componente || componente.combo.empresaId !== empresaId) {
-        throw new NotFoundException('Componente de combo no encontrado');
-      }
+        if (!componente || componente.combo.empresaId !== empresaId) {
+          throw new NotFoundException('Componente de combo no encontrado');
+        }
 
-      await this.prisma.productoCombo.delete({
-        where: { id: componenteId },
+        // Si el combo tiene reservas activas, liberar stockReservadoCombo de este componente
+        const reservaciones = await tx.comboReservacion.findMany({
+          where: { comboId: componente.comboId },
+        });
+
+        if (reservaciones.length > 0) {
+          const stocks = componente.componenteVariante
+            ? componente.componenteVariante.stocksPorSede
+            : componente.componenteProducto?.stocksPorSede ?? [];
+
+          for (const reservacion of reservaciones) {
+            const stock = stocks.find((s: any) => s.sedeId === reservacion.sedeId);
+            if (stock) {
+              const cantidadLiberar = componente.cantidad * reservacion.cantidad;
+              await tx.productoStock.update({
+                where: { id: stock.id },
+                data: { stockReservadoCombo: { decrement: cantidadLiberar } },
+              });
+            }
+          }
+        }
+
+        await tx.productoCombo.delete({
+          where: { id: componenteId },
+        });
       });
 
       this.logger.log(`Componente ${componenteId} eliminado del combo`);
@@ -805,189 +989,271 @@ export class ProductoComboService {
   }
 
   /**
-   * Calcula el stock disponible de un combo
-   * Retorna la cantidad máxima de combos que se pueden armar con el stock actual
-   * @param sedeId - Requerido para obtener stock de la sede específica
+   * Calcula el stock disponible de un combo (endpoint individual).
+   * Hace el query necesario y delega al método sincrono.
    */
   async getStockDisponibleCombo(comboId: string, sedeId: string): Promise<number> {
-    try {
-      const componentes = await this.prisma.productoCombo.findMany({
-        where: { comboId },
-        include: {
-          componenteProducto: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-          componenteVariante: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-        },
-      });
-
-      if (componentes.length === 0) {
-        return 0;
-      }
-
-      let stockMinimo = Infinity;
-
-      for (const componente of componentes) {
-        let stockComponente = 0;
-
-        if (componente.componenteVariante) {
-          const stock = componente.componenteVariante.stocksPorSede[0];
-          stockComponente = stock?.stockActual || 0;
-        } else if (componente.componenteProducto) {
-          const stock = componente.componenteProducto.stocksPorSede[0];
-          stockComponente = stock?.stockActual || 0;
-        }
-
-        // Calcular cuántos combos se pueden armar con el stock de este componente
-        const maxCombos = Math.floor(stockComponente / componente.cantidad);
-        stockMinimo = Math.min(stockMinimo, maxCombos);
-      }
-
-      return stockMinimo === Infinity ? 0 : stockMinimo;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error al calcular stock de combo: ${errorMessage}`);
-      return 0;
-    }
+    const componentes = await this.prisma.productoCombo.findMany({
+      where: { comboId },
+      include: {
+        componenteProducto: { include: { stocksPorSede: { where: { sedeId } } } },
+        componenteVariante: { include: { producto: true, stocksPorSede: { where: { sedeId } } } },
+      },
+    });
+    return this.calcularStockDisponibleFromComponentes(componentes);
   }
 
   /**
-   * Calcula el precio de un combo según su tipo
-   * @param sedeId - Requerido para obtener precios específicos de la sede
+   * Calcula el precio de un combo según su tipo (endpoint individual).
    */
   async calcularPrecioCombo(comboId: string, sedeId: string): Promise<number> {
-    try {
-      const combo = await this.prisma.producto.findUnique({
-        where: { id: comboId },
-        include: {
-          componentesCombo: {
-            include: {
-              componenteProducto: {
-                include: {
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-              componenteVariante: {
-                include: {
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-            },
-          },
-          stocksPorSede: {
-            where: { sedeId },
+    const combo = await this.prisma.producto.findUnique({
+      where: { id: comboId },
+      include: {
+        componentesCombo: {
+          include: {
+            componenteProducto: { include: { stocksPorSede: { where: { sedeId } } } },
+            componenteVariante: { include: { producto: true, stocksPorSede: { where: { sedeId } } } },
           },
         },
-      });
+        stocksPorSede: { where: { sedeId } },
+      },
+    });
 
-      if (!combo) {
-        throw new NotFoundException('Combo no encontrado');
-      }
+    if (!combo) throw new NotFoundException('Combo no encontrado');
 
-      // Si es precio fijo, retornar el precio definido en ProductoStock
-      if (combo.tipoPrecioCombo === TipoPrecioCombo.FIJO) {
-        const stockCombo = combo.stocksPorSede[0];
-        return stockCombo?.precio ? Number(stockCombo.precio) : 0;
-      }
+    const { precioCalculado } = this.calcularPreciosFromComponentes(combo.componentesCombo);
 
-      // Calcular suma de componentes desde ProductoStock
-      let precioTotal = 0;
+    if (combo.tipoPrecioCombo === TipoPrecioCombo.FIJO) {
+      const stockCombo = combo.stocksPorSede[0];
+      return stockCombo?.precio ? Number(stockCombo.precio) : precioCalculado;
+    }
 
-      for (const componente of combo.componentesCombo) {
-        let precioComponente = 0;
+    if (combo.tipoPrecioCombo === TipoPrecioCombo.CALCULADO_CON_DESCUENTO) {
+      const descuento = Number(combo.descuentoMaximo || 0);
+      return precioCalculado * (1 - descuento / 100);
+    }
 
-        if (componente.componenteVariante) {
-          const stock = componente.componenteVariante.stocksPorSede[0];
-          precioComponente = stock?.precio ? Number(stock.precio) : 0;
-        } else if (componente.componenteProducto) {
-          const stock = componente.componenteProducto.stocksPorSede[0];
-          precioComponente = stock?.precio ? Number(stock.precio) : 0;
+    return precioCalculado;
+  }
+
+  // =====================================================
+  // MÉTODOS DE RESERVA DE STOCK PARA COMBOS
+  // =====================================================
+
+  /**
+   * Obtiene la reservación actual de un combo en una sede.
+   */
+  async getReservacionCombo(comboId: string, sedeId: string): Promise<{ cantidad: number }> {
+    const reservacion = await this.prisma.comboReservacion.findUnique({
+      where: { comboId_sedeId: { comboId, sedeId } },
+    });
+    return { cantidad: reservacion?.cantidad ?? 0 };
+  }
+
+  /**
+   * Reserva stock para un combo: incrementa stockReservadoCombo en cada componente.
+   * Si ya existe reserva, actualiza la diferencia (solo el delta).
+   * @param cantidad - Cantidad TOTAL de combos a reservar (no delta)
+   */
+  async reservarStockCombo(
+    comboId: string,
+    sedeId: string,
+    cantidad: number,
+    usuarioId: string,
+  ): Promise<{ cantidad: number }> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // Obtener reservación actual
+        const reservacionActual = await tx.comboReservacion.findUnique({
+          where: { comboId_sedeId: { comboId, sedeId } },
+        });
+        const cantidadActual = reservacionActual?.cantidad ?? 0;
+        const delta = cantidad - cantidadActual;
+
+        if (delta === 0) return { cantidad: cantidadActual };
+
+        // Obtener componentes con stock
+        const componentes = await tx.productoCombo.findMany({
+          where: { comboId },
+          include: {
+            componenteProducto: { include: { stocksPorSede: { where: { sedeId } } } },
+            componenteVariante: { include: { stocksPorSede: { where: { sedeId } } } },
+          },
+        });
+
+        if (componentes.length === 0) {
+          throw new BadRequestException('El combo no tiene componentes configurados');
         }
 
-        precioTotal += precioComponente * componente.cantidad;
-      }
+        // Si se incrementa la reserva, validar stock disponible
+        if (delta > 0) {
+          for (const componente of componentes) {
+            const stock = componente.componenteVariante
+              ? componente.componenteVariante.stocksPorSede[0]
+              : componente.componenteProducto?.stocksPorSede[0];
 
-      // Si es calculado con descuento, aplicar descuento
-      if (combo.tipoPrecioCombo === TipoPrecioCombo.CALCULADO_CON_DESCUENTO) {
-        const descuentoPorcentaje = Number(combo.descuentoMaximo || 0);
-        precioTotal = precioTotal * (1 - descuentoPorcentaje / 100);
-      }
+            if (!stock) {
+              const nombre = componente.componenteVariante?.nombre ?? componente.componenteProducto?.nombre ?? 'Componente';
+              throw new BadRequestException(`No hay stock de "${nombre}" en esta sede`);
+            }
 
-      return precioTotal;
+            const disponible = this.getStockDisponibleReal(stock);
+            const necesario = componente.cantidad * delta;
+
+            if (disponible < necesario) {
+              const nombre = componente.componenteVariante?.nombre ?? componente.componenteProducto?.nombre ?? 'Componente';
+              throw new BadRequestException(
+                `Stock insuficiente de "${nombre}". Disponible: ${Math.floor(disponible / componente.cantidad)}, necesitas reservar: ${delta} más`,
+              );
+            }
+          }
+        }
+
+        // Aplicar delta en stockReservadoCombo de cada componente
+        for (const componente of componentes) {
+          const stock = componente.componenteVariante
+            ? componente.componenteVariante.stocksPorSede[0]
+            : componente.componenteProducto?.stocksPorSede[0];
+
+          if (!stock) continue;
+
+          const cantidadDelta = componente.cantidad * delta;
+
+          await tx.productoStock.update({
+            where: { id: stock.id },
+            data: { stockReservadoCombo: { increment: cantidadDelta } },
+          });
+
+          // Registrar movimiento
+          await tx.movimientoStock.create({
+            data: {
+              sedeId,
+              empresaId: stock.empresaId,
+              productoStockId: stock.id,
+              usuarioId,
+              tipo: delta > 0 ? 'RESERVA_COMBO' : 'LIBERAR_RESERVA_COMBO',
+              tipoDocumento: 'RESERVA_COMBO',
+              cantidad: cantidadDelta,
+              cantidadAnterior: stock.stockActual,
+              cantidadNueva: stock.stockActual,
+              motivo: `Reserva de combo ${comboId}: ${cantidad} unidades`,
+            },
+          });
+        }
+
+        // Crear o actualizar ComboReservacion
+        if (reservacionActual) {
+          await tx.comboReservacion.update({
+            where: { comboId_sedeId: { comboId, sedeId } },
+            data: { cantidad },
+          });
+        } else {
+          await tx.comboReservacion.create({
+            data: { comboId, sedeId, cantidad },
+          });
+        }
+
+        this.logger.log(`Reserva de combo ${comboId} actualizada a ${cantidad} en sede ${sedeId}`);
+        return { cantidad };
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error al calcular precio de combo: ${errorMessage}`);
-      return 0;
+      this.logger.error(`Error al reservar stock de combo: ${errorMessage}`);
+      throw error;
     }
   }
 
   /**
-   * Obtiene la lista de componentes sin stock suficiente
-   * @param sedeId - Requerido para verificar stock de la sede específica
+   * Libera toda la reserva de un combo en una sede (cantidad = 0).
    */
-  async getComponentesSinStock(comboId: string, sedeId: string): Promise<string[]> {
-    try {
-      const componentes = await this.prisma.productoCombo.findMany({
-        where: { comboId },
-        include: {
-          componenteProducto: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-          componenteVariante: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-        },
-      });
+  async liberarReservaCombo(
+    comboId: string,
+    sedeId: string,
+    usuarioId: string,
+  ): Promise<{ cantidad: number }> {
+    return this.reservarStockCombo(comboId, sedeId, 0, usuarioId);
+  }
 
-      const sinStock: string[] = [];
+  // =====================================================
+  // MÉTODOS PRIVADOS DE CÁLCULO (sincrónos, operan sobre datos ya cargados)
+  // =====================================================
 
-      for (const componente of componentes) {
-        let stockComponente = 0;
-        let nombre = '';
+  /**
+   * Calcula stock disponible real de un componente desde su ProductoStock.
+   * stockDisponible = stockActual - stockReservado - stockReservadoVenta - stockReservadoCombo - stockDanado - stockEnGarantia
+   */
+  private getStockDisponibleReal(stock: any): number {
+    if (!stock) return 0;
+    return stock.stockActual - stock.stockReservado - stock.stockReservadoVenta - (stock.stockReservadoCombo || 0) - stock.stockDanado - stock.stockEnGarantia;
+  }
 
-        if (componente.componenteVariante) {
-          const stock = componente.componenteVariante.stocksPorSede[0];
-          stockComponente = stock?.stockActual || 0;
-          nombre = componente.componenteVariante.nombre;
-        } else if (componente.componenteProducto) {
-          const stock = componente.componenteProducto.stocksPorSede[0];
-          stockComponente = stock?.stockActual || 0;
-          nombre = componente.componenteProducto.nombre;
-        }
+  /**
+   * Calcula cuántos combos se pueden armar con los componentes dados.
+   * Retorna el mínimo entre los máximos de cada componente (cuello de botella).
+   */
+  private calcularStockDisponibleFromComponentes(componentes: any[]): number {
+    if (componentes.length === 0) return 0;
 
-        if (stockComponente < componente.cantidad) {
-          sinStock.push(nombre);
-        }
-      }
+    let stockMinimo = Infinity;
+    for (const componente of componentes) {
+      const stock = componente.componenteVariante
+        ? componente.componenteVariante.stocksPorSede?.[0]
+        : componente.componenteProducto?.stocksPorSede?.[0];
 
-      return sinStock;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error al obtener componentes sin stock: ${errorMessage}`);
-      return [];
+      const disponible = this.getStockDisponibleReal(stock);
+      const maxCombos = Math.floor(disponible / componente.cantidad);
+      stockMinimo = Math.min(stockMinimo, maxCombos);
     }
+
+    return stockMinimo === Infinity ? 0 : Math.max(0, stockMinimo);
+  }
+
+  /**
+   * Retorna nombres de componentes sin stock suficiente.
+   */
+  private getComponentesSinStockFromData(componentes: any[]): string[] {
+    const sinStock: string[] = [];
+
+    for (const componente of componentes) {
+      const stock = componente.componenteVariante
+        ? componente.componenteVariante.stocksPorSede?.[0]
+        : componente.componenteProducto?.stocksPorSede?.[0];
+
+      const disponible = this.getStockDisponibleReal(stock);
+      if (disponible < componente.cantidad) {
+        const nombre = componente.componenteVariante?.nombre ?? componente.componenteProducto?.nombre ?? 'Componente';
+        sinStock.push(nombre);
+      }
+    }
+
+    return sinStock;
+  }
+
+  /**
+   * Calcula precios del combo desde los componentes.
+   * - precioCalculado: suma de (precioEnCombo ?? precioRegular) * cantidad
+   * - precioRegularTotal: suma de precioRegular * cantidad (sin overrides)
+   */
+  private calcularPreciosFromComponentes(componentes: any[]): { precioCalculado: number; precioRegularTotal: number } {
+    let precioCalculado = 0;
+    let precioRegularTotal = 0;
+
+    for (const componente of componentes) {
+      const stock = componente.componenteVariante
+        ? componente.componenteVariante.stocksPorSede?.[0]
+        : componente.componenteProducto?.stocksPorSede?.[0];
+
+      const precioRegular = stock?.precio ? Number(stock.precio) : 0;
+      const precioOverride = componente.precioEnCombo !== null && componente.precioEnCombo !== undefined
+        ? Number(componente.precioEnCombo)
+        : null;
+
+      precioRegularTotal += precioRegular * componente.cantidad;
+      precioCalculado += (precioOverride ?? precioRegular) * componente.cantidad;
+    }
+
+    return { precioCalculado, precioRegularTotal };
   }
 
   /**
@@ -1127,6 +1393,41 @@ export class ProductoComboService {
           }
         }
 
+        // Decrementar stockReservadoCombo si hay reservación activa para este combo
+        const reservacion = await tx.comboReservacion.findUnique({
+          where: { comboId_sedeId: { comboId, sedeId } },
+        });
+
+        if (reservacion && reservacion.cantidad > 0) {
+          const cantVentaContraReserva = Math.min(cantidad, reservacion.cantidad);
+          const nuevaCantReserva = reservacion.cantidad - cantVentaContraReserva;
+
+          for (const componente of componentes) {
+            const stock = componente.componenteVariante
+              ? componente.componenteVariante.stocksPorSede[0]
+              : componente.componenteProducto?.stocksPorSede[0];
+
+            if (!stock) continue;
+
+            const cantidadLiberar = componente.cantidad * cantVentaContraReserva;
+            await tx.productoStock.update({
+              where: { id: stock.id },
+              data: { stockReservadoCombo: { decrement: cantidadLiberar } },
+            });
+          }
+
+          if (nuevaCantReserva === 0) {
+            await tx.comboReservacion.delete({
+              where: { comboId_sedeId: { comboId, sedeId } },
+            });
+          } else {
+            await tx.comboReservacion.update({
+              where: { comboId_sedeId: { comboId, sedeId } },
+              data: { cantidad: nuevaCantReserva },
+            });
+          }
+        }
+
         this.logger.log(`Stock descontado para ${cantidad} unidad(es) del combo ${comboId} en sede ${sedeId}`);
       });
     } catch (error) {
@@ -1138,7 +1439,6 @@ export class ProductoComboService {
 
   /**
    * Mapea un ProductoCombo a DTO de respuesta
-   * @param sedeId - Requerido para obtener información de precio y stock de la sede
    */
   private mapToResponseDto(componente: any, sedeId: string): ProductoComboResponseDto {
     return {
@@ -1147,6 +1447,9 @@ export class ProductoComboService {
       componenteProductoId: componente.componenteProductoId,
       componenteVarianteId: componente.componenteVarianteId,
       cantidad: componente.cantidad,
+      precioEnCombo: componente.precioEnCombo !== null && componente.precioEnCombo !== undefined
+        ? Number(componente.precioEnCombo)
+        : undefined,
       esPersonalizable: componente.esPersonalizable,
       categoriaComponente: componente.categoriaComponente,
       orden: componente.orden,
@@ -1157,10 +1460,14 @@ export class ProductoComboService {
   }
 
   /**
-   * Extrae información del componente (producto o variante)
-   * Obtiene precio y stock desde ProductoStock
+   * Extrae información del componente (producto o variante).
+   * Retorna precio regular (desde ProductoStock), precioEnCombo (override), y stock disponible real.
    */
   private getComponenteInfo(componente: any) {
+    const precioEnCombo = componente.precioEnCombo !== null && componente.precioEnCombo !== undefined
+      ? Number(componente.precioEnCombo)
+      : undefined;
+
     if (componente.componenteVariante) {
       const variante = componente.componenteVariante;
       const producto = variante.producto;
@@ -1171,10 +1478,11 @@ export class ProductoComboService {
         nombre: variante.nombre,
         sku: variante.sku,
         precio: stock?.precio ? Number(stock.precio) : 0,
-        stock: stock?.stockActual || 0,
+        precioEnCombo,
+        stock: this.getStockDisponibleReal(stock),
         esVariante: true,
-        productoNombre: producto?.nombre, // Nombre del producto padre
-        varianteNombre: variante.nombre,  // Nombre de la variante
+        productoNombre: producto?.nombre,
+        varianteNombre: variante.nombre,
       };
     } else if (componente.componenteProducto) {
       const stock = componente.componenteProducto.stocksPorSede?.[0];
@@ -1184,7 +1492,8 @@ export class ProductoComboService {
         nombre: componente.componenteProducto.nombre,
         sku: componente.componenteProducto.sku,
         precio: stock?.precio ? Number(stock.precio) : 0,
-        stock: stock?.stockActual || 0,
+        precioEnCombo,
+        stock: this.getStockDisponibleReal(stock),
         esVariante: false,
       };
     }

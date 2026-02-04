@@ -647,8 +647,9 @@ model Producto {
   variantes           ProductoVariante[]
 
   // Relaciones para combos
-  componentesCombo ProductoCombo[] @relation("ComboProducto")
-  usadoEnCombos    ProductoCombo[] @relation("ComponenteProducto")
+  componentesCombo  ProductoCombo[]     @relation("ComboProducto")
+  usadoEnCombos     ProductoCombo[]     @relation("ComponenteProducto")
+  reservacionesCombo ComboReservacion[] @relation("ComboReservaciones")
 
   // Relaciones para atributos estructurados
   atributosValores ProductoAtributoValor[]
@@ -1442,6 +1443,7 @@ model Sede {
   transferenciasOrigen  TransferenciaStock[]          @relation("TransferenciasOrigen")
   transferenciasDestino TransferenciaStock[]          @relation("TransferenciasDestino")
   historialPreciosSede  ProductoPrecioHistorialSede[] @relation("SedeCambiosPrecios")
+  reservacionesCombos   ComboReservacion[]
 
   // Relaciones para devoluciones
   devoluciones Devolucion[]
@@ -1490,6 +1492,7 @@ model ProductoStock {
   // ========== RESERVAS ==========
   stockReservado      Int @default(0) // Reservado para transferencias aprobadas
   stockReservadoVenta Int @default(0) // Apartado por clientes (pre-ventas, pedidos)
+  stockReservadoCombo Int @default(0) // Apartado para ensamble de combos reservados
 
   // ========== MERMA Y ESTADO ==========
   stockDanado     Int @default(0) // Productos defectuosos/dañados (no vendibles)
@@ -1500,7 +1503,7 @@ model ProductoStock {
   stockMaximo Int?
 
   // ========== STOCK CALCULADOS (runtime, no se guardan en BD) ==========
-  // stockDisponibleVenta = stockActual - stockReservado - stockReservadoVenta - stockDanado - stockEnGarantia
+  // stockDisponibleVenta = stockActual - stockReservado - stockReservadoVenta - stockReservadoCombo - stockDanado - stockEnGarantia
   // stockDisponibleTransferencia = stockActual - stockReservado
 
   // Ubicación dentro de la sede
@@ -1711,6 +1714,8 @@ enum TipoMovimientoStock {
   AJUSTE_SALIDA_VENTA // Ajuste por error en venta
   RESERVA_VENTA // Reservar stock para venta (stockReservadoVenta++)
   LIBERAR_RESERVA_VENTA // Liberar reserva de venta (stockReservadoVenta--)
+  RESERVA_COMBO // Reservar stock para ensamble de combo (stockReservadoCombo++)
+  LIBERAR_RESERVA_COMBO // Liberar reserva de combo (stockReservadoCombo--)
 
   // === TRANSFERENCIAS ===
   ENTRADA_TRANSFERENCIA // Entrada por transferencia de otra sede
@@ -2964,6 +2969,11 @@ model ProductoCombo {
   // Cantidad de este componente en el combo
   cantidad Int @default(1)
 
+  // Precio del componente dentro del combo (override opcional)
+  // Si es null, se usa el precio regular del producto desde ProductoStock
+  // Ejemplo: producto vale 100 en general, pero dentro del combo vale 95
+  precioEnCombo Decimal? @db.Decimal(10, 2)
+
   // Permitir personalización (para PCs ensamblables)
   esPersonalizable    Boolean @default(false)
   categoriaComponente String? // "CPU", "RAM", "Almacenamiento", "Monitor", etc.
@@ -2978,6 +2988,29 @@ model ProductoCombo {
   @@index([componenteProductoId])
   @@index([componenteVarianteId])
   @@index([categoriaComponente])
+}
+
+/// Reserva de stock para un combo específico en una sede.
+/// Cuando el usuario decide "apartar" componentes para armar N combos,
+/// se crea/actualiza este registro y se incrementa stockReservadoCombo
+/// en cada componente involucrado.
+model ComboReservacion {
+  id      String @id @default(cuid())
+  comboId String
+  combo   Producto @relation("ComboReservaciones", fields: [comboId], references: [id], onDelete: Cascade)
+
+  sedeId String
+  sede   Sede @relation(fields: [sedeId], references: [id])
+
+  /// Cantidad de combos reservados (ej: 5 significa que los componentes para 5 combos están apartados)
+  cantidad Int @default(0)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  @@unique([comboId, sedeId])
+  @@index([comboId])
+  @@index([sedeId])
 }
 
 /// Tipos de atributos para productos

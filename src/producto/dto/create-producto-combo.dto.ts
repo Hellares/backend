@@ -38,6 +38,12 @@ export class CreateComponenteComboDto {
   @Min(1)
   cantidad: number; // Cantidad de este componente en el combo
 
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  @IsOptional()
+  precioEnCombo?: number; // Precio del componente dentro del combo (override). Si es null, se usa el precio regular.
+
   @IsBoolean()
   @IsOptional()
   esPersonalizable?: boolean; // Si puede ser reemplazado por otra opción
