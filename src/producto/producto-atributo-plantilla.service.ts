@@ -338,7 +338,24 @@ export class ProductoAtributoPlantillaService {
       );
     }
 
-    // Obtener plantilla con atributos
+    // Verificar que el producto o variante existe y pertenece a la empresa
+    if (productoId) {
+      const producto = await this.prisma.producto.findFirst({
+        where: { id: productoId, empresaId, deletedAt: null },
+      });
+      if (!producto) {
+        throw new NotFoundException(`Producto ${productoId} no encontrado`);
+      }
+    } else if (varianteId) {
+      const variante = await this.prisma.productoVariante.findFirst({
+        where: { id: varianteId, empresaId, deletedAt: null },
+      });
+      if (!variante) {
+        throw new NotFoundException(`Variante ${varianteId} no encontrada`);
+      }
+    }
+
+    // Obtener plantilla con atributos (solo atributos activos)
     const plantilla = await this.prisma.productoAtributoPlantilla.findFirst({
       where: {
         id: plantillaId,
@@ -358,27 +375,57 @@ export class ProductoAtributoPlantillaService {
       throw new NotFoundException('Plantilla no encontrada');
     }
 
-    // Los valores iniciales son vacíos - solo creamos la estructura
-    // El usuario llenará los valores en el formulario
-    const atributosValores = plantilla.atributos.map((pa) => ({
+    // Filtrar solo atributos que siguen activos
+    const atributosActivos = plantilla.atributos.filter(
+      (pa) => pa.atributo.isActive,
+    );
+
+    if (atributosActivos.length === 0) {
+      throw new BadRequestException(
+        'La plantilla no tiene atributos activos para aplicar',
+      );
+    }
+
+    // Generar valor por defecto según el tipo de atributo
+    const getValorPorDefecto = (atributo: any): string => {
+      switch (atributo.tipo) {
+        case 'SELECT':
+        case 'MULTI_SELECT':
+        case 'COLOR':
+        case 'TALLA':
+        case 'MATERIAL':
+        case 'CAPACIDAD':
+          // Usar el primer valor predefinido si existe
+          return atributo.valores?.length > 0 ? atributo.valores[0] : '';
+        case 'NUMERO':
+          return '0';
+        case 'BOOLEAN':
+          return 'false';
+        case 'TEXTO':
+        default:
+          return '';
+      }
+    };
+
+    const atributosValores = atributosActivos.map((pa) => ({
       atributoId: pa.atributoId,
       productoId: productoId || null,
       varianteId: varianteId || null,
-      valor: '', // Valor vacío - se llenará después
+      valor: getValorPorDefecto(pa.atributo),
     }));
 
     // Crear valores de atributos (con conflictos se ignoran)
-    await this.prisma.productoAtributoValor.createMany({
+    const result = await this.prisma.productoAtributoValor.createMany({
       data: atributosValores,
       skipDuplicates: true,
     });
 
     this.logger.log(
-      `Plantilla "${plantilla.nombre}" aplicada a ${productoId ? 'producto' : 'variante'} ${productoId || varianteId}`,
+      `Plantilla "${plantilla.nombre}" aplicada a ${productoId ? 'producto' : 'variante'} ${productoId || varianteId} (${result.count} de ${atributosActivos.length} atributos creados)`,
     );
 
     return {
-      atributosCreados: plantilla.atributos.length,
+      atributosCreados: result.count,
     };
   }
 

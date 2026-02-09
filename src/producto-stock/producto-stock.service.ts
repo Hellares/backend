@@ -188,6 +188,7 @@ export class ProductoStockService {
   /**
    * Ajusta el stock de un producto/variante en una sede
    * Registra el movimiento en el historial
+   * Usa SELECT FOR UPDATE para prevenir race conditions en operaciones concurrentes
    */
   async ajustarStock(
     productoStockId: string,
@@ -195,44 +196,52 @@ export class ProductoStockService {
     dto: AjustarStockDto,
     usuarioId: string,
   ) {
-    // Obtener stock actual
-    const stock = await this.prisma.productoStock.findUnique({
-      where: { id: productoStockId },
-      include: {
-        producto: true,
-        variante: true,
-      },
-    });
-
-    if (!stock) {
-      throw new NotFoundException('Stock no encontrado');
-    }
-
-    // Validar que el producto o variante siga activo
-    if (stock.producto && !stock.producto.isActive) {
-      throw new BadRequestException(
-        'No se puede ajustar stock de un producto inactivo',
-      );
-    }
-
-    if (stock.variante && !stock.variante.isActive) {
-      throw new BadRequestException(
-        'No se puede ajustar stock de una variante inactiva',
-      );
-    }
-
-    // Calcular nuevo stock
-    const nuevoStock = stock.stockActual + dto.cantidad;
-
-    // Validar que no quede negativo
-    if (nuevoStock < 0) {
-      throw new BadRequestException(
-        `Stock insuficiente. Actual: ${stock.stockActual}, Requerido: ${Math.abs(dto.cantidad)}`,
-      );
-    }
-
-    // Actualizar stock y registrar movimiento en transacción
     return await this.prisma.$transaction(async (tx) => {
+      // Bloquear la fila con FOR UPDATE para prevenir lecturas concurrentes
+      const [stockLocked] = await tx.$queryRaw<
+        Array<{ id: string; stockActual: number; sedeId: string; productoId: string | null; varianteId: string | null }>
+      >`SELECT id, "stockActual", "sedeId", "productoId", "varianteId"
+        FROM "ProductoStock"
+        WHERE id = ${productoStockId}
+        FOR UPDATE`;
+
+      if (!stockLocked) {
+        throw new NotFoundException('Stock no encontrado');
+      }
+
+      // Cargar relaciones para validaciones (ya bloqueada la fila de stock)
+      const stock = await tx.productoStock.findUnique({
+        where: { id: productoStockId },
+        include: {
+          producto: true,
+          variante: true,
+        },
+      });
+
+      // Validar que el producto o variante siga activo
+      if (stock!.producto && !stock!.producto.isActive) {
+        throw new BadRequestException(
+          'No se puede ajustar stock de un producto inactivo',
+        );
+      }
+
+      if (stock!.variante && !stock!.variante.isActive) {
+        throw new BadRequestException(
+          'No se puede ajustar stock de una variante inactiva',
+        );
+      }
+
+      // Calcular nuevo stock usando el valor bloqueado (consistente)
+      const stockAnterior = stockLocked.stockActual;
+      const nuevoStock = stockAnterior + dto.cantidad;
+
+      // Validar que no quede negativo
+      if (nuevoStock < 0) {
+        throw new BadRequestException(
+          `Stock insuficiente. Actual: ${stockAnterior}, Requerido: ${Math.abs(dto.cantidad)}`,
+        );
+      }
+
       // Actualizar stock
       const stockActualizado = await tx.productoStock.update({
         where: { id: productoStockId },
@@ -247,13 +256,13 @@ export class ProductoStockService {
       // Registrar movimiento
       await tx.movimientoStock.create({
         data: {
-          sedeId: stock.sedeId,
+          sedeId: stockLocked.sedeId,
           empresaId,
           productoStockId,
           tipo: dto.tipo,
           tipoDocumento: dto.tipoDocumento,
           numeroDocumento: dto.numeroDocumento,
-          cantidadAnterior: stock.stockActual,
+          cantidadAnterior: stockAnterior,
           cantidad: dto.cantidad,
           cantidadNueva: nuevoStock,
           motivo: dto.motivo,
@@ -263,7 +272,7 @@ export class ProductoStockService {
       });
 
       this.logger.log(
-        `Stock ajustado: ${stock.producto?.nombre || stock.variante?.nombre} | Anterior: ${stock.stockActual} | Cambio: ${dto.cantidad} | Nuevo: ${nuevoStock}`,
+        `Stock ajustado: ${stock!.producto?.nombre || stock!.variante?.nombre} | Anterior: ${stockAnterior} | Cambio: ${dto.cantidad} | Nuevo: ${nuevoStock}`,
       );
 
       return stockActualizado;
@@ -408,182 +417,6 @@ export class ProductoStockService {
         sedesSinStock: stocks.filter((s) => s.stockActual === 0).length,
       },
     };
-  }
-
-  /**
-   * Valida si hay stock suficiente para vender un combo
-   * Verifica que todos los componentes tengan stock disponible
-   */
-  async validarStockCombo(
-    comboId: string,
-    sedeId: string,
-    empresaId: string,
-    cantidad: number,
-  ): Promise<{
-    valido: boolean;
-    faltantes: Array<{
-      componenteId: string;
-      componenteNombre: string;
-      cantidadNecesaria: number;
-      cantidadDisponible: number;
-      faltante: number;
-    }>;
-  }> {
-    // Obtener componentes del combo
-    const componentes = await this.prisma.productoCombo.findMany({
-      where: { comboId },
-      include: {
-        componenteProducto: {
-          select: {
-            id: true,
-            nombre: true,
-          },
-        },
-        componenteVariante: {
-          select: {
-            id: true,
-            nombre: true,
-          },
-        },
-      },
-    });
-
-    const faltantes = [];
-
-    for (const componente of componentes) {
-      const cantidadNecesaria = componente.cantidad * cantidad;
-
-      // Buscar stock del componente en la sede
-      const stock = await this.prisma.productoStock.findFirst({
-        where: {
-          sedeId,
-          empresaId,
-          productoId: componente.componenteProductoId || undefined,
-          varianteId: componente.componenteVarianteId || undefined,
-        },
-      });
-
-      const stockDisponible = stock?.stockActual || 0;
-
-      if (stockDisponible < cantidadNecesaria) {
-        faltantes.push({
-          componenteId:
-            componente.componenteProductoId ||
-            componente.componenteVarianteId ||
-            '',
-          componenteNombre:
-            componente.componenteProducto?.nombre ||
-            componente.componenteVariante?.nombre ||
-            'Componente desconocido',
-          cantidadNecesaria,
-          cantidadDisponible: stockDisponible,
-          faltante: cantidadNecesaria - stockDisponible,
-        });
-      }
-    }
-
-    return {
-      valido: faltantes.length === 0,
-      faltantes,
-    };
-  }
-
-  /**
-   * Descuenta stock de todos los componentes de un combo al vender
-   * Debe ejecutarse en una transacción para garantizar atomicidad
-   */
-  async descontarStockCombo(
-    comboId: string,
-    sedeId: string,
-    empresaId: string,
-    cantidad: number,
-    usuarioId: string,
-    tipoDocumento?: string,
-    numeroDocumento?: string,
-  ) {
-    // Primero validar que hay stock suficiente
-    const validacion = await this.validarStockCombo(
-      comboId,
-      sedeId,
-      empresaId,
-      cantidad,
-    );
-
-    if (!validacion.valido) {
-      const mensajeError = validacion.faltantes
-        .map(
-          (f) =>
-            `${f.componenteNombre}: necesita ${f.cantidadNecesaria}, disponible ${f.cantidadDisponible}`,
-        )
-        .join('; ');
-
-      throw new BadRequestException(
-        `Stock insuficiente para vender el combo: ${mensajeError}`,
-      );
-    }
-
-    // Descontar stock de cada componente en transacción
-    return await this.prisma.$transaction(async (tx) => {
-      const componentes = await tx.productoCombo.findMany({
-        where: { comboId },
-      });
-
-      const movimientos = [];
-
-      for (const componente of componentes) {
-        const cantidadDescontar = componente.cantidad * cantidad;
-
-        // Obtener stock actual
-        const stock = await tx.productoStock.findFirst({
-          where: {
-            sedeId,
-            empresaId,
-            productoId: componente.componenteProductoId || undefined,
-            varianteId: componente.componenteVarianteId || undefined,
-          },
-        });
-
-        if (!stock) {
-          throw new NotFoundException(
-            `Stock no encontrado para componente ${componente.componenteProductoId || componente.componenteVarianteId}`,
-          );
-        }
-
-        const nuevoStock = stock.stockActual - cantidadDescontar;
-
-        // Actualizar stock
-        await tx.productoStock.update({
-          where: { id: stock.id },
-          data: { stockActual: nuevoStock },
-        });
-
-        // Registrar movimiento
-        const movimiento = await tx.movimientoStock.create({
-          data: {
-            sedeId,
-            empresaId,
-            productoStockId: stock.id,
-            tipo: 'SALIDA_VENTA',
-            tipoDocumento: tipoDocumento || 'VENTA_COMBO',
-            numeroDocumento,
-            cantidadAnterior: stock.stockActual,
-            cantidad: -cantidadDescontar,
-            cantidadNueva: nuevoStock,
-            motivo: `Venta de combo (ID: ${comboId})`,
-            observaciones: `Componente vendido como parte de combo. Cantidad de combos: ${cantidad}`,
-            usuarioId,
-          },
-        });
-
-        movimientos.push(movimiento);
-      }
-
-      this.logger.log(
-        `Stock descontado para combo ${comboId}: ${cantidad} unidades vendidas`,
-      );
-
-      return movimientos;
-    });
   }
 
   /**

@@ -42,16 +42,12 @@ import {
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
+import { GenerateVarianteCombinationsDto } from './dto/generate-variante-combinations.dto';
 import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
 import { SetProductoAtributosDto } from './dto/create-producto-atributo-valor.dto';
 import { CreatePrecioNivelDto } from './dto/create-precio-nivel.dto';
 import { UpdatePrecioNivelDto } from './dto/update-precio-nivel.dto';
 import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
-import {
-  AjusteMasivoPreciosDto,
-  AjusteMasivoPreciosResponseDto,
-} from './dto/ajuste-masivo-precios.dto';
-
 @ApiTags('Productos')
 @Controller('productos')
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
@@ -140,101 +136,103 @@ export class ProductoController {
   }
 
   // =========================================
-  // ENDPOINTS DE ATRIBUTOS (ANTES DE :id)
+  // ENDPOINTS DE ATRIBUTOS - ELIMINADOS (DUPLICADOS)
+  // Usar /producto-atributos (ProductoAtributoController) en su lugar
+  // Flutter ya usa /producto-atributos exclusivamente
   // =========================================
 
-  @Post('atributos')
-  @RequiresPermission(Permission.MANAGE_PRODUCTS)
-  @ApiOperation({ summary: 'Crear un atributo de producto' })
-  @ApiResponse({
-    status: 201,
-    description: 'Atributo creado exitosamente',
-  })
-  @ApiHeader({
-    name: 'x-tenant-id',
-    description: 'ID de la empresa (tenant)',
-    required: true,
-  })
-  async createAtributo(
-    @Headers('x-tenant-id') empresaId: string,
-    @Body() dto: CreateProductoAtributoDto,
-  ) {
-    return await this.atributoService.create(empresaId, dto);
-  }
+  // @Post('atributos')
+  // @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  // @ApiOperation({ summary: 'Crear un atributo de producto' })
+  // @ApiResponse({
+  //   status: 201,
+  //   description: 'Atributo creado exitosamente',
+  // })
+  // @ApiHeader({
+  //   name: 'x-tenant-id',
+  //   description: 'ID de la empresa (tenant)',
+  //   required: true,
+  // })
+  // async createAtributo(
+  //   @Headers('x-tenant-id') empresaId: string,
+  //   @Body() dto: CreateProductoAtributoDto,
+  // ) {
+  //   return await this.atributoService.create(empresaId, dto);
+  // }
 
-  @Get('atributos')
-  @RequiresPermission(Permission.VIEW_PRODUCTS)
-  @ApiOperation({ summary: 'Obtener todos los atributos de la empresa' })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de atributos obtenida exitosamente',
-  })
-  @ApiHeader({
-    name: 'x-tenant-id',
-    description: 'ID de la empresa (tenant)',
-    required: true,
-  })
-  async findAllAtributos(@Headers('x-tenant-id') empresaId: string) {
-    return await this.atributoService.findAll(empresaId);
-  }
+  // @Get('atributos')
+  // @RequiresPermission(Permission.VIEW_PRODUCTS)
+  // @ApiOperation({ summary: 'Obtener todos los atributos de la empresa' })
+  // @ApiResponse({
+  //   status: 200,
+  //   description: 'Lista de atributos obtenida exitosamente',
+  // })
+  // @ApiHeader({
+  //   name: 'x-tenant-id',
+  //   description: 'ID de la empresa (tenant)',
+  //   required: true,
+  // })
+  // async findAllAtributos(@Headers('x-tenant-id') empresaId: string) {
+  //   return await this.atributoService.findAll(empresaId);
+  // }
 
-  @Get('atributos/:atributoId')
-  @RequiresPermission(Permission.VIEW_PRODUCTS)
-  @ApiOperation({ summary: 'Obtener un atributo por ID' })
-  @ApiResponse({
-    status: 200,
-    description: 'Atributo obtenido exitosamente',
-  })
-  @ApiHeader({
-    name: 'x-tenant-id',
-    description: 'ID de la empresa (tenant)',
-    required: true,
-  })
-  async findOneAtributo(
-    @Param('atributoId') atributoId: string,
-    @Headers('x-tenant-id') empresaId: string,
-  ) {
-    return await this.atributoService.findOne(atributoId, empresaId);
-  }
+  // @Get('atributos/:atributoId')
+  // @RequiresPermission(Permission.VIEW_PRODUCTS)
+  // @ApiOperation({ summary: 'Obtener un atributo por ID' })
+  // @ApiResponse({
+  //   status: 200,
+  //   description: 'Atributo obtenido exitosamente',
+  // })
+  // @ApiHeader({
+  //   name: 'x-tenant-id',
+  //   description: 'ID de la empresa (tenant)',
+  //   required: true,
+  // })
+  // async findOneAtributo(
+  //   @Param('atributoId') atributoId: string,
+  //   @Headers('x-tenant-id') empresaId: string,
+  // ) {
+  //   return await this.atributoService.findOne(atributoId, empresaId);
+  // }
 
-  @Put('atributos/:atributoId')
-  @RequiresPermission(Permission.MANAGE_PRODUCTS)
-  @ApiOperation({ summary: 'Actualizar un atributo' })
-  @ApiResponse({
-    status: 200,
-    description: 'Atributo actualizado exitosamente',
-  })
-  @ApiHeader({
-    name: 'x-tenant-id',
-    description: 'ID de la empresa (tenant)',
-    required: true,
-  })
-  async updateAtributo(
-    @Param('atributoId') atributoId: string,
-    @Headers('x-tenant-id') empresaId: string,
-    @Body() dto: Partial<CreateProductoAtributoDto>,
-  ) {
-    return await this.atributoService.update(atributoId, empresaId, dto);
-  }
+  // @Put('atributos/:atributoId')
+  // @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  // @ApiOperation({ summary: 'Actualizar un atributo' })
+  // @ApiResponse({
+  //   status: 200,
+  //   description: 'Atributo actualizado exitosamente',
+  // })
+  // @ApiHeader({
+  //   name: 'x-tenant-id',
+  //   description: 'ID de la empresa (tenant)',
+  //   required: true,
+  // })
+  // async updateAtributo(
+  //   @Param('atributoId') atributoId: string,
+  //   @Headers('x-tenant-id') empresaId: string,
+  //   @Body() dto: Partial<CreateProductoAtributoDto>,
+  // ) {
+  //   return await this.atributoService.update(atributoId, empresaId, dto);
+  // }
 
-  @Delete('atributos/:atributoId')
-  @RequiresPermission(Permission.MANAGE_PRODUCTS)
-  @ApiOperation({ summary: 'Eliminar un atributo' })
-  @ApiResponse({
-    status: 200,
-    description: 'Atributo eliminado exitosamente',
-  })
-  @ApiHeader({
-    name: 'x-tenant-id',
-    description: 'ID de la empresa (tenant)',
-    required: true,
-  })
-  async removeAtributo(
-    @Param('atributoId') atributoId: string,
-    @Headers('x-tenant-id') empresaId: string,
-  ): Promise<void> {
-    return await this.atributoService.remove(atributoId, empresaId);
-  }
+  // @Delete('atributos/:atributoId')
+  // @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  // @ApiOperation({ summary: 'Eliminar un atributo' })
+  // @ApiResponse({
+  //   status: 200,
+  //   description: 'Atributo eliminado exitosamente',
+  // })
+  // @ApiHeader({
+  //   name: 'x-tenant-id',
+  //   description: 'ID de la empresa (tenant)',
+  //   required: true,
+  // })
+  // async removeAtributo(
+  //   @Param('atributoId') atributoId: string,
+  //   @Headers('x-tenant-id') empresaId: string,
+  // ): Promise<void> {
+  //   return await this.atributoService.remove(atributoId, empresaId);
+  // }
 
   // =========================================
   // ENDPOINTS ESTÁTICOS DE COMBOS (ANTES DE :id)
@@ -266,87 +264,6 @@ export class ProductoController {
       page ? Number(page) : 1,
       limit ? Number(limit) : 50,
       search,
-    );
-  }
-
-  @Post('ajuste-masivo-precios')
-  @RequiresPermission(Permission.MANAGE_PRODUCTS)
-  @ApiOperation({
-    summary: 'Ajuste masivo de precios por porcentaje',
-    description: `
-      Permite incrementar o decrementar precios de múltiples productos de forma masiva.
-
-      **Características:**
-      - Ajuste por porcentaje (1-100%)
-      - Aplicar a TODOS los productos o productos SELECCIONADOS
-      - Incluye variantes opcionalmente
-      - Redondeo a 2 decimales
-      - Modo PREVIEW para ver cambios antes de aplicar
-      - Registra todos los cambios en historial de precios
-
-      **Casos de uso:**
-      - Ajustes por inflación
-      - Cambios de temporada
-      - Actualizaciones de costos de proveedores
-    `,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Ajuste masivo aplicado exitosamente o preview generado',
-    schema: {
-      type: 'object',
-      properties: {
-        resumen: {
-          type: 'object',
-          properties: {
-            totalProductosAfectados: { type: 'number' },
-            totalVariantesAfectadas: { type: 'number' },
-            ajustePromedio: { type: 'number' },
-            operacion: { type: 'string' },
-            valorAjuste: { type: 'number' },
-          },
-        },
-        cambios: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              productoId: { type: 'string' },
-              nombre: { type: 'string' },
-              precioAnterior: { type: 'number' },
-              precioNuevo: { type: 'number' },
-              diferencia: { type: 'number' },
-              diferenciaPercentual: { type: 'number' },
-              varianteId: { type: 'string', nullable: true },
-              varianteNombre: { type: 'string', nullable: true },
-            },
-          },
-        },
-        advertencias: {
-          type: 'array',
-          items: { type: 'string' },
-          nullable: true,
-        },
-        esPreview: { type: 'boolean' },
-      },
-    },
-  })
-  @ApiResponse({ status: 400, description: 'Datos inválidos o no hay productos para ajustar' })
-  @ApiResponse({ status: 403, description: 'Sin permisos' })
-  @ApiHeader({
-    name: 'x-tenant-id',
-    description: 'ID de la empresa (tenant)',
-    required: true,
-  })
-  async ajusteMasivoPrecios(
-    @Headers('x-tenant-id') empresaId: string,
-    @CurrentUser() user: any,
-    @Body() dto: AjusteMasivoPreciosDto,
-  ): Promise<AjusteMasivoPreciosResponseDto> {
-    return await this.productoService.ajusteMasivoPrecios(
-      empresaId,
-      user.sub,
-      dto,
     );
   }
 
@@ -688,6 +605,32 @@ export class ProductoController {
     @Body() dto: CreateProductoVarianteDto,
   ): Promise<ProductoVarianteResponseDto> {
     return await this.varianteService.create(productoId, empresaId, dto);
+  }
+
+  @Post(':productoId/variantes/generar-combinaciones')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Generar variantes automáticamente por combinación de atributos',
+    description: 'Genera el producto cartesiano de los valores seleccionados de cada atributo. Máximo 50 combinaciones por operación.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Variantes generadas exitosamente',
+    type: [ProductoVarianteResponseDto],
+  })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o más de 50 combinaciones' })
+  @ApiResponse({ status: 409, description: 'Ya existe una variante con la misma combinación' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async generarCombinaciones(
+    @Param('productoId') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: GenerateVarianteCombinationsDto,
+  ): Promise<ProductoVarianteResponseDto[]> {
+    return await this.varianteService.generarCombinaciones(productoId, empresaId, dto);
   }
 
   @Get(':productoId/variantes')

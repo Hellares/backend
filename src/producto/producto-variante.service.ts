@@ -7,6 +7,7 @@ import { CacheService } from '../redis/cache.service';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
+import { GenerateVarianteCombinationsDto } from './dto/generate-variante-combinations.dto';
 
 @Injectable()
 export class ProductoVarianteService {
@@ -70,13 +71,6 @@ export class ProductoVarianteService {
       throw new ConflictException(`Ya existe una variante con el SKU: ${dto.sku}`);
     }
 
-    // Validar que el precio sea válido
-    if (!dto.precio || dto.precio <= 0) {
-      throw new BadRequestException(
-        'El precio de la variante debe ser mayor a 0',
-      );
-    }
-
     // Generar código de empresa único (usando servicio centralizado)
     const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId);
 
@@ -89,7 +83,6 @@ export class ProductoVarianteService {
         sku: dto.sku,
         codigoBarras: dto.codigoBarras,
         codigoEmpresa,
-        // ❌ precio/precioCosto/precioOferta - DEPRECATED: Precios ahora solo en ProductoStock
         peso: dto.peso,
         dimensiones: dto.dimensiones,
         isActive: dto.isActive ?? true,
@@ -116,6 +109,11 @@ export class ProductoVarianteService {
         stocksPorSede: {
           select: {
             stockActual: true,
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            precioConfigurado: true,
             sede: {
               select: {
                 id: true,
@@ -191,12 +189,18 @@ export class ProductoVarianteService {
     // Copiar niveles de precio de otra variante del mismo producto
     await this.copiarNivelesDeOtraVariante(productoId, variante.id);
 
+    // Crear ProductoStock en las sedes correspondientes
+    await this.crearProductoStockEnSedes(variante.id, productoId, empresaId);
+
+    // Recargar variante con stocksPorSede recién creados
+    const varianteFinal = await this.recargarVariante(variante.id);
+
     // Invalidar cache de productos (las variantes afectan el stock total)
     await this.cache.invalidateProductosLists(empresaId);
 
     this.logger.success('Product variant created', { varianteId: variante.id });
 
-    return this.mapToResponseDto(variante);
+    return this.mapToResponseDto(varianteFinal);
   }
 
   /**
@@ -237,6 +241,11 @@ export class ProductoVarianteService {
         stocksPorSede: {
           select: {
             stockActual: true,
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            precioConfigurado: true,
             sede: {
               select: {
                 id: true,
@@ -289,6 +298,11 @@ export class ProductoVarianteService {
         stocksPorSede: {
           select: {
             stockActual: true,
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            precioConfigurado: true,
             sede: {
               select: {
                 id: true,
@@ -369,9 +383,6 @@ export class ProductoVarianteService {
         ...(dto.nombre && { nombre: dto.nombre }),
         ...(dto.sku && { sku: dto.sku }),
         ...(dto.codigoBarras !== undefined && { codigoBarras: dto.codigoBarras }),
-        ...(dto.precio !== undefined && { precio: dto.precio }),
-        ...(dto.precioCosto !== undefined && { precioCosto: dto.precioCosto }),
-        ...(dto.precioOferta !== undefined && { precioOferta: dto.precioOferta }),
         ...(dto.peso !== undefined && { peso: dto.peso }),
         ...(dto.dimensiones && { dimensiones: dto.dimensiones }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
@@ -398,6 +409,11 @@ export class ProductoVarianteService {
         stocksPorSede: {
           select: {
             stockActual: true,
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            precioConfigurado: true,
             sede: {
               select: {
                 id: true,
@@ -498,61 +514,6 @@ export class ProductoVarianteService {
 
     return this.mapToResponseDto(variante);
   }
-
-  /**
-   * Crea atributos estructurados para una variante
-   * Convierte el formato JSON libre a la tabla ProductoAtributoValor
-   */
-  // private async createVarianteAtributos(
-  //   varianteId: string,
-  //   empresaId: string,
-  //   atributos: Record<string, any>,
-  // ): Promise<void> {
-  //   // Obtener todos los atributos configurados para esta empresa
-  //   const atributosDisponibles = await this.prisma.productoAtributo.findMany({
-  //     where: {
-  //       empresaId,
-  //       isActive: true,
-  //     },
-  //   });
-
-  //   if (atributosDisponibles.length === 0) {
-  //     this.logger.warn(`No hay atributos configurados para empresa ${empresaId}. No se crearán valores de atributos.`);
-  //     return;
-  //   }
-
-  //   // Crear un mapa clave -> atributo para búsqueda rápida
-  //   const atributosMap = new Map(
-  //     atributosDisponibles.map(attr => [attr.clave.toLowerCase(), attr])
-  //   );
-
-  //   // Crear los valores de atributos
-  //   const valoresAtributos = Object.entries(atributos)
-  //     .map(([clave, valor]) => {
-  //       const atributo = atributosMap.get(clave.toLowerCase());
-        
-  //       if (!atributo) {
-  //         this.logger.warn(`Atributo con clave "${clave}" no encontrado en empresa ${empresaId}. Ignorando.`);
-  //         return null;
-  //       }
-
-  //       return {
-  //         varianteId,
-  //         atributoId: atributo.id,
-  //         valor: String(valor), // Siempre convertir a string
-  //       };
-  //     })
-  //     .filter(Boolean); // Filtrar nulos
-
-  //   if (valoresAtributos.length > 0) {
-  //     await this.prisma.productoAtributoValor.createMany({
-  //       data: valoresAtributos as any[],
-  //       skipDuplicates: true,
-  //     });
-
-  //     this.logger.debug(`Creados ${valoresAtributos.length} valores de atributos para variante ${varianteId}`);
-  //   }
-  // }
 
   /**
    * Crea atributos estructurados a partir de un array de VarianteAtributoDto
@@ -657,9 +618,12 @@ export class ProductoVarianteService {
    * Mapear a DTO de respuesta (formato estructurado)
    */
   private mapToResponseDto(variante: any): ProductoVarianteResponseDto {
-    // Calcular stock total desde ProductoStock (sistema multi-sede)
+    // Calcular stock total y precios desde ProductoStock (sistema multi-sede)
     let stockTotal = 0;
     let stocksPorSede: any[] | undefined = undefined;
+    let precioFinal = 0;
+    let precioCostoFinal: number | undefined = undefined;
+    let precioOfertaFinal: number | undefined = undefined;
 
     if (variante.stocksPorSede && variante.stocksPorSede.length > 0) {
       // Calcular total sumando todas las sedes
@@ -668,12 +632,27 @@ export class ProductoVarianteService {
         0,
       );
 
-      // Preparar desglose por sede
+      // Obtener precio del primer stock con precio configurado
+      const stockConPrecio = variante.stocksPorSede.find(
+        (s: any) => s.precioConfigurado && s.precio != null,
+      );
+      if (stockConPrecio) {
+        precioFinal = Number(stockConPrecio.precio);
+        precioCostoFinal = stockConPrecio.precioCosto ? Number(stockConPrecio.precioCosto) : undefined;
+        precioOfertaFinal = stockConPrecio.precioOferta ? Number(stockConPrecio.precioOferta) : undefined;
+      }
+
+      // Preparar desglose por sede (incluyendo precios)
       stocksPorSede = variante.stocksPorSede.map((stock: any) => ({
         sedeId: stock.sede.id,
         sedeNombre: stock.sede.nombre,
         sedeCodigo: stock.sede.codigo,
         cantidad: stock.stockActual,
+        precio: stock.precio ? Number(stock.precio) : undefined,
+        precioCosto: stock.precioCosto ? Number(stock.precioCosto) : undefined,
+        precioOferta: stock.precioOferta ? Number(stock.precioOferta) : undefined,
+        enOferta: stock.enOferta ?? false,
+        precioConfigurado: stock.precioConfigurado ?? false,
       }));
     }
 
@@ -697,11 +676,11 @@ export class ProductoVarianteService {
           unidad: av.atributo.unidad,
         },
       })) || [],
-      precio: Number(variante.precio),
-      precioCosto: variante.precioCosto ? Number(variante.precioCosto) : undefined,
-      precioOferta: variante.precioOferta ? Number(variante.precioOferta) : undefined,
-      stock: stockTotal, // Stock total calculado desde ProductoStock
-      stocksPorSede: stocksPorSede, // Desglose de stock por sede
+      precio: precioFinal,
+      precioCosto: precioCostoFinal,
+      precioOferta: precioOfertaFinal,
+      stock: stockTotal,
+      stocksPorSede: stocksPorSede,
       peso: variante.peso ? Number(variante.peso) : undefined,
       dimensiones: variante.dimensiones as Record<string, number> | undefined,
       isActive: variante.isActive,
@@ -777,6 +756,375 @@ export class ProductoVarianteService {
   }
 
   // =====================================================
+  // GENERACIÓN AUTOMÁTICA DE COMBINACIONES DE VARIANTES
+  // =====================================================
+
+  /**
+   * Genera variantes automáticamente a partir del producto cartesiano de atributos seleccionados.
+   * Ej: Conexión [USB, BT] × Color [Negro, Blanco] = 4 variantes
+   */
+  async generarCombinaciones(
+    productoId: string,
+    empresaId: string,
+    dto: GenerateVarianteCombinationsDto,
+  ): Promise<ProductoVarianteResponseDto[]> {
+    this.logger.info('Generating variant combinations', { productoId, empresaId, atributos: dto.atributos.length });
+
+    // Verificar que el producto existe y tiene variantes habilitadas
+    const producto = await this.prisma.producto.findFirst({
+      where: {
+        id: productoId,
+        empresaId,
+        deletedAt: null,
+      },
+    });
+
+    if (!producto) {
+      throw new NotFoundException(`Producto ${productoId} no encontrado`);
+    }
+
+    if (!producto.tieneVariantes) {
+      throw new BadRequestException('El producto no tiene variantes habilitadas');
+    }
+
+    if (!producto.isActive) {
+      throw new BadRequestException(
+        'No se pueden generar variantes cuando el producto padre está inactivo. Active primero el producto padre.',
+      );
+    }
+
+    // Validar que todos los atributos pertenecen a la empresa y están activos
+    const atributoIds = dto.atributos.map(a => a.atributoId);
+    const atributosDb = await this.prisma.productoAtributo.findMany({
+      where: {
+        id: { in: atributoIds },
+        empresaId,
+        isActive: true,
+      },
+    });
+
+    if (atributosDb.length !== atributoIds.length) {
+      const encontrados = new Set(atributosDb.map(a => a.id));
+      const noEncontrados = atributoIds.filter(id => !encontrados.has(id));
+      throw new BadRequestException(
+        `Los siguientes atributos no existen o no están activos: ${noEncontrados.join(', ')}`,
+      );
+    }
+
+    // Validar que cada valor está dentro de atributo.valores[]
+    const atributosMap = new Map(atributosDb.map(a => [a.id, a]));
+    for (const atributoDto of dto.atributos) {
+      const atributo = atributosMap.get(atributoDto.atributoId)!;
+      if (atributo.valores && atributo.valores.length > 0) {
+        const valoresInvalidos = atributoDto.valores.filter(v => !atributo.valores.includes(v));
+        if (valoresInvalidos.length > 0) {
+          throw new BadRequestException(
+            `Valores inválidos para atributo "${atributo.nombre}": ${valoresInvalidos.join(', ')}. Valores permitidos: ${atributo.valores.join(', ')}`,
+          );
+        }
+      }
+    }
+
+    // Generar producto cartesiano
+    const valoresArrays = dto.atributos.map(a => a.valores);
+    const combinaciones = this.cartesianProduct(valoresArrays);
+
+    if (combinaciones.length === 0) {
+      throw new BadRequestException('No se generaron combinaciones. Seleccione al menos un valor por atributo.');
+    }
+
+    if (combinaciones.length > 50) {
+      throw new BadRequestException(
+        `Se generarían ${combinaciones.length} combinaciones, el máximo permitido es 50. Reduzca la cantidad de valores seleccionados.`,
+      );
+    }
+
+    // Verificar que no existan variantes duplicadas (misma combinación de atributos)
+    const variantesExistentes = await this.prisma.productoVariante.findMany({
+      where: {
+        productoId,
+        empresaId,
+        deletedAt: null,
+      },
+      include: {
+        atributosValores: {
+          select: { atributoId: true, valor: true },
+        },
+      },
+    });
+
+    // Crear un set de combinaciones existentes para comparación
+    const combinacionesExistentes = new Set(
+      variantesExistentes.map(v => {
+        const sorted = [...v.atributosValores]
+          .sort((a, b) => a.atributoId.localeCompare(b.atributoId))
+          .map(av => `${av.atributoId}:${av.valor}`)
+          .join('|');
+        return sorted;
+      }),
+    );
+
+    // Verificar duplicados
+    const combinacionesNuevas: string[][] = [];
+    for (const combo of combinaciones) {
+      const key = dto.atributos
+        .map((a, i) => `${a.atributoId}:${combo[i]}`)
+        .sort()
+        .join('|');
+
+      if (combinacionesExistentes.has(key)) {
+        const nombre = combo.map((valor, idx) => {
+          const atributo = atributosMap.get(dto.atributos[idx].atributoId)!;
+          return `${atributo.nombre} ${valor}`;
+        }).join(' / ');
+        throw new ConflictException(
+          `Ya existe una variante con la combinación: ${nombre}`,
+        );
+      }
+      combinacionesNuevas.push(combo);
+    }
+
+    // Crear variantes dentro de una transacción (solo inserts, sin recargas pesadas)
+    // Timeout extendido: ~2s por variante (máximo 50 variantes = 100s)
+    const txTimeout = Math.max(15000, combinacionesNuevas.length * 2000);
+    const varianteIds = await this.prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+
+      for (let i = 0; i < combinacionesNuevas.length; i++) {
+        const combo = combinacionesNuevas[i];
+        const nombre = combo.map((valor, idx) => {
+          const atributo = atributosMap.get(dto.atributos[idx].atributoId)!;
+          return `${atributo.nombre} ${valor}`;
+        }).join(' / ');
+
+        // Generar código de empresa único
+        const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId, tx);
+
+        // Generar SKU
+        const sku = dto.skuBase
+          ? `${dto.skuBase}-${i + 1}`
+          : `${codigoEmpresa}`;
+
+        // Crear la variante
+        const variante = await tx.productoVariante.create({
+          data: {
+            productoId,
+            empresaId,
+            nombre,
+            sku,
+            codigoEmpresa,
+            isActive: true,
+            orden: variantesExistentes.length + i,
+          },
+        });
+
+        // Crear los valores de atributos
+        const atributosValoresData = dto.atributos.map((atributoDto, attrIndex) => ({
+          varianteId: variante.id,
+          atributoId: atributoDto.atributoId,
+          valor: combo[attrIndex],
+        }));
+
+        await tx.productoAtributoValor.createMany({
+          data: atributosValoresData,
+          skipDuplicates: true,
+        });
+
+        ids.push(variante.id);
+      }
+
+      return ids;
+    }, { timeout: txTimeout });
+
+    // Copiar niveles de precio fuera de la transacción
+    for (const varianteId of varianteIds) {
+      await this.copiarNivelesDeOtraVariante(productoId, varianteId);
+    }
+
+    // Crear ProductoStock en las sedes correspondientes para cada variante
+    for (const varianteId of varianteIds) {
+      await this.crearProductoStockEnSedes(varianteId, productoId, empresaId);
+    }
+
+    // Recargar variantes con relaciones completas (fuera de la transacción)
+    const variantesCreadas = await this.prisma.productoVariante.findMany({
+      where: { id: { in: varianteIds } },
+      include: {
+        archivos: {
+          where: { deletedAt: null },
+          orderBy: { orden: 'asc' },
+        },
+        atributosValores: {
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
+        },
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            precioConfigurado: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // Invalidar cache
+    await this.cache.invalidateProductosLists(empresaId);
+
+    this.logger.success(`${variantesCreadas.length} variant combinations generated`, { productoId });
+
+    return variantesCreadas.map((v) => this.mapToResponseDto(v));
+  }
+
+  /**
+   * Genera el producto cartesiano de múltiples arrays
+   * Ej: [["USB","BT"], ["Negro","Blanco"]] → [["USB","Negro"],["USB","Blanco"],["BT","Negro"],["BT","Blanco"]]
+   */
+  private cartesianProduct(arrays: string[][]): string[][] {
+    if (arrays.length === 0) return [];
+    return arrays.reduce<string[][]>(
+      (acc, curr) => {
+        const result: string[][] = [];
+        for (const a of acc) {
+          for (const b of curr) {
+            result.push([...a, b]);
+          }
+        }
+        return result;
+      },
+      [[]],
+    );
+  }
+
+  // =====================================================
+  // CREACIÓN AUTOMÁTICA DE PRODUCTOSTOCK PARA VARIANTES
+  // =====================================================
+
+  /**
+   * Recarga una variante con todas sus relaciones completas
+   */
+  private async recargarVariante(varianteId: string) {
+    return this.prisma.productoVariante.findUnique({
+      where: { id: varianteId },
+      include: {
+        archivos: {
+          where: { deletedAt: null },
+          orderBy: { orden: 'asc' },
+        },
+        atributosValores: {
+          include: {
+            atributo: {
+              select: {
+                id: true,
+                nombre: true,
+                clave: true,
+                tipo: true,
+                unidad: true,
+              },
+            },
+          },
+        },
+        stocksPorSede: {
+          select: {
+            stockActual: true,
+            precio: true,
+            precioCosto: true,
+            precioOferta: true,
+            enOferta: true,
+            precioConfigurado: true,
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                codigo: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Crea registros de ProductoStock para una variante en todas las sedes
+   * donde el producto base ya tiene stock.
+   * Si el producto base no tiene stock en ninguna sede, crea en todas las sedes activas de la empresa.
+   * Los registros se crean con stock=0 y sin precio (precioConfigurado=false).
+   */
+  private async crearProductoStockEnSedes(
+    varianteId: string,
+    productoId: string,
+    empresaId: string,
+  ): Promise<void> {
+    try {
+      // Buscar sedes donde el producto base tiene stock
+      const stocksProductoBase = await this.prisma.productoStock.findMany({
+        where: {
+          productoId,
+          empresaId,
+        },
+        select: { sedeId: true },
+      });
+
+      let sedeIds: string[];
+
+      if (stocksProductoBase.length > 0) {
+        // Usar las mismas sedes del producto base
+        sedeIds = stocksProductoBase.map(s => s.sedeId);
+      } else {
+        // Si el producto base no tiene stock, usar todas las sedes activas
+        const sedesActivas = await this.prisma.sede.findMany({
+          where: { empresaId, isActive: true },
+          select: { id: true },
+        });
+        sedeIds = sedesActivas.map(s => s.id);
+      }
+
+      if (sedeIds.length === 0) return;
+
+      // Crear registros de ProductoStock para la variante en cada sede
+      await this.prisma.productoStock.createMany({
+        data: sedeIds.map(sedeId => ({
+          sedeId,
+          empresaId,
+          varianteId,
+          stockActual: 0,
+          precioConfigurado: false,
+        })),
+        skipDuplicates: true,
+      });
+
+      this.logger.debug(
+        `ProductoStock creado para variante ${varianteId} en ${sedeIds.length} sede(s)`,
+      );
+    } catch (error) {
+      // No fallar la creación de variante si falla la creación de stock
+      this.logger.warn(
+        `Error creando ProductoStock para variante ${varianteId}: ${error.message}`,
+      );
+    }
+  }
+
+  // =====================================================
   // MÉTODOS PARA CONVERSIÓN A VARIANTES (NUEVOS)
   // =====================================================
 
@@ -796,7 +1144,7 @@ export class ProductoVarianteService {
     productoId: string,
     empresaId: string,
     productoData: {
-      // ❌ precio/precioCosto - DEPRECATED: Precios ahora solo en ProductoStock
+      nombre: string;
       peso?: any;
       dimensiones?: any;
       codigoEmpresa: string;
@@ -835,12 +1183,11 @@ export class ProductoVarianteService {
         data: {
           productoId,
           empresaId,
-          nombre: 'Original',
-          sku: `${productoData.codigoEmpresa}-ORIGINAL`,
+          nombre: productoData.nombre,
+          sku: `${productoData.codigoEmpresa}-BASE`,
           codigoBarras: null,
           codigoEmpresa,
-          // ❌ precio/precioCosto - DEPRECATED: Precios ahora solo en ProductoStock
-          peso: productoData.peso,
+              peso: productoData.peso,
           dimensiones: productoData.dimensiones as any,
           isActive: true,
           orden: 0,
@@ -855,12 +1202,11 @@ export class ProductoVarianteService {
           data: {
             productoId,
             empresaId,
-            nombre: 'Original',
-            sku: `${productoData.codigoEmpresa}-ORIGINAL`,
+            nombre: productoData.nombre,
+            sku: `${productoData.codigoEmpresa}-BASE`,
             codigoBarras: null,
             codigoEmpresa: nuevoCodigo,
-            // ❌ precio/precioCosto - DEPRECATED: Precios ahora solo en ProductoStock
-            peso: productoData.peso,
+                  peso: productoData.peso,
             dimensiones: productoData.dimensiones as any,
             isActive: true,
             orden: 0,

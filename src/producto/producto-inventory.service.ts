@@ -143,64 +143,36 @@ export class ProductoInventoryService {
 
   /**
    * Obtiene el stock total de un producto en TODAS las sedes
-   * MIGRADO: Ahora usa ProductoStock (suma de todas las sedes)
-   *
-   * - Si tiene variantes: suma el stock de todas las variantes en todas las sedes
-   * - Si no tiene variantes: suma el stock del producto en todas las sedes
+   * Usa un solo query: verifica existencia + suma stock directo y de variantes activas
    */
   async getStockTotal(productoId: string, empresaId: string): Promise<number> {
-    const producto = await this.prisma.producto.findFirst({
-      where: {
-        id: productoId,
-        empresaId,
-        deletedAt: null,
-      },
-    });
+    const [result] = await this.prisma.$queryRaw<
+      Array<{ exists: boolean; total: bigint }>
+    >`SELECT
+        EXISTS(
+          SELECT 1 FROM "Producto"
+          WHERE id = ${productoId} AND "empresaId" = ${empresaId} AND "deletedAt" IS NULL
+        ) AS exists,
+        COALESCE((
+          SELECT SUM(ps."stockActual")
+          FROM "ProductoStock" ps
+          WHERE ps."empresaId" = ${empresaId}
+            AND (
+              ps."productoId" = ${productoId}
+              OR ps."varianteId" IN (
+                SELECT pv.id FROM "ProductoVariante" pv
+                WHERE pv."productoId" = ${productoId}
+                  AND pv."isActive" = true
+                  AND pv."deletedAt" IS NULL
+              )
+            )
+        ), 0) AS total`;
 
-    if (!producto) {
+    if (!result.exists) {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    // Si tiene variantes, sumar stock de todas las variantes en todas las sedes
-    if (producto.tieneVariantes) {
-      const variantes = await this.prisma.productoVariante.findMany({
-        where: {
-          productoId,
-          isActive: true,
-          deletedAt: null,
-        },
-        select: {
-          id: true,
-        },
-      });
-
-      const varianteIds = variantes.map((v) => v.id);
-
-      const result = await this.prisma.productoStock.aggregate({
-        where: {
-          varianteId: { in: varianteIds },
-          empresaId,
-        },
-        _sum: {
-          stockActual: true,
-        },
-      });
-
-      return result._sum.stockActual || 0;
-    }
-
-    // Si no tiene variantes, sumar stock del producto en todas las sedes
-    const result = await this.prisma.productoStock.aggregate({
-      where: {
-        productoId,
-        empresaId,
-      },
-      _sum: {
-        stockActual: true,
-      },
-    });
-
-    return result._sum.stockActual || 0;
+    return Number(result.total);
   }
 
   /**

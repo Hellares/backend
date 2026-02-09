@@ -29,6 +29,7 @@ import { CreateComponenteComboDto, CreateComponentesComboBatchDto } from './dto/
 import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
 import { CreateComboDto } from './dto/create-combo.dto';
 import { ReservarStockComboDto } from './dto/reservar-stock-combo.dto';
+import { DeleteComponentesComboBatchDto } from './dto/delete-componentes-batch.dto';
 import {
   ProductoComboResponseDto,
   ComboCompletoResponseDto,
@@ -303,6 +304,35 @@ export class ProductoComboController {
       throw new BadRequestException('El parámetro sedeId es requerido');
     }
     return await this.comboService.actualizarComponente(componenteId, empresaId, sedeId, dto);
+  }
+
+  /**
+   * Eliminar múltiples componentes del combo en batch
+   * IMPORTANTE: Este endpoint debe ir ANTES del endpoint individual para que NestJS lo reconozca correctamente
+   */
+  @Delete('componentes/batch')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Eliminar múltiples componentes de un combo en una sola operación' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Componentes eliminados exitosamente en batch',
+  })
+  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 404, description: 'Uno o más componentes no encontrados' })
+  async eliminarComponentesBatch(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: DeleteComponentesComboBatchDto,
+  ): Promise<{ message: string; count: number }> {
+    await this.comboService.eliminarComponentesBatch(dto.componenteIds, empresaId);
+    return {
+      message: 'Componentes eliminados exitosamente',
+      count: dto.componenteIds.length,
+    };
   }
 
   /**

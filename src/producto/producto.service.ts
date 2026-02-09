@@ -13,10 +13,6 @@ import {
   ProductoResponseDto,
   PaginatedProductoResponseDto,
 } from './dto/producto-response.dto';
-import {
-  AjusteMasivoPreciosDto,
-  AjusteMasivoPreciosResponseDto,
-} from './dto/ajuste-masivo-precios.dto';
 import { AppLoggerService } from 'src/common/logger';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
 import { SedeContextHelper } from '../common/helpers/sede-context.helper';
@@ -176,10 +172,6 @@ export class ProductoService {
       }
     }
 
-    // ❌ DEPRECATED: Precio ahora se gestiona en ProductoStock por sede
-    // Los productos se crean sin precio y se configura después en cada sede
-    // Ver: POST /producto-stock o PATCH /producto-stock/:id/precios
-
     try {
       // 6-11. Transacción atómica para crear productos en múltiples sedes
       const productosCreados = await this.prisma.$transaction(async (tx) => {
@@ -200,11 +192,8 @@ export class ProductoService {
             sedeId,
             codigoEmpresa,
             codigoSistema,
-            // ❌ precio: precioFinal, - DEPRECATED: Precio ahora solo en ProductoStock
-            // ❌ stock/stockMinimo - DEPRECATED: Stock ahora solo en ProductoStock
             visibleMarketplace: productoData.visibleMarketplace ?? true,
             destacado: productoData.destacado ?? false,
-            // ❌ enOferta/fechas - DEPRECATED: Ofertas ahora solo en ProductoStock por sede
           };
 
           // 8. Crear producto usando include clause del CatalogService
@@ -568,6 +557,26 @@ export class ProductoService {
       );
     }
 
+    // Caso 4: No permitir habilitar variantes si el producto es componente de algún combo
+    if (
+      productoData.tieneVariantes === true &&
+      productoExistente.tieneVariantes === false
+    ) {
+      const usadoEnCombos = await this.prisma.productoCombo.findFirst({
+        where: { componenteProductoId: id },
+        include: {
+          combo: { select: { nombre: true } },
+        },
+      });
+
+      if (usadoEnCombos) {
+        throw new BadRequestException(
+          `No se puede habilitar variantes. Este producto es componente del combo "${usadoEnCombos.combo.nombre}". ` +
+          'Elimínelo de todos los combos antes de convertirlo a variantes.',
+        );
+      }
+    }
+
     // Si es combo, asegurar que tieneVariantes sea false (incluso si no se envía)
     if (productoData.esCombo === true) {
       productoData.tieneVariantes = false;
@@ -627,6 +636,7 @@ export class ProductoService {
             id,
             empresaId,
             {
+              nombre: productoExistente.nombre,
               // Los precios ya no se pasan aquí, se mantienen en ProductoStock
               peso: productoExistente.peso,
               dimensiones: productoExistente.dimensiones,
@@ -719,17 +729,9 @@ export class ProductoService {
       ? productoData.tipoPrecioCombo
       : productoExistente.tipoPrecioCombo;
 
-    // ❌ DEPRECATED: Precio/ofertas ahora se gestionan en ProductoStock por sede
-    // Para actualizar precios, usar: PATCH /producto-stock/:id/precios
-
     // Preparar datos para actualización
     const dataToUpdate: any = {
       ...productoData,
-      // ❌ precio - DEPRECATED
-      // ❌ precioOferta - DEPRECATED
-      // ❌ enOferta - DEPRECATED
-      // ❌ fechaInicioOferta - DEPRECATED
-      // ❌ fechaFinOferta - DEPRECATED
     };
 
     // Procesar videoUrl de forma especial si está presente
@@ -1124,25 +1126,6 @@ export class ProductoService {
       this.logger.error(`Error al obtener productos para combo: ${errorMessage}`);
       throw error;
     }
-  }
-
-  /**
-   * Ajuste masivo de precios
-   * Permite incrementar o decrementar precios por porcentaje de forma masiva
-   */
-  // ❌ DEPRECATED: Este método ya no funciona porque Producto/ProductoVariante no tienen precios
-  // Los precios ahora se gestionan en ProductoStock por sede
-  // Use: POST /producto-stock/sedes/:sedeId/precios/ajuste-masivo
-  // Ver: ProductoStockService.ajusteMasivoPreciosPorSede()
-  async ajusteMasivoPrecios(
-    empresaId: string,
-    usuarioId: string,
-    dto: AjusteMasivoPreciosDto,
-  ): Promise<AjusteMasivoPreciosResponseDto> {
-    throw new BadRequestException(
-      'Este método está deprecado. Los precios ahora se gestionan por sede en ProductoStock. ' +
-      'Use el endpoint POST /producto-stock/sedes/:sedeId/precios/ajuste-masivo para ajustar precios por sede.'
-    );
   }
 
   /**

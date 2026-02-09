@@ -238,10 +238,10 @@ export class ProductoCatalogService {
     // Desestructurar para excluir campos relacionados
     const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, stocksPorSede: _, ...productoData } = producto;
 
-    // Obtener precio del primer stock con precio configurado, o fallback al producto
-    let precioFinal = Number(producto.precio || 0);
-    let precioCostoFinal = producto.precioCosto ? Number(producto.precioCosto) : undefined;
-    let precioOfertaFinal = producto.precioOferta ? Number(producto.precioOferta) : undefined;
+    // Obtener precio del primer stock con precio configurado
+    let precioFinal = 0;
+    let precioCostoFinal: number | undefined = undefined;
+    let precioOfertaFinal: number | undefined = undefined;
 
     if (stocksPorSede && stocksPorSede.length > 0) {
       const stockConPrecio = stocksPorSede.find((s: any) => s.precioConfigurado && s.precio != null);
@@ -370,8 +370,8 @@ export class ProductoCatalogService {
           }));
         }
 
-        // Obtener precio del primer stock con precio configurado, o fallback a la variante
-        let variantePrecio = Number(v.precio || 0);
+        // Obtener precio del primer stock con precio configurado
+        let variantePrecio = 0;
         if (varianteStocksPorSede && varianteStocksPorSede.length > 0) {
           const stockConPrecio = varianteStocksPorSede.find((s: any) => s.precioConfigurado && s.precio != null);
           if (stockConPrecio) {
@@ -471,6 +471,7 @@ export class ProductoCatalogService {
 
     // ✅ NUEVO: Filtrar productos que tienen stock en la sede especificada
     // Solo mostrar productos que tienen ProductoStock creado en esa sede
+    // Incluye productos con stock directo Y productos cuyas variantes tienen stock
     // Si mostrarTodos=true, se salta este filtro y se muestran todos los productos
     if (filters.sedeId && !filters.mostrarTodos) {
       const productosConStockEnSede = await this.prisma.$queryRaw<Array<{ productoId: string }>>`
@@ -478,6 +479,12 @@ export class ProductoCatalogService {
         FROM "ProductoStock" ps
         WHERE ps."sedeId" = ${filters.sedeId}
         AND ps."productoId" IS NOT NULL
+        UNION
+        SELECT DISTINCT pv."productoId"
+        FROM "ProductoStock" ps
+        INNER JOIN "ProductoVariante" pv ON ps."varianteId" = pv.id
+        WHERE ps."sedeId" = ${filters.sedeId}
+        AND ps."varianteId" IS NOT NULL
       `;
 
       // Agregar filtro por IDs
@@ -494,15 +501,6 @@ export class ProductoCatalogService {
     if (filters.visibleMarketplace !== undefined) {
       where.visibleMarketplace = filters.visibleMarketplace;
     }
-
-    // ❌ DEPRECATED: enOferta/fechaFinOferta ahora en ProductoStock por sede
-    // Para filtrar productos en oferta, consultar stocksPorSede.enOferta
-    // if (filters.enOferta === true) {
-    //   where.enOferta = true;
-    //   where.fechaFinOferta = {
-    //     gte: new Date(), // Ofertas no expiradas
-    //   };
-    // }
 
     // Filtro de stock bajo: productos con stock <= stockMinimo en al menos una sede
     // Nota: Se implementa usando una subquery SQL cruda porque Prisma no soporta

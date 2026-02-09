@@ -21,13 +21,17 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+import { ProductoComboService } from '../producto/producto-combo.service';
 
 @ApiTags('Inventarios - Stock por Sede')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('producto-stock')
 export class ProductoStockController {
-  constructor(private readonly stockService: ProductoStockService) {}
+  constructor(
+    private readonly stockService: ProductoStockService,
+    private readonly comboService: ProductoComboService,
+  ) {}
 
   @Post()
   @ApiOperation({
@@ -81,6 +85,18 @@ export class ProductoStockController {
     @Param('sedeId') sedeId: string,
   ) {
     return await this.stockService.getStockPorSede(sedeId, productoId);
+  }
+
+  @Get('variante/:varianteId/sede/:sedeId')
+  @ApiOperation({
+    summary: 'Obtener stock de variante en sede',
+    description: 'Consulta el stock actual de una variante específica en una sede',
+  })
+  async getStockVarianteEnSede(
+    @Param('varianteId') varianteId: string,
+    @Param('sedeId') sedeId: string,
+  ) {
+    return await this.stockService.getStockPorSede(sedeId, undefined, varianteId);
   }
 
   @Put(':id/ajustar')
@@ -175,12 +191,16 @@ export class ProductoStockController {
       cantidad: number;
     },
   ) {
-    return await this.stockService.validarStockCombo(
-      body.comboId,
-      body.sedeId,
-      empresaId,
-      body.cantidad,
-    );
+    const [valido, stockDisponible] = await Promise.all([
+      this.comboService.validarStockCombo(body.comboId, body.sedeId, body.cantidad),
+      this.comboService.getStockDisponibleCombo(body.comboId, body.sedeId),
+    ]);
+
+    return {
+      valido,
+      stockDisponible,
+      faltantes: [],
+    };
   }
 
   @Post('combo/descontar-stock')
@@ -206,15 +226,14 @@ export class ProductoStockController {
       numeroDocumento?: string;
     },
   ) {
-    return await this.stockService.descontarStockCombo(
+    await this.comboService.descontarStockCombo(
       body.comboId,
       body.sedeId,
-      empresaId,
-      body.cantidad,
       user.sub,
-      body.tipoDocumento,
-      body.numeroDocumento,
+      body.cantidad,
     );
+
+    return { success: true, message: 'Stock descontado exitosamente' };
   }
 
   // =====================================================

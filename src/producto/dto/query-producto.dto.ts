@@ -97,15 +97,6 @@ export class QueryProductoDto {
   destacado?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Filtrar solo productos en oferta',
-    example: false,
-  })
-  @IsOptional()
-  @IsBoolean()
-  @Type(() => Boolean)
-  enOferta?: boolean;
-
-  @ApiPropertyOptional({
     description: 'Filtrar solo productos con stock bajo',
     example: false,
   })

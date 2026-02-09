@@ -606,9 +606,6 @@ model Producto {
   nombre             String
   descripcion        String?
 
-  // ✅ PRECIOS ELIMINADOS - Ahora solo en ProductoStock por sede
-  // Los precios son independientes por sede, gestionados en ProductoStock
-
   peso               Decimal? @db.Decimal(10, 3)
   dimensiones        Json?
   videoUrl           String?
@@ -619,9 +616,6 @@ model Producto {
   visibleMarketplace Boolean @default(true)
   destacado          Boolean @default(false)
   ordenMarketplace   Int?
-
-  // ✅ OFERTAS ELIMINADAS - Ahora solo en ProductoStock por sede
-  // Cada sede puede tener sus propias ofertas
 
   // Sistema de Variantes
   tieneVariantes Boolean @default(false)
@@ -690,8 +684,6 @@ model Producto {
   @@index([visibleMarketplace])
   @@index([destacado])
   @@index([ordenMarketplace])
-  // @@index([enOferta])
-  // @@index([fechaFinOferta])
   // Índices para búsqueda optimizada
   @@index([nombre])
   @@index([descripcion])
@@ -2745,9 +2737,6 @@ model ProductoVariante {
   sku           String // SKU único de la variante
   codigoBarras  String? // Código de barras único
   codigoEmpresa String // Código interno de la empresa
-
-  // ✅ PRECIOS ELIMINADOS - Ahora solo en ProductoStock por sede
-  // Los precios son independientes por sede, gestionados en ProductoStock
 
   // Características físicas (si difieren del producto base)
   peso        Decimal? @db.Decimal(10, 3)

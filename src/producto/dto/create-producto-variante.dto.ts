@@ -1,6 +1,5 @@
 import { IsString, IsNotEmpty, IsNumber, IsOptional, IsObject, IsBoolean, Min, IsArray, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
-import { IsPrecioMayorQueCosto } from '../validators/precio-mayor-que-costo.validator';
 
 export class VarianteAtributoDto {
   @IsString()
@@ -35,27 +34,6 @@ export class CreateProductoVarianteDto {
   @Type(() => VarianteAtributoDto)
   @IsOptional()
   atributosEstructurados?: VarianteAtributoDto[];
-
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  @IsPrecioMayorQueCosto()
-  precio: number;
-
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  @IsOptional()
-  precioCosto?: number;
-
-  @IsNumber()
-  @Type(() => Number)
-  @Min(0)
-  @IsOptional()
-  precioOferta?: number;
-
-  // NOTA: Los campos stock y stockMinimo han sido removidos.
-  // Use ProductoStockRepository para gestionar stock por sede después de crear la variante.
 
   @IsNumber()
   @Type(() => Number)

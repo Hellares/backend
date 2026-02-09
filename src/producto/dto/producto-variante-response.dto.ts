@@ -33,12 +33,17 @@ export class ProductoVarianteResponseDto {
   // Stock total calculado desde ProductoStock (suma de todas las sedes)
   stock: number;
 
-  // Stock desglosado por sede (sistema multi-sede)
+  // Stock y precios desglosados por sede (sistema multi-sede)
   stocksPorSede?: {
     sedeId: string;
     sedeNombre: string;
     sedeCodigo: string;
     cantidad: number;
+    precio?: number;
+    precioCosto?: number;
+    precioOferta?: number;
+    enOferta: boolean;
+    precioConfigurado: boolean;
   }[];
 
   peso?: number;

@@ -415,6 +415,16 @@ export class ProductoComboService {
         throw new BadRequestException('Debe proporcionar al menos un componente');
       }
 
+      // Limitar a 15 componentes por petición para evitar timeouts y optimizar rendimiento en SaaS
+      const MAX_COMPONENTES_POR_PETICION = 15;
+      if (componentes.length > MAX_COMPONENTES_POR_PETICION) {
+        throw new BadRequestException(
+          `Solo se pueden agregar máximo ${MAX_COMPONENTES_POR_PETICION} componentes por petición. ` +
+          `Se recibieron ${componentes.length}. ` +
+          `Por favor, divida la operación en múltiples peticiones.`,
+        );
+      }
+
       // Validar todos los componentes antes de insertar
       const componentesValidados: CreateComponenteComboDto[] = [];
 
@@ -493,6 +503,7 @@ export class ProductoComboService {
       }
 
       // Insertar todos los componentes en batch dentro de una transacción
+      // Timeout aumentado a 15 segundos para soportar batches grandes
       const componentesCreados = await this.prisma.$transaction(async (tx) => {
         const creados = [];
         for (const dto of componentesValidados) {
@@ -573,9 +584,13 @@ export class ProductoComboService {
         }
 
         return creados;
+      }, {
+        timeout: 20000, // 20 segundos (suficiente para máximo 15 componentes por petición)
       });
 
-      this.logger.log(`${componentesCreados.length} componentes agregados al combo ${comboId} en batch`);
+      this.logger.log(
+        `✅ ${componentesCreados.length}/${MAX_COMPONENTES_POR_PETICION} componentes agregados al combo ${comboId}`,
+      );
       return componentesCreados.map((c) => this.mapToResponseDto(c, sedeId));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -980,6 +995,91 @@ export class ProductoComboService {
   }
 
   /**
+   * Eliminar múltiples componentes de un combo en batch
+   * Optimizado para eliminar varios componentes en una sola transacción
+   */
+  async eliminarComponentesBatch(componenteIds: string[], empresaId: string): Promise<void> {
+    try {
+      if (!componenteIds || componenteIds.length === 0) {
+        throw new BadRequestException('Debe proporcionar al menos un componenteId');
+      }
+
+      // Limitar a 50 componentes por petición para evitar timeouts
+      const MAX_COMPONENTES_POR_PETICION = 50;
+      if (componenteIds.length > MAX_COMPONENTES_POR_PETICION) {
+        throw new BadRequestException(
+          `Solo se pueden eliminar máximo ${MAX_COMPONENTES_POR_PETICION} componentes por petición. ` +
+          `Se recibieron ${componenteIds.length}.`,
+        );
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        // Buscar todos los componentes en una sola query
+        const componentes = await tx.productoCombo.findMany({
+          where: {
+            id: { in: componenteIds },
+          },
+          include: {
+            combo: true,
+            componenteProducto: { include: { stocksPorSede: true } },
+            componenteVariante: { include: { stocksPorSede: true } },
+          },
+        });
+
+        // Validar que todos los componentes existen y pertenecen a la empresa
+        if (componentes.length !== componenteIds.length) {
+          throw new NotFoundException('Uno o más componentes no fueron encontrados');
+        }
+
+        for (const componente of componentes) {
+          if (componente.combo.empresaId !== empresaId) {
+            throw new NotFoundException('Uno o más componentes no pertenecen a esta empresa');
+          }
+        }
+
+        // Agrupar componentes por comboId para buscar reservaciones eficientemente
+        const comboIds = [...new Set(componentes.map(c => c.comboId))];
+        const reservaciones = await tx.comboReservacion.findMany({
+          where: { comboId: { in: comboIds } },
+        });
+
+        // Si hay reservaciones, liberar stockReservadoCombo de cada componente
+        if (reservaciones.length > 0) {
+          for (const componente of componentes) {
+            const stocks = componente.componenteVariante
+              ? componente.componenteVariante.stocksPorSede
+              : componente.componenteProducto?.stocksPorSede ?? [];
+
+            const reservacionesDelCombo = reservaciones.filter(r => r.comboId === componente.comboId);
+
+            for (const reservacion of reservacionesDelCombo) {
+              const stock = stocks.find((s: any) => s.sedeId === reservacion.sedeId);
+              if (stock) {
+                const cantidadLiberar = componente.cantidad * reservacion.cantidad;
+                await tx.productoStock.update({
+                  where: { id: stock.id },
+                  data: { stockReservadoCombo: { decrement: cantidadLiberar } },
+                });
+              }
+            }
+          }
+        }
+
+        // Eliminar todos los componentes en una sola operación
+        await tx.productoCombo.deleteMany({
+          where: { id: { in: componenteIds } },
+        });
+      }, { timeout: 20000 }); // 20 segundos de timeout
+
+      this.logger.log(`${componenteIds.length} componentes eliminados en batch`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al eliminar componentes en batch: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
    * Valida si un combo tiene stock suficiente
    * @param sedeId - Requerido para verificar stock de la sede específica
    */
@@ -1054,6 +1154,7 @@ export class ProductoComboService {
   /**
    * Reserva stock para un combo: incrementa stockReservadoCombo en cada componente.
    * Si ya existe reserva, actualiza la diferencia (solo el delta).
+   * Usa SELECT FOR UPDATE para prevenir race conditions.
    * @param cantidad - Cantidad TOTAL de combos a reservar (no delta)
    */
   async reservarStockCombo(
@@ -1086,19 +1187,54 @@ export class ProductoComboService {
           throw new BadRequestException('El combo no tiene componentes configurados');
         }
 
-        // Si se incrementa la reserva, validar stock disponible
+        // Recolectar IDs de stock de todos los componentes
+        const stockIds: string[] = [];
+        for (const componente of componentes) {
+          const stock = componente.componenteVariante
+            ? componente.componenteVariante.stocksPorSede[0]
+            : componente.componenteProducto?.stocksPorSede[0];
+          if (stock) stockIds.push(stock.id);
+        }
+
+        if (stockIds.length === 0) {
+          throw new BadRequestException('No hay stock registrado para los componentes en esta sede');
+        }
+
+        // Bloquear TODAS las filas de stock con FOR UPDATE
+        const stocksLocked = await tx.$queryRaw<
+          Array<{
+            id: string; stockActual: number; empresaId: string;
+            stockReservado: number; stockReservadoVenta: number;
+            stockReservadoCombo: number; stockDanado: number; stockEnGarantia: number;
+          }>
+        >`SELECT id, "stockActual", "empresaId", "stockReservado", "stockReservadoVenta",
+                 "stockReservadoCombo", "stockDanado", "stockEnGarantia"
+          FROM "ProductoStock"
+          WHERE id = ANY(${stockIds}::text[])
+          ORDER BY id
+          FOR UPDATE`;
+
+        const stockMap = new Map(stocksLocked.map((s) => [s.id, s]));
+
+        // Si se incrementa la reserva, validar stock disponible con valores bloqueados
         if (delta > 0) {
           for (const componente of componentes) {
-            const stock = componente.componenteVariante
+            const stockRef = componente.componenteVariante
               ? componente.componenteVariante.stocksPorSede[0]
               : componente.componenteProducto?.stocksPorSede[0];
 
-            if (!stock) {
+            if (!stockRef) {
               const nombre = componente.componenteVariante?.nombre ?? componente.componenteProducto?.nombre ?? 'Componente';
               throw new BadRequestException(`No hay stock de "${nombre}" en esta sede`);
             }
 
-            const disponible = this.getStockDisponibleReal(stock);
+            const locked = stockMap.get(stockRef.id);
+            if (!locked) {
+              const nombre = componente.componenteVariante?.nombre ?? componente.componenteProducto?.nombre ?? 'Componente';
+              throw new BadRequestException(`No hay stock de "${nombre}" en esta sede`);
+            }
+
+            const disponible = locked.stockActual - locked.stockReservado - locked.stockReservadoVenta - (locked.stockReservadoCombo || 0) - locked.stockDanado - locked.stockEnGarantia;
             const necesario = componente.cantidad * delta;
 
             if (disponible < necesario) {
@@ -1112,16 +1248,17 @@ export class ProductoComboService {
 
         // Aplicar delta en stockReservadoCombo de cada componente
         for (const componente of componentes) {
-          const stock = componente.componenteVariante
+          const stockRef = componente.componenteVariante
             ? componente.componenteVariante.stocksPorSede[0]
             : componente.componenteProducto?.stocksPorSede[0];
 
-          if (!stock) continue;
+          if (!stockRef) continue;
 
+          const locked = stockMap.get(stockRef.id)!;
           const cantidadDelta = componente.cantidad * delta;
 
           await tx.productoStock.update({
-            where: { id: stock.id },
+            where: { id: stockRef.id },
             data: { stockReservadoCombo: { increment: cantidadDelta } },
           });
 
@@ -1129,14 +1266,14 @@ export class ProductoComboService {
           await tx.movimientoStock.create({
             data: {
               sedeId,
-              empresaId: stock.empresaId,
-              productoStockId: stock.id,
+              empresaId: locked.empresaId,
+              productoStockId: stockRef.id,
               usuarioId,
               tipo: delta > 0 ? 'RESERVA_COMBO' : 'LIBERAR_RESERVA_COMBO',
               tipoDocumento: 'RESERVA_COMBO',
               cantidad: cantidadDelta,
-              cantidadAnterior: stock.stockActual,
-              cantidadNueva: stock.stockActual,
+              cantidadAnterior: locked.stockActual,
+              cantidadNueva: locked.stockActual,
               motivo: `Reserva de combo ${comboId}: ${cantidad} unidades`,
             },
           });
@@ -1258,7 +1395,7 @@ export class ProductoComboService {
 
   /**
    * Descuenta stock al vender un combo
-   * Implementado con transacción para prevenir race conditions
+   * Usa SELECT FOR UPDATE para bloquear filas de stock y prevenir race conditions
    * @param sedeId - Requerido para descontar stock de la sede específica
    * @param usuarioId - Usuario responsable del movimiento de stock
    */
@@ -1270,7 +1407,7 @@ export class ProductoComboService {
   ): Promise<void> {
     try {
       await this.prisma.$transaction(async (tx) => {
-        // Obtener componentes del combo con su stock en la sede
+        // Obtener componentes del combo
         const componentes = await tx.productoCombo.findMany({
           where: { comboId },
           include: {
@@ -1295,105 +1432,89 @@ export class ProductoComboService {
           throw new BadRequestException('El combo no tiene componentes configurados');
         }
 
-        // Calcular stock disponible y validar dentro de la transacción
-        let stockDisponible = Number.MAX_SAFE_INTEGER;
-
+        // Recolectar IDs de stock de todos los componentes
+        const stockIds: string[] = [];
         for (const componente of componentes) {
-          let stockComponente = 0;
-
-          if (componente.componenteVariante) {
-            const stock = componente.componenteVariante.stocksPorSede[0];
-            stockComponente = stock?.stockActual || 0;
-          } else if (componente.componenteProducto) {
-            const stock = componente.componenteProducto.stocksPorSede[0];
-            stockComponente = stock?.stockActual || 0;
-          }
-
-          const combosDisponibles = Math.floor(stockComponente / componente.cantidad);
-          stockDisponible = Math.min(stockDisponible, combosDisponibles);
+          const stock = componente.componenteVariante
+            ? componente.componenteVariante.stocksPorSede[0]
+            : componente.componenteProducto?.stocksPorSede[0];
+          if (stock) stockIds.push(stock.id);
         }
 
-        // Validar stock disponible
-        if (stockDisponible < cantidad) {
+        if (stockIds.length === 0) {
+          throw new BadRequestException('No hay stock registrado para los componentes en esta sede');
+        }
+
+        // Bloquear TODAS las filas de stock de los componentes con FOR UPDATE
+        const stocksLocked = await tx.$queryRaw<
+          Array<{ id: string; stockActual: number; empresaId: string; stockReservadoCombo: number }>
+        >`SELECT id, "stockActual", "empresaId", "stockReservadoCombo"
+          FROM "ProductoStock"
+          WHERE id = ANY(${stockIds}::text[])
+          ORDER BY id
+          FOR UPDATE`;
+
+        const stockMap = new Map(stocksLocked.map((s) => [s.id, s]));
+
+        // Validar stock disponible con valores bloqueados
+        let stockDisponibleCombo = Number.MAX_SAFE_INTEGER;
+
+        for (const componente of componentes) {
+          const stockRef = componente.componenteVariante
+            ? componente.componenteVariante.stocksPorSede[0]
+            : componente.componenteProducto?.stocksPorSede[0];
+
+          if (!stockRef) {
+            const nombre = componente.componenteVariante?.nombre ?? componente.componenteProducto?.nombre ?? 'Componente';
+            throw new BadRequestException(`No se encontró stock para ${nombre} en la sede`);
+          }
+
+          const locked = stockMap.get(stockRef.id);
+          const stockComponente = locked?.stockActual || 0;
+          const combosDisponibles = Math.floor(stockComponente / componente.cantidad);
+          stockDisponibleCombo = Math.min(stockDisponibleCombo, combosDisponibles);
+        }
+
+        if (stockDisponibleCombo < cantidad) {
           throw new BadRequestException(
-            `Stock insuficiente para este combo. Disponible: ${stockDisponible}, Solicitado: ${cantidad}`,
+            `Stock insuficiente para este combo. Disponible: ${stockDisponibleCombo}, Solicitado: ${cantidad}`,
           );
         }
 
-        // Descontar stock de cada componente usando ProductoStock
+        // Descontar stock de cada componente usando los valores bloqueados
         for (const componente of componentes) {
+          const stockRef = componente.componenteVariante
+            ? componente.componenteVariante.stocksPorSede[0]
+            : componente.componenteProducto?.stocksPorSede[0];
+
+          if (!stockRef) continue;
+
+          const locked = stockMap.get(stockRef.id)!;
           const cantidadDescontar = componente.cantidad * cantidad;
+          const nuevoStock = locked.stockActual - cantidadDescontar;
 
-          if (componente.componenteVariante) {
-            const stock = componente.componenteVariante.stocksPorSede[0];
-            if (!stock) {
-              throw new BadRequestException(
-                `No se encontró stock para la variante ${componente.componenteVariante.nombre} en la sede`,
-              );
-            }
+          await tx.productoStock.update({
+            where: { id: stockRef.id },
+            data: { stockActual: nuevoStock },
+          });
 
-            const nuevoStock = stock.stockActual - cantidadDescontar;
-
-            // Actualizar stock de la variante
-            await tx.productoStock.update({
-              where: { id: stock.id },
-              data: {
-                stockActual: nuevoStock,
-              },
-            });
-
-            // Registrar movimiento de stock
-            await tx.movimientoStock.create({
-              data: {
-                sedeId,
-                empresaId: componente.componenteVariante.empresaId,
-                productoStockId: stock.id,
-                usuarioId,
-                tipo: 'SALIDA_VENTA',
-                tipoDocumento: 'VENTA_COMBO',
-                cantidad: -cantidadDescontar, // Negativo para salidas
-                cantidadAnterior: stock.stockActual,
-                cantidadNueva: nuevoStock,
-                motivo: `Venta de combo ${comboId}`,
-              },
-            });
-          } else if (componente.componenteProducto) {
-            const stock = componente.componenteProducto.stocksPorSede[0];
-            if (!stock) {
-              throw new BadRequestException(
-                `No se encontró stock para el producto ${componente.componenteProducto.nombre} en la sede`,
-              );
-            }
-
-            const nuevoStock = stock.stockActual - cantidadDescontar;
-
-            // Actualizar stock del producto
-            await tx.productoStock.update({
-              where: { id: stock.id },
-              data: {
-                stockActual: nuevoStock,
-              },
-            });
-
-            // Registrar movimiento de stock
-            await tx.movimientoStock.create({
-              data: {
-                sedeId,
-                empresaId: componente.componenteProducto.empresaId,
-                productoStockId: stock.id,
-                usuarioId,
-                tipo: 'SALIDA_VENTA',
-                tipoDocumento: 'VENTA_COMBO',
-                cantidad: -cantidadDescontar, // Negativo para salidas
-                cantidadAnterior: stock.stockActual,
-                cantidadNueva: nuevoStock,
-                motivo: `Venta de combo ${comboId}`,
-              },
-            });
-          }
+          await tx.movimientoStock.create({
+            data: {
+              sedeId,
+              empresaId: locked.empresaId,
+              productoStockId: stockRef.id,
+              usuarioId,
+              tipo: 'SALIDA_VENTA',
+              tipoDocumento: 'VENTA_COMBO',
+              cantidad: -cantidadDescontar,
+              cantidadAnterior: locked.stockActual,
+              cantidadNueva: nuevoStock,
+              motivo: `Venta de combo ${comboId}`,
+            },
+          });
         }
 
-        // Decrementar stockReservadoCombo si hay reservación activa para este combo
+        // Decrementar stockReservadoCombo si hay reservación activa
         const reservacion = await tx.comboReservacion.findUnique({
           where: { comboId_sedeId: { comboId, sedeId } },
         });
@@ -1403,15 +1524,15 @@ export class ProductoComboService {
           const nuevaCantReserva = reservacion.cantidad - cantVentaContraReserva;
 
           for (const componente of componentes) {
-            const stock = componente.componenteVariante
+            const stockRef = componente.componenteVariante
               ? componente.componenteVariante.stocksPorSede[0]
               : componente.componenteProducto?.stocksPorSede[0];
 
-            if (!stock) continue;
+            if (!stockRef) continue;
 
             const cantidadLiberar = componente.cantidad * cantVentaContraReserva;
             await tx.productoStock.update({
-              where: { id: stock.id },
+              where: { id: stockRef.id },
               data: { stockReservadoCombo: { decrement: cantidadLiberar } },
             });
           }
