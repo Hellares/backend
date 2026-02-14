@@ -3,6 +3,7 @@ import {
   IsString,
   IsInt,
   IsOptional,
+  IsNotEmpty,
   Min,
   IsNumber,
   IsBoolean,
@@ -18,12 +19,13 @@ export class CrearStockDto {
   @IsString()
   sedeId: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'ID del producto (requerido si no hay varianteId)',
     example: 'producto-id-123',
   })
   @IsOptional()
   @IsString()
+  @IsNotEmpty({ message: 'productoId no puede estar vacío' })
   productoId?: string;
 
   @ApiPropertyOptional({
@@ -32,6 +34,7 @@ export class CrearStockDto {
   })
   @IsOptional()
   @IsString()
+  @IsNotEmpty({ message: 'varianteId no puede estar vacío' })
   varianteId?: string;
 
   @ApiProperty({

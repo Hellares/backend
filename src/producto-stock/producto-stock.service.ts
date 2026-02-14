@@ -34,12 +34,17 @@ export class ProductoStockService {
         'Se requiere productoId o varianteId',
       );
     }
+    if (productoId && varianteId) {
+      throw new BadRequestException(
+        'Solo se debe enviar productoId o varianteId, no ambos',
+      );
+    }
 
     return await this.prisma.productoStock.findFirst({
       where: {
         sedeId,
-        productoId: productoId || null,
-        varianteId: varianteId || null,
+        productoId: productoId ?? null,
+        varianteId: varianteId ?? null,
       },
       include: {
         producto: {
@@ -76,10 +81,15 @@ export class ProductoStockService {
     dto: CrearStockDto,
     usuarioId: string,
   ) {
-    // Validar que se proporcione producto o variante
+    // Validar que se proporcione producto o variante (XOR)
     if (!dto.productoId && !dto.varianteId) {
       throw new BadRequestException(
         'Se requiere productoId o varianteId',
+      );
+    }
+    if (dto.productoId && dto.varianteId) {
+      throw new BadRequestException(
+        'Solo se debe enviar productoId o varianteId, no ambos',
       );
     }
 
@@ -118,8 +128,8 @@ export class ProductoStockService {
     const existente = await this.prisma.productoStock.findFirst({
       where: {
         sedeId: dto.sedeId,
-        productoId: dto.productoId || null,
-        varianteId: dto.varianteId || null,
+        productoId: dto.productoId ?? null,
+        varianteId: dto.varianteId ?? null,
       },
     });
 
@@ -365,12 +375,17 @@ export class ProductoStockService {
         'Se requiere productoId o varianteId',
       );
     }
+    if (productoId && varianteId) {
+      throw new BadRequestException(
+        'Solo se debe enviar productoId o varianteId, no ambos',
+      );
+    }
 
     const stocks = await this.prisma.productoStock.findMany({
       where: {
         empresaId,
-        productoId: productoId || null,
-        varianteId: varianteId || null,
+        productoId: productoId ?? null,
+        varianteId: varianteId ?? null,
       },
       include: {
         sede: {
@@ -423,18 +438,26 @@ export class ProductoStockService {
    * Obtiene productos con stock bajo el mínimo
    */
   async getProductosBajoMinimo(empresaId: string, sedeId?: string) {
-    const where: Prisma.ProductoStockWhereInput = {
-      empresaId,
-      stockMinimo: { not: null },
-    };
+    // Obtener IDs filtrados en DB (compara stockActual <= stockMinimo en PostgreSQL)
+    const idsResult = await this.prisma.$queryRaw<Array<{ id: string; stockActual: number }>>`
+      SELECT id, "stockActual"
+      FROM "ProductoStock"
+      WHERE "empresaId" = ${empresaId}
+        AND "stockMinimo" IS NOT NULL
+        AND "stockActual" <= "stockMinimo"
+        ${sedeId ? Prisma.sql`AND "sedeId" = ${sedeId}` : Prisma.empty}
+      ORDER BY "stockActual" ASC
+    `;
 
-    // Filtrar por sede si se proporciona
-    if (sedeId) {
-      where.sedeId = sedeId;
+    if (idsResult.length === 0) {
+      return { productos: [], total: 0, criticos: 0 };
     }
 
-    const productosBajos = await this.prisma.productoStock.findMany({
-      where,
+    const ids = idsResult.map((r) => r.id);
+
+    // Cargar relaciones con Prisma usando los IDs ya filtrados
+    const filtrados = await this.prisma.productoStock.findMany({
+      where: { id: { in: ids } },
       include: {
         producto: {
           select: {
@@ -464,15 +487,10 @@ export class ProductoStockService {
       },
     });
 
-    // Filtrar aquellos donde stockActual <= stockMinimo
-    const filtrados = productosBajos.filter(
-      (p) => p.stockMinimo && p.stockActual <= p.stockMinimo,
-    );
-
     return {
       productos: filtrados,
       total: filtrados.length,
-      criticos: filtrados.filter((p) => p.stockActual === 0).length,
+      criticos: idsResult.filter((r) => r.stockActual === 0).length,
     };
   }
 
@@ -661,13 +679,18 @@ export class ProductoStockService {
         'Se requiere productoId o varianteId',
       );
     }
+    if (productoId && varianteId) {
+      throw new BadRequestException(
+        'Solo se debe enviar productoId o varianteId, no ambos',
+      );
+    }
 
     // Obtener stock con precios de sede
     const stock = await this.prisma.productoStock.findFirst({
       where: {
         sedeId,
-        productoId: productoId || null,
-        varianteId: varianteId || null,
+        productoId: productoId ?? null,
+        varianteId: varianteId ?? null,
       },
     });
 
@@ -723,8 +746,8 @@ export class ProductoStockService {
     const stock = await this.prisma.productoStock.findFirst({
       where: {
         sedeId,
-        productoId: productoId || null,
-        varianteId: varianteId || null,
+        productoId: productoId ?? null,
+        varianteId: varianteId ?? null,
       },
       include: {
         producto: true,

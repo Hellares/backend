@@ -99,6 +99,7 @@ export class StorageService {
           extension: extension.replace('.', ''),
           entidadTipo,
           entidadId,
+          varianteId: entidadTipo === EntidadTipo.PRODUCTO_VARIANTE ? entidadId : undefined,
           categoria,
           orden,
           proveedor,

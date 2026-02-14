@@ -425,82 +425,97 @@ export class ProductoComboService {
         );
       }
 
-      // Validar todos los componentes antes de insertar
-      const componentesValidados: CreateComponenteComboDto[] = [];
-
+      // Validar estructura de cada componente antes de consultar la DB
       for (const dto of componentes) {
-        // Validar que se proporcione al menos un componente (producto o variante)
         if (!dto.componenteProductoId && !dto.componenteVarianteId) {
           throw new BadRequestException(
             'Cada componente debe tener componenteProductoId o componenteVarianteId',
           );
         }
-
-        // Validar que no se proporcionen ambos
         if (dto.componenteProductoId && dto.componenteVarianteId) {
           throw new BadRequestException(
             'Solo puede proporcionar componenteProductoId O componenteVarianteId, no ambos',
           );
         }
+      }
 
-        // Validar que el componente existe
+      // Recolectar IDs y hacer batch queries (evita N+1)
+      const productoIds = componentes
+        .filter((d) => d.componenteProductoId)
+        .map((d) => d.componenteProductoId!);
+      const varianteIds = componentes
+        .filter((d) => d.componenteVarianteId)
+        .map((d) => d.componenteVarianteId!);
+
+      const [productosDb, variantesDb, existentes] = await Promise.all([
+        productoIds.length > 0
+          ? this.prisma.producto.findMany({
+              where: { id: { in: productoIds }, empresaId, deletedAt: null },
+            })
+          : Promise.resolve([]),
+        varianteIds.length > 0
+          ? this.prisma.productoVariante.findMany({
+              where: { id: { in: varianteIds }, empresaId, deletedAt: null },
+            })
+          : Promise.resolve([]),
+        this.prisma.productoCombo.findMany({
+          where: {
+            comboId,
+            OR: [
+              ...(productoIds.length > 0
+                ? [{ componenteProductoId: { in: productoIds } }]
+                : []),
+              ...(varianteIds.length > 0
+                ? [{ componenteVarianteId: { in: varianteIds } }]
+                : []),
+            ],
+          },
+        }),
+      ]);
+
+      const productoMap = new Map(productosDb.map((p) => [p.id, p]));
+      const varianteMap = new Map(variantesDb.map((v) => [v.id, v]));
+      const existenteSet = new Set(
+        existentes.map((e) => e.componenteProductoId ?? e.componenteVarianteId),
+      );
+
+      // Validar cada componente contra los datos ya cargados
+      for (const dto of componentes) {
         if (dto.componenteProductoId) {
-          const producto = await this.prisma.producto.findFirst({
-            where: {
-              id: dto.componenteProductoId,
-              empresaId,
-              deletedAt: null,
-            },
-          });
+          const producto = productoMap.get(dto.componenteProductoId);
           if (!producto) {
             throw new NotFoundException(`Producto componente no encontrado: ${dto.componenteProductoId}`);
           }
-
-          // Validar que el producto componente no sea un combo (evitar recursión)
           if (producto.esCombo) {
             throw new BadRequestException(
               `El producto "${producto.nombre}" es un combo. Los combos no pueden contener otros combos.`,
             );
           }
-
-          // Validar que si el producto tiene variantes, se debe agregar la variante específica
           if (producto.tieneVariantes) {
             throw new BadRequestException(
               `El producto "${producto.nombre}" tiene variantes. Debes agregar la variante específica como componente.`,
             );
           }
-        }
-
-        if (dto.componenteVarianteId) {
-          const variante = await this.prisma.productoVariante.findFirst({
-            where: {
-              id: dto.componenteVarianteId,
-              empresaId,
-              deletedAt: null,
-            },
-          });
-          if (!variante) {
-            throw new NotFoundException(`Variante componente no encontrada: ${dto.componenteVarianteId}`);
+          if (existenteSet.has(dto.componenteProductoId)) {
+            throw new BadRequestException(
+              `Ya existe un componente con el mismo producto/variante en este combo`,
+            );
           }
         }
 
-        // Verificar que no exista ya este componente en el combo
-        const existente = await this.prisma.productoCombo.findFirst({
-          where: {
-            comboId,
-            ...(dto.componenteProductoId && { componenteProductoId: dto.componenteProductoId }),
-            ...(dto.componenteVarianteId && { componenteVarianteId: dto.componenteVarianteId }),
-          },
-        });
-
-        if (existente) {
-          throw new BadRequestException(
-            `Ya existe un componente con el mismo producto/variante en este combo`,
-          );
+        if (dto.componenteVarianteId) {
+          if (!varianteMap.has(dto.componenteVarianteId)) {
+            throw new NotFoundException(`Variante componente no encontrada: ${dto.componenteVarianteId}`);
+          }
+          if (existenteSet.has(dto.componenteVarianteId)) {
+            throw new BadRequestException(
+              `Ya existe un componente con el mismo producto/variante en este combo`,
+            );
+          }
         }
-
-        componentesValidados.push(dto);
       }
+
+      const componentesValidados = componentes;
 
       // Insertar todos los componentes en batch dentro de una transacción
       // Timeout aumentado a 15 segundos para soportar batches grandes
@@ -547,23 +562,42 @@ export class ProductoComboService {
         });
 
         if (reservaciones.length > 0) {
+          // Batch: cargar stocks de todos los componentes nuevos en todas las sedes (evita N+1)
+          const newProductoIds = componentesValidados
+            .filter((d) => d.componenteProductoId)
+            .map((d) => d.componenteProductoId!);
+          const newVarianteIds = componentesValidados
+            .filter((d) => d.componenteVarianteId)
+            .map((d) => d.componenteVarianteId!);
+
+          const allStocks = await tx.productoStock.findMany({
+            where: {
+              OR: [
+                ...(newProductoIds.length > 0
+                  ? [{ productoId: { in: newProductoIds }, varianteId: null }]
+                  : []),
+                ...(newVarianteIds.length > 0
+                  ? [{ varianteId: { in: newVarianteIds } }]
+                  : []),
+              ],
+            },
+          });
+
+          // Indexar por (productoId|varianteId, sedeId) para acceso O(1)
+          const stockIndex = new Map<string, typeof allStocks[0]>();
+          for (const s of allStocks) {
+            const key = `${s.varianteId ?? s.productoId}:${s.sedeId}`;
+            stockIndex.set(key, s);
+          }
+
           for (const dto of componentesValidados) {
             const targetId = dto.componenteVarianteId ?? dto.componenteProductoId!;
-            const componenteConStocks = dto.componenteVarianteId
-              ? await tx.productoVariante.findUnique({
-                  where: { id: targetId },
-                  include: { stocksPorSede: true },
-                })
-              : await tx.producto.findUnique({
-                  where: { id: targetId },
-                  include: { stocksPorSede: true },
-                });
-
-            const stocks = componenteConStocks?.stocksPorSede ?? [];
-            const nombre = componenteConStocks?.nombre ?? 'Componente';
+            const nombre = dto.componenteVarianteId
+              ? varianteMap.get(dto.componenteVarianteId)?.nombre ?? 'Componente'
+              : productoMap.get(dto.componenteProductoId!)?.nombre ?? 'Componente';
 
             for (const reservacion of reservaciones) {
-              const stock = stocks.find((s: any) => s.sedeId === reservacion.sedeId);
+              const stock = stockIndex.get(`${targetId}:${reservacion.sedeId}`);
               if (!stock) continue;
 
               const necesario = dto.cantidad * reservacion.cantidad;
@@ -1447,8 +1481,13 @@ export class ProductoComboService {
 
         // Bloquear TODAS las filas de stock de los componentes con FOR UPDATE
         const stocksLocked = await tx.$queryRaw<
-          Array<{ id: string; stockActual: number; empresaId: string; stockReservadoCombo: number }>
-        >`SELECT id, "stockActual", "empresaId", "stockReservadoCombo"
+          Array<{
+            id: string; stockActual: number; empresaId: string;
+            stockReservado: number; stockReservadoVenta: number;
+            stockReservadoCombo: number; stockDanado: number; stockEnGarantia: number;
+          }>
+        >`SELECT id, "stockActual", "empresaId", "stockReservado", "stockReservadoVenta",
+                 "stockReservadoCombo", "stockDanado", "stockEnGarantia"
           FROM "ProductoStock"
           WHERE id = ANY(${stockIds}::text[])
           ORDER BY id
@@ -1470,8 +1509,18 @@ export class ProductoComboService {
           }
 
           const locked = stockMap.get(stockRef.id);
-          const stockComponente = locked?.stockActual || 0;
-          const combosDisponibles = Math.floor(stockComponente / componente.cantidad);
+          if (!locked) {
+            const nombre = componente.componenteVariante?.nombre ?? componente.componenteProducto?.nombre ?? 'Componente';
+            throw new BadRequestException(`No se encontró stock para ${nombre} en la sede`);
+          }
+
+          const disponible = locked.stockActual
+            - locked.stockReservado
+            - locked.stockReservadoVenta
+            - (locked.stockReservadoCombo || 0)
+            - locked.stockDanado
+            - locked.stockEnGarantia;
+          const combosDisponibles = Math.floor(disponible / componente.cantidad);
           stockDisponibleCombo = Math.min(stockDisponibleCombo, combosDisponibles);
         }
 

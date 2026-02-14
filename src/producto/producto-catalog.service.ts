@@ -180,18 +180,16 @@ export class ProductoCatalogService {
       producto.empresaMarca?.nombrePersonalizado ||
       null;
 
-    // Calcular stock total desde ProductoStock (nuevo sistema multi-sede)
+    // Calcular stock total desde ProductoStock (sistema multi-sede)
     let stockTotal = 0;
     let stocksPorSede: any[] | undefined = undefined;
 
     if (producto.stocksPorSede && producto.stocksPorSede.length > 0) {
-      // Calcular total sumando todas las sedes
       stockTotal = producto.stocksPorSede.reduce(
         (sum: number, stock: any) => sum + stock.stockActual,
         0,
       );
 
-      // Preparar desglose por sede
       stocksPorSede = producto.stocksPorSede.map((stock: any) => ({
         sedeId: stock.sede.id,
         sedeNombre: stock.sede.nombre,
@@ -200,7 +198,6 @@ export class ProductoCatalogService {
         stockMinimo: stock.stockMinimo,
         stockMaximo: stock.stockMaximo,
         ubicacion: stock.ubicacion,
-        // Incluir precios de ProductoStock
         precio: stock.precio ? Number(stock.precio) : null,
         precioCosto: stock.precioCosto ? Number(stock.precioCosto) : null,
         precioOferta: stock.precioOferta ? Number(stock.precioOferta) : null,
@@ -209,30 +206,20 @@ export class ProductoCatalogService {
         fechaFinOferta: stock.fechaFinOferta,
         precioConfigurado: stock.precioConfigurado ?? false,
       }));
-    } else {
-      // Fallback para productos legacy que aún usan el campo deprecated
-      stockTotal = producto.stock || 0;
-
-      // Si el producto tiene variantes, calcular stock total desde las variantes
-      if (producto.tieneVariantes && producto.variantes?.length > 0) {
-        // Intentar calcular desde stocksPorSede de las variantes (nuevo sistema)
-        const stockDesdeVariantes = producto.variantes.reduce(
-          (sum: number, variante: any) => {
-            if (variante.stocksPorSede && variante.stocksPorSede.length > 0) {
-              // Sumar stock de todas las sedes de esta variante
-              return sum + variante.stocksPorSede.reduce(
-                (varianteSum: number, stock: any) => varianteSum + stock.stockActual,
-                0,
-              );
-            } else {
-              // Fallback al campo legacy de la variante
-              return sum + (variante.stock || 0);
-            }
-          },
-          0,
-        );
-        stockTotal = stockDesdeVariantes;
-      }
+    } else if (producto.tieneVariantes && producto.variantes?.length > 0) {
+      // Calcular stock total desde stocksPorSede de las variantes
+      stockTotal = producto.variantes.reduce(
+        (sum: number, variante: any) => {
+          if (variante.stocksPorSede && variante.stocksPorSede.length > 0) {
+            return sum + variante.stocksPorSede.reduce(
+              (varianteSum: number, stock: any) => varianteSum + stock.stockActual,
+              0,
+            );
+          }
+          return sum;
+        },
+        0,
+      );
     }
 
     // Desestructurar para excluir campos relacionados

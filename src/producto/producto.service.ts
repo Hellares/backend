@@ -23,7 +23,6 @@ import { ProductoInventoryService } from './producto-inventory.service';
 import { ProductoPricingService } from './producto-pricing.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
-import { ProductoPrecioHistorialService } from './producto-precio-historial.service';
 import { ProductoComboService } from './producto-combo.service';
 
 /**
@@ -49,7 +48,6 @@ export class ProductoService {
     private pricingService: ProductoPricingService,
     private variantService: ProductoVarianteService,
     private atributoService: ProductoAtributoService,
-    private precioHistorialService: ProductoPrecioHistorialService,
     private comboService: ProductoComboService,
     private sedeContextHelper: SedeContextHelper,
     private configCodigosService: ConfiguracionCodigosService,
@@ -759,13 +757,6 @@ export class ProductoService {
         include: this.catalogService.buildIncludeClause(true, true, false, true),
       });
 
-      // 5.1 Registrar cambios de precio en el historial (si aplica)
-      await this.registrarCambiosPrecio(
-        productoExistente,
-        producto,
-        userId,
-      );
-
       // Si se desactivó el producto (era activo y ahora es inactivo) y tiene variantes,
       // desactivar todas las variantes automáticamente
       if (
@@ -1148,127 +1139,6 @@ export class ProductoService {
       // El sistema debe seguir funcionando aunque Redis falle
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.warn(`⚠️ Error al invalidar cache: ${errorMessage}`);
-    }
-  }
-
-  /**
-   * Registrar cambios de precio en el historial
-   * Detecta y registra cambios en: precio base, precio de oferta, precio de costo
-   */
-  private async registrarCambiosPrecio(
-    productoAntes: any,
-    productoDespues: any,
-    usuarioId: string,
-  ): Promise<void> {
-    try {
-      // 1. Detectar cambio en precio base
-      const precioAnterior = productoAntes.precio?.toNumber();
-      const precioNuevo = productoDespues.precio?.toNumber();
-
-      if (precioAnterior !== undefined && precioNuevo !== undefined && precioAnterior !== precioNuevo) {
-        await this.precioHistorialService.registrarCambio({
-          productoId: productoDespues.id,
-          precioAnterior,
-          precioNuevo,
-          tipoCambio: 'MANUAL',
-          razon: 'Actualización manual del precio base',
-          origenModulo: 'PRODUCTO',
-          usuarioId,
-        });
-      }
-
-      // 2. Detectar cambio en precio de costo
-      const precioCostoAnterior = productoAntes.precioCosto?.toNumber();
-      const precioCostoNuevo = productoDespues.precioCosto?.toNumber();
-
-      if (
-        precioCostoAnterior !== undefined &&
-        precioCostoNuevo !== undefined &&
-        precioCostoAnterior !== precioCostoNuevo
-      ) {
-        await this.precioHistorialService.registrarCambio({
-          productoId: productoDespues.id,
-          precioNuevo: precioNuevo || precioAnterior || 0,
-          precioCostoAnterior,
-          precioCostoNuevo,
-          tipoCambio: 'COSTO_ACTUALIZADO',
-          razon: 'Actualización del precio de costo',
-          origenModulo: 'PRODUCTO',
-          usuarioId,
-        });
-      }
-
-      // 3. Detectar activación de oferta
-      const ofertaActivada =
-        productoAntes.enOferta === false &&
-        productoDespues.enOferta === true &&
-        productoDespues.precioOferta !== null;
-
-      if (ofertaActivada) {
-        const precioOfertaNuevo = productoDespues.precioOferta?.toNumber();
-
-        await this.precioHistorialService.registrarCambio({
-          productoId: productoDespues.id,
-          precioAnterior: precioNuevo || precioAnterior || 0,
-          precioNuevo: precioOfertaNuevo || 0,
-          tipoCambio: 'OFERTA_ACTIVADA',
-          razon: `Oferta activada: ${productoDespues.fechaInicioOferta ? 'desde ' + productoDespues.fechaInicioOferta.toISOString().split('T')[0] : ''} ${productoDespues.fechaFinOferta ? 'hasta ' + productoDespues.fechaFinOferta.toISOString().split('T')[0] : ''}`.trim(),
-          origenModulo: 'PRODUCTO',
-          usuarioId,
-        });
-      }
-
-      // 4. Detectar desactivación de oferta
-      const ofertaDesactivada =
-        productoAntes.enOferta === true &&
-        productoDespues.enOferta === false;
-
-      if (ofertaDesactivada) {
-        const precioOfertaAnterior = productoAntes.precioOferta?.toNumber();
-
-        await this.precioHistorialService.registrarCambio({
-          productoId: productoDespues.id,
-          precioAnterior: precioOfertaAnterior || 0,
-          precioNuevo: precioNuevo || precioAnterior || 0,
-          tipoCambio: 'OFERTA_DESACTIVADA',
-          razon: 'Oferta desactivada - retorno a precio normal',
-          origenModulo: 'PRODUCTO',
-          usuarioId,
-        });
-      }
-
-      // 5. Detectar cambio en precio de oferta (mientras la oferta está activa)
-      if (
-        productoAntes.enOferta === true &&
-        productoDespues.enOferta === true
-      ) {
-        const precioOfertaAnterior = productoAntes.precioOferta?.toNumber();
-        const precioOfertaNuevo = productoDespues.precioOferta?.toNumber();
-
-        if (
-          precioOfertaAnterior !== undefined &&
-          precioOfertaNuevo !== undefined &&
-          precioOfertaAnterior !== precioOfertaNuevo
-        ) {
-          await this.precioHistorialService.registrarCambio({
-            productoId: productoDespues.id,
-            precioAnterior: precioOfertaAnterior,
-            precioNuevo: precioOfertaNuevo,
-            tipoCambio: 'MANUAL',
-            razon: 'Actualización del precio de oferta',
-            origenModulo: 'PRODUCTO',
-            usuarioId,
-          });
-        }
-      }
-    } catch (error) {
-      // No lanzar error si falla el registro del historial
-      // El sistema debe seguir funcionando aunque falle el historial
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `Error al registrar cambios de precio en historial para producto ${productoDespues.id}: ${errorMessage}`,
-        error instanceof Error ? error.stack : undefined,
-      );
     }
   }
 
