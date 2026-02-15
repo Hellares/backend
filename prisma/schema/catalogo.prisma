@@ -1,0 +1,224 @@
+// ============================================
+// CATÁLOGOS MAESTROS (Sistema Global)
+// ============================================
+
+model CategoriaMaestra {
+  id          String  @id @default(cuid())
+  nombre      String  @unique
+  slug        String  @unique
+  descripcion String?
+  icono       String? // Emoji o URL de icono
+  imagen      String? // Banner/imagen de categoría
+
+  // Jerarquía
+  padreId String?
+  nivel   Int     @default(0)
+
+  // Metadata
+  orden     Int?
+  esPopular Boolean @default(false)
+
+  // Auditoría
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones jerárquicas
+  padre CategoriaMaestra?  @relation("SubcategoriasMaestras", fields: [padreId], references: [id], onDelete: Restrict)
+  hijos CategoriaMaestra[] @relation("SubcategoriasMaestras")
+
+  // Relación con empresas
+  empresaCategorias EmpresaCategoria[]
+
+  @@index([padreId])
+  @@index([isActive])
+  @@index([esPopular])
+  @@index([slug])
+}
+
+model MarcaMaestra {
+  id          String  @id @default(cuid())
+  nombre      String  @unique
+  slug        String  @unique
+  descripcion String?
+  logo        String?
+  sitioWeb    String?
+  paisOrigen  String?
+
+  // Metadata
+  esPopular Boolean @default(false)
+
+  // Auditoría
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relación con empresas
+  empresaMarcas EmpresaMarca[]
+
+  @@index([isActive])
+  @@index([esPopular])
+  @@index([slug])
+}
+
+/// Unidades de medida maestras (Catálogo SUNAT)
+/// Códigos estándar para facturación electrónica
+model UnidadMedidaMaestra {
+  id          String          @id @default(cuid())
+  codigo      String          @unique // "NIU", "KGM", "MTR", "LTR", "ZZ" (Códigos SUNAT)
+  nombre      String          @unique // "Unidad", "Kilogramo", "Metro", "Litro", "Servicio"
+  simbolo     String? // "und", "kg", "m", "L", "svc"
+  descripcion String?
+  categoria   CategoriaUnidad // CANTIDAD, MASA, LONGITUD, AREA, VOLUMEN, TIEMPO, SERVICIO
+
+  // Metadata
+  esPopular Boolean @default(false)
+  orden     Int?
+
+  // Auditoría
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relación con empresas
+  empresasUnidades EmpresaUnidadMedida[]
+
+  @@index([codigo])
+  @@index([categoria])
+  @@index([esPopular])
+  @@index([isActive])
+}
+
+/// Categorías de unidades de medida
+enum CategoriaUnidad {
+  CANTIDAD // unidad, docena, ciento, millar
+  MASA // gramo, kilogramo, tonelada, libra
+  LONGITUD // metro, centímetro, kilómetro, pulgada
+  AREA // metro cuadrado, hectárea
+  VOLUMEN // litro, mililitro, metro cúbico, galón
+  TIEMPO // hora, día, semana, mes, año
+  SERVICIO // servicio, sesión, consulta
+}
+
+// ============================================
+// RELACIÓN EMPRESA-CATÁLOGO (Activación)
+// ============================================
+
+model EmpresaCategoria {
+  id                 String  @id @default(cuid())
+  empresaId          String
+  categoriaMaestraId String? // NULL = categoría personalizada
+
+  // Campos para categorías PERSONALIZADAS (cuando categoriaMaestraId es NULL)
+  nombrePersonalizado      String?
+  descripcionPersonalizada String?
+  padreId                  String?
+
+  // Personalización/Override del nombre maestro
+  nombreLocal String? // Ejemplo: "Electrónica" → "Tech"
+
+  // Configuración por empresa
+  orden     Int?
+  isVisible Boolean   @default(true)
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa                    Empresa                     @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  categoriaMaestra           CategoriaMaestra?           @relation(fields: [categoriaMaestraId], references: [id], onDelete: Restrict)
+  productos                  Producto[]
+  servicios                  Servicio[]
+  atributos                  ProductoAtributo[] // Atributos asociados a esta categoría
+  productoAtributoPlantillas ProductoAtributoPlantilla[]
+
+  // Relaciones para sistema de descuentos
+  descuentosAplicables PoliticaDescuentoCategoria[]
+
+  @@unique([empresaId, categoriaMaestraId])
+  @@index([empresaId])
+  @@index([categoriaMaestraId])
+  @@index([isActive])
+  @@index([isVisible])
+}
+
+model EmpresaMarca {
+  id             String  @id @default(cuid())
+  empresaId      String
+  marcaMaestraId String? // NULL = marca personalizada
+
+  // Campos para marcas PERSONALIZADAS
+  nombrePersonalizado      String?
+  descripcionPersonalizada String?
+  logoPersonalizado        String?
+  sitioWebPersonalizado    String?
+
+  // Personalización
+  nombreLocal String?
+
+  // Configuración
+  orden     Int?
+  isVisible Boolean   @default(true)
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa      Empresa       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  marcaMaestra MarcaMaestra? @relation(fields: [marcaMaestraId], references: [id], onDelete: Restrict)
+  productos    Producto[]
+
+  @@unique([empresaId, marcaMaestraId])
+  @@index([empresaId])
+  @@index([marcaMaestraId])
+  @@index([isActive])
+  @@index([isVisible])
+}
+
+/// Unidades de medida activadas por empresa
+/// Permite personalizar nombres y agregar unidades propias
+model EmpresaUnidadMedida {
+  id              String  @id @default(cuid())
+  empresaId       String
+  unidadMaestraId String? // NULL = unidad personalizada
+
+  // Campos para unidades PERSONALIZADAS
+  nombrePersonalizado  String? // Ej: "Caja de 12 unidades"
+  simboloPersonalizado String? // Ej: "cja12"
+  codigoPersonalizado  String? // Ej: "CJ12"
+  descripcion          String?
+
+  // Personalización
+  nombreLocal  String? // Override del nombre maestro
+  simboloLocal String? // Override del símbolo maestro
+
+  // Configuración
+  orden     Int?
+  isVisible Boolean   @default(true)
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa             Empresa              @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  unidadMaestra       UnidadMedidaMaestra? @relation(fields: [unidadMaestraId], references: [id], onDelete: Restrict)
+  productos           Producto[]
+  variantes           ProductoVariante[]
+  servicios           Servicio[]
+  detallesComprobante DetalleComprobante[]
+
+  @@unique([empresaId, unidadMaestraId])
+  @@index([empresaId])
+  @@index([unidadMaestraId])
+  @@index([isActive])
+  @@index([isVisible])
+}

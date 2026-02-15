@@ -534,7 +534,7 @@ export class ProductoCatalogService {
     includeAtributos: boolean = false,
     includeArchivos: boolean = false,
     includeStock: boolean = false,
-    sedeIdFilter?: string, // Nuevo parámetro para filtrar stock por sede
+    _sedeIdFilter?: string, // Deprecado: stocksPorSede siempre trae todas las sedes
   ): Prisma.ProductoInclude {
     const include: Prisma.ProductoInclude = {
       empresaCategoria: {
@@ -616,9 +616,9 @@ export class ProductoCatalogService {
       }
 
       // Incluir stock por sede de cada variante (necesario para calcular stock total)
+      // Siempre traer TODAS las sedes para mostrar información completa
       if (includeStock) {
         varianteInclude.stocksPorSede = {
-          where: sedeIdFilter ? { sedeId: sedeIdFilter } : undefined, // Filtrar por sede si se proporciona
           select: {
             stockActual: true,
             stockMinimo: true,
@@ -663,9 +663,9 @@ export class ProductoCatalogService {
     }
 
     // Incluir stock por sedes para calcular stock total
+    // Siempre traer TODAS las sedes para mostrar información completa
     if (includeStock) {
       include.stocksPorSede = {
-        where: sedeIdFilter ? { sedeId: sedeIdFilter } : undefined, // Filtrar por sede si se proporciona
         select: {
           stockActual: true,
           stockMinimo: true,

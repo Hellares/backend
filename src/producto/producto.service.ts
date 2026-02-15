@@ -343,7 +343,7 @@ export class ProductoService {
         skip,
         take: limit,
         orderBy,
-        include: this.catalogService.buildIncludeClause(true, true, false, true, queryDto.sedeId),
+        include: this.catalogService.buildIncludeClause(true, true, false, true),
       }),
       this.prisma.producto.count({ where }),
     ]);

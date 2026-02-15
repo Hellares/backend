@@ -1,0 +1,512 @@
+model Producto {
+  id                 String  @id @default(cuid())
+  empresaId          String
+  sedeId             String?
+  empresaCategoriaId String?
+  empresaMarcaId     String?
+  unidadMedidaId     String? // Unidad de medida del producto
+  codigoEmpresa      String
+  codigoSistema      String
+  sku                String?
+  codigoBarras       String?
+  nombre             String
+  descripcion        String?
+
+  peso               Decimal? @db.Decimal(10, 3)
+  dimensiones        Json?
+  videoUrl           String?
+  impuestoPorcentaje Decimal? @db.Decimal(5, 2)
+  descuentoMaximo    Decimal? @db.Decimal(5, 2)
+
+  // Campos para Marketplace
+  visibleMarketplace Boolean @default(true)
+  destacado          Boolean @default(false)
+  ordenMarketplace   Int?
+
+  // Sistema de Variantes
+  tieneVariantes Boolean @default(false)
+
+  // Sistema de Combos
+  esCombo         Boolean          @default(false)
+  tipoPrecioCombo TipoPrecioCombo?
+
+  // Configuración de precios por volumen
+  configuracionPrecioId String?
+
+  isActive            Boolean                  @default(true)
+  deletedAt           DateTime?
+  creadoEn            DateTime                 @default(now())
+  actualizadoEn       DateTime                 @updatedAt
+  detallesComprobante DetalleComprobante[]     @relation("DetalleProducto")
+  empresaCategoria    EmpresaCategoria?        @relation(fields: [empresaCategoriaId], references: [id])
+  empresaMarca        EmpresaMarca?            @relation(fields: [empresaMarcaId], references: [id])
+  unidadMedida        EmpresaUnidadMedida?     @relation(fields: [unidadMedidaId], references: [id])
+  empresa             Empresa                  @relation(fields: [empresaId], references: [id])
+  sede                Sede?                    @relation(fields: [sedeId], references: [id])
+  comprobantes        ComprobanteElectronico[] @relation("ProductoComprobante")
+  variantes           ProductoVariante[]
+
+  // Relaciones para combos
+  componentesCombo  ProductoCombo[]     @relation("ComboProducto")
+  usadoEnCombos     ProductoCombo[]     @relation("ComponenteProducto")
+  reservacionesCombo ComboReservacion[] @relation("ComboReservaciones")
+
+  // Relaciones para atributos estructurados
+  atributosValores ProductoAtributoValor[]
+
+  // Relaciones para precios por volumen
+  preciosNivel        PrecioNivel[]
+  configuracionPrecio ConfiguracionPrecio? @relation(fields: [configuracionPrecioId], references: [id], onDelete: SetNull)
+
+  // Relación para historial de precios
+  historialPrecios ProductoPrecioHistorial[]
+
+  // Relaciones para sistema de descuentos
+  descuentosAplicables PoliticaDescuentoProducto[]
+  historialDescuentos  DescuentoUsoHistorial[]
+
+  // Relaciones para inventario por sede
+  stocksPorSede ProductoStock[]
+
+  // Relaciones para transferencias de stock
+  itemsTransferencia TransferenciaStockItem[]
+
+  // Relaciones para devoluciones
+  devolucionItems DevolucionItem[]
+
+  // Relaciones para módulo de proveedores
+  proveedorProductos ProveedorProducto[]
+
+  @@unique([empresaId, codigoEmpresa])
+  @@unique([empresaId, sku])
+  @@index([empresaId])
+  @@index([empresaId, codigoEmpresa])
+  @@index([empresaCategoriaId])
+  @@index([empresaMarcaId])
+  @@index([unidadMedidaId])
+  @@index([sedeId])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@index([visibleMarketplace])
+  @@index([destacado])
+  @@index([ordenMarketplace])
+  // Índices para búsqueda optimizada
+  @@index([nombre])
+  @@index([descripcion])
+  @@index([codigoBarras])
+  @@index([sku])
+  @@index([esCombo])
+  @@index([tieneVariantes])
+  // Índices compuestos para filtros comunes
+  @@index([empresaId, esCombo])
+  @@index([empresaId, isActive, deletedAt])
+  @@index([empresaId, visibleMarketplace, isActive])
+}
+
+/// Historial de cambios de precios de productos
+/// Registra auditoría completa de cambios significativos en precios
+model ProductoPrecioHistorial {
+  id String @id @default(cuid())
+
+  // Referencia al producto o variante
+  productoId String?
+  varianteId String?
+
+  // Precios (registro del cambio)
+  precioAnterior      Decimal? @db.Decimal(10, 2)
+  precioNuevo         Decimal  @db.Decimal(10, 2)
+  precioCostoAnterior Decimal? @db.Decimal(10, 2)
+  precioCostoNuevo    Decimal? @db.Decimal(10, 2)
+
+  // Contexto del cambio
+  tipoCambio   TipoCambioPrecio // MANUAL, OFERTA, COSTO, MASIVO, etc.
+  razon        String? // Descripción opcional del motivo
+  origenModulo String? // PRODUCTO, VENTA, IMPORTACION, etc.
+
+  // Auditoría
+  usuarioId String
+  creadoEn  DateTime @default(now())
+
+  // Relaciones
+  producto Producto?         @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  variante ProductoVariante? @relation(fields: [varianteId], references: [id], onDelete: Cascade)
+  usuario  Usuario           @relation(fields: [usuarioId], references: [id])
+
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([creadoEn])
+  @@index([usuarioId])
+  @@index([tipoCambio])
+}
+
+/// Historial de cambios de precios por sede
+/// Registra auditoría completa de cambios de precios específicos de cada sede
+model ProductoPrecioHistorialSede {
+  id String @id @default(cuid())
+
+  // Referencia al stock de producto en sede
+  productoStockId String
+  sedeId          String
+
+  // Precios (registro del cambio)
+  precioAnterior       Decimal? @db.Decimal(10, 2)
+  precioNuevo          Decimal? @db.Decimal(10, 2)
+  precioCostoAnterior  Decimal? @db.Decimal(10, 2)
+  precioCostoNuevo     Decimal? @db.Decimal(10, 2)
+  precioOfertaAnterior Decimal? @db.Decimal(10, 2)
+  precioOfertaNuevo    Decimal? @db.Decimal(10, 2)
+
+  // Contexto del cambio
+  tipoCambio   TipoCambioPrecio // MANUAL, OFERTA, COSTO, MASIVO, etc.
+  razon        String? // Descripción opcional del motivo
+  origenModulo String? // PRODUCTO, INVENTARIO, IMPORTACION, etc.
+
+  // Auditoría
+  usuarioId String
+  creadoEn  DateTime @default(now())
+
+  // Relaciones
+  productoStock ProductoStock @relation(fields: [productoStockId], references: [id], onDelete: Cascade)
+  sede          Sede          @relation("SedeCambiosPrecios", fields: [sedeId], references: [id])
+  usuario       Usuario       @relation("UsuarioCambiosPrecioSede", fields: [usuarioId], references: [id])
+
+  @@index([productoStockId])
+  @@index([sedeId])
+  @@index([creadoEn])
+  @@index([usuarioId])
+  @@index([tipoCambio])
+  @@index([sedeId, creadoEn]) // Consultas de historial por sede
+}
+
+// =========================================
+// SISTEMA DE VARIANTES DE PRODUCTOS
+// =========================================
+
+/// Variantes de un producto (ej: diferentes colores, tallas, conexiones)
+model ProductoVariante {
+  id             String  @id @default(cuid())
+  productoId     String
+  empresaId      String
+  unidadMedidaId String? // Unidad de medida específica de la variante
+
+  // Identificación de la variante
+  nombre        String // "Negro - USB", "Blanco - Bluetooth"
+  sku           String // SKU único de la variante
+  codigoBarras  String? // Código de barras único
+  codigoEmpresa String // Código interno de la empresa
+
+  // Características físicas (si difieren del producto base)
+  peso        Decimal? @db.Decimal(10, 3)
+  dimensiones Json? // {"largo": 30, "ancho": 20, "alto": 5} en cm
+
+  // Visibilidad y orden
+  isActive Boolean @default(true)
+  orden    Int     @default(0) // Para ordenar variantes en el frontend
+
+  // Auditoría
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  producto      Producto             @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  empresa       Empresa              @relation(fields: [empresaId], references: [id])
+  unidadMedida  EmpresaUnidadMedida? @relation(fields: [unidadMedidaId], references: [id])
+  archivos      Archivo[]
+  usadoEnCombos ProductoCombo[]      @relation("ComponenteVariante")
+
+  // Relaciones para atributos estructurados
+  atributosValores ProductoAtributoValor[]
+
+  // Relaciones para precios por volumen
+  preciosNivel PrecioNivel[]
+
+  // Relación para historial de precios
+  historialPrecios ProductoPrecioHistorial[]
+
+  // Relaciones para sistema de descuentos
+  historialDescuentos DescuentoUsoHistorial[]
+
+  // Relaciones para inventario por sede
+  stocksPorSede ProductoStock[]
+
+  // Relaciones para transferencias de stock
+  itemsTransferencia TransferenciaStockItem[]
+
+  // Relaciones para devoluciones
+  devolucionItems DevolucionItem[]
+
+  // Relaciones para módulo de proveedores
+  proveedorProductos ProveedorProducto[]
+
+  @@unique([empresaId, sku])
+  @@unique([empresaId, codigoEmpresa])
+  @@index([productoId])
+  @@index([empresaId])
+  @@index([unidadMedidaId])
+  @@index([sku])
+  @@index([isActive])
+  // Índices compuestos para queries comunes
+  @@index([productoId, isActive])
+  @@index([empresaId, isActive])
+}
+
+/// Definición de atributos configurables para productos
+/// Permite crear filtros dinámicos (Color, Talla, Socket, RAM Type, etc.)
+/// Plantillas reutilizables para categorías de productos
+model ProductoAtributo {
+  id          String  @id @default(cuid())
+  empresaId   String
+  categoriaId String? // Opcional: asociar atributo a categoría específica
+
+  // Información del atributo
+  nombre      String // "Color", "Socket del Procesador", "Tipo de RAM"
+  clave       String // "color", "cpu_socket", "ram_type" - para uso programático
+  tipo        AtributoTipo
+  requerido   Boolean      @default(false)
+  descripcion String?
+  unidad      String? // "MHz", "GB", "mm", "W" - para valores numéricos
+
+  // Valores posibles (solo para tipos SELECT y MULTI_SELECT)
+  // Ejemplo: ["Negro", "Blanco", "Rojo"] para Color
+  // Ejemplo: ["AM4", "AM5", "LGA1700"] para Socket
+  valores String[] @default([])
+
+  // Configuración de visualización
+  orden                Int     @default(0)
+  mostrarEnListado     Boolean @default(true)
+  usarParaFiltros      Boolean @default(true)
+  mostrarEnMarketplace Boolean @default(true)
+
+  // Auditoría
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa             Empresa                 @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  categoria           EmpresaCategoria?       @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  valoresProductos    ProductoAtributoValor[]
+  plantillasAtributos PlantillaAtributo[] // Atributos que pertenecen a plantillas
+
+  @@unique([empresaId, clave])
+  @@index([empresaId])
+  @@index([empresaId, categoriaId])
+  @@index([tipo])
+  @@index([isActive])
+  @@index([clave])
+}
+
+/// Valores de atributos para productos y variantes
+/// Sistema estructurado que reemplaza el campo JSON "detalles" y "atributos"
+/// Permite búsquedas, filtros y validaciones de compatibilidad
+model ProductoAtributoValor {
+  id String @id @default(cuid())
+
+  // Puede estar asociado a producto base O a variante (XOR)
+  productoId String?
+  varianteId String?
+  atributoId String
+
+  // Valor del atributo (siempre como string, se convierte según tipo)
+  // Ejemplos: "Negro", "AM5", "16", "DDR5"
+  valor String
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  producto Producto?         @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  variante ProductoVariante? @relation(fields: [varianteId], references: [id], onDelete: Cascade)
+  atributo ProductoAtributo  @relation(fields: [atributoId], references: [id], onDelete: Cascade)
+
+  @@unique([productoId, atributoId])
+  @@unique([varianteId, atributoId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([atributoId])
+  @@index([valor])
+}
+
+// =========================================
+// SISTEMA DE PLANTILLAS DE ATRIBUTOS
+// =========================================
+
+/// Plantillas predefinidas de atributos para productos
+/// Permite crear conjuntos reutilizables de atributos (ej: Motherboard, CPU, RAM)
+/// Acelera la creación de productos con atributos estándar
+model ProductoAtributoPlantilla {
+  id          String  @id @default(cuid())
+  empresaId   String
+  categoriaId String? // Opcional: vincular plantilla a categoría específica
+
+  // Información de la plantilla
+  nombre        String // "Motherboard", "Procesador Intel", "Memoria RAM DDR5"
+  descripcion   String?
+  icono         String? // Icono para UI (nombre del icono o emoji)
+  esPredefinida Boolean @default(false) // Si es plantilla del sistema o personalizada
+
+  // Configuración
+  orden    Int     @default(0)
+  isActive Boolean @default(true)
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa   Empresa             @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  categoria EmpresaCategoria?   @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  atributos PlantillaAtributo[] // Atributos que componen esta plantilla
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([empresaId, categoriaId])
+  @@index([isActive])
+  @@index([esPredefinida])
+}
+
+/// Relación many-to-many entre Plantillas y Atributos
+/// Define qué atributos pertenecen a cada plantilla
+model PlantillaAtributo {
+  id          String @id @default(cuid())
+  plantillaId String
+  atributoId  String
+
+  // Configuración específica de este atributo en la plantilla
+  orden             Int      @default(0)
+  requeridoOverride Boolean? // Override del campo requerido del atributo base
+  valoresOverride   String[] // Override de los valores predefinidos del atributo base
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  plantilla ProductoAtributoPlantilla @relation(fields: [plantillaId], references: [id], onDelete: Cascade)
+  atributo  ProductoAtributo          @relation(fields: [atributoId], references: [id], onDelete: Cascade)
+
+  @@unique([plantillaId, atributoId])
+  @@index([plantillaId])
+  @@index([atributoId])
+}
+
+// =========================================
+// SISTEMA DE COMBOS DE PRODUCTOS
+// =========================================
+
+/// Componentes de un combo/kit de productos
+/// Permite crear combos (ofertas) o productos ensamblables (PCs, equipos)
+model ProductoCombo {
+  id String @id @default(cuid())
+
+  // El combo (producto padre)
+  comboId String
+  combo   Producto @relation("ComboProducto", fields: [comboId], references: [id], onDelete: Cascade)
+
+  // El componente (puede ser producto base o variante específica)
+  componenteProductoId String?
+  componenteProducto   Producto? @relation("ComponenteProducto", fields: [componenteProductoId], references: [id], onDelete: Restrict)
+
+  componenteVarianteId String?
+  componenteVariante   ProductoVariante? @relation("ComponenteVariante", fields: [componenteVarianteId], references: [id], onDelete: Restrict)
+
+  // Cantidad de este componente en el combo
+  cantidad Int @default(1)
+
+  // Precio del componente dentro del combo (override opcional)
+  // Si es null, se usa el precio regular del producto desde ProductoStock
+  // Ejemplo: producto vale 100 en general, pero dentro del combo vale 95
+  precioEnCombo Decimal? @db.Decimal(10, 2)
+
+  // Permitir personalización (para PCs ensamblables)
+  esPersonalizable    Boolean @default(false)
+  categoriaComponente String? // "CPU", "RAM", "Almacenamiento", "Monitor", etc.
+
+  // Metadata
+  orden         Int      @default(0)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  @@unique([comboId, componenteProductoId, componenteVarianteId])
+  @@index([comboId])
+  @@index([componenteProductoId])
+  @@index([componenteVarianteId])
+  @@index([categoriaComponente])
+}
+
+/// Reserva de stock para un combo específico en una sede.
+/// Cuando el usuario decide "apartar" componentes para armar N combos,
+/// se crea/actualiza este registro y se incrementa stockReservadoCombo
+/// en cada componente involucrado.
+model ComboReservacion {
+  id      String @id @default(cuid())
+  comboId String
+  combo   Producto @relation("ComboReservaciones", fields: [comboId], references: [id], onDelete: Cascade)
+
+  sedeId String
+  sede   Sede @relation(fields: [sedeId], references: [id])
+
+  /// Cantidad de combos reservados (ej: 5 significa que los componentes para 5 combos están apartados)
+  cantidad Int @default(0)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  @@unique([comboId, sedeId])
+  @@index([comboId])
+  @@index([sedeId])
+}
+
+/// Tipos de atributos para productos
+enum AtributoTipo {
+  COLOR // Color con picker
+  TALLA // Tallas predefinidas (XS, S, M, L, XL, etc.)
+  MATERIAL // Material del producto (ej: Algodón, Poliéster)
+  CAPACIDAD // Capacidad (ej: 1TB, 500GB, 64GB)
+  TEXTO // Texto libre
+  NUMERO // Valor numérico
+  SELECT // Lista desplegable (un solo valor)
+  MULTI_SELECT // Lista desplegable (múltiples valores)
+  BOOLEAN // Sí/No
+}
+
+enum EntidadTipo {
+  PRODUCTO
+  PRODUCTO_VARIANTE
+  SERVICIO
+  EMPRESA
+  COMPROBANTE
+  ORDEN_SERVICIO
+  COTIZACION
+  USUARIO
+  SEDE
+  MARCA
+  TRANSFERENCIA_INCIDENCIA
+  REPORTE_INCIDENCIA // Reporte de incidencias (documento padre)
+  REPORTE_INCIDENCIA_ITEM // Item individual del reporte
+  INVENTARIO // Inventario físico
+  INVENTARIO_ITEM // Item individual del inventario
+}
+
+enum TipoPrecioCombo {
+  FIJO // Precio fijo definido manualmente
+  CALCULADO // Suma de componentes
+  CALCULADO_CON_DESCUENTO // Suma de componentes con descuento aplicado
+}
+
+/// Tipo de cambio de precio para auditoría
+enum TipoCambioPrecio {
+  MANUAL // Cambio manual por usuario
+  OFERTA // Cambio relacionado con ofertas (activación/desactivación)
+  OFERTA_ACTIVADA // Se activó una oferta (legacy - usar OFERTA)
+  OFERTA_DESACTIVADA // Se desactivó una oferta (legacy - usar OFERTA)
+  COSTO // Actualización de precio de costo
+  COSTO_ACTUALIZADO // Se actualizó el precio de costo (legacy - usar COSTO)
+  MASIVO // Cambio masivo de precios por sede
+  AJUSTE_MASIVO // Cambio masivo/importación (legacy - usar MASIVO)
+  AJUSTE_MERCADO // Ajuste por condiciones de mercado
+  COMPETENCIA // Ajuste por competencia
+  CORRECCION // Corrección de error
+}

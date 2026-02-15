@@ -1,0 +1,311 @@
+model MetodoPago {
+  id                      String            @id @default(cuid())
+  empresaId               String
+  tipo                    TipoMetodoPago
+  nombre                  String
+  esActivo                Boolean           @default(true)
+  apiKey                  String?
+  secretKey               String?
+  webhookSecret           String?
+  merchantId              String?
+  comision                Decimal?          @db.Decimal(5, 2)
+  comisionFija            Decimal?          @db.Decimal(10, 2)
+  limiteMinimo            Decimal?          @db.Decimal(10, 2)
+  limiteMaximo            Decimal?          @db.Decimal(10, 2)
+  modoPrueba              Boolean           @default(false)
+  requiere3DS             Boolean           @default(false)
+  tiempoExpiracionMinutos Int               @default(30)
+  configExtra             Json?
+  configuradoPorId        String?
+  creadoEn                DateTime          @default(now())
+  actualizadoEn           DateTime          @updatedAt
+  configuradoPor          Usuario?          @relation("MetodoPagoUsuario", fields: [configuradoPorId], references: [id])
+  empresa                 Empresa           @relation(fields: [empresaId], references: [id])
+  transacciones           TransaccionPago[]
+
+  @@unique([empresaId, tipo])
+  @@index([empresaId])
+  @@index([tipo])
+  @@index([esActivo])
+}
+
+model TransaccionPago {
+  id               String            @id @default(cuid())
+  metodoPagoId     String?
+  usuarioId        String?
+  empresaId        String?
+  monto            Decimal           @db.Decimal(10, 2)
+  moneda           String            @default("PEN")
+  tipoCambio       Decimal?          @db.Decimal(10, 6)
+  montoOriginal    Decimal?          @db.Decimal(10, 2)
+  estado           EstadoPago
+  idExterno        String?
+  descripcion      String?
+  datosCliente     Json?
+  errorMensaje     String?
+  fechaAprobacion  DateTime?
+  fechaReembolso   DateTime?
+  expiraEn         DateTime?
+  metadata         Json?
+  origen           String?
+  creadoEn         DateTime          @default(now())
+  actualizadoEn    DateTime          @updatedAt
+  pagosComprobante PagoComprobante[] @relation("PagoComprobanteTransaccion")
+  empresa          Empresa?          @relation(fields: [empresaId], references: [id])
+  metodoPago       MetodoPago?       @relation(fields: [metodoPagoId], references: [id])
+  usuario          Usuario?          @relation(fields: [usuarioId], references: [id])
+
+  @@index([metodoPagoId])
+  @@index([usuarioId])
+  @@index([empresaId])
+  @@index([estado])
+  @@index([moneda])
+  @@index([idExterno])
+  @@index([creadoEn])
+  @@index([expiraEn])
+  @@index([empresaId, estado, creadoEn])
+}
+
+model ConfiguracionFacturacion {
+  id                 String   @id @default(cuid())
+  empresaId          String   @unique
+  ruc                String?
+  razonSocial        String?
+  nombreComercial    String?
+  direccionFiscal    String?
+  telefono           String?
+  emailFacturacion   String?
+  serieFactura       String   @default("F001")
+  serieBoleta        String   @default("B001")
+  serieNotaCredito   String   @default("NC01")
+  serieNotaDebito    String   @default("ND01")
+  certificadoDigital String?
+  claveCertificado   String?
+  usuarioSol         String?
+  claveSol           String?
+  entorno            String   @default("BETA")
+  logoEmpresa        String?
+  textoPiePagina     String   @default("Gracias por su compra")
+  incluirIGV         Boolean  @default(true)
+  incluirDetalles    Boolean  @default(true)
+  formatoPapel       String   @default("A4")
+  porcentajeIGV      Decimal  @default(18.00) @db.Decimal(5, 2)
+  creadoEn           DateTime @default(now())
+  actualizadoEn      DateTime @updatedAt
+  empresa            Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+}
+
+model ComprobanteElectronico {
+  id               String               @id @default(cuid())
+  empresaId        String
+  clienteId        String?
+  tipoComprobante  TipoComprobante
+  serie            String
+  correlativo      String
+  codigoGenerado   String
+  tipoDocumento    String?
+  numeroDocumento  String?
+  nombreCliente    String
+  direccionCliente String?
+  emailCliente     String?
+  fechaEmision     DateTime             @default(now())
+  fechaVencimiento DateTime?
+  moneda           String               @default("PEN")
+  tipoCambio       Decimal?             @db.Decimal(10, 6)
+  gravada          Decimal              @default(0) @db.Decimal(10, 2)
+  inafecta         Decimal              @default(0) @db.Decimal(10, 2)
+  exonerada        Decimal              @default(0) @db.Decimal(10, 2)
+  igv              Decimal              @default(0) @db.Decimal(10, 2)
+  icbper           Decimal              @default(0) @db.Decimal(10, 2)
+  total            Decimal              @default(0) @db.Decimal(10, 2)
+  totalIgv         Decimal              @default(0) @db.Decimal(10, 2)
+  cdrResponse      Json?
+  sunatStatus      EstadoSunat          @default(PENDIENTE)
+  sunatHash        String?
+  sunatXmlUrl      String?
+  sunatPdfUrl      String?
+  estado           EstadoComprobante    @default(BORRADOR)
+  anulado          Boolean              @default(false)
+  motivoAnulacion  String?
+  creadoEn         DateTime             @default(now())
+  actualizadoEn    DateTime             @updatedAt
+  cliente          EmpresaPersona?      @relation("ComoCliente", fields: [clienteId], references: [id])
+  empresa          Empresa              @relation(fields: [empresaId], references: [id])
+  detalles         DetalleComprobante[]
+  ordenesServicio  OrdenServicio[]
+  pagos            PagoComprobante[]
+  componentes      ServicioComponente[] @relation("ComprobanteComponente")
+  productos        Producto[]           @relation("ProductoComprobante")
+  servicios        Servicio[]           @relation("ServicioComprobante")
+  // ventas           Venta[]              // Relación inversa: ventas que generaron este comprobante (comentado hasta implementar módulo Venta)
+
+  @@unique([empresaId, tipoComprobante, serie, correlativo])
+  @@unique([empresaId, codigoGenerado])
+  @@index([empresaId])
+  @@index([tipoComprobante])
+  @@index([fechaEmision])
+  @@index([estado])
+  // Índices compuestos para queries comunes
+  @@index([empresaId, estado])
+  @@index([empresaId, fechaEmision])
+  @@index([empresaId, estado, fechaEmision])
+}
+
+model DetalleComprobante {
+  id              String                 @id @default(cuid())
+  comprobanteId   String
+  productoId      String?
+  servicioId      String?
+  unidadMedidaId  String? // Relación a EmpresaUnidadMedida
+  descripcion     String
+  unidadMedida    String                 @default("NIU") // Código SUNAT directo (para compatibilidad)
+  cantidad        Decimal                @db.Decimal(12, 2)
+  valorUnitario   Decimal                @db.Decimal(12, 2)
+  precioUnitario  Decimal                @db.Decimal(12, 2)
+  tipoAfectacion  String                 @default("10")
+  porcentajeIGV   Decimal                @default(18.00) @db.Decimal(5, 2)
+  igv             Decimal                @default(0) @db.Decimal(12, 2)
+  valorVenta      Decimal                @default(0) @db.Decimal(12, 2)
+  descuentoItem   Decimal?               @db.Decimal(12, 2)
+  cargoItem       Decimal?               @db.Decimal(12, 2)
+  subtotal        Decimal                @db.Decimal(12, 2)
+  total           Decimal                @db.Decimal(12, 2)
+  creadoEn        DateTime               @default(now())
+  actualizadoEn   DateTime               @updatedAt
+  comprobante     ComprobanteElectronico @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  producto        Producto?              @relation("DetalleProducto", fields: [productoId], references: [id])
+  servicio        Servicio?              @relation("DetalleServicio", fields: [servicioId], references: [id])
+  unidadMedidaRef EmpresaUnidadMedida?   @relation(fields: [unidadMedidaId], references: [id])
+
+  @@index([comprobanteId])
+  @@index([productoId])
+  @@index([servicioId])
+  @@index([unidadMedidaId])
+}
+
+model PlantillaComprobante {
+  id              String          @id @default(cuid())
+  empresaId       String
+  tipoComprobante TipoComprobante
+  nombre          String
+  descripcion     String?
+  htmlTemplate    String?
+  cssStyles       String?
+  margenSuperior  Decimal         @default(10.00) @db.Decimal(5, 2)
+  margenInferior  Decimal         @default(10.00) @db.Decimal(5, 2)
+  margenIzquierdo Decimal         @default(10.00) @db.Decimal(5, 2)
+  margenDerecho   Decimal         @default(10.00) @db.Decimal(5, 2)
+  mostrarLogo     Boolean         @default(true)
+  mostrarCodigoQR Boolean         @default(true)
+  mostrarFirma    Boolean         @default(true)
+  mostrarDetalles Boolean         @default(true)
+  mostrarTotales  Boolean         @default(true)
+  colorEncabezado String          @default("#000000")
+  colorCuerpo     String          @default("#333333")
+  colorPiePagina  String          @default("#666666")
+  isActive        Boolean         @default(true)
+  esPorDefecto    Boolean         @default(false)
+  creadoEn        DateTime        @default(now())
+  actualizadoEn   DateTime        @updatedAt
+  empresa         Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, tipoComprobante])
+  @@index([empresaId])
+  @@index([tipoComprobante])
+}
+
+model PagoComprobante {
+  id            String                 @id @default(cuid())
+  comprobanteId String
+  transaccionId String?
+  metodoPago    String
+  monto         Decimal                @db.Decimal(10, 2)
+  moneda        String                 @default("PEN")
+  fechaPago     DateTime               @default(now())
+  referencia    String?
+  estado        String                 @default("COMPLETADO")
+  creadoEn      DateTime               @default(now())
+  actualizadoEn DateTime               @updatedAt
+  comprobante   ComprobanteElectronico @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  transaccion   TransaccionPago?       @relation("PagoComprobanteTransaccion", fields: [transaccionId], references: [id])
+
+  @@index([comprobanteId])
+  @@index([transaccionId])
+  @@index([fechaPago])
+}
+
+enum EstadoPago {
+  PENDIENTE
+  PROCESANDO
+  APROBADO
+  RECHAZADO
+  REEMBOLSADO
+  REEMBOLSO_PENDIENTE
+  REEMBOLSO_COMPLETADO
+  CANCELADO
+  EXPIRADO
+  ERROR_PROCESAMIENTO
+  ESPERANDO_CONFIRMACION
+}
+
+enum TipoMetodoPago {
+  TARJETA_CREDITO
+  TARJETA_DEBITO
+  YAPE
+  PLIN
+  PAGO_EFECTIVO
+  MERCADO_PAGO
+  CULQI
+  IZIPAY
+  NIUBIZ
+  CODIGO_QR
+  OTRO
+}
+
+enum TipoComprobante {
+  FACTURA
+  BOLETA
+  NOTA_CREDITO
+  NOTA_DEBITO
+  GUIA_REMISION
+  RECIBO_HONORARIOS
+  COMPROBANTE_PERCEPCION
+  COMPROBANTE_RETENCION
+}
+
+enum EstadoComprobante {
+  BORRADOR
+  REGISTRADO
+  ACEPTADO
+  RECHAZADO
+  ANULADO
+  EXPIRADO
+}
+
+enum EstadoSunat {
+  PENDIENTE
+  ACEPTADO
+  RECHAZADO
+  ERROR_COMUNICACION
+  PROCESANDO
+}
+
+enum Moneda {
+  PEN
+  USD
+  EUR
+  GBP
+  JPY
+}
+
+enum OrigenTransaccion {
+  WEB
+  MOVIL
+  PRESENCIAL
+  WHATSAPP
+  TELEMARKETING
+  API
+  LINK_PAGO
+}

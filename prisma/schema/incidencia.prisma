@@ -1,0 +1,494 @@
+// =========================================
+// MÓDULO DE REPORTES DE INCIDENCIAS
+// =========================================
+/// Sistema para reportar productos dañados, perdidos, robos, diferencias de inventario
+/// Sirve como base para inventarios completos y reportes puntuales
+
+/// Reporte de incidencias - Documento padre que agrupa múltiples productos afectados
+/// Útil para: Inventarios, revisiones rutinarias, eventos (robos, inundaciones)
+model ReporteIncidencia {
+  id        String @id @default(cuid())
+  codigo    String // RPI-2025-001, RPI-2025-002 (único por empresa)
+  empresaId String
+  sedeId    String
+
+  // Información general del reporte
+  titulo             String // "Inventario Febrero 2025", "Revisión Post-Lluvia"
+  descripcionGeneral String? @db.Text // Contexto general de lo ocurrido
+
+  // Tipo de reporte
+  tipoReporte TipoReporteIncidencia // INVENTARIO_COMPLETO, INCIDENCIA_PUNTUAL, etc.
+
+  // Estado del reporte completo
+  estado EstadoReporteIncidencia @default(BORRADOR)
+
+  // Responsables
+  reportadoPorId String // Quien crea el reporte
+  supervisorId   String? // Quien supervisa/aprueba
+  resolvidoPorId String? // Quien resuelve
+  aprobadoPorId  String? // Quien aprueba las acciones
+
+  // Fechas
+  fechaIncidente  DateTime // Cuándo ocurrieron los problemas
+  fechaReporte    DateTime  @default(now()) // Cuándo se reporta
+  fechaRevision   DateTime? // Cuándo se revisa
+  fechaAprobacion DateTime? // Cuándo se aprueba
+  fechaResolucion DateTime? // Cuándo se resuelve todo
+
+  // Items individuales (cada producto afectado)
+  items ReporteIncidenciaItem[]
+
+  // NOTA: Los archivos se gestionan mediante el sistema polimórfico de Archivo
+  // usando entidadTipo = 'REPORTE_INCIDENCIA' y entidadId = id del reporte
+
+  // Totales calculados (se actualizan al agregar/quitar items)
+  totalProductosAfectados Int @default(0) // Número de productos diferentes
+  totalCantidadAfectada   Int @default(0) // Suma de todas las cantidades
+  totalDanados            Int @default(0)
+  totalPerdidos           Int @default(0)
+  totalOtros              Int @default(0)
+
+  // Observaciones finales
+  observacionesFinales String? @db.Text
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa      Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  sede         Sede         @relation(fields: [sedeId], references: [id])
+  reportadoPor Usuario      @relation("ReporteReportadoPor", fields: [reportadoPorId], references: [id])
+  supervisor   Usuario?     @relation("ReporteSupervisadoPor", fields: [supervisorId], references: [id])
+  resolvidoPor Usuario?     @relation("ReporteResueltoPor", fields: [resolvidoPorId], references: [id])
+  aprobadoPor  Usuario?     @relation("ReporteAprobadoPor", fields: [aprobadoPorId], references: [id])
+  inventarios  Inventario[] // Inventarios que generaron este reporte de incidencias
+
+  @@unique([empresaId, codigo]) // Código único por empresa
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([codigo])
+  @@index([estado])
+  @@index([tipoReporte])
+  @@index([fechaIncidente])
+  @@index([fechaReporte])
+  @@index([empresaId, sedeId])
+  @@index([empresaId, estado])
+  @@index([sedeId, estado])
+  @@index([empresaId, tipoReporte])
+}
+
+/// Item individual del reporte - Cada producto afectado
+model ReporteIncidenciaItem {
+  id              String @id @default(cuid())
+  reporteId       String
+  empresaId       String
+  sedeId          String
+  productoStockId String
+
+  // Identificación del producto (desnormalizado para histórico)
+  nombreProducto String
+  codigoProducto String?
+
+  // Tipo de incidencia específica
+  tipo TipoIncidenciaProducto
+
+  // Cantidad afectada
+  cantidadAfectada Int
+
+  // Descripción específica del problema
+  descripcion   String  @db.Text
+  observaciones String? @db.Text
+
+  // Estado y acción
+  estadoItem   EstadoItemIncidencia      @default(PENDIENTE)
+  accionTomada AccionIncidenciaProducto?
+
+  // NOTA: Los archivos se gestionan mediante el sistema polimórfico de Archivo
+  // usando entidadTipo = 'REPORTE_INCIDENCIA_ITEM' y entidadId = id del item
+
+  // Resultado de la acción
+  movimientoStockId         String? // Movimiento de stock generado
+  transferenciaDevolucionId String? // Si se devuelve a otra sede
+
+  // Fechas de resolución individual
+  fechaResolucion DateTime?
+  resolvidoPorId  String?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  reporte                 ReporteIncidencia   @relation(fields: [reporteId], references: [id], onDelete: Cascade)
+  empresa                 Empresa             @relation(fields: [empresaId], references: [id])
+  sede                    Sede                @relation(fields: [sedeId], references: [id])
+  productoStock           ProductoStock       @relation(fields: [productoStockId], references: [id])
+  movimientoStock         MovimientoStock?    @relation("ItemIncidenciaMovimiento", fields: [movimientoStockId], references: [id])
+  transferenciaDevolucion TransferenciaStock? @relation("ItemIncidenciaTransferencia", fields: [transferenciaDevolucionId], references: [id])
+  resolvidoPor            Usuario?            @relation("ItemResueltoPor", fields: [resolvidoPorId], references: [id])
+
+  @@index([reporteId])
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([productoStockId])
+  @@index([tipo])
+  @@index([estadoItem])
+  @@index([reporteId, estadoItem])
+  @@index([sedeId, estadoItem])
+}
+
+// Enums para Reportes de Incidencias
+
+enum TipoReporteIncidencia {
+  INVENTARIO_COMPLETO // Inventario formal completo de toda la sede
+  INCIDENCIA_PUNTUAL // Problema específico encontrado (no es inventario)
+  REVISION_RUTINARIA // Revisión periódica de productos
+  EVENTO_ESPECIFICO // Robo, inundación, incendio, etc.
+  AUDITORIA // Auditoría externa o interna
+  OTRO // Otro tipo de reporte
+}
+
+enum EstadoReporteIncidencia {
+  BORRADOR // En creación, aún editando
+  ENVIADO // Enviado para revisión
+  EN_REVISION // Siendo revisado por supervisor
+  APROBADO // Aprobado, listo para resolver items
+  EN_PROCESO // Resolviéndose (algunos items ya resueltos)
+  RESUELTO // Todos los items resueltos
+  RECHAZADO // Rechazado por supervisor
+  CANCELADO // Cancelado por quien lo creó
+}
+
+enum TipoIncidenciaProducto {
+  DANADO // Producto dañado físicamente
+  PERDIDO // Extraviado sin explicación clara
+  ROBO // Producto robado (con o sin denuncia)
+  CADUCADO // Producto vencido/expirado
+  DEFECTO_FABRICA // Defecto de fábrica
+  MAL_ALMACENAMIENTO // Dañado por mal almacenamiento
+  ACCIDENTE // Dañado por accidente
+  DIFERENCIA_INVENTARIO // No coincide con sistema (faltante o sobrante)
+  OTRO // Otro motivo no especificado
+}
+
+enum AccionIncidenciaProducto {
+  MARCAR_DANADO // Solo marcar como dañado (stockDanado++)
+  DAR_DE_BAJA // Eliminar completamente del inventario (stockActual--)
+  REPARACION_INTERNA // Intentar reparar internamente (en sede)
+  DEVOLVER_SEDE_PRINCIPAL // Crear transferencia a sede principal
+  ENVIAR_GARANTIA // Marcar para enviar a garantía (stockEnGarantia++)
+  ACEPTAR_PERDIDA // Aceptar la pérdida y ajustar
+  REPORTAR_ROBO // Documentar robo (para seguros/denuncias)
+  AJUSTAR_SISTEMA // Solo ajustar el sistema (diferencia inventario)
+  PENDIENTE_DECISION // Aún no se ha decidido qué hacer
+}
+
+enum EstadoItemIncidencia {
+  PENDIENTE // Sin resolver, esperando acción
+  EN_PROCESO // Resolviéndose (acción en curso)
+  RESUELTO // Resuelto completamente
+  NO_PROCEDE // No procede ninguna acción
+}
+
+// =========================================
+// MÓDULO DE INVENTARIOS
+// =========================================
+/// Sistema de inventarios físicos para conteo y validación de stock
+/// Se integra con el módulo de incidencias para reportar diferencias
+
+/// Inventario - Documento de conteo físico de productos en una sede
+model Inventario {
+  id        String @id @default(cuid())
+  codigo    String @unique // INV-2025-001, INV-2025-002
+  empresaId String
+  sedeId    String
+
+  // Información del inventario
+  nombre         String // "Inventario Mensual Enero 2025", "Inventario Anual 2025"
+  descripcion    String?        @db.Text
+  tipoInventario TipoInventario // COMPLETO, PARCIAL, CICLICO, SORPRESA
+
+  // Estado del inventario
+  estado EstadoInventario @default(PLANIFICADO)
+
+  // Responsables
+  responsableId String // Quien realiza el conteo
+  supervisorId  String? // Quien supervisa/aprueba
+  aprobadoPorId String? // Quien aprueba finalmente
+
+  // Fechas
+  fechaPlanificada DateTime // Cuándo se planea hacer el inventario
+  fechaInicio      DateTime? // Cuándo se inicia el conteo
+  fechaFinConteo   DateTime? // Cuándo se termina el conteo
+  fechaAprobacion  DateTime? // Cuándo se aprueba
+  fechaAjuste      DateTime? // Cuándo se aplican los ajustes al sistema
+
+  // Configuración
+  incluirTodosProductos     Boolean @default(true) // true = todos los productos, false = solo seleccionados
+  permitirAjusteAutomatico  Boolean @default(false) // Si se permite ajustar stock automáticamente
+  generarReporteIncidencias Boolean @default(true) // Si generar reporte de incidencias para diferencias
+
+  // Items contados
+  items InventarioItem[]
+
+  // Resultados y totales
+  totalProductosEsperados Int      @default(0) // Productos que deberían estar
+  totalProductosContados  Int      @default(0) // Productos efectivamente contados
+  totalDiferencias        Int      @default(0) // Número de productos con diferencias
+  totalSobrantes          Int      @default(0) // Cantidad total sobrante
+  totalFaltantes          Int      @default(0) // Cantidad total faltante
+  valorDiferenciaEstimado Decimal? @db.Decimal(10, 2) // Valor económico de las diferencias
+
+  // Reporte de incidencias generado (si aplica)
+  reporteIncidenciaId String? // Reporte generado por las diferencias encontradas
+
+  // Observaciones
+  observaciones        String? @db.Text
+  observacionesFinales String? @db.Text
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa           Empresa            @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  sede              Sede               @relation(fields: [sedeId], references: [id])
+  responsable       Usuario            @relation("InventarioResponsable", fields: [responsableId], references: [id])
+  supervisor        Usuario?           @relation("InventarioSupervisor", fields: [supervisorId], references: [id])
+  aprobadoPor       Usuario?           @relation("InventarioAprobadoPor", fields: [aprobadoPorId], references: [id])
+  reporteIncidencia ReporteIncidencia? @relation(fields: [reporteIncidenciaId], references: [id])
+
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([codigo])
+  @@index([estado])
+  @@index([tipoInventario])
+  @@index([fechaPlanificada])
+  @@index([empresaId, sedeId])
+  @@index([empresaId, estado])
+}
+
+/// Item individual del inventario - Cada producto contado
+model InventarioItem {
+  id              String @id @default(cuid())
+  inventarioId    String
+  empresaId       String
+  sedeId          String
+  productoStockId String
+
+  // Identificación del producto (desnormalizado para histórico)
+  nombreProducto String
+  codigoProducto String?
+
+  // Cantidades
+  cantidadSistema Int // Stock que debería haber según el sistema
+  cantidadContada Int? // Stock físico contado (null si aún no se cuenta)
+  diferencia      Int  @default(0) // cantidadContada - cantidadSistema (puede ser negativo)
+
+  // Análisis de diferencia
+  esDiferencia Boolean                   @default(false) // true si diferencia != 0
+  tipoRestante TipoDiferenciaInventario? // SOBRANTE, FALTANTE, SIN_DIFERENCIA
+
+  // Ubicación física
+  ubicacionFisica  String? // Donde se encontró físicamente
+  loteNumero       String? // Número de lote si aplica
+  fechaVencimiento DateTime? // Fecha de vencimiento si aplica
+
+  // Estado del conteo
+  estadoConteo EstadoConteoItem @default(PENDIENTE)
+  contadoPorId String? // Usuario que realizó el conteo
+  fechaConteo  DateTime? // Cuándo se contó
+
+  // Observaciones del conteo
+  observaciones    String? @db.Text
+  fotoEvidenciaUrl String? // URL de foto de evidencia (opcional)
+
+  // Ajuste aplicado (si se aprobó)
+  ajusteAplicado    Boolean @default(false)
+  movimientoStockId String? // Movimiento generado si se ajustó
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  inventario      Inventario       @relation(fields: [inventarioId], references: [id], onDelete: Cascade)
+  empresa         Empresa          @relation(fields: [empresaId], references: [id])
+  sede            Sede             @relation(fields: [sedeId], references: [id])
+  productoStock   ProductoStock    @relation(fields: [productoStockId], references: [id])
+  contadoPor      Usuario?         @relation("ItemContadoPor", fields: [contadoPorId], references: [id])
+  movimientoStock MovimientoStock? @relation("InventarioAjuste", fields: [movimientoStockId], references: [id])
+
+  @@index([inventarioId])
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([productoStockId])
+  @@index([estadoConteo])
+  @@index([esDiferencia])
+  @@index([inventarioId, estadoConteo])
+}
+
+// Enums para Inventarios
+
+enum TipoInventario {
+  COMPLETO // Inventario completo de toda la sede
+  PARCIAL // Solo algunos productos o categorías
+  CICLICO // Inventario rotativo periódico
+  SORPRESA // Inventario sorpresa/auditoría
+  TEMPORAL // Inventario temporal (ej: antes de cierre)
+}
+
+enum EstadoInventario {
+  PLANIFICADO // Planificado, aún no iniciado
+  EN_PROCESO // Conteo en proceso
+  CONTEO_COMPLETO // Todos los items contados, esperando revisión
+  EN_REVISION // Siendo revisado por supervisor
+  APROBADO // Aprobado, listo para aplicar ajustes
+  AJUSTADO // Ajustes aplicados al sistema
+  CANCELADO // Cancelado sin completar
+  RECHAZADO // Rechazado por el supervisor
+}
+
+enum EstadoConteoItem {
+  PENDIENTE // Sin contar
+  CONTADO // Ya contado
+  VERIFICADO // Contado y verificado
+  EN_REVISION // Requiere revisión (diferencia significativa)
+  AJUSTADO // Ya se aplicó el ajuste al sistema
+}
+
+enum TipoDiferenciaInventario {
+  SOBRANTE // Más productos de los esperados
+  FALTANTE // Menos productos de los esperados
+  SIN_DIFERENCIA // Coincide con el sistema
+}
+
+// ========================================
+// MODELOS DE DEVOLUCIONES
+// ========================================
+
+model Devolucion {
+  id        String           @id @default(cuid())
+  codigo    String           @unique // Ej: DEV-00001
+  empresaId String
+  sedeId    String // Sede que recibe/procesa la devolución
+  tipo      TipoDevolucion
+  estado    EstadoDevolucion @default(PENDIENTE)
+
+  // Referencias según tipo
+  ventaId     String? // Si es devolución de cliente (futuro)
+  compraId    String? // Si es devolución a proveedor (futuro)
+  clienteId   String? // Cliente que devuelve (futuro)
+  proveedorId String? // Proveedor al que se devuelve (futuro)
+
+  // Detalles
+  motivo        String? // Motivo general de la devolución
+  observaciones String? // Observaciones adicionales
+
+  // Auditoría
+  creadoPor     String
+  aprobadoPor   String?
+  procesadoPor  String?
+  creadoEn      DateTime  @default(now())
+  aprobadoEn    DateTime?
+  procesadoEn   DateTime?
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  empresa     Empresa           @relation(fields: [empresaId], references: [id])
+  sede        Sede              @relation(fields: [sedeId], references: [id])
+  items       DevolucionItem[]
+  movimientos MovimientoStock[]
+
+  @@index([empresaId, sedeId, estado])
+  @@index([codigo])
+  @@index([tipo])
+  @@index([estado])
+  @@index([ventaId])
+  @@index([compraId])
+}
+
+model DevolucionItem {
+  id           String  @id @default(cuid())
+  devolucionId String
+  empresaId    String
+  productoId   String?
+  varianteId   String?
+
+  // Cantidades
+  cantidad Int // Cantidad devuelta
+
+  // Clasificación
+  motivo         MotivoDevolucion
+  estadoProducto EstadoProductoDevolucion
+  accion         AccionDevolucion
+
+  // Detalles
+  observaciones String? // Observaciones específicas del item
+  imagenes      String[] // URLs de fotos del producto (evidencia)
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  devolucion Devolucion        @relation(fields: [devolucionId], references: [id], onDelete: Cascade)
+  empresa    Empresa           @relation(fields: [empresaId], references: [id])
+  producto   Producto?         @relation(fields: [productoId], references: [id])
+  variante   ProductoVariante? @relation(fields: [varianteId], references: [id])
+
+  @@index([devolucionId])
+  @@index([empresaId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([motivo])
+  @@index([estadoProducto])
+  @@index([accion])
+}
+
+// ========================================
+// ENUMS DE DEVOLUCIONES
+// ========================================
+
+enum TipoDevolucion {
+  CLIENTE_A_TIENDA // Cliente devuelve a la tienda
+  TIENDA_A_PROVEEDOR // Tienda devuelve al proveedor
+  ENTRE_SEDES // Devolución entre sedes (raro, pero posible)
+}
+
+enum EstadoDevolucion {
+  PENDIENTE // Creada, esperando aprobación
+  APROBADA // Aprobada, lista para procesar
+  PROCESADA // Ya se procesó el stock
+  RECHAZADA // Rechazada
+  CANCELADA // Cancelada
+}
+
+enum MotivoDevolucion {
+  DEFECTUOSO // Producto defectuoso/dañado
+  DANADO_TRANSPORTE // Dañado durante el envío
+  ERROR_ENVIO // Error en el pedido (producto incorrecto)
+  CAMBIO_OPINION // Cliente cambió de opinión
+  GARANTIA // Reclamo de garantía
+  PRODUCTO_VENCIDO // Producto caducado
+  NO_CONFORME // No cumple expectativas
+  OTRO // Otro motivo
+}
+
+enum EstadoProductoDevolucion {
+  BUENO // Producto en buen estado, puede revenderse
+  DANADO // Producto dañado, no vendible
+  REPARABLE // Puede repararse
+  VENCIDO // Producto caducado
+  INCOMPLETO // Falta accesorios o partes
+}
+
+enum AccionDevolucion {
+  REINGRESAR_STOCK // Producto vuelve a stock disponible
+  MARCAR_DANADO // Va a stockDanado
+  ENVIAR_REPARACION // Va a stockEnGarantia
+  DAR_DE_BAJA // Descarte definitivo (reduce stockActual)
+  DEVOLVER_PROVEEDOR // Se devolverá al proveedor
+  CAMBIO_PRODUCTO // Se cambia por otro (gestiona venta + devolución)
+}

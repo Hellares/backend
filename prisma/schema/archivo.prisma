@@ -1,0 +1,99 @@
+model Archivo {
+  id        String @id @default(cuid())
+  empresaId String
+
+  // Información del archivo
+  nombreOriginal   String
+  nombreAlmacenado String
+  url              String
+  urlThumbnail     String?
+
+  // Tipo y clasificación
+  tipoArchivo TipoArchivo
+  mimeType    String
+  extension   String
+
+  // Relación polimórfica con entidades
+  entidadTipo EntidadTipo?
+  entidadId   String?
+  varianteId  String? // Para imágenes de variantes de producto
+  categoria   CategoriaArchivo?
+  orden       Int?
+
+  // Proveedor de storage (para portabilidad)
+  proveedor      ProveedorStorage
+  proveedorId    String?
+  bucket         String?
+  carpetaStorage String?
+
+  // Metadatos técnicos
+  tamanoBytes Int
+  ancho       Int?
+  alto        Int?
+  duracion    Int?
+
+  // Optimización
+  esOptimizado Boolean @default(false)
+  versiones    Json?
+
+  // Seguridad y acceso
+  esPublico    Boolean @default(true)
+  requiereAuth Boolean @default(false)
+
+  // Auditoría
+  subidoPor     String?
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  empresa  Empresa           @relation(fields: [empresaId], references: [id])
+  variante ProductoVariante? @relation(fields: [varianteId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@index([entidadTipo, entidadId])
+  @@index([varianteId])
+  @@index([proveedor])
+  @@index([tipoArchivo])
+  @@index([categoria])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+enum TipoArchivo {
+  IMAGEN
+  VIDEO
+  DOCUMENTO
+  PDF
+  EXCEL
+  WORD
+  AUDIO
+  COMPRIMIDO
+  OTRO
+}
+
+enum CategoriaArchivo {
+  PRINCIPAL
+  GALERIA
+  THUMBNAIL
+  DOCUMENTO
+  FACTURA
+  COTIZACION
+  LOGO
+  BANNER
+  SPLASH
+  CERTIFICADO
+  CONTRATO
+  EVIDENCIA
+}
+
+enum ProveedorStorage {
+  CLOUDINARY
+  AWS_S3
+  GOOGLE_CLOUD
+  AZURE_BLOB
+  CONTABO
+  LOCAL
+  DIGITAL_OCEAN
+}

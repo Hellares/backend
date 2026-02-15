@@ -1,0 +1,344 @@
+model Empresa {
+  id                     String            @id @default(cuid())
+  nombre                 String
+  ruc                    String?           @unique
+  subdominio             String?           @unique
+  logo                   String?
+  rubro                  RubroEmpresa      @default(TECNOLOGIA)
+  isActive               Boolean           @default(true)
+  deletedAt              DateTime?
+  descripcion            String?
+  web                    String?
+  telefono               String?
+  email                  String?
+  planSuscripcionId      String?
+  fechaInicioSuscripcion DateTime?
+  fechaVencimiento       DateTime?
+  estadoSuscripcion      EstadoSuscripcion @default(ACTIVA)
+  usuariosActuales       Int               @default(0)
+
+  // Campos para Marketplace
+  visibleEnMarketplace Boolean @default(true)
+  destacadoMarketplace Boolean @default(false)
+  ordenMarketplace     Int?
+  vistasMarketplace    Int     @default(0)
+
+  // SEO y Metadata
+  metaTitle       String?
+  metaDescription String?
+  keywords        String?
+
+  // Redes Sociales
+  facebook  String?
+  instagram String?
+  twitter   String?
+  linkedin  String?
+
+  creadoEn                 DateTime                      @default(now())
+  actualizadoEn            DateTime                      @updatedAt
+  componentes              Componente[]
+  comprobantes             ComprobanteElectronico[]
+  configuracionCampos      ConfiguracionCamposServicio[]
+  configuracionCodigos     ConfiguracionCodigos?
+  configuracionFacturacion ConfiguracionFacturacion?
+  planSuscripcion          PlanSuscripcion?              @relation(fields: [planSuscripcionId], references: [id])
+  personasAsociadas        EmpresaPersona[]
+  usuarios                 EmpresaUsuarioRol[]
+  metodosPago              MetodoPago[]
+  modelosEquipos           ModeloEquipo[]
+  ordenesServicio          OrdenServicio[]
+  personalizaciones        PersonalizacionEmpresa[]
+  plantillasComprobantes   PlantillaComprobante[]
+  productos                Producto[]
+  sedes                    Sede[]
+  servicios                Servicio[]
+  tiposComponentes         TipoComponente[]
+  transaccionesRecibidas   TransaccionPago[]
+  archivos                 Archivo[]
+  empresaCategorias        EmpresaCategoria[]
+  empresaMarcas            EmpresaMarca[]
+  empresasUnidades         EmpresaUnidadMedida[]
+  productoVariantes        ProductoVariante[]
+  productoAtributos        ProductoAtributo[]
+  plantillasAtributos      ProductoAtributoPlantilla[]
+  configuracionesPrecios   ConfiguracionPrecio[]
+
+  // Relaciones para sistema de descuentos
+  politicasDescuento   PoliticaDescuento[]
+  usuariosConDescuento UsuarioDescuento[]
+  historialDescuentos  DescuentoUsoHistorial[]
+
+  // Relaciones para inventario por sede
+  stocksProductos               ProductoStock[]
+  movimientosStock              MovimientoStock[]
+  transferenciasStock           TransferenciaStock[]
+  itemsTransferenciaStock       TransferenciaStockItem[]
+  incidenciasTransferenciaStock TransferenciaStockIncidencia[]
+
+  // Relaciones para reportes de incidencias
+  reportesIncidencia     ReporteIncidencia[]
+  itemsReporteIncidencia ReporteIncidenciaItem[]
+
+  // Relaciones para inventarios
+  inventarios     Inventario[]
+  itemsInventario InventarioItem[]
+
+  // Relaciones para devoluciones
+  devoluciones    Devolucion[]
+  devolucionItems DevolucionItem[]
+
+  // Relaciones para módulo de proveedores
+  proveedores           Proveedor[]
+  proveedorEvaluaciones ProveedorEvaluacion[]
+  proveedorProductos    ProveedorProducto[]
+
+  @@index([subdominio])
+  @@index([isActive])
+  @@index([ruc])
+  @@index([planSuscripcionId])
+  @@index([fechaVencimiento])
+  @@index([estadoSuscripcion])
+  @@index([deletedAt])
+  @@index([visibleEnMarketplace])
+  @@index([destacadoMarketplace])
+  @@index([ordenMarketplace])
+}
+
+model ConfiguracionCodigos {
+  id                  String   @id @default(cuid())
+  empresaId           String   @unique
+  productoCodigo      String   @default("PROD")
+  productoSeparador   String   @default("-")
+  productoLongitud    Int      @default(6)
+  productoIncluirSede Boolean  @default(false)
+  servicioCodigo      String   @default("SERV")
+  servicioSeparador   String   @default("-")
+  servicioLongitud    Int      @default(6)
+  servicioIncluirSede Boolean  @default(false)
+  varianteCodigo      String   @default("VAR")
+  varianteSeparador   String   @default("-")
+  varianteLongitud    Int      @default(6)
+  ventaCodigo         String   @default("VTA")
+  ventaSeparador      String   @default("-")
+  ventaLongitud       Int      @default(8)
+  ventaIncluirSede    Boolean  @default(true)
+  facturaCodigo       String   @default("FAC")
+  boletaCodigo        String   @default("BOL")
+  notaCreditoCodigo   String   @default("NCR")
+  notaDebitoCodigo    String   @default("NDB")
+  documentoSeparador  String   @default("-")
+  documentoLongitud   Int      @default(8)
+  ultimoProducto      Int      @default(0)
+  ultimoServicio      Int      @default(0)
+  ultimaVariante      Int      @default(0)
+  ultimaVenta         Int      @default(0)
+  ultimoFactura       Int      @default(0)
+  ultimaBoleta        Int      @default(0)
+  ultimaNotaCredito   Int      @default(0)
+  ultimaNotaDebito    Int      @default(0)
+  creadoEn            DateTime @default(now())
+  actualizadoEn       DateTime @updatedAt
+  empresa             Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+}
+
+model Sede {
+  id        String   @id @default(cuid())
+  empresaId String
+  codigo    String   @default("SEDE-001") // Código único de la sede (ej: "SEDE-001", "LIMA-CENTRO")
+  nombre    String
+  telefono  String?
+  email     String?
+  tipoSede  TipoSede @default(OPERATIVA_COMPLETA) // Tipo de operación de la sede
+
+  // Ubicación completa
+  direccion    String?
+  referencia   String?
+  distrito     String?
+  provincia    String?
+  departamento String?
+  pais         String? @default("PERU")
+  coordenadas  Json? // {lat: -12.0464, lon: -77.0428} para geolocalización
+
+  // Configuración operativa
+  horarioAtencion Json? // {"lunes": {"inicio": "09:00", "fin": "18:00"}, ...}
+  configuracion   Json? // Configuraciones específicas de la sede
+
+  // Series de comprobantes por sede
+  serieFactura      String  @default("F001")
+  serieBoleta       String  @default("B001")
+  serieNotaCredito  String  @default("NC01")
+  serieNotaDebito   String  @default("ND01")
+  serieGuiaRemision String? @default("GR01")
+
+  // Contadores de documentos por sede
+  ultimoNumeroFactura      Int @default(0)
+  ultimoNumeroBoleta       Int @default(0)
+  ultimoNumeroNotaCredito  Int @default(0)
+  ultimoNumeroNotaDebito   Int @default(0)
+  ultimoNumeroGuiaRemision Int @default(0)
+
+  // Estado
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  esPrincipal Boolean   @default(false)
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  direcciones DireccionSede[]
+  productos   Producto[]
+  empresa     Empresa          @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  servicios   Servicio[]
+  usuarios    UsuarioSedeRol[]
+
+  // Relaciones para sistema de descuentos
+  historialDescuentos DescuentoUsoHistorial[]
+
+  // Relaciones para inventario por sede
+  stocksProductos       ProductoStock[]
+  movimientosStock      MovimientoStock[]
+  transferenciasOrigen  TransferenciaStock[]          @relation("TransferenciasOrigen")
+  transferenciasDestino TransferenciaStock[]          @relation("TransferenciasDestino")
+  historialPreciosSede  ProductoPrecioHistorialSede[] @relation("SedeCambiosPrecios")
+  reservacionesCombos   ComboReservacion[]
+
+  // Relaciones para devoluciones
+  devoluciones Devolucion[]
+
+  // Relaciones para reportes de incidencias
+  reportesIncidencia     ReporteIncidencia[]
+  itemsReporteIncidencia ReporteIncidenciaItem[]
+
+  // Relaciones para inventarios
+  inventarios     Inventario[]
+  itemsInventario InventarioItem[]
+
+  // Relaciones futuras (descomentar cuando se implementen)
+  // ventas      Venta[]
+  // cotizaciones Cotizacion[]
+  // cajas       Caja[]
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId])
+  @@index([codigo])
+  @@index([isActive])
+  @@index([esPrincipal])
+  @@index([deletedAt])
+  @@index([tipoSede])
+  @@index([empresaId, isActive])
+  @@index([empresaId, deletedAt])
+  @@index([empresaId, isActive, deletedAt])
+}
+
+model DireccionSede {
+  id            String    @id @default(cuid())
+  sedeId        String
+  direccion     String
+  referencia    String?
+  distrito      String?
+  provincia     String?
+  departamento  String?
+  pais          String?   @default("PERU")
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+  sede          Sede      @relation(fields: [sedeId], references: [id])
+
+  @@index([sedeId])
+  @@index([deletedAt])
+}
+
+model PlanSuscripcion {
+  id                        String             @id @default(cuid())
+  nombre                    String             @unique
+  descripcion               String
+  precio                    Decimal            @db.Decimal(10, 2)
+  periodo                   PeriodoSuscripcion
+  limiteProductos           Int?
+  limiteServicios           Int?
+  limiteUsuarios            Int?
+  limiteSedes               Int?
+  limitePlantillasAtributos Int? // Límite de plantillas personalizadas
+  tienePersonalizacion      Boolean            @default(false)
+  tieneDominioPropio        Boolean            @default(false)
+  tieneApi                  Boolean            @default(false)
+  tieneReportesAvanzados    Boolean            @default(false)
+  caracteristicas           Json
+  isActive                  Boolean            @default(true)
+  creadoEn                  DateTime           @default(now())
+  actualizadoEn             DateTime           @updatedAt
+  empresas                  Empresa[]
+
+  @@index([isActive])
+  @@index([precio])
+}
+
+model PersonalizacionEmpresa {
+  id                   String   @id @default(cuid())
+  empresaId            String
+  webConfig            Json?
+  bannerPrincipalUrl   String?
+  bannerPrincipalTexto String?
+  bannerColor          String?  @default("#000000")
+  colorPrimario        String?  @default("#007bff")
+  colorSecundario      String?  @default("#6c757d")
+  colorAcento          String?  @default("#28a745")
+  mostrarPrecios       Boolean  @default(true)
+  productosDestacados  String[]
+  serviciosDestacados  String[]
+  mostrarContacto      Boolean  @default(true)
+  mostrarRedesSociales Boolean  @default(false)
+  permitirRegistro     Boolean  @default(true)
+  appConfig            Json?
+  appSplashScreenUrl   String?
+  appColorTema         String?  @default("#007bff")
+  dominioPersonalizado String?  @unique
+  creadoEn             DateTime @default(now())
+  actualizadoEn        DateTime @updatedAt
+  empresa              Empresa  @relation(fields: [empresaId], references: [id])
+
+  @@index([empresaId])
+  @@index([dominioPersonalizado])
+}
+
+// Tipos de sede según su función operativa
+enum TipoSede {
+  OPERATIVA_COMPLETA // Ventas + Almacén + Servicios (sede completa)
+  SOLO_ALMACEN // Solo inventario y transferencias (sin ventas directas)
+  PUNTO_VENTA // Solo ventas (recibe stock por transferencia)
+  OFICINA_ADMINISTRATIVA // Solo administración (sin operaciones comerciales)
+  TALLER_LABORATORIO // Taller de reparación o laboratorio de servicios
+}
+
+enum PeriodoSuscripcion {
+  MENSUAL
+  TRIMESTRAL
+  SEMESTRAL
+  ANUAL
+  PERSONALIZADO
+}
+
+enum EstadoSuscripcion {
+  ACTIVA
+  VENCIDA
+  CANCELADA
+  EN_PROBATION
+}
+
+enum RubroEmpresa {
+  TECNOLOGIA
+  GASTRONOMIA
+  MODA
+  HOGAR
+  SALUD
+  AUTOMOTRIZ
+  DEPORTES
+  CONSTRUCCION
+  EDUCACION
+  OTRO
+}

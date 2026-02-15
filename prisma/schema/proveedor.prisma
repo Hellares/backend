@@ -1,0 +1,197 @@
+// =========================================
+// MÓDULO DE COMPRAS Y PROVEEDORES
+// =========================================
+
+/// Enumeración para tipos de documento de identidad
+enum TipoDocumentoIdentidad {
+  RUC
+  DNI
+  PASAPORTE
+  CARNET_EXTRANJERIA
+  OTROS
+}
+
+/// Enumeración para términos de pago
+enum TerminosPago {
+  CONTADO
+  CREDITO_7
+  CREDITO_15
+  CREDITO_30
+  CREDITO_45
+  CREDITO_60
+  CREDITO_90
+  PERSONALIZADO
+}
+
+/// Enumeración para tipos de cuenta bancaria
+enum TipoCuenta {
+  AHORROS
+  CORRIENTE
+  INTERBANCARIA
+}
+
+/// Gestión avanzada de proveedores
+model Proveedor {
+  id        String @id @default(cuid())
+  empresaId String
+
+  // Identificación
+  codigo          String // PROV-001 (único por empresa)
+  nombre          String
+  nombreComercial String?
+  tipoDocumento   TipoDocumentoIdentidad
+  numeroDocumento String
+
+  // Información de Contacto
+  email               String?
+  telefono            String?
+  telefonoAlternativo String?
+  sitioWeb            String?
+
+  // Dirección
+  direccion    String?
+  ciudad       String?
+  provincia    String?
+  pais         String  @default("PE")
+  codigoPostal String?
+
+  // Términos Comerciales
+  terminosPago          TerminosPago?
+  diasCredito           Int?
+  limiteCredito         Decimal?      @db.Decimal(15, 2)
+  descuentoPreferencial Decimal?      @db.Decimal(5, 2)
+
+  // Información Bancaria
+  bancos ProveedorBanco[]
+
+  // Datos Adicionales
+  contactoPrincipal String?
+  cargoContacto     String?
+  notas             String?
+
+  // Evaluación
+  calificacion Int?
+  evaluaciones ProveedorEvaluacion[]
+
+  // Control
+  isActive       Boolean @default(true)
+  motivoInactivo String?
+
+  // Auditoría
+  creadoPor      String
+  actualizadoPor String?
+  creadoEn       DateTime @default(now())
+  actualizadoEn  DateTime @updatedAt
+
+  // Relaciones
+  empresa                 Empresa             @relation(fields: [empresaId], references: [id])
+  productosPreferenciales ProveedorProducto[]
+  contactos               ProveedorContacto[]
+
+  @@unique([empresaId, codigo])
+  @@unique([empresaId, numeroDocumento])
+  @@index([empresaId, isActive])
+}
+
+/// Contactos adicionales del proveedor
+model ProveedorContacto {
+  id          String @id @default(cuid())
+  proveedorId String
+
+  nombre        String
+  cargo         String?
+  email         String?
+  telefono      String?
+  telefonoMovil String?
+  esPrincipal   Boolean @default(false)
+
+  creadoEn DateTime @default(now())
+
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+
+  @@index([proveedorId])
+}
+
+/// Cuentas bancarias del proveedor
+model ProveedorBanco {
+  id          String @id @default(cuid())
+  proveedorId String
+
+  nombreBanco  String
+  tipoCuenta   TipoCuenta
+  numeroCuenta String
+  cci          String?
+  swift        String?
+  moneda       String     @default("PEN")
+  esPrincipal  Boolean    @default(false)
+
+  creadoEn DateTime @default(now())
+
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+
+  @@index([proveedorId])
+}
+
+/// Evaluación periódica del proveedor
+model ProveedorEvaluacion {
+  id          String @id @default(cuid())
+  proveedorId String
+  empresaId   String
+
+  // Criterios de evaluación (1-5)
+  calidadProductos    Int
+  cumplimientoPlazos  Int
+  atencionServicio    Int
+  preciosCompetitivos Int
+
+  // Promedio
+  calificacionGeneral Decimal @db.Decimal(3, 2)
+
+  comentarios     String?
+  evaluadoPor     String
+  fechaEvaluacion DateTime @default(now())
+
+  proveedor Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+  empresa   Empresa   @relation(fields: [empresaId], references: [id])
+
+  @@index([proveedorId])
+  @@index([empresaId])
+}
+
+/// Productos preferenciales con precios especiales por proveedor
+model ProveedorProducto {
+  id          String  @id @default(cuid())
+  proveedorId String
+  productoId  String?
+  varianteId  String?
+  empresaId   String
+
+  // Precios preferenciales
+  precioCompra Decimal  @db.Decimal(15, 2)
+  descuento    Decimal? @db.Decimal(5, 2)
+
+  // Stock
+  esPreferido Boolean @default(false)
+
+  // Tiempos
+  tiempoEntrega  Int?
+  cantidadMinima Int?
+
+  // Control
+  isActive      Boolean   @default(true)
+  vigenciaDesde DateTime?
+  vigenciaHasta DateTime?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  proveedor Proveedor         @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+  producto  Producto?         @relation(fields: [productoId], references: [id])
+  variante  ProductoVariante? @relation(fields: [varianteId], references: [id])
+  empresa   Empresa           @relation(fields: [empresaId], references: [id])
+
+  @@unique([proveedorId, productoId, varianteId])
+  @@index([proveedorId])
+  @@index([productoId])
+  @@index([varianteId])
+}

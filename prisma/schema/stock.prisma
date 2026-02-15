@@ -1,0 +1,354 @@
+// =========================================
+// MÓDULO DE INVENTARIO POR SEDE
+// =========================================
+/// Stock de productos por sede
+/// Permite gestionar inventario independiente en cada sede
+/// INCLUYE precios por sede para manejo independiente de precios en cada ubicación
+model ProductoStock {
+  id         String  @id @default(cuid())
+  sedeId     String
+  productoId String?
+  varianteId String?
+  empresaId  String
+
+  // ========== STOCK FÍSICO ==========
+  stockActual Int // Stock físico total en la sede
+
+  // ========== RESERVAS ==========
+  stockReservado      Int @default(0) // Reservado para transferencias aprobadas
+  stockReservadoVenta Int @default(0) // Apartado por clientes (pre-ventas, pedidos)
+  stockReservadoCombo Int @default(0) // Apartado para ensamble de combos reservados
+
+  // ========== MERMA Y ESTADO ==========
+  stockDanado     Int @default(0) // Productos defectuosos/dañados (no vendibles)
+  stockEnGarantia Int @default(0) // Productos en proceso de garantía/reparación
+
+  // ========== CONFIGURACIÓN ==========
+  stockMinimo Int?
+  stockMaximo Int?
+
+  // ========== STOCK CALCULADOS (runtime, no se guardan en BD) ==========
+  // stockDisponibleVenta = stockActual - stockReservado - stockReservadoVenta - stockReservadoCombo - stockDanado - stockEnGarantia
+  // stockDisponibleTransferencia = stockActual - stockReservado
+
+  // Ubicación dentro de la sede
+  ubicacion String? // Pasillo, estante, etc.
+
+  // Precios por sede (opcionales - pueden configurarse después de crear el stock)
+  // Esto permite que cada sede maneje sus propios precios de forma independiente
+  precio       Decimal? @db.Decimal(10, 2) // Precio de venta en esta sede
+  precioCosto  Decimal? @db.Decimal(10, 2) // Precio de costo en esta sede (para cálculo de márgenes)
+  precioOferta Decimal? @db.Decimal(10, 2) // Precio de oferta específico de la sede
+
+  // Control de ofertas por sede
+  enOferta          Boolean   @default(false) // Si está en oferta en esta sede
+  fechaInicioOferta DateTime? // Inicio de oferta en esta sede
+  fechaFinOferta    DateTime? // Fin de oferta en esta sede
+
+  // Estado de configuración de precio (útil para filtros y dashboards)
+  precioConfigurado Boolean @default(false) // true cuando se ha establecido al menos el precio de venta
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  sede                   Sede                          @relation(fields: [sedeId], references: [id])
+  empresa                Empresa                       @relation(fields: [empresaId], references: [id])
+  producto               Producto?                     @relation(fields: [productoId], references: [id])
+  variante               ProductoVariante?             @relation(fields: [varianteId], references: [id])
+  movimientos            MovimientoStock[]
+  preciosHistorial       ProductoPrecioHistorialSede[] // Historial de cambios de precio por sede
+  itemsReporteIncidencia ReporteIncidenciaItem[] // Items de reportes de incidencias
+  itemsInventario        InventarioItem[] // Items de inventarios
+
+  @@unique([sedeId, productoId, varianteId])
+  @@index([sedeId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([stockActual])
+  @@index([empresaId, sedeId]) // Consultas de stock por empresa y sede
+  @@index([sedeId, stockActual]) // Ordenar por stock en sede
+  @@index([precio]) // Búsquedas por precio
+  @@index([enOferta]) // Filtrar productos en oferta por sede
+  @@index([precioConfigurado]) // Filtrar productos con/sin precio configurado
+  @@index([sedeId, precioConfigurado]) // Productos con precio por sede
+  @@index([sedeId, precioConfigurado, stockActual]) // Productos vendibles por sede
+}
+
+/// Registro de movimientos de stock (entradas, salidas, ajustes)
+model MovimientoStock {
+  id              String @id @default(cuid())
+  sedeId          String
+  productoStockId String
+  empresaId       String
+
+  // Tipo de movimiento
+  tipo            TipoMovimientoStock
+  tipoDocumento   String? // COMPRA, VENTA, AJUSTE, TRANSFERENCIA, etc.
+  numeroDocumento String?
+
+  // Cantidades
+  cantidadAnterior Int
+  cantidad         Int // Positivo = entrada, Negativo = salida
+  cantidadNueva    Int
+
+  // Motivo
+  motivo        String?
+  observaciones String?
+
+  // Relación con transferencias (si aplica)
+  transferenciaId String?
+
+  // Relación con devoluciones (si aplica)
+  devolucionId String?
+
+  // Usuario responsable
+  usuarioId String
+
+  // Auditoría
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  sede                   Sede                    @relation(fields: [sedeId], references: [id])
+  empresa                Empresa                 @relation(fields: [empresaId], references: [id])
+  productoStock          ProductoStock           @relation(fields: [productoStockId], references: [id])
+  transferencia          TransferenciaStock?     @relation(fields: [transferenciaId], references: [id])
+  devolucion             Devolucion?             @relation(fields: [devolucionId], references: [id])
+  itemsReporteIncidencia ReporteIncidenciaItem[] @relation("ItemIncidenciaMovimiento")
+  itemsInventario        InventarioItem[]        @relation("InventarioAjuste")
+
+  @@index([sedeId])
+  @@index([empresaId])
+  @@index([productoStockId])
+  @@index([tipo])
+  @@index([creadoEn])
+  @@index([transferenciaId])
+  @@index([devolucionId])
+  @@index([productoStockId, creadoEn]) // Historial de movimientos ordenado
+  @@index([sedeId, tipo]) // Filtrar movimientos por sede y tipo
+}
+
+/// Transferencias de stock entre sedes
+model TransferenciaStock {
+  id            String @id @default(cuid())
+  empresaId     String
+  sedeOrigenId  String
+  sedeDestinoId String
+
+  // Identificación
+  codigo String
+
+  // Estado
+  estado EstadoTransferencia @default(PENDIENTE)
+
+  // Resumen de items
+  totalItems      Int @default(0)
+  itemsAprobados  Int @default(0)
+  itemsRechazados Int @default(0)
+  itemsRecibidos  Int @default(0)
+
+  // Usuarios responsables
+  solicitadoPor String
+  aprobadoPor   String?
+  recibidoPor   String?
+
+  // Fechas
+  fechaSolicitud  DateTime  @default(now())
+  fechaAprobacion DateTime?
+  fechaEnvio      DateTime?
+  fechaRecepcion  DateTime?
+
+  // Observaciones
+  motivo        String? // Motivo general de la transferencia
+  observaciones String?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa               Empresa                        @relation(fields: [empresaId], references: [id])
+  sedeOrigen            Sede                           @relation("TransferenciasOrigen", fields: [sedeOrigenId], references: [id])
+  sedeDestino           Sede                           @relation("TransferenciasDestino", fields: [sedeDestinoId], references: [id])
+  items                 TransferenciaStockItem[] // Items de la transferencia
+  movimientos           MovimientoStock[]
+  incidencias           TransferenciaStockIncidencia[] // Incidencias reportadas en esta transferencia
+  itemsIncidenciaOrigen ReporteIncidenciaItem[]        @relation("ItemIncidenciaTransferencia") // Items que generaron esta transferencia de devolución
+
+  @@unique([empresaId, codigo]) // Código único por empresa
+  @@index([empresaId])
+  @@index([sedeOrigenId])
+  @@index([sedeDestinoId])
+  @@index([estado])
+  @@index([creadoEn])
+  @@index([empresaId, estado]) // Filtrar transferencias por empresa y estado
+}
+
+// Items individuales de una transferencia
+model TransferenciaStockItem {
+  id              String @id @default(cuid())
+  transferenciaId String
+  empresaId       String // Para filtros multi-tenant
+
+  // Producto o variante
+  productoId String?
+  varianteId String?
+
+  // Cantidades
+  cantidadSolicitada Int
+  cantidadAprobada   Int? // Puede ser menor a la solicitada
+  cantidadEnviada    Int? // Puede ser menor a la aprobada
+  cantidadRecibida   Int? // Puede ser menor a la enviada
+
+  // Estado del item
+  estado EstadoItemTransferencia @default(PENDIENTE)
+
+  // Observaciones específicas del item
+  motivo        String? // Motivo específico de este item (anula el general)
+  observaciones String? // Observaciones específicas del item
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  transferencia TransferenciaStock             @relation(fields: [transferenciaId], references: [id], onDelete: Cascade)
+  empresa       Empresa                        @relation(fields: [empresaId], references: [id])
+  producto      Producto?                      @relation(fields: [productoId], references: [id])
+  variante      ProductoVariante?              @relation(fields: [varianteId], references: [id])
+  incidencias   TransferenciaStockIncidencia[] // Incidencias reportadas para este item
+
+  @@index([transferenciaId])
+  @@index([empresaId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([estado])
+  @@index([empresaId, estado]) // Filtrar items por empresa y estado
+}
+
+enum TipoMovimientoStock {
+  // === COMPRAS ===
+  ENTRADA_COMPRA // Compra a proveedor
+  SALIDA_DEVOLUCION_PROVEEDOR // Devolución a proveedor
+  AJUSTE_ENTRADA_COMPRA // Ajuste por diferencia en recepción
+
+  // === VENTAS ===
+  SALIDA_VENTA // Venta a cliente
+  ENTRADA_DEVOLUCION_CLIENTE // Cliente devuelve producto
+  AJUSTE_SALIDA_VENTA // Ajuste por error en venta
+  RESERVA_VENTA // Reservar stock para venta (stockReservadoVenta++)
+  LIBERAR_RESERVA_VENTA // Liberar reserva de venta (stockReservadoVenta--)
+  RESERVA_COMBO // Reservar stock para ensamble de combo (stockReservadoCombo++)
+  LIBERAR_RESERVA_COMBO // Liberar reserva de combo (stockReservadoCombo--)
+
+  // === TRANSFERENCIAS ===
+  ENTRADA_TRANSFERENCIA // Entrada por transferencia de otra sede
+  SALIDA_TRANSFERENCIA // Salida por transferencia a otra sede
+
+  // === MERMA Y AJUSTES ===
+  AJUSTE_ENTRADA // Ajuste de inventario (entrada)
+  AJUSTE_SALIDA // Ajuste de inventario (salida)
+  AJUSTE_MERMA // Marcar producto como dañado (stockDanado++)
+  AJUSTE_REPARACION // Producto reparado (stockDanado--, disponible de nuevo)
+  AJUSTE_PERDIDA // Producto perdido/robado
+  AJUSTE_ENCONTRADO // Producto encontrado (corrección)
+  SALIDA_BAJA // Dar de baja definitiva (descarte)
+
+  // === GARANTÍA ===
+  ENTRADA_GARANTIA // Producto recibido para garantía (stockEnGarantia++)
+  SALIDA_GARANTIA // Enviar producto a reparación/proveedor
+  RETORNO_GARANTIA // Producto reparado regresa (stockEnGarantia--)
+
+  // === OTROS (Legacy - mantener compatibilidad) ===
+  ENTRADA_AJUSTE // (DEPRECADO) Usar AJUSTE_ENTRADA
+  SALIDA_AJUSTE // (DEPRECADO) Usar AJUSTE_SALIDA
+  ENTRADA_DEVOLUCION // Devolución genérica (deprecado, usar ENTRADA_DEVOLUCION_CLIENTE)
+  SALIDA_MERMA // Merma genérica (deprecado, usar AJUSTE_MERMA)
+  SALIDA_ROBO // Robo (deprecado, usar AJUSTE_PERDIDA)
+  SALIDA_DONACION // Donación
+}
+
+enum EstadoTransferencia {
+  BORRADOR // En creación
+  PENDIENTE // Solicitada, esperando aprobación
+  APROBADA // Aprobada, lista para envío
+  EN_TRANSITO // Enviada, en camino
+  RECIBIDA // Recibida en sede destino
+  RECHAZADA // Rechazada
+  CANCELADA // Cancelada
+}
+
+enum EstadoItemTransferencia {
+  PENDIENTE // Item pendiente de aprobación
+  APROBADO // Item aprobado para envío
+  RECHAZADO // Item rechazado (no se enviará)
+  ENVIADO // Item enviado
+  RECIBIDO // Item recibido completo
+  RECIBIDO_PARCIAL // Item recibido parcialmente (menos cantidad)
+}
+
+// ========================================
+// INCIDENCIAS DE TRANSFERENCIAS
+// ========================================
+
+/// Tipos de incidencias que pueden ocurrir al recibir una transferencia
+enum TipoIncidenciaTransferencia {
+  FALTANTE // No llegó la cantidad esperada (productos perdidos en tránsito)
+  DANADO // Llegó pero en mal estado físico
+  CALIDAD_RECHAZADA // No cumple estándares de calidad
+  EXCEDENTE // Llegaron más productos de los esperados
+  EMPAQUE_DANADO // Empaque dañado pero producto OK
+  PRODUCTO_INCORRECTO // Enviaron producto equivocado
+}
+
+/// Registro de incidencias/problemas al recibir transferencias entre sedes
+/// Sistema de tickets para gestionar productos dañados, faltantes, etc.
+model TransferenciaStockIncidencia {
+  id        String @id @default(cuid())
+  empresaId String
+
+  // Relación con transferencia e item
+  transferenciaId     String
+  transferenciaItemId String
+
+  // Tipo de incidencia
+  tipo TipoIncidenciaTransferencia
+
+  // Cantidades afectadas
+  cantidadAfectada Int // Cuántos productos tienen el problema
+
+  // Detalles del problema
+  descripcion    String?  @db.Text // Descripción detallada del problema
+  evidenciasUrls String[] @default([]) // URLs de fotos, PDFs o documentos de evidencia
+  observaciones  String?  @db.Text // Observaciones adicionales
+
+  // Resolución del ticket
+  resuelto             Boolean   @default(false)
+  fechaResolucion      DateTime?
+  accionTomada         String? // DEVOLVER_ORIGEN, DAR_DE_BAJA, REPARAR, ACEPTAR_CON_DESCUENTO, RECLAMAR_PROVEEDOR
+  documentoRelacionado String? // ID de documento generado (transferencia de devolución, orden de baja, etc.)
+
+  // Auditoría
+  reportadoPor  String // Usuario que reporta la incidencia
+  resueltoPor   String? // Usuario que resolvió la incidencia
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa             Empresa                @relation(fields: [empresaId], references: [id])
+  transferencia       TransferenciaStock     @relation(fields: [transferenciaId], references: [id], onDelete: Cascade)
+  item                TransferenciaStockItem @relation(fields: [transferenciaItemId], references: [id], onDelete: Cascade)
+  reportadoPorUsuario Usuario                @relation("IncidenciasReportadas", fields: [reportadoPor], references: [id])
+  resueltoPorUsuario  Usuario?               @relation("IncidenciasResueltas", fields: [resueltoPor], references: [id])
+
+  @@index([empresaId])
+  @@index([transferenciaId])
+  @@index([transferenciaItemId])
+  @@index([tipo])
+  @@index([resuelto])
+  @@index([reportadoPor])
+  @@index([empresaId, resuelto]) // Filtrar incidencias pendientes por empresa
+  @@index([empresaId, tipo]) // Reportes por tipo de incidencia
+  @@index([creadoEn]) // Ordenar por fecha de creación
+}

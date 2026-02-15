@@ -1,0 +1,391 @@
+model Persona {
+  id                String             @id @default(cuid())
+  nombres           String
+  apellidos         String
+  dni               String?            @unique
+  telefono          String?
+  email             String?
+  fechaNacimiento   DateTime?
+  genero            Genero?
+  observaciones     String?
+  isActive          Boolean            @default(true)
+  deletedAt         DateTime?
+  esCliente         Boolean            @default(false)
+  esProveedor       Boolean            @default(false)
+  esUsuario         Boolean            @default(false)
+  creadoEn          DateTime           @default(now())
+  actualizadoEn     DateTime           @updatedAt
+  direcciones       DireccionPersona[]
+  empresasAsociadas EmpresaPersona[]
+  usuario           Usuario?
+
+  @@index([isActive])
+  @@index([dni])
+  @@index([esCliente])
+  @@index([esProveedor])
+  @@index([esUsuario])
+  @@index([deletedAt])
+}
+
+model Usuario {
+  id                          String    @id @default(cuid())
+  personaId                   String    @unique
+  email                       String?   @unique
+  telefono                    String?   @unique
+  passwordHash                String?
+  isActive                    Boolean   @default(true)
+  deletedAt                   DateTime?
+  lastLoginAt                 DateTime?
+  resetToken                  String?   @unique
+  resetTokenExpiracion        DateTime?
+  emailVerificationToken      String?   @unique
+  emailVerificationExpiracion DateTime?
+  emailVerificado             Boolean   @default(false)
+  telefonoVerificado          Boolean   @default(false)
+  rolGlobal                   Rol?
+  authMethodsCount            Int       @default(0)
+
+  // Campos para login con DNI
+  metodoPrincipalLogin   MetodoLogin? @default(EMAIL)
+  requiereCambioPassword Boolean      @default(false)
+  dniVerificado          Boolean      @default(false)
+  ultimoCambioPassword   DateTime?
+
+  // Sede por defecto (última sede accedida o asignada)
+  sedeDefaultId String? // ID de la sede por defecto para este usuario
+
+  creadoEn                DateTime                      @default(now())
+  actualizadoEn           DateTime                      @updatedAt
+  authProviders           AuthProvider[]
+  empresas                EmpresaUsuarioRol[]
+  metodosPagoConfigurados MetodoPago[]                  @relation("MetodoPagoUsuario")
+  ordenesServicio         OrdenServicio[]
+  registrosComoCliente    RegistroCliente[]
+  transacciones           TransaccionPago[]
+  persona                 Persona                       @relation(fields: [personaId], references: [id], onDelete: Restrict)
+  sedes                   UsuarioSedeRol[]
+  historialPreciosCambios ProductoPrecioHistorial[]
+  historialPreciosSede    ProductoPrecioHistorialSede[] @relation("UsuarioCambiosPrecioSede")
+
+  // Relaciones para sistema de descuentos
+  descuentosAsignados   UsuarioDescuento[]      @relation("UsuarioConDescuento")
+  familiaresRegistrados UsuarioDescuento[]      @relation("FamiliarDe")
+  usosDescuento         DescuentoUsoHistorial[] @relation("UsuarioUsaDescuento")
+  descuentosProcesados  DescuentoUsoHistorial[] @relation("CajeroDescuentos")
+
+  // Relación inversa para registrados por este usuario
+  usuariosRegistrados EmpresaUsuarioRol[] @relation("RegistradoPor")
+
+  // Relaciones para incidencias de transferencias
+  incidenciasReportadas TransferenciaStockIncidencia[] @relation("IncidenciasReportadas")
+  incidenciasResueltas  TransferenciaStockIncidencia[] @relation("IncidenciasResueltas")
+
+  // Relaciones para reportes de incidencias
+  reportesIncidenciaCreados      ReporteIncidencia[]     @relation("ReporteReportadoPor")
+  reportesIncidenciaSupervisados ReporteIncidencia[]     @relation("ReporteSupervisadoPor")
+  reportesIncidenciaResueltos    ReporteIncidencia[]     @relation("ReporteResueltoPor")
+  reportesIncidenciaAprobados    ReporteIncidencia[]     @relation("ReporteAprobadoPor")
+  itemsIncidenciaResueltos       ReporteIncidenciaItem[] @relation("ItemResueltoPor")
+
+  // Relaciones para inventarios
+  inventariosResponsable  Inventario[]     @relation("InventarioResponsable")
+  inventariosSupervisados Inventario[]     @relation("InventarioSupervisor")
+  inventariosAprobados    Inventario[]     @relation("InventarioAprobadoPor")
+  itemsInventarioContados InventarioItem[] @relation("ItemContadoPor")
+
+  @@index([email])
+  @@index([telefono])
+  @@index([personaId])
+  @@index([isActive])
+  @@index([rolGlobal])
+  @@index([emailVerificado])
+  @@index([telefonoVerificado])
+  @@index([resetToken])
+  @@index([emailVerificationToken])
+  @@index([deletedAt])
+  @@index([metodoPrincipalLogin])
+  @@index([sedeDefaultId])
+}
+
+model AuthProvider {
+  id         String           @id @default(cuid())
+  userId     String
+  provider   AuthProviderType
+  providerId String
+  email      String
+  isActive   Boolean          @default(true)
+  createdAt  DateTime         @default(now())
+  usuario    Usuario          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerId])
+  @@index([userId])
+  @@index([email])
+  @@index([provider])
+}
+
+model EmpresaPersona {
+  id              String                   @id @default(cuid())
+  personaId       String
+  empresaId       String
+  rol             RolPersona               @default(CLIENTE)
+  isActive        Boolean                  @default(true)
+  deletedAt       DateTime?
+  creadoEn        DateTime                 @default(now())
+  actualizadoEn   DateTime                 @updatedAt
+  comprobantes    ComprobanteElectronico[] @relation("ComoCliente")
+  empresa         Empresa                  @relation(fields: [empresaId], references: [id])
+  persona         Persona                  @relation(fields: [personaId], references: [id])
+  ordenesServicio OrdenServicio[]          @relation("OrdenServicioCliente")
+
+  @@unique([personaId, empresaId])
+  @@index([empresaId])
+  @@index([rol])
+  @@index([empresaId, rol])
+  @@index([deletedAt])
+}
+
+model EmpresaUsuarioRol {
+  id                 String                   @id @default(cuid())
+  usuarioId          String
+  empresaId          String
+  rol                Rol
+  isActive           Boolean                  @default(true)
+  deletedAt          DateTime?
+  estado             EstadoCliente            @default(ACTIVO)
+  motivoInactivacion MotivoInactivacion?
+  notasMotivo        String?
+  registradoPor      String?
+  fechaAprobacion    DateTime?
+  aprobadoPor        String?
+  creadoPor          String?
+  modificadoPor      String?
+  creadoEn           DateTime                 @default(now())
+  actualizadoEn      DateTime                 @updatedAt
+  empresa            Empresa                  @relation(fields: [empresaId], references: [id])
+  usuario            Usuario                  @relation(fields: [usuarioId], references: [id])
+  registrador        Usuario?                 @relation("RegistradoPor", fields: [registradoPor], references: [id], onDelete: SetNull)
+  historialEstados   HistorialEstadoCliente[]
+
+  @@unique([usuarioId, empresaId, rol])
+  @@index([usuarioId, empresaId])
+  @@index([empresaId])
+  @@index([rol])
+  @@index([estado])
+  @@index([empresaId, rol])
+  @@index([empresaId, estado])
+  @@index([deletedAt])
+  @@index([registradoPor])
+}
+
+model UsuarioSedeRol {
+  id        String   @id @default(cuid())
+  usuarioId String
+  sedeId    String
+  rol       SedeRole // Rol específico del usuario en esta sede
+
+  // Permisos y configuración
+  permisos  String[]  @default([]) // Permisos específicos adicionales
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+
+  // Configuración de acceso
+  puedeAbrirCaja     Boolean  @default(false)
+  puedeCerrarCaja    Boolean  @default(false)
+  limiteCreditoVenta Decimal? @db.Decimal(10, 2) // Límite de crédito que puede autorizar
+
+  // Auditoría
+  creadoPor     String?
+  modificadoPor String?
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  sede    Sede    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, sedeId])
+  @@index([sedeId])
+  @@index([usuarioId])
+  @@index([rol])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@index([sedeId, isActive])
+  @@index([usuarioId, isActive])
+}
+
+model HistorialEstadoCliente {
+  id                  String              @id @default(cuid())
+  empresaUsuarioRolId String
+  estadoAnterior      EstadoCliente?
+  estadoNuevo         EstadoCliente
+  motivo              MotivoInactivacion?
+  notas               String?
+  modificadoPor       String?
+  fechaCambio         DateTime            @default(now())
+  empresaUsuarioRol   EmpresaUsuarioRol   @relation(fields: [empresaUsuarioRolId], references: [id])
+
+  @@index([empresaUsuarioRolId])
+  @@index([estadoNuevo])
+  @@index([motivo])
+  @@index([fechaCambio])
+}
+
+model RegistroCliente {
+  id            String         @id @default(cuid())
+  usuarioId     String
+  empresaId     String
+  tipoRegistro  TipoRegistro
+  canalRegistro CanalRegistro  @default(PRESENCIAL)
+  estado        EstadoRegistro @default(AUTO_APROBADO)
+  registradoPor String?
+  datosExtra    Json?
+  notas         String?
+  creadoEn      DateTime       @default(now())
+  actualizadoEn DateTime       @updatedAt
+  usuario       Usuario        @relation(fields: [usuarioId], references: [id])
+
+  @@unique([usuarioId, empresaId])
+  @@index([empresaId])
+  @@index([estado])
+  @@index([tipoRegistro])
+  @@index([canalRegistro])
+  @@index([creadoEn])
+}
+
+model DireccionPersona {
+  id            String        @id @default(cuid())
+  personaId     String
+  tipo          TipoDireccion
+  direccion     String
+  referencia    String?
+  distrito      String?
+  provincia     String?
+  departamento  String?
+  pais          String?       @default("PERU")
+  isActive      Boolean       @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime      @default(now())
+  actualizadoEn DateTime      @updatedAt
+  persona       Persona       @relation(fields: [personaId], references: [id])
+
+  @@index([personaId])
+  @@index([deletedAt])
+}
+
+enum AuthProviderType {
+  PASSWORD
+  GOOGLE
+  MICROSOFT
+  FACEBOOK
+  APPLE
+  GITHUB
+  LINKEDIN
+  TWITTER
+  DISCORD
+  SLACK
+  SALESFORCE
+  AMAZON
+  YAHOO
+  INSTAGRAM
+  SPOTIFY
+}
+
+enum MetodoLogin {
+  EMAIL
+  DNI
+  TELEFONO
+  GOOGLE
+  FACEBOOK
+}
+
+enum Rol {
+  SUPER_ADMIN
+  EMPRESA_ADMIN
+  SEDE_ADMIN
+  CAJERO
+  VENDEDOR
+  TECNICO
+  CONTADOR
+  LECTURA
+  OPERADOR
+  CLIENTE
+  CLIENTE_EMPRESA
+}
+
+// Roles específicos para gestión de sedes
+// Estos roles son más granulares y se asignan a usuarios dentro de cada sede
+enum SedeRole {
+  GERENTE_SEDE // Gerente de la sede, acceso completo a operaciones de la sede
+  ADMINISTRADOR // Administrador de sede, puede gestionar usuarios y configuraciones
+  SUPERVISOR // Supervisor de operaciones, supervisa vendedores y cajeros
+  CAJERO // Cajero, puede realizar ventas y manejar caja
+  VENDEDOR // Vendedor, puede realizar ventas pero no manejar caja
+  ALMACENERO // Encargado de almacén/inventario
+  TECNICO_SERVICIO // Técnico para órdenes de servicio
+  REPARTIDOR // Repartidor/delivery
+  CONTADOR_SEDE // Contador asignado a la sede
+  ASISTENTE // Asistente general
+  CONSULTOR // Consultor, solo lectura y reportes
+  PRACTICANTE // Practicante, acceso limitado
+}
+
+enum EstadoCliente {
+  ACTIVO
+  INACTIVO
+  BLOQUEADO
+  SUSPENDIDO
+  ELIMINADO
+}
+
+enum MotivoInactivacion {
+  INCUMPLIMIENTO_PAGO
+  QUEJAS_RECURRENTES
+  FRAUDE
+  VIOLACION_TERMINOS
+  INACTIVIDAD_PROLONGADA
+  MAL_COMPORTAMIENTO
+  PROBLEMAS_DOCUMENTACION
+  CERRAR_NEGOCIO
+  TRASLADO
+  OTRO
+}
+
+enum Genero {
+  MASCULINO
+  FEMENINO
+  OTRO
+}
+
+enum TipoDireccion {
+  ENVIO
+  FISCAL
+  TRABAJO
+}
+
+enum TipoRegistro {
+  AUTO_REGISTRO
+  EMPRESA_REGISTRA
+  EMPRESA_CREA
+  ADMIN_REGISTRA
+}
+
+enum CanalRegistro {
+  WEB
+  MOVIL
+  PRESENCIAL
+  WHATSAPP
+  TELEMARKETING
+}
+
+enum EstadoRegistro {
+  PENDIENTE_APROBACION
+  AUTO_APROBADO
+  RECHAZADO
+  CANCELADO
+}
+
+enum RolPersona {
+  CLIENTE
+  PROVEEDOR
+  EMPLEADO
+}
