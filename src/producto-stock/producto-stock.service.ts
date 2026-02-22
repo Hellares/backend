@@ -556,6 +556,11 @@ export class ProductoStockService {
       hayActualizacion = true;
     }
 
+    if (dto.precioIncluyeIgv !== undefined) {
+      updateData.precioIncluyeIgv = dto.precioIncluyeIgv;
+      hayActualizacion = true;
+    }
+
     if (dto.fechaInicioOferta !== undefined) {
       updateData.fechaInicioOferta = dto.fechaInicioOferta
         ? new Date(dto.fechaInicioOferta)
@@ -1113,7 +1118,9 @@ export class ProductoStockService {
       valor: number;
       aplicarA: 'PRECIO' | 'PRECIO_COSTO';
       operacion: 'AUMENTAR' | 'DISMINUIR';
-      productoIds?: string[]; // Opcional: solo actualizar productos específicos
+      productoIds?: string[];
+      excluirCombos?: boolean;
+      soloCombos?: boolean;
     },
     usuarioId: string,
   ) {
@@ -1134,6 +1141,14 @@ export class ProductoStockService {
 
     if (ajuste.productoIds && ajuste.productoIds.length > 0) {
       where.productoId = { in: ajuste.productoIds };
+    }
+
+    // Filtro de combos
+    if (ajuste.excluirCombos) {
+      where.producto = { esCombo: false };
+    } else if (ajuste.soloCombos) {
+      where.producto = { esCombo: true, tipoPrecioCombo: 'FIJO' };
+      this.logger.log('Ajuste masivo solo para combos FIJO');
     }
 
     // Obtener todos los stocks afectados

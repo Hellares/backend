@@ -71,6 +71,18 @@ export class EmpresaPermissionsDto {
   canManageClients: boolean;
 
   @ApiProperty({
+    description: 'Puede ver la lista de cotizaciones',
+    example: true,
+  })
+  canViewCotizaciones: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar cotizaciones (crear, editar, eliminar)',
+    example: true,
+  })
+  canManageCotizaciones: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de proveedores',
     example: true,
   })

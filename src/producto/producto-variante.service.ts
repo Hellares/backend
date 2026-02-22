@@ -24,6 +24,48 @@ export class ProductoVarianteService {
   }
 
   /**
+   * Include clause reutilizable para cargar variantes con todas sus relaciones
+   */
+  private get varianteInclude() {
+    return {
+      archivos: {
+        where: { deletedAt: null },
+        orderBy: { orden: 'asc' as const },
+      },
+      atributosValores: {
+        include: {
+          atributo: {
+            select: {
+              id: true,
+              nombre: true,
+              clave: true,
+              tipo: true,
+              unidad: true,
+            },
+          },
+        },
+      },
+      stocksPorSede: {
+        select: {
+          stockActual: true,
+          precio: true,
+          precioCosto: true,
+          precioOferta: true,
+          enOferta: true,
+          precioConfigurado: true,
+          sede: {
+            select: {
+              id: true,
+              nombre: true,
+              codigo: true,
+            },
+          },
+        },
+      },
+    };
+  }
+
+  /**
    * Crear una variante para un producto
    */
   async create(
@@ -71,134 +113,64 @@ export class ProductoVarianteService {
       throw new ConflictException(`Ya existe una variante con el SKU: ${dto.sku}`);
     }
 
-    // Generar código de empresa único (usando servicio centralizado)
-    const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId);
+    // Transacción atómica: crear variante + atributos + imágenes + niveles + stock
+    const varianteId = await this.prisma.$transaction(async (tx) => {
+      // Generar código de empresa único
+      const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId, tx);
 
-    // Crear la variante (SIN campos de stock legacy - usar ProductoStock)
-    const variante = await this.prisma.productoVariante.create({
-      data: {
-        productoId,
-        empresaId,
-        nombre: dto.nombre,
-        sku: dto.sku,
-        codigoBarras: dto.codigoBarras,
-        codigoEmpresa,
-        peso: dto.peso,
-        dimensiones: dto.dimensiones,
-        isActive: dto.isActive ?? true,
-        orden: dto.orden ?? 0,
-      },
-      include: {
-        archivos: {
-          where: { deletedAt: null },
-          orderBy: { orden: 'asc' },
+      // Crear la variante (solo necesitamos el ID, reload completo al final)
+      const variante = await tx.productoVariante.create({
+        data: {
+          productoId,
+          empresaId,
+          nombre: dto.nombre,
+          sku: dto.sku,
+          codigoBarras: dto.codigoBarras,
+          codigoEmpresa,
+          peso: dto.peso,
+          dimensiones: dto.dimensiones,
+          isActive: dto.isActive ?? true,
+          orden: dto.orden ?? 0,
         },
-        atributosValores: {
-          include: {
-            atributo: {
-              select: {
-                id: true,
-                nombre: true,
-                clave: true,
-                tipo: true,
-                unidad: true,
-              },
-            },
+        select: { id: true },
+      });
+
+      // Crear atributos estructurados si se proporcionaron
+      if (dto.atributosEstructurados && dto.atributosEstructurados.length > 0) {
+        await this.createVarianteAtributosFromStructured(variante.id, empresaId, dto.atributosEstructurados, tx);
+      }
+
+      // Asociar imágenes si se proporcionaron
+      if (dto.imagenesIds && dto.imagenesIds.length > 0) {
+        await tx.archivo.updateMany({
+          where: {
+            id: { in: dto.imagenesIds },
+            empresaId,
           },
-        },
-        stocksPorSede: {
-          select: {
-            stockActual: true,
-            precio: true,
-            precioCosto: true,
-            precioOferta: true,
-            enOferta: true,
-            precioConfigurado: true,
-            sede: {
-              select: {
-                id: true,
-                nombre: true,
-                codigo: true,
-              },
-            },
+          data: {
+            varianteId: variante.id,
+            entidadTipo: 'PRODUCTO_VARIANTE',
+            entidadId: variante.id,
           },
-        },
-      },
+        });
+      }
+
+      // Copiar niveles de precio de otra variante del mismo producto
+      await this.copiarNivelesDeOtraVariante(productoId, variante.id, tx);
+
+      // Crear ProductoStock en las sedes correspondientes
+      await this.crearProductoStockEnSedes(variante.id, productoId, empresaId, tx);
+
+      return variante.id;
     });
 
-    // Crear atributos estructurados si se proporcionaron
-    if (dto.atributosEstructurados && dto.atributosEstructurados.length > 0) {
-      await this.createVarianteAtributosFromStructured(variante.id, empresaId, dto.atributosEstructurados);
+    // Un solo reload completo fuera de la transacción
+    const varianteFinal = await this.recargarVariante(varianteId);
 
-      // Recargar variante con atributos creados
-      const varianteConAtributos = await this.prisma.productoVariante.findUnique({
-        where: { id: variante.id },
-        include: {
-          archivos: {
-            where: { deletedAt: null },
-            orderBy: { orden: 'asc' },
-          },
-          atributosValores: {
-            include: {
-              atributo: {
-                select: {
-                  id: true,
-                  nombre: true,
-                  clave: true,
-                  tipo: true,
-                  unidad: true,
-                },
-              },
-            },
-          },
-          stocksPorSede: {
-            select: {
-              stockActual: true,
-              sede: {
-                select: {
-                  id: true,
-                  nombre: true,
-                  codigo: true,
-                },
-              },
-            },
-          },
-        },
-      });
-      
-      if (varianteConAtributos) {
-        Object.assign(variante, varianteConAtributos);
-      }
-    }
-
-    // Asociar imágenes si se proporcionaron
-    if (dto.imagenesIds && dto.imagenesIds.length > 0) {
-      await this.prisma.archivo.updateMany({
-        where: {
-          id: { in: dto.imagenesIds },
-          empresaId,
-        },
-        data: {
-          varianteId: variante.id,
-          entidadTipo: 'PRODUCTO_VARIANTE',
-          entidadId: variante.id,
-        },
-      });
-    }
-
-    // Copiar niveles de precio de otra variante del mismo producto
-    await this.copiarNivelesDeOtraVariante(productoId, variante.id);
-
-    // Crear ProductoStock en las sedes correspondientes
-    await this.crearProductoStockEnSedes(variante.id, productoId, empresaId);
-
-    // Recargar variante con stocksPorSede recién creados
-    const varianteFinal = await this.recargarVariante(variante.id);
-
-    // Invalidar cache de productos (las variantes afectan el stock total)
+    // Invalidar cache de productos
     await this.cache.invalidateProductosLists(empresaId);
 
-    this.logger.success('Product variant created', { varianteId: variante.id });
+    this.logger.success('Product variant created', { varianteId });
 
     return this.mapToResponseDto(varianteFinal);
   }
@@ -220,43 +192,9 @@ export class ProductoVarianteService {
         deletedAt: null,
         ...(includeInactive ? {} : { isActive: true }),
       },
-      include: {
-        archivos: {
-          where: { deletedAt: null },
-          orderBy: { orden: 'asc' },
-        },
-        atributosValores: {
-          include: {
-            atributo: {
-              select: {
-                id: true,
-                nombre: true,
-                clave: true,
-                tipo: true,
-                unidad: true,
-              },
-            },
-          },
-        },
-        stocksPorSede: {
-          select: {
-            stockActual: true,
-            precio: true,
-            precioCosto: true,
-            precioOferta: true,
-            enOferta: true,
-            precioConfigurado: true,
-            sede: {
-              select: {
-                id: true,
-                nombre: true,
-                codigo: true,
-              },
-            },
-          },
-        },
-      },
+      include: this.varianteInclude,
       orderBy: { orden: 'asc' },
+      take: 100, // Límite de seguridad
     });
 
     return variantes.map((v) => this.mapToResponseDto(v));
@@ -277,42 +215,7 @@ export class ProductoVarianteService {
         empresaId,
         deletedAt: null,
       },
-      include: {
-        archivos: {
-          where: { deletedAt: null },
-          orderBy: { orden: 'asc' },
-        },
-        atributosValores: {
-          include: {
-            atributo: {
-              select: {
-                id: true,
-                nombre: true,
-                clave: true,
-                tipo: true,
-                unidad: true,
-              },
-            },
-          },
-        },
-        stocksPorSede: {
-          select: {
-            stockActual: true,
-            precio: true,
-            precioCosto: true,
-            precioOferta: true,
-            enOferta: true,
-            precioConfigurado: true,
-            sede: {
-              select: {
-                id: true,
-                nombre: true,
-                codigo: true,
-              },
-            },
-          },
-        },
-      },
+      include: this.varianteInclude,
     });
 
     if (!variante) {
@@ -376,143 +279,66 @@ export class ProductoVarianteService {
       }
     }
 
-    // Actualizar la variante (SIN campos de stock legacy - usar ProductoStockRepository)
-    const variante = await this.prisma.productoVariante.update({
-      where: { id: varianteId },
-      data: {
-        ...(dto.nombre && { nombre: dto.nombre }),
-        ...(dto.sku && { sku: dto.sku }),
-        ...(dto.codigoBarras !== undefined && { codigoBarras: dto.codigoBarras }),
-        ...(dto.peso !== undefined && { peso: dto.peso }),
-        ...(dto.dimensiones && { dimensiones: dto.dimensiones }),
-        ...(dto.isActive !== undefined && { isActive: dto.isActive }),
-        ...(dto.orden !== undefined && { orden: dto.orden }),
-      },
-      include: {
-        archivos: {
-          where: { deletedAt: null },
-          orderBy: { orden: 'asc' },
+    // Transacción atómica: update variante + atributos + imágenes
+    await this.prisma.$transaction(async (tx) => {
+      // Actualizar la variante
+      await tx.productoVariante.update({
+        where: { id: varianteId },
+        data: {
+          ...(dto.nombre && { nombre: dto.nombre }),
+          ...(dto.sku && { sku: dto.sku }),
+          ...(dto.codigoBarras !== undefined && { codigoBarras: dto.codigoBarras }),
+          ...(dto.peso !== undefined && { peso: dto.peso }),
+          ...(dto.dimensiones && { dimensiones: dto.dimensiones }),
+          ...(dto.isActive !== undefined && { isActive: dto.isActive }),
+          ...(dto.orden !== undefined && { orden: dto.orden }),
         },
-        atributosValores: {
-          include: {
-            atributo: {
-              select: {
-                id: true,
-                nombre: true,
-                clave: true,
-                tipo: true,
-                unidad: true,
-              },
+        select: { id: true },
+      });
+
+      // Actualizar atributos si se proporcionaron
+      if (dto.atributosEstructurados !== undefined) {
+        await tx.productoAtributoValor.deleteMany({
+          where: { varianteId },
+        });
+
+        if (dto.atributosEstructurados.length > 0) {
+          await this.createVarianteAtributosFromStructured(varianteId, empresaId, dto.atributosEstructurados, tx);
+        }
+      }
+
+      // Actualizar imágenes si se proporcionaron
+      if (dto.imagenesIds !== undefined) {
+        await tx.archivo.updateMany({
+          where: { varianteId },
+          data: { varianteId: null },
+        });
+
+        if (dto.imagenesIds.length > 0) {
+          await tx.archivo.updateMany({
+            where: {
+              id: { in: dto.imagenesIds },
+              empresaId,
             },
-          },
-        },
-        stocksPorSede: {
-          select: {
-            stockActual: true,
-            precio: true,
-            precioCosto: true,
-            precioOferta: true,
-            enOferta: true,
-            precioConfigurado: true,
-            sede: {
-              select: {
-                id: true,
-                nombre: true,
-                codigo: true,
-              },
+            data: {
+              varianteId,
+              entidadTipo: 'PRODUCTO_VARIANTE',
+              entidadId: varianteId,
             },
-          },
-        },
-      },
+          });
+        }
+      }
     });
 
-    // Actualizar atributos si se proporcionaron
-    if (dto.atributosEstructurados !== undefined) {
-      // Eliminar atributos existentes
-      await this.prisma.productoAtributoValor.deleteMany({
-        where: { varianteId: varianteId },
-      });
+    // Un solo reload completo con todos los datos (corrige bug de stocksPorSede incompleto)
+    const varianteFinal = await this.recargarVariante(varianteId);
 
-      // Crear nuevos atributos si hay
-      if (dto.atributosEstructurados.length > 0) {
-        await this.createVarianteAtributosFromStructured(varianteId, empresaId, dto.atributosEstructurados);
-      }
-
-      // Recargar variante con nuevos atributos
-      const varianteConAtributos = await this.prisma.productoVariante.findUnique({
-        where: { id: varianteId },
-        include: {
-          archivos: {
-            where: { deletedAt: null },
-            orderBy: { orden: 'asc' },
-          },
-          atributosValores: {
-            include: {
-              atributo: {
-                select: {
-                  id: true,
-                  nombre: true,
-                  clave: true,
-                  tipo: true,
-                  unidad: true,
-                },
-              },
-            },
-          },
-          stocksPorSede: {
-            select: {
-              stockActual: true,
-              sede: {
-                select: {
-                  id: true,
-                  nombre: true,
-                  codigo: true,
-                },
-              },
-            },
-          },
-        },
-      });
-
-      if (varianteConAtributos) {
-        Object.assign(variante, varianteConAtributos);
-      }
-    }
-
-    // Actualizar imágenes si se proporcionaron
-    if (dto.imagenesIds !== undefined) {
-      // Desvincular imágenes anteriores
-      await this.prisma.archivo.updateMany({
-        where: {
-          varianteId: varianteId,
-        },
-        data: {
-          varianteId: null,
-        },
-      });
-
-      // Vincular nuevas imágenes
-      if (dto.imagenesIds.length > 0) {
-        await this.prisma.archivo.updateMany({
-          where: {
-            id: { in: dto.imagenesIds },
-            empresaId,
-          },
-          data: {
-            varianteId: variante.id,
-            entidadTipo: 'PRODUCTO_VARIANTE',
-            entidadId: variante.id,
-          },
-        });
-      }
-    }
-
-    // Invalidar cache de productos (las variantes afectan el stock total y datos del producto)
+    // Invalidar cache
     await this.cache.invalidateProductosLists(empresaId);
 
     this.logger.success('Variant updated', { varianteId });
 
-    return this.mapToResponseDto(variante);
+    return this.mapToResponseDto(varianteFinal);
   }
 
   /**
@@ -523,14 +349,16 @@ export class ProductoVarianteService {
     varianteId: string,
     empresaId: string,
     atributosEstructurados: Array<{ atributoId: string; valor: string }>,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
+    const prisma = tx || this.prisma;
     if (atributosEstructurados.length === 0) {
       return;
     }
 
     // Verificar que los atributos pertenezcan a la empresa y estén activos
     const atributoIds = atributosEstructurados.map(a => a.atributoId);
-    const atributosExistentes = await this.prisma.productoAtributo.findMany({
+    const atributosExistentes = await prisma.productoAtributo.findMany({
       where: {
         id: { in: atributoIds },
         empresaId,
@@ -553,7 +381,7 @@ export class ProductoVarianteService {
       valor: String(a.valor),
     }));
 
-    await this.prisma.productoAtributoValor.createMany({
+    await prisma.productoAtributoValor.createMany({
       data: valoresAtributos,
       skipDuplicates: true,
     });
@@ -703,9 +531,11 @@ export class ProductoVarianteService {
   private async copiarNivelesDeOtraVariante(
     productoId: string,
     nuevaVarianteId: string,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
+    const prisma = tx || this.prisma;
     // Buscar una variante existente del mismo producto que tenga niveles de precio
-    const varianteConNiveles = await this.prisma.productoVariante.findFirst({
+    const varianteConNiveles = await prisma.productoVariante.findFirst({
       where: {
         productoId,
         id: { not: nuevaVarianteId },
@@ -746,7 +576,7 @@ export class ProductoVarianteService {
       isActive: true,
     }));
 
-    await this.prisma.precioNivel.createMany({
+    await prisma.precioNivel.createMany({
       data: nivelesParaCopiar,
     });
 
@@ -936,55 +766,79 @@ export class ProductoVarianteService {
       return ids;
     }, { timeout: txTimeout });
 
-    // Copiar niveles de precio fuera de la transacción
-    for (const varianteId of varianteIds) {
-      await this.copiarNivelesDeOtraVariante(productoId, varianteId);
+    // OPTIMIZACIÓN: Copiar niveles y crear stock en bulk (2 queries en vez de 2N)
+    // 1. Buscar niveles de precio UNA sola vez
+    const varianteConNiveles = await this.prisma.productoVariante.findFirst({
+      where: {
+        productoId,
+        id: { notIn: varianteIds },
+        deletedAt: null,
+      },
+      include: {
+        preciosNivel: {
+          where: { isActive: true },
+          orderBy: { orden: 'asc' },
+        },
+      },
+    });
+
+    if (varianteConNiveles?.preciosNivel?.length) {
+      // Crear niveles para TODAS las variantes de una vez
+      const todosNiveles = varianteIds.flatMap(varianteId =>
+        varianteConNiveles.preciosNivel.map(nivel => ({
+          varianteId,
+          productoId: null as string | null,
+          nombre: nivel.nombre,
+          cantidadMinima: nivel.cantidadMinima,
+          cantidadMaxima: nivel.cantidadMaxima,
+          tipoPrecio: nivel.tipoPrecio,
+          precio: nivel.precio,
+          porcentajeDesc: nivel.porcentajeDesc,
+          descripcion: nivel.descripcion,
+          orden: nivel.orden,
+          isActive: true,
+        })),
+      );
+      await this.prisma.precioNivel.createMany({ data: todosNiveles });
     }
 
-    // Crear ProductoStock en las sedes correspondientes para cada variante
-    for (const varianteId of varianteIds) {
-      await this.crearProductoStockEnSedes(varianteId, productoId, empresaId);
+    // 2. Buscar sedes UNA sola vez y crear stock para TODAS las variantes
+    const stocksProductoBase = await this.prisma.productoStock.findMany({
+      where: { productoId, empresaId },
+      select: { sedeId: true },
+    });
+
+    let sedeIds: string[];
+    if (stocksProductoBase.length > 0) {
+      sedeIds = stocksProductoBase.map(s => s.sedeId);
+    } else {
+      const sedesActivas = await this.prisma.sede.findMany({
+        where: { empresaId, isActive: true },
+        select: { id: true },
+      });
+      sedeIds = sedesActivas.map(s => s.id);
+    }
+
+    if (sedeIds.length > 0) {
+      const todosStocks = varianteIds.flatMap(varianteId =>
+        sedeIds.map(sedeId => ({
+          sedeId,
+          empresaId,
+          varianteId,
+          stockActual: 0,
+          precioConfigurado: false,
+        })),
+      );
+      await this.prisma.productoStock.createMany({
+        data: todosStocks,
+        skipDuplicates: true,
+      });
     }
 
     // Recargar variantes con relaciones completas (fuera de la transacción)
     const variantesCreadas = await this.prisma.productoVariante.findMany({
       where: { id: { in: varianteIds } },
-      include: {
-        archivos: {
-          where: { deletedAt: null },
-          orderBy: { orden: 'asc' },
-        },
-        atributosValores: {
-          include: {
-            atributo: {
-              select: {
-                id: true,
-                nombre: true,
-                clave: true,
-                tipo: true,
-                unidad: true,
-              },
-            },
-          },
-        },
-        stocksPorSede: {
-          select: {
-            stockActual: true,
-            precio: true,
-            precioCosto: true,
-            precioOferta: true,
-            enOferta: true,
-            precioConfigurado: true,
-            sede: {
-              select: {
-                id: true,
-                nombre: true,
-                codigo: true,
-              },
-            },
-          },
-        },
-      },
+      include: this.varianteInclude,
     });
 
     // Invalidar cache
@@ -1025,42 +879,7 @@ export class ProductoVarianteService {
   private async recargarVariante(varianteId: string) {
     return this.prisma.productoVariante.findUnique({
       where: { id: varianteId },
-      include: {
-        archivos: {
-          where: { deletedAt: null },
-          orderBy: { orden: 'asc' },
-        },
-        atributosValores: {
-          include: {
-            atributo: {
-              select: {
-                id: true,
-                nombre: true,
-                clave: true,
-                tipo: true,
-                unidad: true,
-              },
-            },
-          },
-        },
-        stocksPorSede: {
-          select: {
-            stockActual: true,
-            precio: true,
-            precioCosto: true,
-            precioOferta: true,
-            enOferta: true,
-            precioConfigurado: true,
-            sede: {
-              select: {
-                id: true,
-                nombre: true,
-                codigo: true,
-              },
-            },
-          },
-        },
-      },
+      include: this.varianteInclude,
     });
   }
 
@@ -1074,10 +893,12 @@ export class ProductoVarianteService {
     varianteId: string,
     productoId: string,
     empresaId: string,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
+    const prisma = tx || this.prisma;
     try {
       // Buscar sedes donde el producto base tiene stock
-      const stocksProductoBase = await this.prisma.productoStock.findMany({
+      const stocksProductoBase = await prisma.productoStock.findMany({
         where: {
           productoId,
           empresaId,
@@ -1092,7 +913,7 @@ export class ProductoVarianteService {
         sedeIds = stocksProductoBase.map(s => s.sedeId);
       } else {
         // Si el producto base no tiene stock, usar todas las sedes activas
-        const sedesActivas = await this.prisma.sede.findMany({
+        const sedesActivas = await prisma.sede.findMany({
           where: { empresaId, isActive: true },
           select: { id: true },
         });
@@ -1102,7 +923,7 @@ export class ProductoVarianteService {
       if (sedeIds.length === 0) return;
 
       // Crear registros de ProductoStock para la variante en cada sede
-      await this.prisma.productoStock.createMany({
+      await prisma.productoStock.createMany({
         data: sedeIds.map(sedeId => ({
           sedeId,
           empresaId,
@@ -1266,18 +1087,14 @@ export class ProductoVarianteService {
       return;
     }
 
-    // Actualizar cada atributo para asignarle la varianteId y desvincularlo del producto
-    await Promise.all(
-      atributosProducto.map(async (atributo) => {
-        await prisma.productoAtributoValor.update({
-          where: { id: atributo.id },
-          data: {
-            productoId: null,
-            varianteId,
-          },
-        });
-      }),
-    );
+    // Actualizar todos los atributos en una sola operación
+    await prisma.productoAtributoValor.updateMany({
+      where: { id: { in: atributosProducto.map(a => a.id) } },
+      data: {
+        productoId: null,
+        varianteId,
+      },
+    });
 
     this.logger.debug(`Migrados ${atributosProducto.length} atributos del producto ${productoId} a variante ${varianteId}`);
   }
@@ -1325,38 +1142,33 @@ export class ProductoVarianteService {
 
     this.logger.info(`Migrando ${stocksDelProducto.length} registros de ProductoStock del producto ${productoId} a variante ${varianteId}`);
 
-    // Migrar cada registro a la variante
-    for (const stock of stocksDelProducto) {
-      // Actualizar ProductoStock: desvincular del producto y vincular a variante
-      await prisma.productoStock.update({
-        where: { id: stock.id },
-        data: {
-          productoId: null,     // Quitar del producto
-          varianteId: varianteId, // Asignar a variante
-        },
-      });
+    // Migrar todos los registros en bulk (1 updateMany + 1 createMany en vez de 2N queries)
+    const stockIds = stocksDelProducto.map(s => s.id);
 
-      // Registrar movimiento de auditoría (sin cambio de cantidad)
-      await prisma.movimientoStock.create({
-        data: {
-          sedeId: stock.sedeId,
-          empresaId,
-          productoStockId: stock.id,
-          tipo: 'ENTRADA_AJUSTE',
-          tipoDocumento: 'MIGRACION_VARIANTE',
-          cantidadAnterior: stock.stockActual,
-          cantidad: 0, // No cambia cantidad
-          cantidadNueva: stock.stockActual,
-          motivo: `Migración de stock al habilitar variantes en producto. Stock preservado en variante por defecto.`,
-          observaciones: `Sede: ${stock.sede.nombre} | Stock migrado: ${stock.stockActual} unidades`,
-          usuarioId,
-        },
-      });
+    await prisma.productoStock.updateMany({
+      where: { id: { in: stockIds } },
+      data: {
+        productoId: null,
+        varianteId: varianteId,
+      },
+    });
 
-      this.logger.debug(
-        `Stock migrado en sede ${stock.sede.nombre}: ${stock.stockActual} unidades (ProductoStock ID: ${stock.id})`,
-      );
-    }
+    // Registrar movimientos de auditoría en bulk
+    await prisma.movimientoStock.createMany({
+      data: stocksDelProducto.map(stock => ({
+        sedeId: stock.sedeId,
+        empresaId,
+        productoStockId: stock.id,
+        tipo: 'ENTRADA_AJUSTE' as const,
+        tipoDocumento: 'MIGRACION_VARIANTE',
+        cantidadAnterior: stock.stockActual,
+        cantidad: 0,
+        cantidadNueva: stock.stockActual,
+        motivo: `Migración de stock al habilitar variantes en producto. Stock preservado en variante por defecto.`,
+        observaciones: `Sede: ${stock.sede.nombre} | Stock migrado: ${stock.stockActual} unidades`,
+        usuarioId,
+      })),
+    });
 
     this.logger.info(`Migración completada: ${stocksDelProducto.length} registros de ProductoStock migrados exitosamente`);
   }

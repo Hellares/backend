@@ -47,9 +47,10 @@ model Producto {
   variantes           ProductoVariante[]
 
   // Relaciones para combos
-  componentesCombo  ProductoCombo[]     @relation("ComboProducto")
-  usadoEnCombos     ProductoCombo[]     @relation("ComponenteProducto")
-  reservacionesCombo ComboReservacion[] @relation("ComboReservaciones")
+  componentesCombo     ProductoCombo[]        @relation("ComboProducto")
+  usadoEnCombos        ProductoCombo[]        @relation("ComponenteProducto")
+  reservacionesCombo   ComboReservacion[]     @relation("ComboReservaciones")
+  configHistorialCombo ComboConfigHistorial[] @relation("ComboConfigCambios")
 
   // Relaciones para atributos estructurados
   atributosValores ProductoAtributoValor[]
@@ -76,6 +77,9 @@ model Producto {
 
   // Relaciones para módulo de proveedores
   proveedorProductos ProveedorProducto[]
+
+  // Relaciones para cotizaciones
+  cotizacionDetalles CotizacionDetalle[]
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
@@ -239,6 +243,9 @@ model ProductoVariante {
   // Relaciones para módulo de proveedores
   proveedorProductos ProveedorProducto[]
 
+  // Relaciones para cotizaciones
+  cotizacionDetalles CotizacionDetalle[]
+
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
   @@index([productoId])
@@ -255,9 +262,9 @@ model ProductoVariante {
 /// Permite crear filtros dinámicos (Color, Talla, Socket, RAM Type, etc.)
 /// Plantillas reutilizables para categorías de productos
 model ProductoAtributo {
-  id          String  @id @default(cuid())
-  empresaId   String
-  categoriaId String? // Opcional: asociar atributo a categoría específica
+  id           String   @id @default(cuid())
+  empresaId    String
+  categoriaIds String[] // Array de categorías asociadas (vacío = atributo global)
 
   // Información del atributo
   nombre      String // "Color", "Socket del Procesador", "Tipo de RAM"
@@ -285,13 +292,11 @@ model ProductoAtributo {
 
   // Relaciones
   empresa             Empresa                 @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  categoria           EmpresaCategoria?       @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
   valoresProductos    ProductoAtributoValor[]
   plantillasAtributos PlantillaAtributo[] // Atributos que pertenecen a plantillas
 
   @@unique([empresaId, clave])
   @@index([empresaId])
-  @@index([empresaId, categoriaId])
   @@index([tipo])
   @@index([isActive])
   @@index([clave])
@@ -441,12 +446,12 @@ model ProductoCombo {
 /// se crea/actualiza este registro y se incrementa stockReservadoCombo
 /// en cada componente involucrado.
 model ComboReservacion {
-  id      String @id @default(cuid())
+  id      String   @id @default(cuid())
   comboId String
   combo   Producto @relation("ComboReservaciones", fields: [comboId], references: [id], onDelete: Cascade)
 
   sedeId String
-  sede   Sede @relation(fields: [sedeId], references: [id])
+  sede   Sede   @relation(fields: [sedeId], references: [id])
 
   /// Cantidad de combos reservados (ej: 5 significa que los componentes para 5 combos están apartados)
   cantidad Int @default(0)
@@ -494,6 +499,81 @@ enum TipoPrecioCombo {
   FIJO // Precio fijo definido manualmente
   CALCULADO // Suma de componentes
   CALCULADO_CON_DESCUENTO // Suma de componentes con descuento aplicado
+}
+
+enum TipoCambioComboConfig {
+  TIPO_PRECIO // Cambio de tipo de precio del combo
+  DESCUENTO // Cambio de descuento del combo
+  COMPONENTE_PRECIO // Cambio de precioEnCombo de un componente
+  PRECIO_FIJO_SEDE // Cambio de precio fijo en una sede
+  OFERTA_COMBO // Activación/desactivación de oferta
+}
+
+/// Historial de cambios de configuración de precios de combos
+/// Registra auditoría de cambios en tipo de precio, descuentos, ofertas, etc.
+model ComboConfigHistorial {
+  id            String                @id @default(cuid())
+  comboId       String
+  combo         Producto              @relation("ComboConfigCambios", fields: [comboId], references: [id], onDelete: Cascade)
+  tipoCambio    TipoCambioComboConfig
+  valorAnterior String? // JSON: {"tipoPrecioCombo":"CALCULADO"} o {"descuento":10}
+  valorNuevo    String // JSON
+  razon         String?
+  sedeId        String?
+  usuarioId     String
+  creadoEn      DateTime              @default(now())
+  usuario       Usuario               @relation("UsuarioCambiosComboConfig", fields: [usuarioId], references: [id])
+
+  @@index([comboId])
+  @@index([comboId, creadoEn])
+  @@index([tipoCambio])
+  @@index([creadoEn])
+}
+
+enum TipoValidacionCompatibilidad {
+  IGUAL // El valor del atributo origen debe ser idéntico al destino
+  INCLUYE_EN // El valor origen debe estar en la lista mapeada (mapeoValores)
+}
+
+/// Reglas de compatibilidad entre atributos de productos
+/// Ejemplo: socket_cpu del motherboard DEBE COINCIDIR con socket_cpu del procesador
+model ReglaCompatibilidad {
+  id        String @id @default(cuid())
+  empresaId String
+
+  // Nombre descriptivo de la regla
+  nombre      String // "Socket CPU compatible", "Tipo RAM compatible"
+  descripcion String?
+
+  // Atributo origen: la clave del atributo que define la restricción
+  atributoOrigenClave String // "cpu_socket"
+  categoriaOrigenId   String // Categoría del producto origen
+
+  // Atributo destino: la clave del atributo que debe coincidir
+  atributoDestinoClave String // "cpu_socket"
+  categoriaDestinoId   String // Categoría del producto destino
+
+  // Tipo de validación
+  tipoValidacion TipoValidacionCompatibilidad @default(IGUAL)
+
+  // Para INCLUYE_EN: mapeo personalizado de valores compatibles (JSON)
+  mapeoValores String? // JSON string
+
+  // Estado
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa          Empresa          @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  categoriaOrigen  EmpresaCategoria @relation("ReglaOrigen", fields: [categoriaOrigenId], references: [id], onDelete: Cascade)
+  categoriaDestino EmpresaCategoria @relation("ReglaDestino", fields: [categoriaDestinoId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, atributoOrigenClave, categoriaOrigenId, atributoDestinoClave, categoriaDestinoId])
+  @@index([empresaId])
+  @@index([empresaId, categoriaOrigenId])
+  @@index([empresaId, categoriaDestinoId])
+  @@index([isActive])
 }
 
 /// Tipo de cambio de precio para auditoría

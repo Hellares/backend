@@ -1,0 +1,111 @@
+model Cotizacion {
+  id         String  @id @default(cuid())
+  empresaId  String
+  sedeId     String
+  clienteId  String?
+  vendedorId String
+
+  // Identificacion
+  codigo String
+  nombre String?
+
+  // Datos del cliente (snapshot al momento de crear)
+  nombreCliente    String
+  documentoCliente String?
+  emailCliente     String?
+  telefonoCliente  String?
+  direccionCliente String?
+
+  // Moneda
+  moneda     String   @default("PEN")
+  tipoCambio Decimal? @db.Decimal(10, 6)
+
+  // Montos
+  subtotal  Decimal @db.Decimal(10, 2)
+  descuento Decimal @default(0) @db.Decimal(10, 2)
+  impuestos Decimal @default(0) @db.Decimal(10, 2)
+  total     Decimal @db.Decimal(10, 2)
+
+  // Vigencia
+  fechaEmision     DateTime  @default(now())
+  fechaVencimiento DateTime?
+
+  // Estado
+  estado EstadoCotizacion @default(BORRADOR)
+
+  // Referencia a comprobante (si se convierte)
+  comprobanteId String?
+
+  // Observaciones
+  observaciones String?
+  condiciones   String?
+
+  // Auditoria
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa  Empresa             @relation(fields: [empresaId], references: [id])
+  sede     Sede                @relation(fields: [sedeId], references: [id])
+  cliente  EmpresaPersona?     @relation(fields: [clienteId], references: [id])
+  vendedor Usuario             @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
+  detalles CotizacionDetalle[]
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([vendedorId])
+  @@index([clienteId])
+  @@index([estado])
+  @@index([fechaEmision])
+  @@index([empresaId, estado])
+  @@index([empresaId, sedeId, estado])
+}
+
+model CotizacionDetalle {
+  id           String  @id @default(cuid())
+  cotizacionId String
+  productoId   String?
+  varianteId   String?
+  servicioId   String?
+
+  // Datos del item (snapshot)
+  descripcion    String
+  cantidad       Decimal @db.Decimal(10, 2)
+  precioUnitario Decimal @db.Decimal(10, 2)
+  descuento      Decimal @default(0) @db.Decimal(10, 2)
+
+  // Impuesto
+  porcentajeIGV Decimal @default(18.00) @db.Decimal(5, 2)
+  igv           Decimal @default(0) @db.Decimal(10, 2)
+
+  // Totales
+  subtotal Decimal @db.Decimal(10, 2)
+  total    Decimal @db.Decimal(10, 2)
+
+  // Orden
+  orden Int @default(0)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  cotizacion Cotizacion        @relation(fields: [cotizacionId], references: [id], onDelete: Cascade)
+  producto   Producto?         @relation(fields: [productoId], references: [id])
+  variante   ProductoVariante? @relation(fields: [varianteId], references: [id])
+  servicio   Servicio?         @relation(fields: [servicioId], references: [id])
+
+  @@index([cotizacionId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([servicioId])
+}
+
+enum EstadoCotizacion {
+  BORRADOR
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+  VENCIDA
+  CONVERTIDA
+}

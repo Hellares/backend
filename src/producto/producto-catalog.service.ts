@@ -617,6 +617,21 @@ export class ProductoCatalogService {
 
       // Incluir stock por sede de cada variante (necesario para calcular stock total)
       // Siempre traer TODAS las sedes para mostrar información completa
+      // Incluir archivos (imágenes) de cada variante
+      varianteInclude.archivos = {
+        where: {
+          isActive: true,
+          deletedAt: null,
+        },
+        orderBy: [{ orden: 'asc' }, { creadoEn: 'asc' }],
+        select: {
+          id: true,
+          url: true,
+          urlThumbnail: true,
+          orden: true,
+        },
+      };
+
       if (includeStock) {
         varianteInclude.stocksPorSede = {
           select: {

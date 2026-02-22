@@ -73,37 +73,40 @@ export class ProductoInventoryService {
       );
     }
 
-    // Buscar ProductoStock en la sede específica
-    const productoStock = await this.prisma.productoStock.findFirst({
-      where: {
-        productoId: id,
-        sedeId,
-        empresaId,
-      },
-    });
-
-    if (!productoStock) {
-      throw new NotFoundException(
-        `El producto no tiene stock registrado en la sede especificada. ` +
-          `Use el endpoint POST /producto-stock para crear el stock inicial.`,
-      );
-    }
-
-    // Calcular nuevo stock
+    // Calcular ajuste
     const cantidadAjuste = operacion === 'agregar' ? cantidad : -cantidad;
-    const nuevoStock = productoStock.stockActual + cantidadAjuste;
 
-    if (nuevoStock < 0) {
-      throw new BadRequestException(
-        `Stock insuficiente. Disponible: ${productoStock.stockActual}, Solicitado: ${cantidad}`,
-      );
-    }
+    // Transacción atómica: lectura + validación + escritura dentro de la misma transacción
+    const { stockAnterior, nuevoStock, productoStockId } = await this.prisma.$transaction(async (tx) => {
+      // Leer dentro de la transacción para evitar race conditions
+      const productoStock = await tx.productoStock.findFirst({
+        where: {
+          productoId: id,
+          sedeId,
+          empresaId,
+        },
+      });
 
-    // Actualizar stock en transacción
-    await this.prisma.$transaction(async (tx) => {
+      if (!productoStock) {
+        throw new NotFoundException(
+          `El producto no tiene stock registrado en la sede especificada. ` +
+            `Use el endpoint POST /producto-stock para crear el stock inicial.`,
+        );
+      }
+
+      const stockAnterior = productoStock.stockActual;
+      const nuevoStock = stockAnterior + cantidadAjuste;
+
+      if (nuevoStock < 0) {
+        throw new BadRequestException(
+          `Stock insuficiente. Disponible: ${stockAnterior}, Solicitado: ${cantidad}`,
+        );
+      }
+
+      // Actualizar stock con increment/decrement atómico
       await tx.productoStock.update({
         where: { id: productoStock.id },
-        data: { stockActual: nuevoStock },
+        data: { stockActual: { increment: cantidadAjuste } },
       });
 
       // Registrar movimiento
@@ -114,20 +117,22 @@ export class ProductoInventoryService {
           productoStockId: productoStock.id,
           tipo: operacion === 'agregar' ? 'ENTRADA_AJUSTE' : 'SALIDA_AJUSTE',
           tipoDocumento: 'AJUSTE_MANUAL',
-          cantidadAnterior: productoStock.stockActual,
+          cantidadAnterior: stockAnterior,
           cantidad: cantidadAjuste,
           cantidadNueva: nuevoStock,
           motivo: `Ajuste ${operacion === 'agregar' ? 'entrada' : 'salida'} manual`,
           usuarioId,
         },
       });
+
+      return { stockAnterior, nuevoStock, productoStockId: productoStock.id };
     });
 
     // Calcular stock total (todas las sedes)
     const stockTotal = await this.getStockTotal(id, empresaId);
 
     this.logger.info(`Stock actualizado para producto ${id} en sede ${sedeId}`, {
-      stockAnterior: productoStock.stockActual,
+      stockAnterior,
       stockNuevo: nuevoStock,
       operacion,
       cantidad,

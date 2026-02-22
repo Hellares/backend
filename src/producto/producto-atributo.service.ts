@@ -2,12 +2,13 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
+import { UpdateProductoAtributoDto } from './dto/update-producto-atributo.dto';
 import { AtributoTipo } from '@prisma/client';
 
 export interface ProductoAtributoResponse {
   id: string;
   empresaId: string;
-  categoriaId?: string;
+  categoriaIds: string[];
   nombre: string;
   clave: string;
   tipo: AtributoTipo;
@@ -45,7 +46,7 @@ export class ProductoAtributoService {
   ): Promise<ProductoAtributoResponse> {
     this.logger.info('Creating product attribute', { empresaId, dto });
 
-    // Verificar que no existe un atributo con la misma clave
+    // Verificar que no existe un atributo activo con la misma clave
     const existing = await this.prisma.productoAtributo.findUnique({
       where: {
         empresaId_clave: {
@@ -56,7 +57,29 @@ export class ProductoAtributoService {
     });
 
     if (existing) {
-      throw new ConflictException(`Ya existe un atributo con la clave: ${dto.clave}`);
+      if (existing.isActive) {
+        throw new ConflictException(`Ya existe un atributo con la clave: ${dto.clave}`);
+      }
+      // Reactivar atributo soft-deleted actualizando sus datos
+      const reactivado = await this.prisma.productoAtributo.update({
+        where: { id: existing.id },
+        data: {
+          isActive: true,
+          nombre: dto.nombre,
+          tipo: dto.tipo,
+          requerido: dto.requerido ?? false,
+          descripcion: dto.descripcion,
+          unidad: dto.unidad,
+          valores: dto.valores ?? [],
+          categoriaIds: dto.categoriaIds ?? [],
+          orden: dto.orden ?? 0,
+          mostrarEnListado: dto.mostrarEnListado ?? true,
+          usarParaFiltros: dto.usarParaFiltros ?? true,
+          mostrarEnMarketplace: dto.mostrarEnMarketplace ?? true,
+        },
+      });
+      this.logger.success('Product attribute reactivated', { atributoId: reactivado.id });
+      return this.mapToResponse(reactivado);
     }
 
     // Validar coherencia entre tipo y valores
@@ -65,7 +88,7 @@ export class ProductoAtributoService {
     const atributo = await this.prisma.productoAtributo.create({
       data: {
         empresaId,
-        categoriaId: dto.categoriaId,
+        categoriaIds: dto.categoriaIds ?? [],
         nombre: dto.nombre,
         clave: dto.clave,
         tipo: dto.tipo,
@@ -97,6 +120,7 @@ export class ProductoAtributoService {
         ...(includeInactive ? {} : { isActive: true }),
       },
       orderBy: { orden: 'asc' },
+      take: 200, // Límite de seguridad
     });
 
     return atributos.map((a) => this.mapToResponse(a));
@@ -111,7 +135,7 @@ export class ProductoAtributoService {
     const atributos = await this.prisma.productoAtributo.findMany({
       where: {
         empresaId,
-        categoriaId,
+        categoriaIds: { has: categoriaId },
         isActive: true,
       },
       orderBy: { orden: 'asc' },
@@ -130,6 +154,7 @@ export class ProductoAtributoService {
       where: {
         id: atributoId,
         empresaId,
+        isActive: true,
       },
     });
 
@@ -146,7 +171,7 @@ export class ProductoAtributoService {
   async update(
     atributoId: string,
     empresaId: string,
-    dto: Partial<CreateProductoAtributoDto>,
+    dto: UpdateProductoAtributoDto,
   ): Promise<ProductoAtributoResponse> {
     this.logger.info('Updating attribute', { atributoId, empresaId, dto });
 
@@ -154,6 +179,7 @@ export class ProductoAtributoService {
       where: {
         id: atributoId,
         empresaId,
+        isActive: true,
       },
     });
 
@@ -161,19 +187,19 @@ export class ProductoAtributoService {
       throw new NotFoundException(`Atributo ${atributoId} no encontrado`);
     }
 
-    // Si se actualiza la clave, verificar que no exista
+    // Si se actualiza la clave, verificar que no exista otra activa con la misma
     if (dto.clave && dto.clave !== existing.clave) {
-      const duplicado = await this.prisma.productoAtributo.findUnique({
+      const duplicado = await this.prisma.productoAtributo.findFirst({
         where: {
-          empresaId_clave: {
-            empresaId,
-            clave: dto.clave,
-          },
+          empresaId,
+          clave: dto.clave,
+          isActive: true,
+          id: { not: atributoId },
         },
       });
 
       if (duplicado) {
-        throw new ConflictException(`Ya existe un atributo con la clave: ${dto.clave}`);
+        throw new ConflictException(`Ya existe un atributo activo con la clave: ${dto.clave}`);
       }
     }
 
@@ -191,7 +217,7 @@ export class ProductoAtributoService {
         ...(dto.requerido !== undefined && { requerido: dto.requerido }),
         ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
         ...(dto.unidad !== undefined && { unidad: dto.unidad }),
-        ...(dto.categoriaId !== undefined && { categoriaId: dto.categoriaId }),
+        ...(dto.categoriaIds !== undefined && { categoriaIds: dto.categoriaIds }),
         ...(dto.valores && { valores: dto.valores }),
         ...(dto.orden !== undefined && { orden: dto.orden }),
         ...(dto.mostrarEnListado !== undefined && { mostrarEnListado: dto.mostrarEnListado }),
@@ -208,15 +234,17 @@ export class ProductoAtributoService {
   }
 
   /**
-   * Eliminar un atributo
+   * Eliminar un atributo (soft delete)
+   * Marca como inactivo en vez de eliminar para preservar valores existentes
    */
   async remove(atributoId: string, empresaId: string): Promise<void> {
-    this.logger.info('Deleting attribute', { atributoId, empresaId });
+    this.logger.info('Soft-deleting attribute', { atributoId, empresaId });
 
     const atributo = await this.prisma.productoAtributo.findFirst({
       where: {
         id: atributoId,
         empresaId,
+        isActive: true,
       },
     });
 
@@ -224,11 +252,26 @@ export class ProductoAtributoService {
       throw new NotFoundException(`Atributo ${atributoId} no encontrado`);
     }
 
-    await this.prisma.productoAtributo.delete({
-      where: { id: atributoId },
+    // Verificar si el atributo está en uso en alguna plantilla activa
+    const enPlantillas = await this.prisma.plantillaAtributo.count({
+      where: {
+        atributoId,
+        plantilla: { isActive: true },
+      },
     });
 
-    this.logger.success('Attribute deleted', { atributoId });
+    if (enPlantillas > 0) {
+      throw new BadRequestException(
+        `No se puede eliminar el atributo "${atributo.nombre}" porque está en uso en ${enPlantillas} plantilla(s) activa(s). Elimínelo primero de las plantillas.`,
+      );
+    }
+
+    await this.prisma.productoAtributo.update({
+      where: { id: atributoId },
+      data: { isActive: false },
+    });
+
+    this.logger.success('Attribute soft-deleted', { atributoId });
   }
 
   /**
@@ -286,7 +329,7 @@ export class ProductoAtributoService {
     return {
       id: atributo.id,
       empresaId: atributo.empresaId,
-      categoriaId: atributo.categoriaId,
+      categoriaIds: atributo.categoriaIds,
       nombre: atributo.nombre,
       clave: atributo.clave,
       tipo: atributo.tipo,

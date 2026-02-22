@@ -18,6 +18,7 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { Permission } from '../auth/enums/permission.enum';
 import { ProductoAtributoService, ProductoAtributoResponse } from './producto-atributo.service';
 import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
+import { UpdateProductoAtributoDto } from './dto/update-producto-atributo.dto';
 
 @ApiTags('Producto Atributos')
 @Controller('producto-atributos')
@@ -98,7 +99,7 @@ export class ProductoAtributoController {
   async update(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
-    @Body() dto: Partial<CreateProductoAtributoDto>,
+    @Body() dto: UpdateProductoAtributoDto,
   ): Promise<ProductoAtributoResponse> {
     return this.atributoService.update(id, empresaId, dto);
   }

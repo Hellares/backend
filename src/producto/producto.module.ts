@@ -22,6 +22,9 @@ import { ProductoCatalogService } from './producto-catalog.service';
 import { ProductoInventoryService } from './producto-inventory.service';
 import { ProductoPricingService } from './producto-pricing.service';
 import { ProductoPrecioHistorialService } from './producto-precio-historial.service';
+import { CompatibilidadService } from './compatibilidad.service';
+import { CompatibilidadController } from './compatibilidad.controller';
+import { ProductoBulkUploadService } from './producto-bulk-upload.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule],
@@ -31,6 +34,7 @@ import { ProductoPrecioHistorialService } from './producto-precio-historial.serv
     ProductoAtributoController,
     ProductoAtributoPlantillaController,
     ConfiguracionPrecioController,
+    CompatibilidadController,
   ],
   providers: [
     // Facade (orquestador)
@@ -42,6 +46,9 @@ import { ProductoPrecioHistorialService } from './producto-precio-historial.serv
     ProductoPricingService,
     ProductoPrecioHistorialService,
 
+    // Carga masiva
+    ProductoBulkUploadService,
+
     // Servicios existentes
     ProductoVarianteService,
     ProductoAtributoService,
@@ -50,6 +57,7 @@ import { ProductoPrecioHistorialService } from './producto-precio-historial.serv
     ProductoAtributoPlantillaService,
     PrecioNivelService,
     ConfiguracionPrecioService,
+    CompatibilidadService,
     PlanLimitsService,
 
     // Helpers
@@ -73,6 +81,7 @@ import { ProductoPrecioHistorialService } from './producto-precio-historial.serv
     ProductoAtributoPlantillaService,
     PrecioNivelService,
     ConfiguracionPrecioService,
+    CompatibilidadService,
   ],
 })
 export class ProductoModule {}

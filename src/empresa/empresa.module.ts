@@ -7,12 +7,14 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SeedPlanesService } from './scripts/seed-planes.service';
 import { CatalogosModule } from '../catalogos/catalogos.module';
+import { ConfiguracionDocumentosModule } from '../configuracion-documentos/configuracion-documentos.module';
 
 @Module({
   imports: [
     PrismaModule,
     AuthModule,
     CatalogosModule,
+    ConfiguracionDocumentosModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

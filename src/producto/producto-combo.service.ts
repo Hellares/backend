@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma, TipoPrecioCombo } from '@prisma/client';
+import { Prisma, TipoPrecioCombo, TipoCambioPrecio, TipoCambioComboConfig } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateComponenteComboDto } from './dto/create-producto-combo.dto';
 import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
 import { ProductoComboResponseDto, ComboCompletoResponseDto } from './dto/producto-combo-response.dto';
 import { CreateComboDto } from './dto/create-combo.dto';
+import { UpdateComboPricingDto } from './dto/update-combo-pricing.dto';
+import { UpdateComboOfertaDto } from './dto/update-combo-oferta.dto';
 
 const Decimal = Prisma.Decimal;
 
@@ -25,6 +27,29 @@ export class ProductoComboService {
   ) {
     this.logger = loggerService;
     this.logger.setContext(ProductoComboService.name);
+  }
+
+  /**
+   * Include reutilizable para componentes de combo con stock filtrado por sede
+   */
+  private componenteInclude(sedeId: string) {
+    return {
+      componenteProducto: {
+        include: {
+          stocksPorSede: {
+            where: { sedeId },
+          },
+        },
+      },
+      componenteVariante: {
+        include: {
+          producto: true,
+          stocksPorSede: {
+            where: { sedeId },
+          },
+        },
+      },
+    };
   }
 
   /**
@@ -91,7 +116,7 @@ export class ProductoComboService {
         precioInicial = precioFijo;
       }
 
-      // Crear combo dentro de transacción para evitar race conditions
+      // Crear combo dentro de transacción (incluye asociación de imágenes)
       const combo = await this.prisma.$transaction(async (tx) => {
         // Generar códigos únicos (usando servicio centralizado)
         const { codigoEmpresa, codigoSistema } = await this.configCodigosService.generarCodigoProducto(
@@ -101,67 +126,60 @@ export class ProductoComboService {
         );
 
         // Crear el combo como un producto
-        return await tx.producto.create({
-        data: {
-          empresaId,
-          sedeId: comboData.sedeId,
-          empresaCategoriaId: comboData.empresaCategoriaId,
-          empresaMarcaId: comboData.empresaMarcaId,
-          codigoEmpresa,
-          codigoSistema,
-          sku: comboData.sku,
-          codigoBarras: comboData.codigoBarras,
-          nombre: comboData.nombre,
-          descripcion: comboData.descripcion,
-
-          // Campos específicos de combo
-          esCombo: true,
-          tieneVariantes: false, // Los combos no pueden tener variantes
-          tipoPrecioCombo: dto.tipoPrecioCombo,
-
-          // ❌ precio: precioInicial - DEPRECATED: Precio ahora en ProductoStock por sede
-          // El precio del combo se configurará en ProductoStock después de crearlo
-          // Para combos FIJO: usar precioFijo en ProductoStock
-          // Para combos CALCULADO: calcular desde componentes en ProductoStock
-
-          // Descuento (se usa descuentoMaximo para almacenar el porcentaje del combo)
-          descuentoMaximo: descuentoPorcentaje,
-
-          // Otros campos
-          videoUrl: comboData.videoUrl,
-          impuestoPorcentaje: comboData.impuestoPorcentaje,
-          visibleMarketplace: comboData.visibleMarketplace ?? true,
-          destacado: comboData.destacado ?? false,
-        },
-        include: {
-          empresaCategoria: {
-            include: {
-              categoriaMaestra: true,
-            },
-          },
-          empresaMarca: {
-            include: {
-              marcaMaestra: true,
-            },
-          },
-          sede: true,
-        },
-        });
-      });
-
-      // Asociar imágenes si se proporcionaron (fuera de transacción)
-      if (imagenesIds && imagenesIds.length > 0) {
-        await this.prisma.archivo.updateMany({
-          where: {
-            id: { in: imagenesIds },
-            empresaId,
-          },
+        const created = await tx.producto.create({
           data: {
-            entidadId: combo.id,
-            entidadTipo: 'PRODUCTO',
+            empresaId,
+            sedeId: comboData.sedeId,
+            empresaCategoriaId: comboData.empresaCategoriaId,
+            empresaMarcaId: comboData.empresaMarcaId,
+            codigoEmpresa,
+            codigoSistema,
+            sku: comboData.sku,
+            codigoBarras: comboData.codigoBarras,
+            nombre: comboData.nombre,
+            descripcion: comboData.descripcion,
+
+            // Campos específicos de combo
+            esCombo: true,
+            tieneVariantes: false,
+            tipoPrecioCombo: dto.tipoPrecioCombo,
+
+            // Descuento (se usa descuentoMaximo para almacenar el porcentaje del combo)
+            descuentoMaximo: descuentoPorcentaje,
+
+            // Otros campos
+            videoUrl: comboData.videoUrl,
+            impuestoPorcentaje: comboData.impuestoPorcentaje,
+            visibleMarketplace: comboData.visibleMarketplace ?? true,
+            destacado: comboData.destacado ?? false,
+          },
+          include: {
+            empresaCategoria: {
+              select: { id: true, nombrePersonalizado: true, categoriaMaestra: { select: { id: true, nombre: true } } },
+            },
+            empresaMarca: {
+              select: { id: true, nombrePersonalizado: true, marcaMaestra: { select: { id: true, nombre: true } } },
+            },
+            sede: { select: { id: true, nombre: true, codigo: true } },
           },
         });
-      }
+
+        // Asociar imágenes dentro de la transacción
+        if (imagenesIds && imagenesIds.length > 0) {
+          await tx.archivo.updateMany({
+            where: {
+              id: { in: imagenesIds },
+              empresaId,
+            },
+            data: {
+              entidadId: created.id,
+              entidadTipo: 'PRODUCTO',
+            },
+          });
+        }
+
+        return created;
+      });
 
       this.logger.log(`Combo creado: ${combo.id} - ${combo.nombre}`);
 
@@ -315,23 +333,7 @@ export class ProductoComboService {
             categoriaComponente: dto.categoriaComponente,
             orden: dto.orden ?? 0,
           },
-          include: {
-            componenteProducto: {
-              include: {
-                stocksPorSede: {
-                  where: { sedeId },
-                },
-              },
-            },
-            componenteVariante: {
-              include: {
-                producto: true,
-                stocksPorSede: {
-                  where: { sedeId },
-                },
-              },
-            },
-          },
+          include: this.componenteInclude(sedeId),
         });
 
         // Si el combo tiene reservaciones activas, ajustar stockReservadoCombo del nuevo componente
@@ -515,46 +517,37 @@ export class ProductoComboService {
         }
       }
 
-      const componentesValidados = componentes;
-
       // Insertar todos los componentes en batch dentro de una transacción
-      // Timeout aumentado a 15 segundos para soportar batches grandes
+      // Timeout aumentado para soportar batches grandes
       const componentesCreados = await this.prisma.$transaction(async (tx) => {
-        const creados = [];
-        for (const dto of componentesValidados) {
-          const componente = await tx.productoCombo.create({
-            data: {
-              comboId,
-              componenteProductoId: dto.componenteProductoId,
-              componenteVarianteId: dto.componenteVarianteId,
-              cantidad: dto.cantidad,
-              precioEnCombo: dto.precioEnCombo !== undefined && dto.precioEnCombo !== null
-                ? new Decimal(dto.precioEnCombo)
-                : null,
-              esPersonalizable: dto.esPersonalizable ?? false,
-              categoriaComponente: dto.categoriaComponente,
-              orden: dto.orden ?? 0,
-            },
-            include: {
-              componenteProducto: {
-                include: {
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-              componenteVariante: {
-                include: {
-                  producto: true,
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-            },
-          });
-          creados.push(componente);
-        }
+        // Crear todos los componentes en bulk (1 query vs N)
+        await tx.productoCombo.createMany({
+          data: componentes.map((dto, index) => ({
+            comboId,
+            componenteProductoId: dto.componenteProductoId,
+            componenteVarianteId: dto.componenteVarianteId,
+            cantidad: dto.cantidad,
+            precioEnCombo: dto.precioEnCombo !== undefined && dto.precioEnCombo !== null
+              ? new Decimal(dto.precioEnCombo)
+              : null,
+            esPersonalizable: dto.esPersonalizable ?? false,
+            categoriaComponente: dto.categoriaComponente,
+            orden: dto.orden ?? index,
+          })),
+        });
+
+        // Obtener los componentes creados con includes (1 query)
+        const creados = await tx.productoCombo.findMany({
+          where: {
+            comboId,
+            OR: [
+              ...(productoIds.length > 0 ? [{ componenteProductoId: { in: productoIds } }] : []),
+              ...(varianteIds.length > 0 ? [{ componenteVarianteId: { in: varianteIds } }] : []),
+            ],
+          },
+          include: this.componenteInclude(sedeId),
+          orderBy: { orden: 'asc' },
+        });
 
         // Si el combo tiene reservaciones activas, ajustar stockReservadoCombo de los nuevos componentes
         const reservaciones = await tx.comboReservacion.findMany({
@@ -563,10 +556,10 @@ export class ProductoComboService {
 
         if (reservaciones.length > 0) {
           // Batch: cargar stocks de todos los componentes nuevos en todas las sedes (evita N+1)
-          const newProductoIds = componentesValidados
+          const newProductoIds = componentes
             .filter((d) => d.componenteProductoId)
             .map((d) => d.componenteProductoId!);
-          const newVarianteIds = componentesValidados
+          const newVarianteIds = componentes
             .filter((d) => d.componenteVarianteId)
             .map((d) => d.componenteVarianteId!);
 
@@ -590,7 +583,7 @@ export class ProductoComboService {
             stockIndex.set(key, s);
           }
 
-          for (const dto of componentesValidados) {
+          for (const dto of componentes) {
             const targetId = dto.componenteVarianteId ?? dto.componenteProductoId!;
             const nombre = dto.componenteVarianteId
               ? varianteMap.get(dto.componenteVarianteId)?.nombre ?? 'Componente'
@@ -623,7 +616,7 @@ export class ProductoComboService {
       });
 
       this.logger.log(
-        `✅ ${componentesCreados.length}/${MAX_COMPONENTES_POR_PETICION} componentes agregados al combo ${comboId}`,
+        `${componentesCreados.length} componentes agregados al combo ${comboId}`,
       );
       return componentesCreados.map((c) => this.mapToResponseDto(c, sedeId));
     } catch (error) {
@@ -659,23 +652,7 @@ export class ProductoComboService {
 
       const componentes = await this.prisma.productoCombo.findMany({
         where: { comboId },
-        include: {
-          componenteProducto: {
-            include: {
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-          componenteVariante: {
-            include: {
-              producto: true,
-              stocksPorSede: {
-                where: { sedeId },
-              },
-            },
-          },
-        },
+        include: this.componenteInclude(sedeId),
         orderBy: { orden: 'asc' },
       });
 
@@ -706,24 +683,8 @@ export class ProductoComboService {
         },
         include: {
           componentesCombo: {
-            include: {
-              componenteProducto: {
-                include: {
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-              componenteVariante: {
-                include: {
-                  producto: true,
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-            },
-            orderBy: { orden: 'asc' },
+            include: this.componenteInclude(sedeId),
+            orderBy: { orden: 'asc' as const },
           },
           stocksPorSede: {
             where: { sedeId },
@@ -755,22 +716,34 @@ export class ProductoComboService {
         precioFinal = stockCombo?.precio ? Number(stockCombo.precio) : precioFinal;
       }
 
+      // Calcular oferta activa
+      const stockCombo = combo.stocksPorSede[0];
+      const ofertaInfo = this.calcularOfertaActiva(stockCombo);
+      const precioFinalConOferta = ofertaInfo.ofertaActiva ? ofertaInfo.precioOferta! : precioFinal;
+
       return {
         id: combo.id,
         nombre: combo.nombre,
         descripcion: combo.descripcion,
         esCombo: combo.esCombo,
         tipoPrecioCombo: combo.tipoPrecioCombo || TipoPrecioCombo.CALCULADO,
-        precio: precioFinal,
+        precio: precioFinalConOferta,
         precioCalculado,
         precioRegularTotal,
         descuentoPorcentaje,
-        descuentoAplicado: precioRegularTotal - precioFinal,
+        descuentoAplicado: precioRegularTotal - precioFinalConOferta,
         stockDisponible,
         componentes,
         tieneStockSuficiente: stockDisponible > 0,
         componentesSinStock: componentesSinStock.length > 0 ? componentesSinStock : undefined,
         imagen: null,
+        // Campos de oferta
+        precioOferta: ofertaInfo.precioOferta,
+        enOferta: ofertaInfo.enOferta,
+        fechaInicioOferta: ofertaInfo.fechaInicioOferta,
+        fechaFinOferta: ofertaInfo.fechaFinOferta,
+        ofertaActiva: ofertaInfo.ofertaActiva,
+        precioSinOferta: ofertaInfo.ofertaActiva ? precioFinal : undefined,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -794,30 +767,15 @@ export class ProductoComboService {
         },
         include: {
           componentesCombo: {
-            include: {
-              componenteProducto: {
-                include: {
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-              componenteVariante: {
-                include: {
-                  producto: true,
-                  stocksPorSede: {
-                    where: { sedeId },
-                  },
-                },
-              },
-            },
-            orderBy: { orden: 'asc' },
+            include: this.componenteInclude(sedeId),
+            orderBy: { orden: 'asc' as const },
           },
           stocksPorSede: {
             where: { sedeId },
           },
         },
         orderBy: { creadoEn: 'desc' },
+        take: 100, // Límite de seguridad
       });
 
       // Mapear cada combo con sus cálculos (sin queries adicionales, todo viene del include)
@@ -837,22 +795,33 @@ export class ProductoComboService {
           precioFinal = stockCombo?.precio ? Number(stockCombo.precio) : precioFinal;
         }
 
+        // Calcular oferta activa
+        const stockCombo = combo.stocksPorSede[0];
+        const ofertaInfo = this.calcularOfertaActiva(stockCombo);
+        const precioFinalConOferta = ofertaInfo.ofertaActiva ? ofertaInfo.precioOferta! : precioFinal;
+
         return {
           id: combo.id,
           nombre: combo.nombre,
           descripcion: combo.descripcion,
           esCombo: combo.esCombo,
           tipoPrecioCombo: combo.tipoPrecioCombo || TipoPrecioCombo.CALCULADO,
-          precio: precioFinal,
+          precio: precioFinalConOferta,
           precioCalculado,
           precioRegularTotal,
           descuentoPorcentaje,
-          descuentoAplicado: precioRegularTotal - precioFinal,
+          descuentoAplicado: precioRegularTotal - precioFinalConOferta,
           stockDisponible,
           componentes,
           tieneStockSuficiente: stockDisponible > 0,
           componentesSinStock: componentesSinStock.length > 0 ? componentesSinStock : undefined,
           imagen: null,
+          precioOferta: ofertaInfo.precioOferta,
+          enOferta: ofertaInfo.enOferta,
+          fechaInicioOferta: ofertaInfo.fechaInicioOferta,
+          fechaFinOferta: ofertaInfo.fechaFinOferta,
+          ofertaActiva: ofertaInfo.ofertaActiva,
+          precioSinOferta: ofertaInfo.ofertaActiva ? precioFinal : undefined,
         };
       });
 
@@ -873,6 +842,7 @@ export class ProductoComboService {
     empresaId: string,
     sedeId: string,
     dto: UpdateComponenteComboDto,
+    userId?: string,
   ): Promise<ProductoComboResponseDto> {
     try {
       const componente = await this.prisma.productoCombo.findFirst({
@@ -900,23 +870,38 @@ export class ProductoComboService {
             }),
             ...(dto.orden !== undefined && { orden: dto.orden }),
           },
-          include: {
-            componenteProducto: {
-              include: {
-                stocksPorSede: {
-                  where: { sedeId },
-                },
-              },
-            },
-            componenteVariante: {
-              include: {
-                stocksPorSede: {
-                  where: { sedeId },
-                },
-              },
-            },
-          },
+          include: this.componenteInclude(sedeId),
         });
+
+        // Si se cambió precioEnCombo, registrar en historial
+        if (dto.precioEnCombo !== undefined && userId) {
+          const precioAnterior = componente.precioEnCombo !== null && componente.precioEnCombo !== undefined
+            ? Number(componente.precioEnCombo)
+            : null;
+          const precioNuevo = dto.precioEnCombo !== null && dto.precioEnCombo !== undefined
+            ? Number(dto.precioEnCombo)
+            : null;
+
+          if (precioAnterior !== precioNuevo) {
+            await tx.comboConfigHistorial.create({
+              data: {
+                comboId: componente.comboId,
+                tipoCambio: TipoCambioComboConfig.COMPONENTE_PRECIO,
+                valorAnterior: JSON.stringify({
+                  componenteId,
+                  precioEnCombo: precioAnterior,
+                }),
+                valorNuevo: JSON.stringify({
+                  componenteId,
+                  precioEnCombo: precioNuevo,
+                }),
+                razon: null,
+                sedeId,
+                usuarioId: userId,
+              },
+            });
+          }
+        }
 
         // Si se cambia la cantidad y hay reservaciones, ajustar stockReservadoCombo
         if (dto.cantidad !== undefined && dto.cantidad !== componente.cantidad) {
@@ -1129,10 +1114,7 @@ export class ProductoComboService {
   async getStockDisponibleCombo(comboId: string, sedeId: string): Promise<number> {
     const componentes = await this.prisma.productoCombo.findMany({
       where: { comboId },
-      include: {
-        componenteProducto: { include: { stocksPorSede: { where: { sedeId } } } },
-        componenteVariante: { include: { producto: true, stocksPorSede: { where: { sedeId } } } },
-      },
+      include: this.componenteInclude(sedeId),
     });
     return this.calcularStockDisponibleFromComponentes(componentes);
   }
@@ -1145,10 +1127,7 @@ export class ProductoComboService {
       where: { id: comboId },
       include: {
         componentesCombo: {
-          include: {
-            componenteProducto: { include: { stocksPorSede: { where: { sedeId } } } },
-            componenteVariante: { include: { producto: true, stocksPorSede: { where: { sedeId } } } },
-          },
+          include: this.componenteInclude(sedeId),
         },
         stocksPorSede: { where: { sedeId } },
       },
@@ -1185,6 +1164,101 @@ export class ProductoComboService {
     return { cantidad: reservacion?.cantidad ?? 0 };
   }
 
+  // =====================================================
+  // MÉTODOS BULK (para evitar N+1 en listados)
+  // =====================================================
+
+  /**
+   * Calcula stock, precio y reservación de múltiples combos en queries optimizadas.
+   * En vez de 3N queries (1 por combo * 3 operaciones), usa 2 queries + 1 query.
+   */
+  async getCombosBulkData(
+    comboIds: string[],
+    sedeId: string,
+  ): Promise<{
+    stocks: Map<string, number>;
+    precios: Map<string, number>;
+    reservaciones: Map<string, number>;
+  }> {
+    if (comboIds.length === 0) {
+      return {
+        stocks: new Map(),
+        precios: new Map(),
+        reservaciones: new Map(),
+      };
+    }
+
+    // 1. Una sola query para obtener TODOS los componentes de TODOS los combos con su stock
+    const [todosComponentes, todosProductosCombo, todasReservaciones] = await Promise.all([
+      this.prisma.productoCombo.findMany({
+        where: { comboId: { in: comboIds } },
+        include: this.componenteInclude(sedeId),
+      }),
+      // Datos del combo (tipoPrecioCombo, descuentoMaximo, precio fijo)
+      this.prisma.producto.findMany({
+        where: { id: { in: comboIds } },
+        select: {
+          id: true,
+          tipoPrecioCombo: true,
+          descuentoMaximo: true,
+          stocksPorSede: { where: { sedeId }, select: { precio: true } },
+        },
+      }),
+      // Todas las reservaciones de una vez
+      this.prisma.comboReservacion.findMany({
+        where: { comboId: { in: comboIds }, sedeId },
+        select: { comboId: true, cantidad: true },
+      }),
+    ]);
+
+    // 2. Agrupar componentes por comboId
+    const componentesPorCombo = new Map<string, any[]>();
+    for (const comp of todosComponentes) {
+      if (!componentesPorCombo.has(comp.comboId)) {
+        componentesPorCombo.set(comp.comboId, []);
+      }
+      componentesPorCombo.get(comp.comboId)!.push(comp);
+    }
+
+    // 3. Indexar datos de combo
+    const combosMap = new Map(todosProductosCombo.map(c => [c.id, c]));
+
+    // 4. Calcular stock y precio por combo usando los métodos existentes
+    const stocks = new Map<string, number>();
+    const precios = new Map<string, number>();
+    const reservaciones = new Map<string, number>();
+
+    for (const comboId of comboIds) {
+      const componentes = componentesPorCombo.get(comboId) || [];
+      const comboData = combosMap.get(comboId);
+
+      // Stock
+      stocks.set(comboId, this.calcularStockDisponibleFromComponentes(componentes));
+
+      // Precio
+      const { precioCalculado } = this.calcularPreciosFromComponentes(componentes);
+      let precioFinal = precioCalculado;
+
+      if (comboData) {
+        if (comboData.tipoPrecioCombo === 'FIJO') {
+          const stockCombo = comboData.stocksPorSede[0];
+          precioFinal = stockCombo?.precio ? Number(stockCombo.precio) : precioCalculado;
+        } else if (comboData.tipoPrecioCombo === 'CALCULADO_CON_DESCUENTO') {
+          const descuento = Number(comboData.descuentoMaximo || 0);
+          precioFinal = precioCalculado * (1 - descuento / 100);
+        }
+      }
+      precios.set(comboId, precioFinal);
+    }
+
+    // Reservaciones
+    for (const res of todasReservaciones) {
+      reservaciones.set(res.comboId, res.cantidad);
+    }
+
+    return { stocks, precios, reservaciones };
+  }
+
   /**
    * Reserva stock para un combo: incrementa stockReservadoCombo en cada componente.
    * Si ya existe reserva, actualiza la diferencia (solo el delta).
@@ -1211,10 +1285,7 @@ export class ProductoComboService {
         // Obtener componentes con stock
         const componentes = await tx.productoCombo.findMany({
           where: { comboId },
-          include: {
-            componenteProducto: { include: { stocksPorSede: { where: { sedeId } } } },
-            componenteVariante: { include: { stocksPorSede: { where: { sedeId } } } },
-          },
+          include: this.componenteInclude(sedeId),
         });
 
         if (componentes.length === 0) {
@@ -1280,7 +1351,8 @@ export class ProductoComboService {
           }
         }
 
-        // Aplicar delta en stockReservadoCombo de cada componente
+        // Aplicar delta en stockReservadoCombo de cada componente y registrar movimientos
+        const movimientosData: any[] = [];
         for (const componente of componentes) {
           const stockRef = componente.componenteVariante
             ? componente.componenteVariante.stocksPorSede[0]
@@ -1296,21 +1368,23 @@ export class ProductoComboService {
             data: { stockReservadoCombo: { increment: cantidadDelta } },
           });
 
-          // Registrar movimiento
-          await tx.movimientoStock.create({
-            data: {
-              sedeId,
-              empresaId: locked.empresaId,
-              productoStockId: stockRef.id,
-              usuarioId,
-              tipo: delta > 0 ? 'RESERVA_COMBO' : 'LIBERAR_RESERVA_COMBO',
-              tipoDocumento: 'RESERVA_COMBO',
-              cantidad: cantidadDelta,
-              cantidadAnterior: locked.stockActual,
-              cantidadNueva: locked.stockActual,
-              motivo: `Reserva de combo ${comboId}: ${cantidad} unidades`,
-            },
+          movimientosData.push({
+            sedeId,
+            empresaId: locked.empresaId,
+            productoStockId: stockRef.id,
+            usuarioId,
+            tipo: delta > 0 ? 'RESERVA_COMBO' : 'LIBERAR_RESERVA_COMBO',
+            tipoDocumento: 'RESERVA_COMBO',
+            cantidad: cantidadDelta,
+            cantidadAnterior: locked.stockActual,
+            cantidadNueva: locked.stockActual,
+            motivo: `Reserva de combo ${comboId}: ${cantidad} unidades`,
           });
+        }
+
+        // Registrar todos los movimientos en bulk (1 query vs N)
+        if (movimientosData.length > 0) {
+          await tx.movimientoStock.createMany({ data: movimientosData });
         }
 
         // Crear o actualizar ComboReservacion
@@ -1349,6 +1423,45 @@ export class ProductoComboService {
   // =====================================================
   // MÉTODOS PRIVADOS DE CÁLCULO (sincrónos, operan sobre datos ya cargados)
   // =====================================================
+
+  /**
+   * Calcula si la oferta de un ProductoStock está activa
+   */
+  private calcularOfertaActiva(stock: any): {
+    precioOferta: number | null;
+    enOferta: boolean;
+    fechaInicioOferta: Date | null;
+    fechaFinOferta: Date | null;
+    ofertaActiva: boolean;
+  } {
+    if (!stock || !stock.enOferta || !stock.precioOferta) {
+      return {
+        precioOferta: stock?.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: stock?.enOferta ?? false,
+        fechaInicioOferta: stock?.fechaInicioOferta ?? null,
+        fechaFinOferta: stock?.fechaFinOferta ?? null,
+        ofertaActiva: false,
+      };
+    }
+
+    const ahora = new Date();
+    let ofertaActiva = true;
+
+    if (stock.fechaInicioOferta && ahora < stock.fechaInicioOferta) {
+      ofertaActiva = false;
+    }
+    if (stock.fechaFinOferta && ahora > stock.fechaFinOferta) {
+      ofertaActiva = false;
+    }
+
+    return {
+      precioOferta: Number(stock.precioOferta),
+      enOferta: stock.enOferta,
+      fechaInicioOferta: stock.fechaInicioOferta,
+      fechaFinOferta: stock.fechaFinOferta,
+      ofertaActiva,
+    };
+  }
 
   /**
    * Calcula stock disponible real de un componente desde su ProductoStock.
@@ -1444,22 +1557,7 @@ export class ProductoComboService {
         // Obtener componentes del combo
         const componentes = await tx.productoCombo.findMany({
           where: { comboId },
-          include: {
-            componenteProducto: {
-              include: {
-                stocksPorSede: {
-                  where: { sedeId },
-                },
-              },
-            },
-            componenteVariante: {
-              include: {
-                stocksPorSede: {
-                  where: { sedeId },
-                },
-              },
-            },
-          },
+          include: this.componenteInclude(sedeId),
         });
 
         if (componentes.length === 0) {
@@ -1531,6 +1629,7 @@ export class ProductoComboService {
         }
 
         // Descontar stock de cada componente usando los valores bloqueados
+        const movimientosVenta: any[] = [];
         for (const componente of componentes) {
           const stockRef = componente.componenteVariante
             ? componente.componenteVariante.stocksPorSede[0]
@@ -1540,27 +1639,29 @@ export class ProductoComboService {
 
           const locked = stockMap.get(stockRef.id)!;
           const cantidadDescontar = componente.cantidad * cantidad;
-          const nuevoStock = locked.stockActual - cantidadDescontar;
 
           await tx.productoStock.update({
             where: { id: stockRef.id },
-            data: { stockActual: nuevoStock },
+            data: { stockActual: { decrement: cantidadDescontar } },
           });
 
-          await tx.movimientoStock.create({
-            data: {
-              sedeId,
-              empresaId: locked.empresaId,
-              productoStockId: stockRef.id,
-              usuarioId,
-              tipo: 'SALIDA_VENTA',
-              tipoDocumento: 'VENTA_COMBO',
-              cantidad: -cantidadDescontar,
-              cantidadAnterior: locked.stockActual,
-              cantidadNueva: nuevoStock,
-              motivo: `Venta de combo ${comboId}`,
-            },
+          movimientosVenta.push({
+            sedeId,
+            empresaId: locked.empresaId,
+            productoStockId: stockRef.id,
+            usuarioId,
+            tipo: 'SALIDA_VENTA',
+            tipoDocumento: 'VENTA_COMBO',
+            cantidad: -cantidadDescontar,
+            cantidadAnterior: locked.stockActual,
+            cantidadNueva: locked.stockActual - cantidadDescontar,
+            motivo: `Venta de combo ${comboId}`,
           });
+        }
+
+        // Registrar todos los movimientos en bulk (1 query vs N)
+        if (movimientosVenta.length > 0) {
+          await tx.movimientoStock.createMany({ data: movimientosVenta });
         }
 
         // Decrementar stockReservadoCombo si hay reservación activa
@@ -1603,6 +1704,633 @@ export class ProductoComboService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al descontar stock de combo: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  // =====================================================
+  // GESTIÓN DE PRECIOS Y OFERTAS DE COMBOS
+  // =====================================================
+
+  /**
+   * Actualiza la configuración de precios de un combo
+   * Permite cambiar tipo de precio, descuento y precio fijo
+   */
+  async actualizarPrecioCombo(
+    comboId: string,
+    empresaId: string,
+    sedeId: string,
+    dto: UpdateComboPricingDto,
+    userId: string,
+  ): Promise<ComboCompletoResponseDto> {
+    try {
+      const combo = await this.prisma.producto.findFirst({
+        where: {
+          id: comboId,
+          empresaId,
+          esCombo: true,
+          deletedAt: null,
+        },
+        include: {
+          stocksPorSede: { where: { sedeId } },
+        },
+      });
+
+      if (!combo) {
+        throw new NotFoundException('Combo no encontrado');
+      }
+
+      const nuevoTipo = dto.tipoPrecioCombo ?? combo.tipoPrecioCombo;
+
+      // Validaciones
+      if (nuevoTipo === TipoPrecioCombo.FIJO && dto.tipoPrecioCombo === TipoPrecioCombo.FIJO) {
+        if (!dto.precioFijo && !combo.stocksPorSede[0]?.precio) {
+          throw new BadRequestException(
+            'Debe proporcionar precioFijo cuando el tipo es FIJO',
+          );
+        }
+      }
+
+      if (nuevoTipo === TipoPrecioCombo.CALCULADO_CON_DESCUENTO) {
+        if (dto.tipoPrecioCombo === TipoPrecioCombo.CALCULADO_CON_DESCUENTO && dto.descuentoPorcentaje === undefined) {
+          const descuentoActual = combo.descuentoMaximo ? Number(combo.descuentoMaximo) : null;
+          if (!descuentoActual) {
+            throw new BadRequestException(
+              'Debe proporcionar descuentoPorcentaje cuando el tipo es CALCULADO_CON_DESCUENTO',
+            );
+          }
+        }
+      }
+
+      const result = await this.prisma.$transaction(async (tx) => {
+        const updateData: any = {};
+        const historialEntries: any[] = [];
+
+        // Actualizar tipoPrecioCombo si cambió
+        if (dto.tipoPrecioCombo && dto.tipoPrecioCombo !== combo.tipoPrecioCombo) {
+          updateData.tipoPrecioCombo = dto.tipoPrecioCombo;
+          historialEntries.push({
+            comboId,
+            tipoCambio: TipoCambioComboConfig.TIPO_PRECIO,
+            valorAnterior: JSON.stringify({ tipoPrecioCombo: combo.tipoPrecioCombo }),
+            valorNuevo: JSON.stringify({ tipoPrecioCombo: dto.tipoPrecioCombo }),
+            razon: dto.razon,
+            sedeId,
+            usuarioId: userId,
+          });
+        }
+
+        // Actualizar descuento si se provee
+        if (dto.descuentoPorcentaje !== undefined) {
+          const valorAnterior = combo.descuentoMaximo ? Number(combo.descuentoMaximo) : null;
+          updateData.descuentoMaximo = dto.descuentoPorcentaje;
+          historialEntries.push({
+            comboId,
+            tipoCambio: TipoCambioComboConfig.DESCUENTO,
+            valorAnterior: JSON.stringify({ descuento: valorAnterior }),
+            valorNuevo: JSON.stringify({ descuento: dto.descuentoPorcentaje }),
+            razon: dto.razon,
+            sedeId,
+            usuarioId: userId,
+          });
+        }
+
+        // Actualizar producto
+        if (Object.keys(updateData).length > 0) {
+          await tx.producto.update({
+            where: { id: comboId },
+            data: updateData,
+          });
+        }
+
+        // Si FIJO + precioFijo: upsert ProductoStock
+        if ((nuevoTipo === TipoPrecioCombo.FIJO || dto.tipoPrecioCombo === TipoPrecioCombo.FIJO) && dto.precioFijo !== undefined) {
+          const stockExistente = combo.stocksPorSede[0];
+          const precioAnterior = stockExistente?.precio ? Number(stockExistente.precio) : null;
+
+          if (stockExistente) {
+            await tx.productoStock.update({
+              where: { id: stockExistente.id },
+              data: {
+                precio: new Decimal(dto.precioFijo),
+                precioConfigurado: true,
+              },
+            });
+
+            // Registrar en historial de precios por sede
+            await tx.productoPrecioHistorialSede.create({
+              data: {
+                productoStockId: stockExistente.id,
+                sedeId,
+                precioAnterior: precioAnterior ? new Decimal(precioAnterior) : null,
+                precioNuevo: new Decimal(dto.precioFijo),
+                tipoCambio: TipoCambioPrecio.MANUAL,
+                razon: dto.razon || 'Actualización de precio fijo del combo',
+                origenModulo: 'COMBO',
+                usuarioId: userId,
+              },
+            });
+          } else {
+            const newStock = await tx.productoStock.create({
+              data: {
+                sedeId,
+                empresaId,
+                productoId: comboId,
+                stockActual: 0,
+                precio: new Decimal(dto.precioFijo),
+                precioConfigurado: true,
+              },
+            });
+
+            await tx.productoPrecioHistorialSede.create({
+              data: {
+                productoStockId: newStock.id,
+                sedeId,
+                precioAnterior: null,
+                precioNuevo: new Decimal(dto.precioFijo),
+                tipoCambio: TipoCambioPrecio.MANUAL,
+                razon: dto.razon || 'Precio fijo inicial del combo',
+                origenModulo: 'COMBO',
+                usuarioId: userId,
+              },
+            });
+          }
+
+          historialEntries.push({
+            comboId,
+            tipoCambio: TipoCambioComboConfig.PRECIO_FIJO_SEDE,
+            valorAnterior: JSON.stringify({ precioFijo: precioAnterior, sedeId }),
+            valorNuevo: JSON.stringify({ precioFijo: dto.precioFijo, sedeId }),
+            razon: dto.razon,
+            sedeId,
+            usuarioId: userId,
+          });
+        }
+
+        // Registrar historial de cambios
+        for (const entry of historialEntries) {
+          await tx.comboConfigHistorial.create({ data: entry });
+        }
+
+        return true;
+      });
+
+      this.logger.log(`Precio de combo ${comboId} actualizado`);
+      return this.getComboCompleto(comboId, empresaId, sedeId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al actualizar precio del combo: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Actualiza la oferta de un combo en una sede
+   * La oferta aplica sobre el precio final calculado (post-descuento)
+   */
+  async actualizarOfertaCombo(
+    comboId: string,
+    empresaId: string,
+    sedeId: string,
+    dto: UpdateComboOfertaDto,
+    userId: string,
+  ): Promise<ComboCompletoResponseDto> {
+    try {
+      const combo = await this.prisma.producto.findFirst({
+        where: {
+          id: comboId,
+          empresaId,
+          esCombo: true,
+          deletedAt: null,
+        },
+        include: {
+          componentesCombo: {
+            include: this.componenteInclude(sedeId),
+          },
+          stocksPorSede: { where: { sedeId } },
+        },
+      });
+
+      if (!combo) {
+        throw new NotFoundException('Combo no encontrado');
+      }
+
+      // Calcular precio final del combo
+      const { precioCalculado } = this.calcularPreciosFromComponentes(combo.componentesCombo);
+      let precioFinal = precioCalculado;
+
+      if (combo.tipoPrecioCombo === TipoPrecioCombo.CALCULADO_CON_DESCUENTO && combo.descuentoMaximo) {
+        precioFinal = precioCalculado * (1 - Number(combo.descuentoMaximo) / 100);
+      }
+      if (combo.tipoPrecioCombo === TipoPrecioCombo.FIJO) {
+        const stockCombo = combo.stocksPorSede[0];
+        precioFinal = stockCombo?.precio ? Number(stockCombo.precio) : precioFinal;
+      }
+
+      // Validar precioOferta < precioFinal
+      if (dto.enOferta && dto.precioOferta >= precioFinal) {
+        throw new BadRequestException(
+          `El precio de oferta (${dto.precioOferta}) debe ser menor que el precio final del combo (${precioFinal})`,
+        );
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        let stockCombo = combo.stocksPorSede[0];
+
+        // Crear ProductoStock si no existe
+        if (!stockCombo) {
+          stockCombo = await tx.productoStock.create({
+            data: {
+              sedeId,
+              empresaId,
+              productoId: comboId,
+              stockActual: 0,
+              precioOferta: new Decimal(dto.precioOferta),
+              enOferta: dto.enOferta,
+              fechaInicioOferta: dto.fechaInicioOferta ? new Date(dto.fechaInicioOferta) : null,
+              fechaFinOferta: dto.fechaFinOferta ? new Date(dto.fechaFinOferta) : null,
+            },
+          }) as any;
+        } else {
+          await tx.productoStock.update({
+            where: { id: stockCombo.id },
+            data: {
+              precioOferta: new Decimal(dto.precioOferta),
+              enOferta: dto.enOferta,
+              fechaInicioOferta: dto.fechaInicioOferta ? new Date(dto.fechaInicioOferta) : null,
+              fechaFinOferta: dto.fechaFinOferta ? new Date(dto.fechaFinOferta) : null,
+            },
+          });
+        }
+
+        // Registrar en historial de precios por sede
+        await tx.productoPrecioHistorialSede.create({
+          data: {
+            productoStockId: stockCombo.id,
+            sedeId,
+            precioOfertaAnterior: stockCombo.precioOferta ? new Decimal(stockCombo.precioOferta.toString()) : null,
+            precioOfertaNuevo: new Decimal(dto.precioOferta),
+            tipoCambio: TipoCambioPrecio.OFERTA,
+            razon: dto.razon || 'Oferta de combo',
+            origenModulo: 'COMBO',
+            usuarioId: userId,
+          },
+        });
+
+        // Registrar en ComboConfigHistorial
+        await tx.comboConfigHistorial.create({
+          data: {
+            comboId,
+            tipoCambio: TipoCambioComboConfig.OFERTA_COMBO,
+            valorAnterior: JSON.stringify({
+              precioOferta: stockCombo.precioOferta ? Number(stockCombo.precioOferta) : null,
+              enOferta: stockCombo.enOferta,
+            }),
+            valorNuevo: JSON.stringify({
+              precioOferta: dto.precioOferta,
+              enOferta: dto.enOferta,
+              fechaInicioOferta: dto.fechaInicioOferta,
+              fechaFinOferta: dto.fechaFinOferta,
+            }),
+            razon: dto.razon,
+            sedeId,
+            usuarioId: userId,
+          },
+        });
+      });
+
+      this.logger.log(`Oferta de combo ${comboId} actualizada`);
+      return this.getComboCompleto(comboId, empresaId, sedeId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al actualizar oferta del combo: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Desactiva la oferta de un combo en una sede
+   */
+  async desactivarOfertaCombo(
+    comboId: string,
+    empresaId: string,
+    sedeId: string,
+    userId: string,
+  ): Promise<ComboCompletoResponseDto> {
+    try {
+      const combo = await this.prisma.producto.findFirst({
+        where: {
+          id: comboId,
+          empresaId,
+          esCombo: true,
+          deletedAt: null,
+        },
+        include: {
+          stocksPorSede: { where: { sedeId } },
+        },
+      });
+
+      if (!combo) {
+        throw new NotFoundException('Combo no encontrado');
+      }
+
+      const stockCombo = combo.stocksPorSede[0];
+      if (!stockCombo) {
+        throw new BadRequestException('El combo no tiene stock configurado en esta sede');
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.productoStock.update({
+          where: { id: stockCombo.id },
+          data: {
+            enOferta: false,
+            precioOferta: null,
+            fechaInicioOferta: null,
+            fechaFinOferta: null,
+          },
+        });
+
+        await tx.productoPrecioHistorialSede.create({
+          data: {
+            productoStockId: stockCombo.id,
+            sedeId,
+            precioOfertaAnterior: stockCombo.precioOferta ? new Decimal(stockCombo.precioOferta.toString()) : null,
+            precioOfertaNuevo: null,
+            tipoCambio: TipoCambioPrecio.OFERTA,
+            razon: 'Desactivación de oferta del combo',
+            origenModulo: 'COMBO',
+            usuarioId: userId,
+          },
+        });
+
+        await tx.comboConfigHistorial.create({
+          data: {
+            comboId,
+            tipoCambio: TipoCambioComboConfig.OFERTA_COMBO,
+            valorAnterior: JSON.stringify({
+              precioOferta: stockCombo.precioOferta ? Number(stockCombo.precioOferta) : null,
+              enOferta: stockCombo.enOferta,
+            }),
+            valorNuevo: JSON.stringify({ enOferta: false, precioOferta: null }),
+            razon: 'Desactivación de oferta',
+            sedeId,
+            usuarioId: userId,
+          },
+        });
+      });
+
+      this.logger.log(`Oferta de combo ${comboId} desactivada`);
+      return this.getComboCompleto(comboId, empresaId, sedeId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al desactivar oferta del combo: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene el historial de cambios de configuración de un combo
+   */
+  async getComboConfigHistorial(
+    comboId: string,
+    empresaId: string,
+    filtros?: {
+      tipoCambio?: TipoCambioComboConfig;
+      desde?: string;
+      hasta?: string;
+    },
+  ): Promise<any[]> {
+    try {
+      // Validar que el combo existe
+      const combo = await this.prisma.producto.findFirst({
+        where: {
+          id: comboId,
+          empresaId,
+          esCombo: true,
+          deletedAt: null,
+        },
+      });
+
+      if (!combo) {
+        throw new NotFoundException('Combo no encontrado');
+      }
+
+      const where: any = { comboId };
+
+      if (filtros?.tipoCambio) {
+        where.tipoCambio = filtros.tipoCambio;
+      }
+
+      if (filtros?.desde || filtros?.hasta) {
+        where.creadoEn = {};
+        if (filtros?.desde) {
+          where.creadoEn.gte = new Date(filtros.desde);
+        }
+        if (filtros?.hasta) {
+          where.creadoEn.lte = new Date(filtros.hasta);
+        }
+      }
+
+      const historial = await this.prisma.comboConfigHistorial.findMany({
+        where,
+        include: {
+          usuario: {
+            select: {
+              id: true,
+              email: true,
+              persona: {
+                select: {
+                  nombres: true,
+                  apellidos: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: { creadoEn: 'desc' },
+        take: 100, // Límite de seguridad
+      });
+
+      // Parsear JSON de valorAnterior/valorNuevo (con protección)
+      const safeJsonParse = (str: string | null): any => {
+        if (!str) return null;
+        try { return JSON.parse(str); } catch { return str; }
+      };
+
+      return historial.map((entry) => ({
+        id: entry.id,
+        comboId: entry.comboId,
+        tipoCambio: entry.tipoCambio,
+        valorAnterior: safeJsonParse(entry.valorAnterior),
+        valorNuevo: safeJsonParse(entry.valorNuevo),
+        razon: entry.razon,
+        sedeId: entry.sedeId,
+        usuarioId: entry.usuarioId,
+        creadoEn: entry.creadoEn,
+        usuario: entry.usuario,
+      }));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al obtener historial de combo: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Actualiza precio fijo de un combo en una sede específica
+   * Solo para combos con tipoPrecioCombo = FIJO
+   */
+  async actualizarPrecioFijoSede(
+    comboId: string,
+    empresaId: string,
+    sedeId: string,
+    precio: number,
+    razon: string | undefined,
+    userId: string,
+  ): Promise<ComboCompletoResponseDto> {
+    try {
+      const combo = await this.prisma.producto.findFirst({
+        where: {
+          id: comboId,
+          empresaId,
+          esCombo: true,
+          deletedAt: null,
+        },
+        include: {
+          stocksPorSede: { where: { sedeId } },
+        },
+      });
+
+      if (!combo) {
+        throw new NotFoundException('Combo no encontrado');
+      }
+
+      if (combo.tipoPrecioCombo !== TipoPrecioCombo.FIJO) {
+        throw new BadRequestException('Solo se puede actualizar el precio fijo de combos con tipo FIJO');
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        const stockExistente = combo.stocksPorSede[0];
+        const precioAnterior = stockExistente?.precio ? Number(stockExistente.precio) : null;
+
+        if (stockExistente) {
+          await tx.productoStock.update({
+            where: { id: stockExistente.id },
+            data: {
+              precio: new Decimal(precio),
+              precioConfigurado: true,
+            },
+          });
+
+          await tx.productoPrecioHistorialSede.create({
+            data: {
+              productoStockId: stockExistente.id,
+              sedeId,
+              precioAnterior: precioAnterior ? new Decimal(precioAnterior) : null,
+              precioNuevo: new Decimal(precio),
+              tipoCambio: TipoCambioPrecio.MANUAL,
+              razon: razon || 'Actualización de precio fijo del combo por sede',
+              origenModulo: 'COMBO',
+              usuarioId: userId,
+            },
+          });
+        } else {
+          const newStock = await tx.productoStock.create({
+            data: {
+              sedeId,
+              empresaId,
+              productoId: comboId,
+              stockActual: 0,
+              precio: new Decimal(precio),
+              precioConfigurado: true,
+            },
+          });
+
+          await tx.productoPrecioHistorialSede.create({
+            data: {
+              productoStockId: newStock.id,
+              sedeId,
+              precioAnterior: null,
+              precioNuevo: new Decimal(precio),
+              tipoCambio: TipoCambioPrecio.MANUAL,
+              razon: razon || 'Precio fijo inicial del combo por sede',
+              origenModulo: 'COMBO',
+              usuarioId: userId,
+            },
+          });
+        }
+
+        await tx.comboConfigHistorial.create({
+          data: {
+            comboId,
+            tipoCambio: TipoCambioComboConfig.PRECIO_FIJO_SEDE,
+            valorAnterior: JSON.stringify({ precioFijo: precioAnterior, sedeId }),
+            valorNuevo: JSON.stringify({ precioFijo: precio, sedeId }),
+            razon,
+            sedeId,
+            usuarioId: userId,
+          },
+        });
+      });
+
+      this.logger.log(`Precio fijo de combo ${comboId} actualizado en sede ${sedeId}`);
+      return this.getComboCompleto(comboId, empresaId, sedeId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al actualizar precio fijo por sede: ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene los precios de un combo en todas las sedes
+   */
+  async getPreciosPorSede(
+    comboId: string,
+    empresaId: string,
+  ): Promise<any[]> {
+    try {
+      const combo = await this.prisma.producto.findFirst({
+        where: {
+          id: comboId,
+          empresaId,
+          esCombo: true,
+          deletedAt: null,
+        },
+      });
+
+      if (!combo) {
+        throw new NotFoundException('Combo no encontrado');
+      }
+
+      const stocks = await this.prisma.productoStock.findMany({
+        where: {
+          productoId: comboId,
+        },
+        include: {
+          sede: {
+            select: {
+              id: true,
+              nombre: true,
+              codigo: true,
+            },
+          },
+        },
+      });
+
+      return stocks.map((stock) => ({
+        sedeId: stock.sedeId,
+        sede: stock.sede,
+        precio: stock.precio ? Number(stock.precio) : null,
+        precioCosto: stock.precioCosto ? Number(stock.precioCosto) : null,
+        precioOferta: stock.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: stock.enOferta,
+        fechaInicioOferta: stock.fechaInicioOferta,
+        fechaFinOferta: stock.fechaFinOferta,
+      }));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al obtener precios por sede: ${errorMessage}`);
       throw error;
     }
   }

@@ -60,28 +60,23 @@ export class ProductoAtributoValorService {
         where: { productoId },
       });
 
-      // Crear los nuevos valores
-      const valoresCreados = await Promise.all(
-        dto.atributos.map((atributo) =>
-          tx.productoAtributoValor.create({
-            data: {
-              productoId,
-              atributoId: atributo.atributoId,
-              valor: atributo.valor,
-            },
-            include: {
-              atributo: {
-                select: {
-                  nombre: true,
-                  clave: true,
-                  tipo: true,
-                  unidad: true,
-                },
-              },
-            },
-          }),
-        ),
-      );
+      // Crear en bulk + un solo findMany con include (2 queries en vez de N)
+      await tx.productoAtributoValor.createMany({
+        data: dto.atributos.map((atributo) => ({
+          productoId,
+          atributoId: atributo.atributoId,
+          valor: atributo.valor,
+        })),
+      });
+
+      const valoresCreados = await tx.productoAtributoValor.findMany({
+        where: { productoId },
+        include: {
+          atributo: {
+            select: { nombre: true, clave: true, tipo: true, unidad: true },
+          },
+        },
+      });
 
       return valoresCreados.map((v) => this.mapToResponse(v));
     });
@@ -116,28 +111,23 @@ export class ProductoAtributoValorService {
         where: { varianteId },
       });
 
-      // Crear los nuevos valores
-      const valoresCreados = await Promise.all(
-        dto.atributos.map((atributo) =>
-          tx.productoAtributoValor.create({
-            data: {
-              varianteId,
-              atributoId: atributo.atributoId,
-              valor: atributo.valor,
-            },
-            include: {
-              atributo: {
-                select: {
-                  nombre: true,
-                  clave: true,
-                  tipo: true,
-                  unidad: true,
-                },
-              },
-            },
-          }),
-        ),
-      );
+      // Crear en bulk + un solo findMany con include (2 queries en vez de N)
+      await tx.productoAtributoValor.createMany({
+        data: dto.atributos.map((atributo) => ({
+          varianteId,
+          atributoId: atributo.atributoId,
+          valor: atributo.valor,
+        })),
+      });
+
+      const valoresCreados = await tx.productoAtributoValor.findMany({
+        where: { varianteId },
+        include: {
+          atributo: {
+            select: { nombre: true, clave: true, tipo: true, unidad: true },
+          },
+        },
+      });
 
       return valoresCreados.map((v) => this.mapToResponse(v));
     });
@@ -226,21 +216,22 @@ export class ProductoAtributoValorService {
       where: {
         id: { in: atributoIds },
         empresaId,
+        isActive: true,
       },
     });
 
+    const existentesMap = new Map(atributosExistentes.map(a => [a.id, a]));
+
     if (atributosExistentes.length !== atributoIds.length) {
-      const faltantes = atributoIds.filter(
-        (id) => !atributosExistentes.find((a) => a.id === id),
-      );
+      const faltantes = atributoIds.filter((id) => !existentesMap.has(id));
       throw new BadRequestException(
-        `Los siguientes atributos no existen o no pertenecen a la empresa: ${faltantes.join(', ')}`,
+        `Los siguientes atributos no existen, están inactivos o no pertenecen a la empresa: ${faltantes.join(', ')}`,
       );
     }
 
     // Validar que los valores sean coherentes con el tipo de atributo
     for (const atributo of atributos) {
-      const plantilla = atributosExistentes.find((a) => a.id === atributo.atributoId);
+      const plantilla = existentesMap.get(atributo.atributoId);
       if (!plantilla) continue;
 
       // Validar según tipo
@@ -264,6 +255,18 @@ export class ProductoAtributoValorService {
         case AtributoTipo.SELECT:
         case AtributoTipo.MULTI_SELECT:
           // Verificar que el valor esté en los valores predefinidos
+          if (plantilla.valores.length > 0 && !plantilla.valores.includes(atributo.valor)) {
+            throw new BadRequestException(
+              `El atributo "${plantilla.nombre}" solo acepta los valores: ${plantilla.valores.join(', ')}. Recibido: ${atributo.valor}`,
+            );
+          }
+          break;
+
+        case AtributoTipo.COLOR:
+        case AtributoTipo.TALLA:
+        case AtributoTipo.MATERIAL:
+        case AtributoTipo.CAPACIDAD:
+          // Validar contra valores predefinidos si existen
           if (plantilla.valores.length > 0 && !plantilla.valores.includes(atributo.valor)) {
             throw new BadRequestException(
               `El atributo "${plantilla.nombre}" solo acepta los valores: ${plantilla.valores.join(', ')}. Recibido: ${atributo.valor}`,

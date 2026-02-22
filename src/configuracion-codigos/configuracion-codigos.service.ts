@@ -1014,6 +1014,130 @@ export class ConfiguracionCodigosService {
     return { sincronizado: true, nuevoContador: ultimoNumero };
   }
 
+  /**
+   * GENERAR CÓDIGO DE COTIZACIÓN
+   * @param empresaId ID de la empresa
+   * @param sedeId ID de la sede (opcional, se incluye si cotizacionIncluirSede = true)
+   * @param tx Transacción de Prisma (opcional)
+   * @returns Código de cotización generado (ej: COT-000001 o COT-SEDE-000001)
+   */
+  async generarCodigoCotizacion(
+    empresaId: string,
+    sedeId?: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ codigoCotizacion: string }> {
+    if (tx) {
+      return await this._generarCodigoCotizacionInTransaction(tx, empresaId, sedeId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoCotizacionInTransaction(
+        txInner,
+        empresaId,
+        sedeId,
+      );
+    });
+  }
+
+  /**
+   * Lógica interna de generación de código de cotización
+   */
+  private async _generarCodigoCotizacionInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    sedeId?: string,
+  ): Promise<{ codigoCotizacion: string }> {
+    let config = await tx.configuracionCodigos.findUnique({
+      where: { empresaId },
+    });
+
+    if (!config) {
+      config = await tx.configuracionCodigos.create({
+        data: { empresaId },
+      });
+    }
+
+    // Sincronizar con BD
+    const ultimaCotizacion = await tx.cotizacion.findFirst({
+      where: {
+        empresaId,
+        codigo: {
+          startsWith: config.cotizacionCodigo,
+        },
+      },
+      orderBy: {
+        codigo: 'desc',
+      },
+      select: {
+        codigo: true,
+      },
+    });
+
+    let nuevoContador = config.ultimaCotizacion;
+
+    if (ultimaCotizacion) {
+      const match = ultimaCotizacion.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= nuevoContador) {
+          nuevoContador = ultimoNumero;
+          await tx.configuracionCodigos.update({
+            where: { empresaId },
+            data: { ultimaCotizacion: nuevoContador },
+          });
+        }
+      }
+    }
+
+    // Incrementar contador atómicamente
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: {
+        ultimaCotizacion: {
+          increment: 1,
+        },
+      },
+    });
+
+    nuevoContador = updated.ultimaCotizacion;
+
+    // Generar código
+    const numero = nuevoContador
+      .toString()
+      .padStart(config.cotizacionLongitud, '0');
+    let codigoCotizacion = `${config.cotizacionCodigo}${config.cotizacionSeparador}${numero}`;
+
+    // Si incluye sede
+    if (config.cotizacionIncluirSede && sedeId) {
+      const sede = await tx.sede.findUnique({
+        where: { id: sedeId },
+        select: { nombre: true },
+      });
+      if (sede) {
+        const sedeCode = sede.nombre.substring(0, 3).toUpperCase();
+        codigoCotizacion = `${config.cotizacionCodigo}${config.cotizacionSeparador}${sedeCode}${config.cotizacionSeparador}${numero}`;
+      }
+    }
+
+    // Verificación final de duplicados
+    const existe = await tx.cotizacion.findFirst({
+      where: {
+        empresaId,
+        codigo: codigoCotizacion,
+      },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de cotización ${codigoCotizacion} ya existe. Reintentando...`,
+      );
+      return this._generarCodigoCotizacionInTransaction(tx, empresaId, sedeId);
+    }
+
+    return { codigoCotizacion };
+  }
+
   // =====================================================
   // HELPERS PRIVADOS
   // =====================================================

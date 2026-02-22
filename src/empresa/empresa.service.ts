@@ -8,6 +8,7 @@ import { AuditLoggerService, AuditAction } from '../common/logger/audit-logger.s
 import { CatalogosService } from '../catalogos/catalogos.service';
 import { CacheService } from '../redis/cache.service';
 import { PermissionsService } from '../auth/services/permissions.service';
+import { ConfiguracionDocumentosService } from '../configuracion-documentos/configuracion-documentos.service';
 import {
   EmpresaContextResponseDto,
   EmpresaPermissionsDto,
@@ -17,6 +18,8 @@ import {
   EmpresaInfoDto,
   PersonalizacionEmpresaDto,
   PersonalizacionEmpresaResponseDto,
+  ConfiguracionEmpresaDto,
+  ConfiguracionEmpresaResponseDto,
 } from './dto';
 
 export interface CreateEmpresaData {
@@ -70,6 +73,7 @@ export class EmpresaService {
     private readonly catalogosService: CatalogosService,
     private readonly cache: CacheService,
     private readonly permissionsService: PermissionsService,
+    private readonly configuracionDocumentosService: ConfiguracionDocumentosService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(EmpresaService.name);
@@ -207,6 +211,13 @@ export class EmpresaService {
       },
     });
 
+    // Crear configuración fiscal/operativa por defecto
+    await this.prisma.configuracionEmpresa.create({
+      data: {
+        empresaId: empresa.id,
+      },
+    });
+
     // Asignar al usuario como administrador de la empresa
     await this.prisma.empresaUsuarioRol.create({
       data: {
@@ -282,6 +293,17 @@ export class EmpresaService {
         empresaId: empresa.id
       });
       // No lanzar error, continuar con la creación de empresa
+    }
+
+    // Crear configuracion de documentos PDF por defecto
+    try {
+      await this.configuracionDocumentosService.seedDefaults(empresa.id);
+      this.logger.log('Configuracion de documentos creada exitosamente');
+    } catch (error) {
+      this.logger.warn('Error al crear configuracion de documentos', {
+        error: error.message,
+        empresaId: empresa.id,
+      });
     }
 
     this.logger.success('Empresa created successfully', {
@@ -608,6 +630,13 @@ export class EmpresaService {
       },
     });
 
+    // Crear configuración fiscal/operativa por defecto
+    await this.prisma.configuracionEmpresa.create({
+      data: {
+        empresaId: empresa.id,
+      },
+    });
+
     // Asignar al usuario como administrador de la empresa
     await this.prisma.empresaUsuarioRol.create({
       data: {
@@ -651,6 +680,17 @@ export class EmpresaService {
         ultimoNumeroGuiaRemision: 0,
       },
     });
+
+    // Crear configuracion de documentos PDF por defecto
+    try {
+      await this.configuracionDocumentosService.seedDefaults(empresa.id);
+      this.logger.log('Configuracion de documentos creada exitosamente');
+    } catch (error) {
+      this.logger.warn('Error al crear configuracion de documentos', {
+        error: error.message,
+        empresaId: empresa.id,
+      });
+    }
 
     this.logger.success('Empresa base created successfully', {
       empresaId: empresa.id,
@@ -1368,5 +1408,115 @@ export class EmpresaService {
     });
 
     return personalizacion as PersonalizacionEmpresaResponseDto;
+  }
+
+  /**
+   * Obtener configuración fiscal/operativa de la empresa
+   */
+  async getConfiguracion(empresaId: string, userId: string): Promise<ConfiguracionEmpresaResponseDto> {
+    this.logger.info('Getting empresa configuration', { empresaId, userId });
+
+    // Verificar acceso del usuario a la empresa
+    const hasAccess = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        empresaId,
+        usuarioId: userId,
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+
+    if (!hasAccess) {
+      this.logger.warn('User does not have access to empresa', { empresaId, userId });
+      throw new ForbiddenException('No tienes acceso a esta empresa');
+    }
+
+    // Buscar configuración existente
+    let configuracion = await this.prisma.configuracionEmpresa.findUnique({
+      where: { empresaId },
+    });
+
+    // Si no existe, crear una con valores por defecto
+    if (!configuracion) {
+      this.logger.info('Creating default configuration', { empresaId });
+      configuracion = await this.prisma.configuracionEmpresa.create({
+        data: {
+          empresaId,
+        },
+      });
+    }
+
+    this.logger.success('Configuration retrieved successfully', { empresaId });
+    return configuracion as ConfiguracionEmpresaResponseDto;
+  }
+
+  /**
+   * Actualizar configuración fiscal/operativa de la empresa
+   */
+  async updateConfiguracion(
+    empresaId: string,
+    userId: string,
+    data: ConfiguracionEmpresaDto,
+  ): Promise<ConfiguracionEmpresaResponseDto> {
+    this.logger.info('Updating empresa configuration', { empresaId, userId });
+
+    // Verificar que el usuario sea administrador de la empresa
+    const userRole = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        empresaId,
+        usuarioId: userId,
+        isActive: true,
+        deletedAt: null,
+        rol: {
+          in: [Rol.SUPER_ADMIN, Rol.EMPRESA_ADMIN],
+        },
+      },
+    });
+
+    if (!userRole) {
+      this.logger.warn('User does not have admin permissions', { empresaId, userId });
+      throw new ForbiddenException('No tienes permisos para modificar la configuración');
+    }
+
+    // Upsert: crear si no existe, actualizar si existe
+    const configuracion = await this.prisma.configuracionEmpresa.upsert({
+      where: { empresaId },
+      update: {
+        ...(data.impuestoDefaultPorcentaje !== undefined && { impuestoDefaultPorcentaje: data.impuestoDefaultPorcentaje }),
+        ...(data.nombreImpuesto !== undefined && { nombreImpuesto: data.nombreImpuesto }),
+        ...(data.monedaPrincipal !== undefined && { monedaPrincipal: data.monedaPrincipal }),
+        ...(data.simboloMoneda !== undefined && { simboloMoneda: data.simboloMoneda }),
+        ...(data.monedasPermitidas !== undefined && { monedasPermitidas: data.monedasPermitidas }),
+        ...(data.diasVigenciaCotizacion !== undefined && { diasVigenciaCotizacion: data.diasVigenciaCotizacion }),
+        ...(data.condicionesDefault !== undefined && { condicionesDefault: data.condicionesDefault }),
+      },
+      create: {
+        empresaId,
+        impuestoDefaultPorcentaje: data.impuestoDefaultPorcentaje ?? 18.0,
+        nombreImpuesto: data.nombreImpuesto ?? 'IGV',
+        monedaPrincipal: data.monedaPrincipal ?? 'PEN',
+        simboloMoneda: data.simboloMoneda ?? 'S/',
+        monedasPermitidas: data.monedasPermitidas ?? ['PEN', 'USD'],
+        diasVigenciaCotizacion: data.diasVigenciaCotizacion ?? 30,
+        condicionesDefault: data.condicionesDefault ?? null,
+      },
+    });
+
+    this.logger.success('Configuration updated successfully', { empresaId });
+
+    // Auditoría
+    this.auditLogger.log({
+      action: AuditAction.TENANT_UPDATED,
+      actor: { userId },
+      target: {
+        type: 'ConfiguracionEmpresa',
+        id: configuracion.id,
+        name: `Configuración de empresa ${empresaId}`,
+      },
+      metadata: data,
+      success: true,
+    });
+
+    return configuracion as ConfiguracionEmpresaResponseDto;
   }
 }

@@ -25,6 +25,8 @@ import {
   EmpresaContextResponseDto,
   PersonalizacionEmpresaDto,
   PersonalizacionEmpresaResponseDto,
+  ConfiguracionEmpresaDto,
+  ConfiguracionEmpresaResponseDto,
 } from './dto';
 import { CreateEmpresaConCatalogosDto } from './dto/create-empresa-con-catalogos.dto';
 
@@ -365,5 +367,58 @@ export class EmpresaController {
     @CurrentUser() user: any,
   ): Promise<PersonalizacionEmpresaResponseDto> {
     return this.empresaService.updatePersonalizacion(id, user.sub, personalizacionDto);
+  }
+
+  /**
+   * Obtener configuración fiscal/operativa de la empresa
+   */
+  @Get(':id/configuracion')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Obtener configuración fiscal/operativa de la empresa',
+    description: 'Obtiene la configuración de impuestos, moneda y cotizaciones',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Configuración obtenida exitosamente',
+    type: ConfiguracionEmpresaResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 403, description: 'No tienes acceso a esta empresa' })
+  @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
+  async getConfiguracion(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ): Promise<ConfiguracionEmpresaResponseDto> {
+    return this.empresaService.getConfiguracion(id, user.sub);
+  }
+
+  /**
+   * Actualizar configuración fiscal/operativa de la empresa
+   */
+  @Put(':id/configuracion')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Actualizar configuración fiscal/operativa de la empresa',
+    description: 'Actualiza impuestos, moneda y configuración de cotizaciones (solo administradores)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Configuración actualizada exitosamente',
+    type: ConfiguracionEmpresaResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos de administrador' })
+  @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
+  async updateConfiguracion(
+    @Param('id') id: string,
+    @Body() configuracionDto: ConfiguracionEmpresaDto,
+    @CurrentUser() user: any,
+  ): Promise<ConfiguracionEmpresaResponseDto> {
+    return this.empresaService.updateConfiguracion(id, user.sub, configuracionDto);
   }
 }

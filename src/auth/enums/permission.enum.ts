@@ -33,6 +33,10 @@ export enum Permission {
   VIEW_PROVEEDORES = 'canViewProveedores',       // Ver lista de proveedores
   MANAGE_PROVEEDORES = 'canManageProveedores',   // Crear, editar, eliminar proveedores
 
+  // Cotizaciones
+  VIEW_COTIZACIONES = 'canViewCotizaciones',       // Ver lista de cotizaciones
+  MANAGE_COTIZACIONES = 'canManageCotizaciones',   // Crear, editar, eliminar cotizaciones
+
   // Otros permisos
   MANAGE_SEDES = 'canManageSedes',
   VIEW_REPORTS = 'canViewReports',

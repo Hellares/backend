@@ -66,4 +66,18 @@ export class AjusteMasivoPreciosDto {
   @IsOptional()
   @IsArray()
   productoIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Si true, excluye productos que son combos (esCombo=true)',
+    example: true,
+  })
+  @IsOptional()
+  excluirCombos?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Si true, solo afecta combos con tipo FIJO (los demás no tienen sentido ajustar masivamente)',
+    example: false,
+  })
+  @IsOptional()
+  soloCombos?: boolean;
 }

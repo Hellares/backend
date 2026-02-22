@@ -35,9 +35,10 @@ export class CreateProductoAtributoDto {
   @IsOptional()
   unidad?: string; // "MHz", "GB", "mm", "W" - para valores numéricos
 
-  @IsString()
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
-  categoriaId?: string; // Asociar atributo a una categoría específica
+  categoriaIds?: string[]; // Asociar atributo a múltiples categorías (vacío = global)
 
   @IsArray()
   @IsString({ each: true })

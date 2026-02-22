@@ -92,6 +92,18 @@ model Empresa {
   proveedorEvaluaciones ProveedorEvaluacion[]
   proveedorProductos    ProveedorProducto[]
 
+  // Relaciones para motor de compatibilidad
+  reglasCompatibilidad ReglaCompatibilidad[]
+
+  // Relaciones para cotizaciones
+  cotizaciones Cotizacion[]
+
+  configuracionEmpresa ConfiguracionEmpresa?
+
+  // Relaciones para configuracion de documentos PDF
+  configuracionDocumentos  ConfiguracionDocumentos?
+  plantillasDocumentos     PlantillaDocumento[]
+
   @@index([subdominio])
   @@index([isActive])
   @@index([ruc])
@@ -105,40 +117,45 @@ model Empresa {
 }
 
 model ConfiguracionCodigos {
-  id                  String   @id @default(cuid())
-  empresaId           String   @unique
-  productoCodigo      String   @default("PROD")
-  productoSeparador   String   @default("-")
-  productoLongitud    Int      @default(6)
-  productoIncluirSede Boolean  @default(false)
-  servicioCodigo      String   @default("SERV")
-  servicioSeparador   String   @default("-")
-  servicioLongitud    Int      @default(6)
-  servicioIncluirSede Boolean  @default(false)
-  varianteCodigo      String   @default("VAR")
-  varianteSeparador   String   @default("-")
-  varianteLongitud    Int      @default(6)
-  ventaCodigo         String   @default("VTA")
-  ventaSeparador      String   @default("-")
-  ventaLongitud       Int      @default(8)
-  ventaIncluirSede    Boolean  @default(true)
-  facturaCodigo       String   @default("FAC")
-  boletaCodigo        String   @default("BOL")
-  notaCreditoCodigo   String   @default("NCR")
-  notaDebitoCodigo    String   @default("NDB")
-  documentoSeparador  String   @default("-")
-  documentoLongitud   Int      @default(8)
-  ultimoProducto      Int      @default(0)
-  ultimoServicio      Int      @default(0)
-  ultimaVariante      Int      @default(0)
-  ultimaVenta         Int      @default(0)
-  ultimoFactura       Int      @default(0)
-  ultimaBoleta        Int      @default(0)
-  ultimaNotaCredito   Int      @default(0)
-  ultimaNotaDebito    Int      @default(0)
-  creadoEn            DateTime @default(now())
-  actualizadoEn       DateTime @updatedAt
-  empresa             Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  id                    String   @id @default(cuid())
+  empresaId             String   @unique
+  productoCodigo        String   @default("PROD")
+  productoSeparador     String   @default("-")
+  productoLongitud      Int      @default(6)
+  productoIncluirSede   Boolean  @default(false)
+  servicioCodigo        String   @default("SERV")
+  servicioSeparador     String   @default("-")
+  servicioLongitud      Int      @default(6)
+  servicioIncluirSede   Boolean  @default(false)
+  varianteCodigo        String   @default("VAR")
+  varianteSeparador     String   @default("-")
+  varianteLongitud      Int      @default(6)
+  ventaCodigo           String   @default("VTA")
+  ventaSeparador        String   @default("-")
+  ventaLongitud         Int      @default(8)
+  ventaIncluirSede      Boolean  @default(true)
+  facturaCodigo         String   @default("FAC")
+  boletaCodigo          String   @default("BOL")
+  notaCreditoCodigo     String   @default("NCR")
+  notaDebitoCodigo      String   @default("NDB")
+  documentoSeparador    String   @default("-")
+  documentoLongitud     Int      @default(8)
+  ultimoProducto        Int      @default(0)
+  ultimoServicio        Int      @default(0)
+  ultimaVariante        Int      @default(0)
+  ultimaVenta           Int      @default(0)
+  cotizacionCodigo      String   @default("COT")
+  cotizacionSeparador   String   @default("-")
+  cotizacionLongitud    Int      @default(6)
+  cotizacionIncluirSede Boolean  @default(true)
+  ultimaCotizacion      Int      @default(0)
+  ultimoFactura         Int      @default(0)
+  ultimaBoleta          Int      @default(0)
+  ultimaNotaCredito     Int      @default(0)
+  ultimaNotaDebito      Int      @default(0)
+  creadoEn              DateTime @default(now())
+  actualizadoEn         DateTime @updatedAt
+  empresa               Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@index([empresaId])
 }
@@ -217,9 +234,11 @@ model Sede {
   inventarios     Inventario[]
   itemsInventario InventarioItem[]
 
+  // Relaciones para cotizaciones
+  cotizaciones Cotizacion[]
+
   // Relaciones futuras (descomentar cuando se implementen)
   // ventas      Venta[]
-  // cotizaciones Cotizacion[]
   // cajas       Caja[]
 
   @@unique([empresaId, codigo])
@@ -304,6 +323,23 @@ model PersonalizacionEmpresa {
 
   @@index([empresaId])
   @@index([dominioPersonalizado])
+}
+
+model ConfiguracionEmpresa {
+  id                        String   @id @default(cuid())
+  empresaId                 String   @unique
+  impuestoDefaultPorcentaje Float    @default(18.0)
+  nombreImpuesto            String   @default("IGV")
+  monedaPrincipal           String   @default("PEN")
+  simboloMoneda             String   @default("S/")
+  monedasPermitidas         String[] @default(["PEN", "USD"])
+  diasVigenciaCotizacion    Int      @default(30)
+  condicionesDefault        String?
+  creadoEn                  DateTime @default(now())
+  actualizadoEn             DateTime @updatedAt
+  empresa                   Empresa  @relation(fields: [empresaId], references: [id])
+
+  @@index([empresaId])
 }
 
 // Tipos de sede según su función operativa

@@ -51,4 +51,12 @@ export class ComboCompletoResponseDto {
   tieneStockSuficiente: boolean;
   componentesSinStock?: string[];
   imagen?: string;
+
+  // Campos de oferta
+  precioOferta?: number | null;
+  enOferta?: boolean;
+  fechaInicioOferta?: Date | null;
+  fechaFinOferta?: Date | null;
+  ofertaActiva?: boolean;
+  precioSinOferta?: number; // Precio sin oferta (solo cuando ofertaActiva=true)
 }

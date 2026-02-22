@@ -66,6 +66,7 @@ model Usuario {
   sedes                   UsuarioSedeRol[]
   historialPreciosCambios ProductoPrecioHistorial[]
   historialPreciosSede    ProductoPrecioHistorialSede[] @relation("UsuarioCambiosPrecioSede")
+  cambiosComboConfig      ComboConfigHistorial[]        @relation("UsuarioCambiosComboConfig")
 
   // Relaciones para sistema de descuentos
   descuentosAsignados   UsuarioDescuento[]      @relation("UsuarioConDescuento")
@@ -92,6 +93,9 @@ model Usuario {
   inventariosSupervisados Inventario[]     @relation("InventarioSupervisor")
   inventariosAprobados    Inventario[]     @relation("InventarioAprobadoPor")
   itemsInventarioContados InventarioItem[] @relation("ItemContadoPor")
+
+  // Relaciones para cotizaciones
+  cotizacionesVendedor Cotizacion[] @relation("CotizacionVendedor")
 
   @@index([email])
   @@index([telefono])
@@ -136,6 +140,7 @@ model EmpresaPersona {
   empresa         Empresa                  @relation(fields: [empresaId], references: [id])
   persona         Persona                  @relation(fields: [personaId], references: [id])
   ordenesServicio OrdenServicio[]          @relation("OrdenServicioCliente")
+  cotizaciones    Cotizacion[]
 
   @@unique([personaId, empresaId])
   @@index([empresaId])

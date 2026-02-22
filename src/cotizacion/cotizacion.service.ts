@@ -1,0 +1,615 @@
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { AppLoggerService } from '../common/logger/logger.service';
+import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
+import { CompatibilidadService } from '../producto/compatibilidad.service';
+import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
+import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
+import { UpdateEstadoCotizacionDto } from './dto/update-estado-cotizacion.dto';
+import { CreateCotizacionDetalleDto } from './dto/create-cotizacion-detalle.dto';
+import { EstadoCotizacion, Prisma } from '@prisma/client';
+
+@Injectable()
+export class CotizacionService {
+  private readonly logger: AppLoggerService;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configuracionCodigos: ConfiguracionCodigosService,
+    private readonly compatibilidadService: CompatibilidadService,
+    loggerService: AppLoggerService,
+  ) {
+    this.logger = loggerService;
+    this.logger.setContext(CotizacionService.name);
+  }
+
+  /**
+   * Crear cotizacion con detalles en transaccion
+   */
+  async create(empresaId: string, dto: CreateCotizacionDto) {
+    this.logger.info('Creando cotizacion', { empresaId, sede: dto.sedeId });
+
+    return this.prisma.$transaction(async (tx) => {
+      // Generar codigo
+      const { codigoCotizacion } =
+        await this.configuracionCodigos.generarCodigoCotizacion(
+          empresaId,
+          dto.sedeId,
+          tx,
+        );
+
+      // Calcular totales por linea
+      const detallesCalculados = dto.detalles.map((d, index) =>
+        this.calcularDetalle(d, index),
+      );
+
+      // Calcular totales del header
+      const subtotal = detallesCalculados.reduce(
+        (sum, d) => sum + d.subtotal,
+        0,
+      );
+      const totalDescuento = detallesCalculados.reduce(
+        (sum, d) => sum + d.descuento,
+        0,
+      );
+      const totalImpuestos = detallesCalculados.reduce(
+        (sum, d) => sum + d.igv,
+        0,
+      );
+      const total = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
+
+      const cotizacion = await tx.cotizacion.create({
+        data: {
+          empresaId,
+          sedeId: dto.sedeId,
+          clienteId: dto.clienteId,
+          vendedorId: dto.vendedorId,
+          codigo: codigoCotizacion,
+          nombre: dto.nombre,
+          nombreCliente: dto.nombreCliente,
+          documentoCliente: dto.documentoCliente,
+          emailCliente: dto.emailCliente,
+          telefonoCliente: dto.telefonoCliente,
+          direccionCliente: dto.direccionCliente,
+          moneda: dto.moneda ?? 'PEN',
+          tipoCambio: dto.tipoCambio,
+          subtotal,
+          descuento: totalDescuento,
+          impuestos: totalImpuestos,
+          total,
+          fechaVencimiento: dto.fechaVencimiento
+            ? new Date(dto.fechaVencimiento)
+            : null,
+          observaciones: dto.observaciones,
+          condiciones: dto.condiciones,
+          detalles: {
+            create: detallesCalculados.map((d) => ({
+              productoId: d.productoId,
+              varianteId: d.varianteId,
+              servicioId: d.servicioId,
+              descripcion: d.descripcion,
+              cantidad: d.cantidad,
+              precioUnitario: d.precioUnitario,
+              descuento: d.descuento,
+              porcentajeIGV: d.porcentajeIGV,
+              igv: d.igv,
+              subtotal: d.subtotal,
+              total: d.total,
+              orden: d.orden,
+            })),
+          },
+        },
+        include: {
+          detalles: {
+            include: {
+              producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+              variante: { select: { id: true, nombre: true, sku: true } },
+              servicio: { select: { id: true, nombre: true, codigoEmpresa: true } },
+            },
+            orderBy: { orden: 'asc' },
+          },
+          sede: { select: { id: true, nombre: true } },
+          cliente: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+          vendedor: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+        },
+      });
+
+      this.logger.log(`Cotizacion creada: ${cotizacion.codigo}`);
+      return cotizacion;
+    });
+  }
+
+  /**
+   * Listar cotizaciones con filtros
+   */
+  async findAll(
+    empresaId: string,
+    filtros?: {
+      sedeId?: string;
+      estado?: EstadoCotizacion;
+      fechaDesde?: string;
+      fechaHasta?: string;
+      clienteId?: string;
+      search?: string;
+    },
+  ) {
+    const where: Prisma.CotizacionWhereInput = { empresaId };
+
+    if (filtros?.sedeId) where.sedeId = filtros.sedeId;
+    if (filtros?.estado) where.estado = filtros.estado;
+    if (filtros?.clienteId) where.clienteId = filtros.clienteId;
+
+    if (filtros?.fechaDesde || filtros?.fechaHasta) {
+      where.fechaEmision = {};
+      if (filtros.fechaDesde) where.fechaEmision.gte = new Date(filtros.fechaDesde);
+      if (filtros.fechaHasta) where.fechaEmision.lte = new Date(filtros.fechaHasta);
+    }
+
+    if (filtros?.search) {
+      where.OR = [
+        { codigo: { contains: filtros.search, mode: 'insensitive' } },
+        { nombreCliente: { contains: filtros.search, mode: 'insensitive' } },
+        { documentoCliente: { contains: filtros.search, mode: 'insensitive' } },
+      ];
+    }
+
+    return this.prisma.cotizacion.findMany({
+      where,
+      include: {
+        sede: { select: { id: true, nombre: true } },
+        cliente: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        vendedor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        _count: { select: { detalles: true } },
+      },
+      orderBy: { creadoEn: 'desc' },
+    });
+  }
+
+  /**
+   * Detalle completo de una cotizacion
+   */
+  async findOne(id: string, empresaId: string) {
+    const cotizacion = await this.prisma.cotizacion.findFirst({
+      where: { id, empresaId },
+      include: {
+        detalles: {
+          include: {
+            producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+            variante: { select: { id: true, nombre: true, sku: true } },
+            servicio: { select: { id: true, nombre: true, codigoEmpresa: true } },
+          },
+          orderBy: { orden: 'asc' },
+        },
+        sede: { select: { id: true, nombre: true } },
+        cliente: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true, dni: true } },
+          },
+        },
+        vendedor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+      },
+    });
+
+    if (!cotizacion) {
+      throw new NotFoundException('Cotizacion no encontrada');
+    }
+
+    return cotizacion;
+  }
+
+  /**
+   * Actualizar cotizacion (solo si BORRADOR)
+   */
+  async update(id: string, empresaId: string, dto: UpdateCotizacionDto) {
+    const cotizacion = await this.prisma.cotizacion.findFirst({
+      where: { id, empresaId },
+    });
+
+    if (!cotizacion) {
+      throw new NotFoundException('Cotizacion no encontrada');
+    }
+
+    if (cotizacion.estado !== EstadoCotizacion.BORRADOR) {
+      throw new BadRequestException(
+        'Solo se pueden editar cotizaciones en estado BORRADOR',
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Si vienen detalles nuevos, reemplazar los existentes
+      if (dto.detalles && dto.detalles.length > 0) {
+        await tx.cotizacionDetalle.deleteMany({
+          where: { cotizacionId: id },
+        });
+
+        const detallesCalculados = dto.detalles.map((d, index) =>
+          this.calcularDetalle(d, index),
+        );
+
+        await tx.cotizacionDetalle.createMany({
+          data: detallesCalculados.map((d) => ({
+            cotizacionId: id,
+            productoId: d.productoId,
+            varianteId: d.varianteId,
+            servicioId: d.servicioId,
+            descripcion: d.descripcion,
+            cantidad: d.cantidad,
+            precioUnitario: d.precioUnitario,
+            descuento: d.descuento,
+            porcentajeIGV: d.porcentajeIGV,
+            igv: d.igv,
+            subtotal: d.subtotal,
+            total: d.total,
+            orden: d.orden,
+          })),
+        });
+
+        const subtotal = detallesCalculados.reduce(
+          (sum, d) => sum + d.subtotal,
+          0,
+        );
+        const totalDescuento = detallesCalculados.reduce(
+          (sum, d) => sum + d.descuento,
+          0,
+        );
+        const totalImpuestos = detallesCalculados.reduce(
+          (sum, d) => sum + d.igv,
+          0,
+        );
+        const total = detallesCalculados.reduce(
+          (sum, d) => sum + d.total,
+          0,
+        );
+
+        return tx.cotizacion.update({
+          where: { id },
+          data: {
+            ...(dto.clienteId !== undefined && { clienteId: dto.clienteId }),
+            ...(dto.vendedorId !== undefined && { vendedorId: dto.vendedorId }),
+            ...(dto.nombre !== undefined && { nombre: dto.nombre }),
+            ...(dto.nombreCliente !== undefined && { nombreCliente: dto.nombreCliente }),
+            ...(dto.documentoCliente !== undefined && { documentoCliente: dto.documentoCliente }),
+            ...(dto.emailCliente !== undefined && { emailCliente: dto.emailCliente }),
+            ...(dto.telefonoCliente !== undefined && { telefonoCliente: dto.telefonoCliente }),
+            ...(dto.direccionCliente !== undefined && { direccionCliente: dto.direccionCliente }),
+            ...(dto.moneda !== undefined && { moneda: dto.moneda }),
+            ...(dto.tipoCambio !== undefined && { tipoCambio: dto.tipoCambio }),
+            ...(dto.observaciones !== undefined && { observaciones: dto.observaciones }),
+            ...(dto.condiciones !== undefined && { condiciones: dto.condiciones }),
+            ...(dto.fechaVencimiento !== undefined && {
+              fechaVencimiento: dto.fechaVencimiento
+                ? new Date(dto.fechaVencimiento)
+                : null,
+            }),
+            subtotal,
+            descuento: totalDescuento,
+            impuestos: totalImpuestos,
+            total,
+          },
+          include: {
+            detalles: {
+              include: {
+                producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+                variante: { select: { id: true, nombre: true, sku: true } },
+                servicio: { select: { id: true, nombre: true, codigoEmpresa: true } },
+              },
+              orderBy: { orden: 'asc' },
+            },
+            sede: { select: { id: true, nombre: true } },
+            vendedor: {
+              select: {
+                id: true,
+                persona: { select: { nombres: true, apellidos: true } },
+              },
+            },
+          },
+        });
+      }
+
+      // Solo actualizar header
+      return tx.cotizacion.update({
+        where: { id },
+        data: {
+          ...(dto.clienteId !== undefined && { clienteId: dto.clienteId }),
+          ...(dto.vendedorId !== undefined && { vendedorId: dto.vendedorId }),
+          ...(dto.nombreCliente !== undefined && { nombreCliente: dto.nombreCliente }),
+          ...(dto.documentoCliente !== undefined && { documentoCliente: dto.documentoCliente }),
+          ...(dto.emailCliente !== undefined && { emailCliente: dto.emailCliente }),
+          ...(dto.telefonoCliente !== undefined && { telefonoCliente: dto.telefonoCliente }),
+          ...(dto.direccionCliente !== undefined && { direccionCliente: dto.direccionCliente }),
+          ...(dto.moneda !== undefined && { moneda: dto.moneda }),
+          ...(dto.tipoCambio !== undefined && { tipoCambio: dto.tipoCambio }),
+          ...(dto.observaciones !== undefined && { observaciones: dto.observaciones }),
+          ...(dto.condiciones !== undefined && { condiciones: dto.condiciones }),
+          ...(dto.fechaVencimiento !== undefined && {
+            fechaVencimiento: dto.fechaVencimiento
+              ? new Date(dto.fechaVencimiento)
+              : null,
+          }),
+        },
+        include: {
+          detalles: {
+            include: {
+              producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+              variante: { select: { id: true, nombre: true, sku: true } },
+              servicio: { select: { id: true, nombre: true, codigoEmpresa: true } },
+            },
+            orderBy: { orden: 'asc' },
+          },
+          sede: { select: { id: true, nombre: true } },
+          vendedor: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+        },
+      });
+    });
+  }
+
+  /**
+   * Cambiar estado con validaciones de flujo
+   */
+  async updateEstado(
+    id: string,
+    empresaId: string,
+    dto: UpdateEstadoCotizacionDto,
+  ) {
+    const cotizacion = await this.prisma.cotizacion.findFirst({
+      where: { id, empresaId },
+    });
+
+    if (!cotizacion) {
+      throw new NotFoundException('Cotizacion no encontrada');
+    }
+
+    this.validarTransicionEstado(cotizacion.estado, dto.estado);
+
+    if (dto.estado === EstadoCotizacion.CONVERTIDA && !dto.comprobanteId) {
+      throw new BadRequestException(
+        'Se requiere comprobanteId para el estado CONVERTIDA',
+      );
+    }
+
+    return this.prisma.cotizacion.update({
+      where: { id },
+      data: {
+        estado: dto.estado,
+        ...(dto.comprobanteId && { comprobanteId: dto.comprobanteId }),
+      },
+      include: {
+        sede: { select: { id: true, nombre: true } },
+        vendedor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Eliminar cotizacion (solo BORRADOR)
+   */
+  async remove(id: string, empresaId: string) {
+    const cotizacion = await this.prisma.cotizacion.findFirst({
+      where: { id, empresaId },
+    });
+
+    if (!cotizacion) {
+      throw new NotFoundException('Cotizacion no encontrada');
+    }
+
+    if (cotizacion.estado !== EstadoCotizacion.BORRADOR) {
+      throw new BadRequestException(
+        'Solo se pueden eliminar cotizaciones en estado BORRADOR',
+      );
+    }
+
+    await this.prisma.cotizacion.delete({
+      where: { id },
+    });
+
+    return { message: 'Cotizacion eliminada exitosamente' };
+  }
+
+  /**
+   * Validar compatibilidad de items del detalle
+   */
+  async validarCompatibilidadItems(
+    empresaId: string,
+    detalles: CreateCotizacionDetalleDto[],
+  ) {
+    const productos = detalles
+      .filter((d) => d.productoId || d.varianteId)
+      .map((d) => ({
+        productoId: d.productoId,
+        varianteId: d.varianteId,
+      }));
+
+    if (productos.length < 2) {
+      return { compatible: true, conflictos: [] };
+    }
+
+    return this.compatibilidadService.validarCompatibilidad(
+      empresaId,
+      productos,
+    );
+  }
+
+  /**
+   * Duplicar cotizacion como BORRADOR
+   */
+  async duplicar(id: string, empresaId: string) {
+    const original = await this.prisma.cotizacion.findFirst({
+      where: { id, empresaId },
+      include: { detalles: { orderBy: { orden: 'asc' } } },
+    });
+
+    if (!original) {
+      throw new NotFoundException('Cotizacion no encontrada');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const { codigoCotizacion } =
+        await this.configuracionCodigos.generarCodigoCotizacion(
+          empresaId,
+          original.sedeId,
+          tx,
+        );
+
+      const copia = await tx.cotizacion.create({
+        data: {
+          empresaId,
+          sedeId: original.sedeId,
+          clienteId: original.clienteId,
+          vendedorId: original.vendedorId,
+          codigo: codigoCotizacion,
+          nombre: original.nombre,
+          nombreCliente: original.nombreCliente,
+          documentoCliente: original.documentoCliente,
+          emailCliente: original.emailCliente,
+          telefonoCliente: original.telefonoCliente,
+          direccionCliente: original.direccionCliente,
+          moneda: original.moneda,
+          tipoCambio: original.tipoCambio,
+          subtotal: original.subtotal,
+          descuento: original.descuento,
+          impuestos: original.impuestos,
+          total: original.total,
+          observaciones: original.observaciones,
+          condiciones: original.condiciones,
+          estado: EstadoCotizacion.BORRADOR,
+          detalles: {
+            create: original.detalles.map((d) => ({
+              productoId: d.productoId,
+              varianteId: d.varianteId,
+              servicioId: d.servicioId,
+              descripcion: d.descripcion,
+              cantidad: d.cantidad,
+              precioUnitario: d.precioUnitario,
+              descuento: d.descuento,
+              porcentajeIGV: d.porcentajeIGV,
+              igv: d.igv,
+              subtotal: d.subtotal,
+              total: d.total,
+              orden: d.orden,
+            })),
+          },
+        },
+        include: {
+          detalles: {
+            orderBy: { orden: 'asc' },
+          },
+          sede: { select: { id: true, nombre: true } },
+          vendedor: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+        },
+      });
+
+      this.logger.log(`Cotizacion duplicada: ${original.codigo} -> ${copia.codigo}`);
+      return copia;
+    });
+  }
+
+  // =====================================================
+  // HELPERS PRIVADOS
+  // =====================================================
+
+  /**
+   * Calcular totales de una linea de detalle
+   */
+  private calcularDetalle(dto: CreateCotizacionDetalleDto, index: number) {
+    const cantidad = dto.cantidad;
+    const precioUnitario = dto.precioUnitario;
+    const descuento = dto.descuento ?? 0;
+    const porcentajeIGV = dto.porcentajeIGV ?? 18;
+
+    const subtotalBruto = cantidad * precioUnitario;
+    const subtotal = subtotalBruto - descuento;
+    const igv = subtotal * (porcentajeIGV / 100);
+    const total = subtotal + igv;
+
+    return {
+      productoId: dto.productoId || null,
+      varianteId: dto.varianteId || null,
+      servicioId: dto.servicioId || null,
+      descripcion: dto.descripcion,
+      cantidad,
+      precioUnitario,
+      descuento,
+      porcentajeIGV,
+      igv: Math.round(igv * 100) / 100,
+      subtotal: Math.round(subtotal * 100) / 100,
+      total: Math.round(total * 100) / 100,
+      orden: index,
+    };
+  }
+
+  /**
+   * Validar transicion de estado
+   */
+  private validarTransicionEstado(
+    actual: EstadoCotizacion,
+    nuevo: EstadoCotizacion,
+  ) {
+    const transicionesValidas: Record<EstadoCotizacion, EstadoCotizacion[]> = {
+      [EstadoCotizacion.BORRADOR]: [
+        EstadoCotizacion.PENDIENTE,
+        EstadoCotizacion.VENCIDA,
+      ],
+      [EstadoCotizacion.PENDIENTE]: [
+        EstadoCotizacion.APROBADA,
+        EstadoCotizacion.RECHAZADA,
+        EstadoCotizacion.VENCIDA,
+      ],
+      [EstadoCotizacion.APROBADA]: [EstadoCotizacion.CONVERTIDA],
+      [EstadoCotizacion.RECHAZADA]: [],
+      [EstadoCotizacion.VENCIDA]: [],
+      [EstadoCotizacion.CONVERTIDA]: [],
+    };
+
+    const permitidos = transicionesValidas[actual];
+    if (!permitidos || !permitidos.includes(nuevo)) {
+      throw new BadRequestException(
+        `No se puede cambiar de ${actual} a ${nuevo}`,
+      );
+    }
+  }
+}

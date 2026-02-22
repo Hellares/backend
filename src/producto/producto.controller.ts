@@ -11,6 +11,9 @@ import {
   Patch,
   Headers,
   BadRequestException,
+  Res,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -19,13 +22,18 @@ import {
   ApiResponse,
   ApiQuery,
   ApiHeader,
+  ApiConsumes,
+  ApiBody,
 } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import { ProductoService } from './producto.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoAtributoValorService } from './producto-atributo-valor.service';
 import { PrecioNivelService } from './precio-nivel.service';
 import { ProductoPrecioHistorialService } from './producto-precio-historial.service';
+import { ProductoBulkUploadService } from './producto-bulk-upload.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -60,6 +68,7 @@ export class ProductoController {
     private readonly atributoValorService: ProductoAtributoValorService,
     private readonly precioNivelService: PrecioNivelService,
     private readonly precioHistorialService: ProductoPrecioHistorialService,
+    private readonly bulkUploadService: ProductoBulkUploadService,
   ) {}
 
   @Post()
@@ -233,6 +242,104 @@ export class ProductoController {
   // ): Promise<void> {
   //   return await this.atributoService.remove(atributoId, empresaId);
   // }
+
+  // =========================================
+  // ENDPOINTS DE CARGA MASIVA (ANTES DE :id)
+  // =========================================
+
+  @Get('bulk-upload/template')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Descargar plantilla Excel para carga masiva de productos' })
+  @ApiResponse({
+    status: 200,
+    description: 'Plantilla Excel descargada exitosamente',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async downloadBulkUploadTemplate(
+    @Headers('x-tenant-id') empresaId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const buffer = await this.bulkUploadService.generateTemplate(empresaId);
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename=plantilla_productos.xlsx',
+      'Content-Length': buffer.length,
+    });
+
+    res.send(buffer);
+  }
+
+  @Post('bulk-upload')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({ summary: 'Carga masiva de productos desde archivo Excel' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'Archivo Excel (.xlsx)' },
+        sedesIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'IDs de sedes donde crear stock (opcional)',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Productos creados exitosamente (éxito parcial posible)',
+  })
+  @ApiResponse({ status: 400, description: 'Archivo inválido o sin datos' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async bulkUpload(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { sedesIds?: string | string[] },
+  ) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó un archivo');
+    }
+
+    // Validar extensión
+    const fileName = file.originalname?.toLowerCase() || '';
+    if (!fileName.endsWith('.xlsx')) {
+      throw new BadRequestException('Solo se aceptan archivos Excel (.xlsx)');
+    }
+
+    // Parsear sedesIds del body (puede venir como string JSON o array)
+    let sedesIds: string[] | undefined;
+    if (body.sedesIds) {
+      if (typeof body.sedesIds === 'string') {
+        try {
+          sedesIds = JSON.parse(body.sedesIds);
+        } catch {
+          sedesIds = [body.sedesIds];
+        }
+      } else if (Array.isArray(body.sedesIds)) {
+        sedesIds = body.sedesIds;
+      }
+    }
+
+    return await this.bulkUploadService.parseAndValidate(
+      file.buffer,
+      empresaId,
+      user.sub,
+      sedesIds,
+    );
+  }
 
   // =========================================
   // ENDPOINTS ESTÁTICOS DE COMBOS (ANTES DE :id)

@@ -83,6 +83,15 @@ export class ActualizarPreciosSedeDto {
   fechaFinOferta?: string | null;
 
   @ApiPropertyOptional({
+    description: 'Indica si el precio de venta ya incluye IGV',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  precioIncluyeIgv?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Tipo de cambio de precio',
     enum: TipoCambioPrecioSede,
     example: TipoCambioPrecioSede.MANUAL,

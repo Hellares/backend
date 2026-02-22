@@ -132,11 +132,14 @@ model EmpresaCategoria {
   categoriaMaestra           CategoriaMaestra?           @relation(fields: [categoriaMaestraId], references: [id], onDelete: Restrict)
   productos                  Producto[]
   servicios                  Servicio[]
-  atributos                  ProductoAtributo[] // Atributos asociados a esta categoría
   productoAtributoPlantillas ProductoAtributoPlantilla[]
 
   // Relaciones para sistema de descuentos
   descuentosAplicables PoliticaDescuentoCategoria[]
+
+  // Relaciones para motor de compatibilidad
+  reglasComoOrigen  ReglaCompatibilidad[] @relation("ReglaOrigen")
+  reglasComoDestino ReglaCompatibilidad[] @relation("ReglaDestino")
 
   @@unique([empresaId, categoriaMaestraId])
   @@index([empresaId])

@@ -13,3 +13,7 @@ export {
   PersonalizacionEmpresaDto,
   PersonalizacionEmpresaResponseDto,
 } from './personalizacion-empresa.dto';
+export {
+  ConfiguracionEmpresaDto,
+  ConfiguracionEmpresaResponseDto,
+} from './configuracion-empresa.dto';

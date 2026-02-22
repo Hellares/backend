@@ -47,6 +47,7 @@ model ProductoStock {
 
   // Estado de configuración de precio (útil para filtros y dashboards)
   precioConfigurado Boolean @default(false) // true cuando se ha establecido al menos el precio de venta
+  precioIncluyeIgv  Boolean @default(false) // true cuando el precio de venta ya incluye IGV
 
   // Auditoría
   creadoEn      DateTime @default(now())

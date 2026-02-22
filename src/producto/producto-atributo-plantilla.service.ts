@@ -2,9 +2,9 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AppLoggerService } from '../common/logger/logger.service';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CreateProductoAtributoPlantillaDto } from './dto/create-producto-atributo-plantilla.dto';
 import { UpdateProductoAtributoPlantillaDto } from './dto/update-producto-atributo-plantilla.dto';
@@ -12,12 +12,49 @@ import { ProductoAtributoPlantillaResponseDto } from './dto/producto-atributo-pl
 
 @Injectable()
 export class ProductoAtributoPlantillaService {
-  private readonly logger = new Logger(ProductoAtributoPlantillaService.name);
+  private readonly logger: AppLoggerService;
 
   constructor(
     private prisma: PrismaService,
     private planLimitsService: PlanLimitsService,
-  ) {}
+    loggerService: AppLoggerService,
+  ) {
+    this.logger = loggerService;
+    this.logger.setContext(ProductoAtributoPlantillaService.name);
+  }
+
+  /**
+   * Include clause reutilizable para plantillas con atributos optimizados
+   */
+  private get plantillaInclude() {
+    return {
+      atributos: {
+        include: {
+          atributo: {
+            select: {
+              id: true,
+              nombre: true,
+              clave: true,
+              tipo: true,
+              requerido: true,
+              descripcion: true,
+              unidad: true,
+              valores: true,
+              isActive: true,
+            },
+          },
+        },
+        orderBy: { orden: 'asc' as const },
+      },
+      categoria: {
+        select: {
+          id: true,
+          nombreLocal: true,
+          nombrePersonalizado: true,
+        },
+      },
+    };
+  }
 
   /**
    * Crear una nueva plantilla de atributos
@@ -80,23 +117,7 @@ export class ProductoAtributoPlantillaService {
           })),
         },
       },
-      include: {
-        atributos: {
-          include: {
-            atributo: true,
-          },
-          orderBy: {
-            orden: 'asc',
-          },
-        },
-        categoria: {
-          select: {
-            id: true,
-            nombreLocal: true,
-            nombrePersonalizado: true,
-          },
-        },
-      },
+      include: this.plantillaInclude,
     });
 
     this.logger.log(
@@ -119,23 +140,7 @@ export class ProductoAtributoPlantillaService {
         isActive: true,
         ...(categoriaId && { categoriaId }),
       },
-      include: {
-        atributos: {
-          include: {
-            atributo: true,
-          },
-          orderBy: {
-            orden: 'asc',
-          },
-        },
-        categoria: {
-          select: {
-            id: true,
-            nombreLocal: true,
-            nombrePersonalizado: true,
-          },
-        },
-      },
+      include: this.plantillaInclude,
       orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
     });
 
@@ -155,23 +160,7 @@ export class ProductoAtributoPlantillaService {
         empresaId,
         isActive: true,
       },
-      include: {
-        atributos: {
-          include: {
-            atributo: true,
-          },
-          orderBy: {
-            orden: 'asc',
-          },
-        },
-        categoria: {
-          select: {
-            id: true,
-            nombreLocal: true,
-            nombrePersonalizado: true,
-          },
-        },
-      },
+      include: this.plantillaInclude,
     });
 
     if (!plantilla) {
@@ -223,7 +212,7 @@ export class ProductoAtributoPlantillaService {
       }
     }
 
-    // Si se actualizan los atributos, validar y actualizar
+    // Validar atributos si se proporcionaron
     if (updateDto.atributos) {
       const atributoIds = updateDto.atributos.map((a) => a.atributoId);
       const atributosExistentes = await this.prisma.productoAtributo.findMany({
@@ -232,6 +221,7 @@ export class ProductoAtributoPlantillaService {
           empresaId,
           isActive: true,
         },
+        select: { id: true },
       });
 
       if (atributosExistentes.length !== atributoIds.length) {
@@ -239,50 +229,37 @@ export class ProductoAtributoPlantillaService {
           'Uno o más atributos no existen o no pertenecen a la empresa',
         );
       }
-
-      // Eliminar atributos actuales y crear nuevos
-      await this.prisma.plantillaAtributo.deleteMany({
-        where: { plantillaId: id },
-      });
-
-      await this.prisma.plantillaAtributo.createMany({
-        data: updateDto.atributos.map((a, index) => ({
-          plantillaId: id,
-          atributoId: a.atributoId,
-          orden: a.orden ?? index,
-          requeridoOverride: a.requeridoOverride,
-          valoresOverride: a.valoresOverride ?? [],
-        })),
-      });
     }
 
-    // Actualizar datos básicos de la plantilla
-    const plantillaActualizada = await this.prisma.productoAtributoPlantilla.update({
-      where: { id },
-      data: {
-        nombre: updateDto.nombre,
-        descripcion: updateDto.descripcion,
-        icono: updateDto.icono,
-        categoriaId: updateDto.categoriaId,
-        orden: updateDto.orden,
-      },
-      include: {
-        atributos: {
-          include: {
-            atributo: true,
-          },
-          orderBy: {
-            orden: 'asc',
-          },
+    // Transacción atómica: delete atributos + create nuevos + update plantilla
+    const plantillaActualizada = await this.prisma.$transaction(async (tx) => {
+      if (updateDto.atributos) {
+        await tx.plantillaAtributo.deleteMany({
+          where: { plantillaId: id },
+        });
+
+        await tx.plantillaAtributo.createMany({
+          data: updateDto.atributos.map((a, index) => ({
+            plantillaId: id,
+            atributoId: a.atributoId,
+            orden: a.orden ?? index,
+            requeridoOverride: a.requeridoOverride,
+            valoresOverride: a.valoresOverride ?? [],
+          })),
+        });
+      }
+
+      return tx.productoAtributoPlantilla.update({
+        where: { id },
+        data: {
+          nombre: updateDto.nombre,
+          descripcion: updateDto.descripcion,
+          icono: updateDto.icono,
+          categoriaId: updateDto.categoriaId,
+          orden: updateDto.orden,
         },
-        categoria: {
-          select: {
-            id: true,
-            nombreLocal: true,
-            nombrePersonalizado: true,
-          },
-        },
-      },
+        include: this.plantillaInclude,
+      });
     });
 
     this.logger.log(`Plantilla ${id} actualizada para empresa ${empresaId}`);
@@ -362,13 +339,7 @@ export class ProductoAtributoPlantillaService {
         empresaId,
         isActive: true,
       },
-      include: {
-        atributos: {
-          include: {
-            atributo: true,
-          },
-        },
-      },
+      include: this.plantillaInclude,
     });
 
     if (!plantilla) {

@@ -74,31 +74,36 @@ export class ProductoService {
     let sedesResueltas: string[] = [];
 
     if (sedesIds && sedesIds.length > 0) {
-      // Validar acceso a cada sede proporcionada
-      for (const sedeId of sedesIds) {
-        const sede = await this.prisma.sede.findFirst({
-          where: {
-            id: sedeId,
-            empresaId,
-            isActive: true,
-            deletedAt: null,
-          },
-        });
+      // Validar todas las sedes en una sola query
+      const sedesValidas = await this.prisma.sede.findMany({
+        where: {
+          id: { in: sedesIds },
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { id: true, nombre: true },
+      });
 
-        if (!sede) {
+      // Verificar que todas las sedes proporcionadas existen
+      const sedesValidasIds = new Set(sedesValidas.map(s => s.id));
+      for (const sedeId of sedesIds) {
+        if (!sedesValidasIds.has(sedeId)) {
           throw new BadRequestException(
             `La sede con ID ${sedeId} no existe o no está activa.`,
           );
         }
+      }
 
-        // Validar acceso del usuario a esta sede
-        const sedesUsuario = await this.sedeContextHelper.getSedesUsuario(
-          empresaId,
-          userId,
-        );
+      // Validar acceso del usuario a todas las sedes (una sola llamada)
+      const sedesUsuario = await this.sedeContextHelper.getSedesUsuario(
+        empresaId,
+        userId,
+      );
+      const sedesUsuarioIds = new Set(sedesUsuario.map(s => s.id));
 
-        const tieneAcceso = sedesUsuario.some((s) => s.id === sedeId);
-        if (!tieneAcceso) {
+      for (const sede of sedesValidas) {
+        if (!sedesUsuarioIds.has(sede.id)) {
           throw new ForbiddenException(
             `No tienes acceso a la sede ${sede.nombre}.`,
           );
@@ -383,38 +388,17 @@ export class ProductoService {
       archivosPorProducto.get(archivo.entidadId!)!.push(archivo);
     }
 
-    // 5. OPTIMIZACIÓN: Obtener stock y precio de todos los combos en paralelo
+    // 5. OPTIMIZACIÓN: Obtener stock, precio y reservaciones de todos los combos en bulk (3 queries en vez de 3N)
     const combosIds = productos.filter(p => p.esCombo).map(p => p.id);
-    const stockCombosMap = new Map<string, number>();
-    const precioCombosMap = new Map<string, number>();
-    const reservacionCombosMap = new Map<string, number>();
+    let stockCombosMap = new Map<string, number>();
+    let precioCombosMap = new Map<string, number>();
+    let reservacionCombosMap = new Map<string, number>();
 
-    // Solo calcular stock/precio/reservaciones de combos si se proporciona sedeId
     if (combosIds.length > 0 && queryDto.sedeId) {
-      const [stockCombos, precioCombos, reservacionCombos] = await Promise.all([
-        Promise.all(combosIds.map(async (comboId) => {
-          const stock = await this.inventoryService.getStockCombo(comboId, queryDto.sedeId!);
-          return { comboId, stock };
-        })),
-        Promise.all(combosIds.map(async (comboId) => {
-          const precio = await this.comboService.calcularPrecioCombo(comboId, queryDto.sedeId!);
-          return { comboId, precio };
-        })),
-        Promise.all(combosIds.map(async (comboId) => {
-          const reservacion = await this.comboService.getReservacionCombo(comboId, queryDto.sedeId!);
-          return { comboId, cantidad: reservacion.cantidad };
-        })),
-      ]);
-
-      stockCombos.forEach(({ comboId, stock }) => {
-        stockCombosMap.set(comboId, stock);
-      });
-      precioCombos.forEach(({ comboId, precio }) => {
-        precioCombosMap.set(comboId, precio);
-      });
-      reservacionCombos.forEach(({ comboId, cantidad }) => {
-        reservacionCombosMap.set(comboId, cantidad);
-      });
+      const combosBulk = await this.comboService.getCombosBulkData(combosIds, queryDto.sedeId);
+      stockCombosMap = combosBulk.stocks;
+      precioCombosMap = combosBulk.precios;
+      reservacionCombosMap = combosBulk.reservaciones;
     }
 
     // 6. Convertir a DTOs (procesamiento en memoria - muy rápido)
@@ -682,30 +666,18 @@ export class ProductoService {
             select: { id: true },
           });
 
-          // Actualizar cada archivo individualmente para asegurar que todos los campos se actualicen
+          // Migrar todos los archivos en una sola operación
           if (archivosAMigrar.length > 0) {
-            this.logger.debug(`Iniciando migración de ${archivosAMigrar.length} archivos...`);
-
-            for (const archivo of archivosAMigrar) {
-              this.logger.debug(`Actualizando archivo ${archivo.id}: entidadTipo -> PRODUCTO_VARIANTE, entidadId -> ${varianteId}`);
-
-              await tx.archivo.update({
-                where: { id: archivo.id },
-                data: {
-                  entidadTipo: 'PRODUCTO_VARIANTE',
-                  entidadId: varianteId,
-                  varianteId: varianteId,
-                },
-              });
-
-              // Verificar que se actualizó correctamente
-              const verificacion = await tx.archivo.findUnique({
-                where: { id: archivo.id },
-                select: { entidadTipo: true, entidadId: true, varianteId: true },
-              });
-
-              this.logger.debug(`Archivo ${archivo.id} actualizado. Verificación: entidadTipo=${verificacion?.entidadTipo}, entidadId=${verificacion?.entidadId}, varianteId=${verificacion?.varianteId}`);
-            }
+            await tx.archivo.updateMany({
+              where: {
+                id: { in: archivosAMigrar.map(a => a.id) },
+              },
+              data: {
+                entidadTipo: 'PRODUCTO_VARIANTE',
+                entidadId: varianteId,
+                varianteId: varianteId,
+              },
+            });
 
             this.logger.debug(`${archivosAMigrar.length} archivos migrados del producto ${id} a la variante ${varianteId}`);
           }
@@ -750,30 +722,22 @@ export class ProductoService {
     }
 
     try {
-      // 5. Actualizar producto usando include clause del CatalogService
-      const producto = await this.prisma.producto.update({
-        where: { id },
-        data: dataToUpdate,
-        include: this.catalogService.buildIncludeClause(true, true, false, true),
-      });
-
-      // Si se desactivó el producto (era activo y ahora es inactivo) y tiene variantes,
-      // desactivar todas las variantes automáticamente
-      if (
-        productoExistente.isActive === true &&
-        producto.isActive === false &&
-        productoExistente.tieneVariantes
-      ) {
-        const variantesActivas = await this.prisma.productoVariante.count({
-          where: {
-            productoId: id,
-            isActive: true,
-            deletedAt: null,
-          },
+      // 5-7. Transacción atómica para update + variantes + precios + imágenes
+      const producto = await this.prisma.$transaction(async (tx) => {
+        // 5. Actualizar producto
+        const productoActualizado = await tx.producto.update({
+          where: { id },
+          data: dataToUpdate,
+          include: this.catalogService.buildIncludeClause(true, true, false, true),
         });
 
-        if (variantesActivas > 0) {
-          await this.prisma.productoVariante.updateMany({
+        // Si se desactivó el producto y tiene variantes, desactivarlas
+        if (
+          productoExistente.isActive === true &&
+          productoActualizado.isActive === false &&
+          productoExistente.tieneVariantes
+        ) {
+          const result = await tx.productoVariante.updateMany({
             where: {
               productoId: id,
               isActive: true,
@@ -784,47 +748,47 @@ export class ProductoService {
             },
           });
 
-          this.logger.warn(
-            `Producto ${id} desactivado. Se desactivaron automáticamente ${variantesActivas} variante(s).`,
-          );
+          if (result.count > 0) {
+            this.logger.warn(
+              `Producto ${id} desactivado. Se desactivaron automáticamente ${result.count} variante(s).`,
+            );
+          }
         }
-      }
 
-      // 6. Sincronizar niveles de precio (delegar a PricingService)
-      // IMPORTANTE: Solo para productos SIN variantes (los que tienen variantes, los niveles van a las variantes)
-      if (
-        productoData.configuracionPrecioId !== undefined &&
-        !producto.tieneVariantes
-      ) {
-        if (productoData.configuracionPrecioId) {
-          // Se asignó o cambió configuración → sincronizar niveles
-          await this.pricingService.sincronizarNivelesDesdeConfiguracion(
-            id,
-            productoData.configuracionPrecioId,
-            empresaId,
-          );
-        } else {
-          // Se removió configuración → eliminar niveles
-          await this.pricingService.eliminarNivelesDeProducto(id);
+        // 6. Sincronizar niveles de precio (dentro de la transacción)
+        if (
+          productoData.configuracionPrecioId !== undefined &&
+          !productoActualizado.tieneVariantes
+        ) {
+          if (productoData.configuracionPrecioId) {
+            await this.pricingService.sincronizarNivelesDesdeConfiguracion(
+              id,
+              productoData.configuracionPrecioId,
+              empresaId,
+              tx,
+            );
+          } else {
+            await this.pricingService.eliminarNivelesDeProducto(id, tx);
+          }
         }
-      }
 
-      // 7. Actualizar imágenes (delegar a CatalogService)
-      // IMPORTANTE: Solo actualizar imágenes si el producto NO tiene variantes
-      // Si tiene variantes, las imágenes están asociadas a las variantes, no al producto base
-      if (imagenesIds !== undefined && !producto.tieneVariantes) {
-        await this.catalogService.actualizarImagenes(id, empresaId, imagenesIds);
-      }
+        // 7. Actualizar imágenes (dentro de la transacción)
+        if (imagenesIds !== undefined && !productoActualizado.tieneVariantes) {
+          await this.catalogService.actualizarImagenes(id, empresaId, imagenesIds, tx);
+        }
+
+        return productoActualizado;
+      });
 
       this.logger.log(`Producto actualizado: ${id}`);
 
-      // 8. Invalidar cache de estadísticas de la empresa (mantener en Facade)
+      // 8. Invalidar cache (fuera de transacción, no es crítico)
       await this.invalidateEmpresaStats(empresaId);
 
-      // 9. Obtener archivos actualizados para respuesta (delegar a CatalogService)
+      // 9. Obtener archivos actualizados para respuesta
       const archivos = await this.catalogService.getProductoArchivos(id, empresaId);
 
-      // 10. Convertir a DTO (delegar a CatalogService)
+      // 10. Convertir a DTO
       return this.catalogService.toResponseDto(producto, archivos);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

@@ -30,6 +30,8 @@ import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
 import { CreateComboDto } from './dto/create-combo.dto';
 import { ReservarStockComboDto } from './dto/reservar-stock-combo.dto';
 import { DeleteComponentesComboBatchDto } from './dto/delete-componentes-batch.dto';
+import { UpdateComboPricingDto } from './dto/update-combo-pricing.dto';
+import { UpdateComboOfertaDto } from './dto/update-combo-oferta.dto';
 import {
   ProductoComboResponseDto,
   ComboCompletoResponseDto,
@@ -299,11 +301,12 @@ export class ProductoComboController {
     @Headers('x-tenant-id') empresaId: string,
     @Query('sedeId') sedeId: string | undefined,
     @Body() dto: UpdateComponenteComboDto,
+    @CurrentUser() user: any,
   ): Promise<ProductoComboResponseDto> {
     if (!sedeId) {
       throw new BadRequestException('El parámetro sedeId es requerido');
     }
-    return await this.comboService.actualizarComponente(componenteId, empresaId, sedeId, dto);
+    return await this.comboService.actualizarComponente(componenteId, empresaId, sedeId, dto, user.sub);
   }
 
   /**
@@ -386,11 +389,10 @@ export class ProductoComboController {
       throw new BadRequestException('El parámetro sedeId es requerido');
     }
     const cantidadNum = parseInt(cantidad, 10);
-    const tieneStock = await this.comboService.validarStockCombo(comboId, sedeId, cantidadNum);
     const stockDisponible = await this.comboService.getStockDisponibleCombo(comboId, sedeId);
 
     return {
-      tieneStock,
+      tieneStock: stockDisponible >= cantidadNum,
       stockDisponible,
     };
   }
@@ -469,5 +471,174 @@ export class ProductoComboController {
     }
     const result = await this.comboService.liberarReservaCombo(comboId, sedeId, user.sub);
     return { ...result, message: 'Reservación liberada exitosamente' };
+  }
+
+  // =====================================================
+  // GESTIÓN DE PRECIOS Y OFERTAS DE COMBOS
+  // =====================================================
+
+  /**
+   * Actualizar configuración de precios del combo
+   */
+  @Put(':id/pricing')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Actualizar configuración de precios del combo',
+    description: 'Permite cambiar el tipo de precio, descuento y/o precio fijo del combo',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Precios actualizados', type: ComboCompletoResponseDto })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o sedeId requerido' })
+  @ApiResponse({ status: 404, description: 'Combo no encontrado' })
+  async actualizarPrecioCombo(
+    @Param('id') comboId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string | undefined,
+    @Body() dto: UpdateComboPricingDto,
+    @CurrentUser() user: any,
+  ): Promise<ComboCompletoResponseDto> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.actualizarPrecioCombo(comboId, empresaId, sedeId, dto, user.sub);
+  }
+
+  /**
+   * Actualizar oferta del combo
+   */
+  @Put(':id/oferta')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Activar o actualizar oferta del combo',
+    description: 'Aplica un precio de oferta sobre el precio final calculado del combo',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Oferta actualizada', type: ComboCompletoResponseDto })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o sedeId requerido' })
+  @ApiResponse({ status: 404, description: 'Combo no encontrado' })
+  async actualizarOfertaCombo(
+    @Param('id') comboId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string | undefined,
+    @Body() dto: UpdateComboOfertaDto,
+    @CurrentUser() user: any,
+  ): Promise<ComboCompletoResponseDto> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.actualizarOfertaCombo(comboId, empresaId, sedeId, dto, user.sub);
+  }
+
+  /**
+   * Desactivar oferta del combo
+   */
+  @Delete(':id/oferta')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Desactivar oferta del combo' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Oferta desactivada', type: ComboCompletoResponseDto })
+  @ApiResponse({ status: 400, description: 'SedeId requerido' })
+  @ApiResponse({ status: 404, description: 'Combo no encontrado' })
+  async desactivarOfertaCombo(
+    @Param('id') comboId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string | undefined,
+    @CurrentUser() user: any,
+  ): Promise<ComboCompletoResponseDto> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.desactivarOfertaCombo(comboId, empresaId, sedeId, user.sub);
+  }
+
+  /**
+   * Obtener historial de cambios de precios del combo
+   */
+  @Get(':id/historial-precios')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Obtener historial de cambios de configuración de precios del combo',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Historial obtenido' })
+  @ApiResponse({ status: 404, description: 'Combo no encontrado' })
+  async getHistorialPrecios(
+    @Param('id') comboId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('tipoCambio') tipoCambio?: string,
+    @Query('desde') desde?: string,
+    @Query('hasta') hasta?: string,
+  ): Promise<any[]> {
+    return await this.comboService.getComboConfigHistorial(comboId, empresaId, {
+      tipoCambio: tipoCambio as any,
+      desde,
+      hasta,
+    });
+  }
+
+  /**
+   * Actualizar precio fijo del combo en una sede
+   */
+  @Put(':id/precio-sede')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Actualizar precio fijo del combo en una sede específica',
+    description: 'Solo para combos con tipoPrecioCombo = FIJO',
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Precio actualizado', type: ComboCompletoResponseDto })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o combo no es FIJO' })
+  async actualizarPrecioFijoSede(
+    @Param('id') comboId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string | undefined,
+    @Body() body: { precio: number; razon?: string },
+    @CurrentUser() user: any,
+  ): Promise<ComboCompletoResponseDto> {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    return await this.comboService.actualizarPrecioFijoSede(
+      comboId, empresaId, sedeId, body.precio, body.razon, user.sub,
+    );
+  }
+
+  /**
+   * Obtener precios del combo en todas las sedes
+   */
+  @Get(':id/precios-por-sede')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Obtener precios del combo en todas las sedes' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  @ApiResponse({ status: 200, description: 'Precios por sede obtenidos' })
+  async getPreciosPorSede(
+    @Param('id') comboId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<any[]> {
+    return await this.comboService.getPreciosPorSede(comboId, empresaId);
   }
 }

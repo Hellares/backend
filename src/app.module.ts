@@ -20,6 +20,8 @@ import { TransferenciaStockModule } from './transferencia-stock/transferencia-st
 import { ProveedorModule } from './proveedor/proveedor.module';
 import { ReporteIncidenciaModule } from './reporte-incidencia/reporte-incidencia.module';
 import { InventarioModule } from './inventario/inventario.module';
+import { CotizacionModule } from './cotizacion/cotizacion.module';
+import { ConfiguracionDocumentosModule } from './configuracion-documentos/configuracion-documentos.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -50,6 +52,8 @@ import { validate } from './config/validation';
     ProveedorModule,
     ReporteIncidenciaModule,
     InventarioModule,
+    CotizacionModule,
+    ConfiguracionDocumentosModule,
   ],
   controllers: [AppController],
   providers: [

@@ -43,6 +43,7 @@
     "cloudinary": "^2.8.0",
     "cls-hooked": "^4.2.2",
     "dotenv": "^17.2.3",
+    "exceljs": "^4.4.0",
     "google-auth-library": "^10.5.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.8.2",

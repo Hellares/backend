@@ -1,0 +1,92 @@
+enum TipoDocumento {
+  COTIZACION
+  FACTURA
+  BOLETA
+  NOTA_CREDITO
+  NOTA_DEBITO
+  GUIA_REMISION
+  TICKET_VENTA
+  ORDEN_SERVICIO
+}
+
+enum FormatoPapel {
+  A4
+  TICKET_80MM
+  TICKET_58MM
+}
+
+/// Configuracion global de identidad de la empresa para documentos
+model ConfiguracionDocumentos {
+  id        String @id @default(cuid())
+  empresaId String @unique
+
+  // Identidad de empresa para documentos
+  logoUrl         String?
+  nombreComercial String?
+  ruc             String?
+  direccion       String?
+  telefono        String?
+  email           String?
+
+  // Colores para documentos (reemplaza los hardcoded PdfColors.blue800)
+  colorPrimario   String @default("#1565C0")
+  colorSecundario String @default("#1E88E5")
+  colorTexto      String @default("#333333")
+
+  // Pie de pagina
+  textoPiePagina    String  @default("Gracias por su preferencia")
+  mostrarPaginacion Boolean @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa    Empresa              @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  plantillas PlantillaDocumento[]
+
+  @@index([empresaId])
+}
+
+/// Plantilla por tipo de documento — controla layout, secciones visibles, margenes
+model PlantillaDocumento {
+  id                 String        @id @default(cuid())
+  empresaId          String
+  configuracionDocId String
+  tipoDocumento      TipoDocumento
+  formatoPapel       FormatoPapel  @default(A4)
+  nombre             String
+
+  // Margenes (mm)
+  margenSuperior  Decimal @default(10.00) @db.Decimal(5, 2)
+  margenInferior  Decimal @default(10.00) @db.Decimal(5, 2)
+  margenIzquierdo Decimal @default(10.00) @db.Decimal(5, 2)
+  margenDerecho   Decimal @default(10.00) @db.Decimal(5, 2)
+
+  // Secciones visibles
+  mostrarLogo          Boolean @default(true)
+  mostrarDatosEmpresa  Boolean @default(true)
+  mostrarDatosCliente  Boolean @default(true)
+  mostrarDetalles      Boolean @default(true)
+  mostrarTotales       Boolean @default(true)
+  mostrarObservaciones Boolean @default(true)
+  mostrarCondiciones   Boolean @default(true)
+  mostrarFirma         Boolean @default(true)
+  mostrarCodigoQR      Boolean @default(false)
+  mostrarPiePagina     Boolean @default(true)
+
+  // Colores override por plantilla (null = usa los de ConfiguracionDocumentos)
+  colorEncabezado String?
+  colorCuerpo     String?
+
+  isActive     Boolean @default(true)
+  esPorDefecto Boolean @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa          Empresa                 @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  configuracionDoc ConfiguracionDocumentos @relation(fields: [configuracionDocId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, tipoDocumento, formatoPapel])
+  @@index([empresaId])
+  @@index([tipoDocumento])
+}
