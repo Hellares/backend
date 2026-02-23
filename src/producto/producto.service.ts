@@ -24,6 +24,7 @@ import { ProductoPricingService } from './producto-pricing.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoComboService } from './producto-combo.service';
+import { PlanLimitsService } from '../common/services/plan-limits.service';
 
 /**
  * ProductoService - FACADE (Orquestador)
@@ -51,6 +52,7 @@ export class ProductoService {
     private comboService: ProductoComboService,
     private sedeContextHelper: SedeContextHelper,
     private configCodigosService: ConfiguracionCodigosService,
+    private planLimitsService: PlanLimitsService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -69,6 +71,9 @@ export class ProductoService {
 
     // 1. Verificar permisos del usuario (mantener en Facade)
     await this.verifyUserPermissions(userId, empresaId);
+
+    // 1.5 Verificar límite de productos del plan de suscripción
+    await this.planLimitsService.checkProductosLimit(empresaId);
 
     // 2. Resolver sedes: múltiples o única
     let sedesResueltas: string[] = [];

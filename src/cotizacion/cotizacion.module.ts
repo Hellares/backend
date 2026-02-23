@@ -6,6 +6,7 @@ import { LoggerModule } from '../common/logger/logger.module';
 import { AuthModule } from '../auth/auth.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
 import { ProductoModule } from '../producto/producto.module';
+import { PlanLimitsService } from '../common/services/plan-limits.service';
 
 @Module({
   imports: [
@@ -16,7 +17,7 @@ import { ProductoModule } from '../producto/producto.module';
     ProductoModule,
   ],
   controllers: [CotizacionController],
-  providers: [CotizacionService],
+  providers: [CotizacionService, PlanLimitsService],
   exports: [CotizacionService],
 })
 export class CotizacionModule {}

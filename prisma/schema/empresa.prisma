@@ -283,6 +283,7 @@ model PlanSuscripcion {
   limiteUsuarios            Int?
   limiteSedes               Int?
   limitePlantillasAtributos Int? // Límite de plantillas personalizadas
+  limiteCotizaciones        Int? // Límite de cotizaciones
   tienePersonalizacion      Boolean            @default(false)
   tieneDominioPropio        Boolean            @default(false)
   tieneApi                  Boolean            @default(false)
@@ -363,6 +364,7 @@ enum EstadoSuscripcion {
   ACTIVA
   VENCIDA
   CANCELADA
+  SUSPENDIDA
   EN_PROBATION
 }
 

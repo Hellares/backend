@@ -25,6 +25,7 @@ export async function seedPlanesSuscripcion() {
       limiteUsuarios: 3,
       limiteSedes: 1,
       limitePlantillasAtributos: 5, // ✨ Límite de plantillas de atributos
+      limiteCotizaciones: 20, // ✨ Límite de cotizaciones
       tienePersonalizacion: false,
       tieneDominioPropio: false,
       tieneApi: false,
@@ -35,6 +36,7 @@ export async function seedPlanesSuscripcion() {
         usuarios: 3,
         sedes: 1,
         plantillasAtributos: 5,
+        cotizaciones: 20,
         facturacion: true,
         inventario: true,
         clientes: true,
@@ -52,6 +54,7 @@ export async function seedPlanesSuscripcion() {
       limiteUsuarios: 10,
       limiteSedes: 3,
       limitePlantillasAtributos: 15, // ✨ Límite de plantillas de atributos
+      limiteCotizaciones: 200, // ✨ Límite de cotizaciones
       tienePersonalizacion: true,
       tieneDominioPropio: false,
       tieneApi: false,
@@ -62,6 +65,7 @@ export async function seedPlanesSuscripcion() {
         usuarios: 10,
         sedes: 3,
         plantillasAtributos: 15,
+        cotizaciones: 200,
         facturacion: true,
         inventario: true,
         clientes: true,
@@ -80,6 +84,7 @@ export async function seedPlanesSuscripcion() {
       limiteUsuarios: 50,
       limiteSedes: 10,
       limitePlantillasAtributos: null, // ✨ Ilimitado
+      limiteCotizaciones: null, // ✨ Ilimitado
       tienePersonalizacion: true,
       tieneDominioPropio: true,
       tieneApi: true,
@@ -90,6 +95,7 @@ export async function seedPlanesSuscripcion() {
         usuarios: 50,
         sedes: 10,
         plantillasAtributos: 'ilimitado',
+        cotizaciones: 'ilimitado',
         facturacion: true,
         inventario: true,
         clientes: true,
@@ -115,6 +121,7 @@ export async function seedPlanesSuscripcion() {
           limiteUsuarios: plan.limiteUsuarios,
           limiteSedes: plan.limiteSedes,
           limitePlantillasAtributos: plan.limitePlantillasAtributos,
+          limiteCotizaciones: plan.limiteCotizaciones,
           tienePersonalizacion: plan.tienePersonalizacion,
           tieneDominioPropio: plan.tieneDominioPropio,
           tieneApi: plan.tieneApi,

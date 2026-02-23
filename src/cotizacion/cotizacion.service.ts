@@ -12,6 +12,7 @@ import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
 import { UpdateEstadoCotizacionDto } from './dto/update-estado-cotizacion.dto';
 import { CreateCotizacionDetalleDto } from './dto/create-cotizacion-detalle.dto';
 import { EstadoCotizacion, Prisma } from '@prisma/client';
+import { PlanLimitsService } from '../common/services/plan-limits.service';
 
 @Injectable()
 export class CotizacionService {
@@ -21,6 +22,7 @@ export class CotizacionService {
     private readonly prisma: PrismaService,
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     private readonly compatibilidadService: CompatibilidadService,
+    private readonly planLimitsService: PlanLimitsService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -32,6 +34,9 @@ export class CotizacionService {
    */
   async create(empresaId: string, dto: CreateCotizacionDto) {
     this.logger.info('Creando cotizacion', { empresaId, sede: dto.sedeId });
+
+    // Verificar límite de cotizaciones del plan de suscripción
+    await this.planLimitsService.checkCotizacionesLimit(empresaId);
 
     return this.prisma.$transaction(async (tx) => {
       // Generar codigo

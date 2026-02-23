@@ -8,6 +8,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SeedPlanesService } from './scripts/seed-planes.service';
 import { CatalogosModule } from '../catalogos/catalogos.module';
 import { ConfiguracionDocumentosModule } from '../configuracion-documentos/configuracion-documentos.module';
+import { PlanLimitsService } from '../common/services/plan-limits.service';
 
 @Module({
   imports: [
@@ -27,7 +28,7 @@ import { ConfiguracionDocumentosModule } from '../configuracion-documentos/confi
     }),
   ],
   controllers: [EmpresaController],
-  providers: [EmpresaService, SeedPlanesService],
+  providers: [EmpresaService, SeedPlanesService, PlanLimitsService],
   exports: [EmpresaService],
 })
 export class EmpresaModule {}

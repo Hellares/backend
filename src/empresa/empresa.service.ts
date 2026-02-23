@@ -1,6 +1,6 @@
 import { Injectable, ConflictException, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { EstadoSuscripcion, Rol, EmpresaUsuarioRol, RubroEmpresa } from '@prisma/client';
+import { EstadoSuscripcion, PeriodoSuscripcion, Rol, EmpresaUsuarioRol, RubroEmpresa } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -9,6 +9,7 @@ import { CatalogosService } from '../catalogos/catalogos.service';
 import { CacheService } from '../redis/cache.service';
 import { PermissionsService } from '../auth/services/permissions.service';
 import { ConfiguracionDocumentosService } from '../configuracion-documentos/configuracion-documentos.service';
+import { PlanLimitsService } from '../common/services/plan-limits.service';
 import {
   EmpresaContextResponseDto,
   EmpresaPermissionsDto,
@@ -74,6 +75,7 @@ export class EmpresaService {
     private readonly cache: CacheService,
     private readonly permissionsService: PermissionsService,
     private readonly configuracionDocumentosService: ConfiguracionDocumentosService,
+    private readonly planLimitsService: PlanLimitsService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(EmpresaService.name);
@@ -961,7 +963,7 @@ export class EmpresaService {
     const nuevoPlan = await this.prisma.planSuscripcion.findFirst({
       where: {
         id: planId,
-        isActive: true
+        isActive: true,
       },
     });
 
@@ -969,20 +971,78 @@ export class EmpresaService {
       throw new NotFoundException('Plan de suscripción no encontrado o no está disponible');
     }
 
+    // Validar downgrade: verificar que los recursos actuales no excedan los nuevos límites
+    const stats = await this.calculateStatistics(empresaId);
+
+    if (nuevoPlan.limiteProductos !== null && stats.totalProductos > nuevoPlan.limiteProductos) {
+      throw new BadRequestException(
+        `No puedes cambiar a este plan. Tienes ${stats.totalProductos} productos y el plan "${nuevoPlan.nombre}" permite máximo ${nuevoPlan.limiteProductos}.`,
+      );
+    }
+    if (nuevoPlan.limiteServicios !== null && stats.totalServicios > nuevoPlan.limiteServicios) {
+      throw new BadRequestException(
+        `No puedes cambiar a este plan. Tienes ${stats.totalServicios} servicios y el plan "${nuevoPlan.nombre}" permite máximo ${nuevoPlan.limiteServicios}.`,
+      );
+    }
+    if (nuevoPlan.limiteUsuarios !== null && stats.totalUsuarios > nuevoPlan.limiteUsuarios) {
+      throw new BadRequestException(
+        `No puedes cambiar a este plan. Tienes ${stats.totalUsuarios} usuarios y el plan "${nuevoPlan.nombre}" permite máximo ${nuevoPlan.limiteUsuarios}.`,
+      );
+    }
+    if (nuevoPlan.limiteSedes !== null && stats.totalSedes > nuevoPlan.limiteSedes) {
+      throw new BadRequestException(
+        `No puedes cambiar a este plan. Tienes ${stats.totalSedes} sedes y el plan "${nuevoPlan.nombre}" permite máximo ${nuevoPlan.limiteSedes}.`,
+      );
+    }
+    if (nuevoPlan.limiteCotizaciones !== null && stats.totalCotizaciones > nuevoPlan.limiteCotizaciones) {
+      throw new BadRequestException(
+        `No puedes cambiar a este plan. Tienes ${stats.totalCotizaciones} cotizaciones y el plan "${nuevoPlan.nombre}" permite máximo ${nuevoPlan.limiteCotizaciones}.`,
+      );
+    }
+
+    // Calcular nueva fecha de vencimiento según el periodo del plan
+    const nuevaFechaVencimiento = this.calcularFechaVencimiento(nuevoPlan.periodo);
+
     // Actualizar el plan de la empresa
     const empresaActualizada = await this.prisma.empresa.update({
       where: { id: empresaId },
       data: {
         planSuscripcionId: planId,
         fechaInicioSuscripcion: new Date(),
-        // Mantener la misma fecha de vencimiento o calcular nueva según el plan
+        fechaVencimiento: nuevaFechaVencimiento,
+        estadoSuscripcion: EstadoSuscripcion.ACTIVA,
       },
       include: {
         planSuscripcion: true,
       },
     });
 
+    // Invalidar cache de estadísticas
+    await this.cache.invalidateEmpresa(empresaId);
+
     return this.formatEmpresaResponse(empresaActualizada);
+  }
+
+  /**
+   * Calcula la fecha de vencimiento según el periodo de suscripción
+   */
+  private calcularFechaVencimiento(periodo: PeriodoSuscripcion): Date {
+    const ahora = new Date();
+    switch (periodo) {
+      case PeriodoSuscripcion.MENSUAL:
+        return new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      case PeriodoSuscripcion.TRIMESTRAL:
+        return new Date(ahora.getTime() + 90 * 24 * 60 * 60 * 1000);
+      case PeriodoSuscripcion.SEMESTRAL:
+        return new Date(ahora.getTime() + 180 * 24 * 60 * 60 * 1000);
+      case PeriodoSuscripcion.ANUAL:
+        return new Date(ahora.getTime() + 365 * 24 * 60 * 60 * 1000);
+      case PeriodoSuscripcion.PERSONALIZADO:
+        // Personalizado: default a 30 días
+        return new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      default:
+        return new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
+    }
   }
 
   /**
@@ -1041,8 +1101,11 @@ export class EmpresaService {
       ],
     });
 
-    // 4. Calcular estadísticas
-    const statistics = await this.calculateStatistics(empresaId);
+    // 4. Calcular estadísticas y límites del plan
+    const [statistics, planLimits] = await Promise.all([
+      this.calculateStatistics(empresaId),
+      this.planLimitsService.getPlanLimitsInfo(empresaId),
+    ]);
 
     // 5. Calcular permisos basados en roles
     const permissions = this.calculatePermissions(userRoles);
@@ -1128,6 +1191,7 @@ export class EmpresaService {
       sedes: sedesInfo,
       permissions,
       statistics,
+      planLimits,
     };
   }
 
@@ -1160,6 +1224,8 @@ export class EmpresaService {
           totalServicios,
           totalUsuarios,
           totalSedes,
+          totalCotizaciones,
+          totalProveedores,
           ordenesPendientes,
           comprobantesMes,
           comprobantesConTotal,
@@ -1197,6 +1263,21 @@ export class EmpresaService {
           empresaId,
           isActive: true,
           deletedAt: null,
+        },
+      }),
+
+      // Total de cotizaciones
+      this.prisma.cotizacion.count({
+        where: {
+          empresaId,
+        },
+      }),
+
+      // Total de proveedores activos
+      this.prisma.proveedor.count({
+        where: {
+          empresaId,
+          isActive: true,
         },
       }),
 
@@ -1252,6 +1333,8 @@ export class EmpresaService {
           totalServicios,
           totalUsuarios,
           totalSedes,
+          totalCotizaciones,
+          totalProveedores,
           ordenesPendientes,
           comprobantesMes,
           ingresosMes: Math.round(ingresosMes * 100) / 100, // Redondear a 2 decimales

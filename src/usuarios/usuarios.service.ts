@@ -14,6 +14,7 @@ import { AppLoggerService } from '../common/logger';
 import { generatePaginationMeta } from '../common/utils/pagination.util';
 import * as bcrypt from 'bcryptjs';
 import { Rol, SedeRole } from '@prisma/client';
+import { PlanLimitsService } from '../common/services/plan-limits.service';
 
 @Injectable()
 export class UsuariosService {
@@ -21,6 +22,7 @@ export class UsuariosService {
 
   constructor(
     private prisma: PrismaService,
+    private planLimitsService: PlanLimitsService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -53,6 +55,9 @@ export class UsuariosService {
     if (sedeIds && sedeIds.length > 0) {
       await this.validarSedesEmpresa(sedeIds, empresaId);
     }
+
+    // Verificar límite de usuarios del plan de suscripción
+    await this.planLimitsService.checkUsuariosLimit(empresaId);
 
     // Buscar si existe una persona con este DNI
     const personaExistente = await this.prisma.persona.findUnique({

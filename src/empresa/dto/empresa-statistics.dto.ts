@@ -29,6 +29,18 @@ export class EmpresaStatisticsDto {
   totalSedes: number;
 
   @ApiProperty({
+    description: 'Total de cotizaciones',
+    example: 5,
+  })
+  totalCotizaciones: number;
+
+  @ApiProperty({
+    description: 'Total de proveedores activos',
+    example: 8,
+  })
+  totalProveedores: number;
+
+  @ApiProperty({
     description: 'Total de órdenes de servicio pendientes',
     example: 12,
   })

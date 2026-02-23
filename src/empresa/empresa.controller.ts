@@ -159,6 +159,42 @@ export class EmpresaController {
   }
 
   /**
+   * Obtener planes de suscripción disponibles
+   */
+  @Get('planes')
+  @Public()
+  @ApiOperation({ summary: 'Obtener planes de suscripción disponibles' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de planes disponibles',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          nombre: { type: 'string' },
+          descripcion: { type: 'string' },
+          precio: { type: 'number' },
+          periodo: { type: 'string' },
+          limiteProductos: { type: 'number' },
+          limiteServicios: { type: 'number' },
+          limiteUsuarios: { type: 'number' },
+          limiteSedes: { type: 'number' },
+          tienePersonalizacion: { type: 'boolean' },
+          tieneDominioPropio: { type: 'boolean' },
+          tieneApi: { type: 'boolean' },
+          tieneReportesAvanzados: { type: 'boolean' },
+          caracteristicas: { type: 'object' },
+        },
+      },
+    },
+  })
+  async getPlanesDisponibles() {
+    return this.empresaService.getPlanesDisponibles();
+  }
+
+  /**
    * Obtener empresa específica
    */
   @Get(':id')
@@ -254,42 +290,6 @@ export class EmpresaController {
     @CurrentUser() user: any,
   ) {
     return this.empresaService.updateEmpresa(id, user.sub, updateEmpresaDto);
-  }
-
-  /**
-   * Obtener planes de suscripción disponibles
-   */
-  @Get('planes')
-  @Public()
-  @ApiOperation({ summary: 'Obtener planes de suscripción disponibles' })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de planes disponibles',
-    schema: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          nombre: { type: 'string' },
-          descripcion: { type: 'string' },
-          precio: { type: 'number' },
-          periodo: { type: 'string' },
-          limiteProductos: { type: 'number' },
-          limiteServicios: { type: 'number' },
-          limiteUsuarios: { type: 'number' },
-          limiteSedes: { type: 'number' },
-          tienePersonalizacion: { type: 'boolean' },
-          tieneDominioPropio: { type: 'boolean' },
-          tieneApi: { type: 'boolean' },
-          tieneReportesAvanzados: { type: 'boolean' },
-          caracteristicas: { type: 'object' },
-        },
-      },
-    },
-  })
-  async getPlanesDisponibles() {
-    return this.empresaService.getPlanesDisponibles();
   }
 
   /**

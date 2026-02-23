@@ -140,6 +140,91 @@ export class PlanLimitsService {
   }
 
   /**
+   * Verifica si la empresa puede crear más cotizaciones
+   */
+  async checkCotizacionesLimit(empresaId: string): Promise<void> {
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: {
+        planSuscripcion: {
+          select: {
+            limiteCotizaciones: true,
+            nombre: true,
+          },
+        },
+      },
+    });
+
+    if (!empresa || !empresa.planSuscripcion) {
+      throw new ForbiddenException(
+        'La empresa no tiene un plan de suscripción activo',
+      );
+    }
+
+    const limite = empresa.planSuscripcion.limiteCotizaciones;
+
+    if (limite === null || limite === undefined) {
+      return;
+    }
+
+    const cotizacionesActuales = await this.prisma.cotizacion.count({
+      where: {
+        empresaId,
+      },
+    });
+
+    if (cotizacionesActuales >= limite) {
+      throw new ForbiddenException(
+        `Has alcanzado el límite de ${limite} cotización(es) para el plan ${empresa.planSuscripcion.nombre}. ` +
+        `Actualiza tu plan para crear más cotizaciones.`,
+      );
+    }
+  }
+
+  /**
+   * Verifica si la empresa puede crear más servicios
+   */
+  async checkServiciosLimit(empresaId: string): Promise<void> {
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: {
+        planSuscripcion: {
+          select: {
+            limiteServicios: true,
+            nombre: true,
+          },
+        },
+      },
+    });
+
+    if (!empresa || !empresa.planSuscripcion) {
+      throw new ForbiddenException(
+        'La empresa no tiene un plan de suscripción activo',
+      );
+    }
+
+    const limite = empresa.planSuscripcion.limiteServicios;
+
+    if (limite === null || limite === undefined) {
+      return;
+    }
+
+    const serviciosActuales = await this.prisma.servicio.count({
+      where: {
+        empresaId,
+        isActive: true,
+      },
+    });
+
+    if (serviciosActuales >= limite) {
+      throw new ForbiddenException(
+        `Has alcanzado el límite de ${limite} servicio(s) para el plan ${empresa.planSuscripcion.nombre}. ` +
+        `Actualiza tu plan para crear más servicios.`,
+      );
+    }
+  }
+
+  /**
    * Obtiene información de límites y uso actual del plan
    */
   async getPlanLimitsInfo(empresaId: string) {
@@ -154,6 +239,7 @@ export class PlanLimitsService {
             limiteUsuarios: true,
             limiteSedes: true,
             limitePlantillasAtributos: true,
+            limiteCotizaciones: true,
           },
         },
       },
@@ -170,6 +256,7 @@ export class PlanLimitsService {
       usuariosActuales,
       sedesActuales,
       plantillasActuales,
+      cotizacionesActuales,
     ] = await Promise.all([
       this.prisma.producto.count({
         where: { empresaId, deletedAt: null },
@@ -185,6 +272,9 @@ export class PlanLimitsService {
       }),
       this.prisma.productoAtributoPlantilla.count({
         where: { empresaId, esPredefinida: false, isActive: true },
+      }),
+      this.prisma.cotizacion.count({
+        where: { empresaId },
       }),
     ]);
 
@@ -230,6 +320,15 @@ export class PlanLimitsService {
             empresa.planSuscripcion.limitePlantillasAtributos !== null
               ? empresa.planSuscripcion.limitePlantillasAtributos -
                 plantillasActuales
+              : null,
+        },
+        cotizaciones: {
+          limite: empresa.planSuscripcion.limiteCotizaciones,
+          actual: cotizacionesActuales,
+          disponible:
+            empresa.planSuscripcion.limiteCotizaciones !== null
+              ? empresa.planSuscripcion.limiteCotizaciones -
+                cotizacionesActuales
               : null,
         },
       },

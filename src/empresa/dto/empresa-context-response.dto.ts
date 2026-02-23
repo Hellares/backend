@@ -150,4 +150,10 @@ export class EmpresaContextResponseDto {
     type: EmpresaStatisticsDto,
   })
   statistics: EmpresaStatisticsDto;
+
+  @ApiProperty({
+    description: 'Información de límites y uso del plan de suscripción',
+    required: false,
+  })
+  planLimits?: any;
 }
