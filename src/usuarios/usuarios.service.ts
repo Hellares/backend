@@ -42,22 +42,16 @@ export class UsuariosService {
       createUsuarioDto;
 
     // Validar que el rol NO sea CLIENTE (solo trabajadores)
-    if (rol === Rol.CLIENTE || rol === Rol.CLIENTE_EMPRESA) {
+    if (rol === Rol.CLIENTE) {
       throw new BadRequestException(
         'No se puede registrar un usuario con rol CLIENTE. Use el módulo de clientes',
       );
     }
 
-    // Validar unicidad de email y teléfono
-    await this.validarEmailTelefonoUnicos(email, telefono);
-
     // Validar que las sedes pertenezcan a la empresa
     if (sedeIds && sedeIds.length > 0) {
       await this.validarSedesEmpresa(sedeIds, empresaId);
     }
-
-    // Verificar límite de usuarios del plan de suscripción
-    await this.planLimitsService.checkUsuariosLimit(empresaId);
 
     // Buscar si existe una persona con este DNI
     const personaExistente = await this.prisma.persona.findUnique({
@@ -73,6 +67,23 @@ export class UsuariosService {
       },
     });
 
+    // Validar unicidad de email/teléfono solo si NO existe un usuario previo
+    // (CASO 1 y 2: el email/teléfono ya pertenecen al mismo usuario)
+    if (!personaExistente?.usuario) {
+      await this.validarEmailTelefonoUnicos(email, telefono);
+    }
+
+    // Verificar límite de usuarios del plan de suscripción
+    // (solo si no es una promoción de cliente existente en la empresa)
+    const esPromocionCliente =
+      personaExistente?.usuario &&
+      personaExistente.usuario.empresas.length > 0 &&
+      personaExistente.usuario.empresas[0].rol === Rol.CLIENTE;
+
+    if (!esPromocionCliente) {
+      await this.planLimitsService.checkUsuariosLimit(empresaId);
+    }
+
     let yaExistia = false;
     let yaEraEmpleadoEmpresa = false;
     let mensaje = '';
@@ -83,11 +94,54 @@ export class UsuariosService {
       personaExistente?.usuario &&
       personaExistente.usuario.empresas.length > 0
     ) {
-      yaExistia = true;
-      yaEraEmpleadoEmpresa = true;
-      mensaje = 'El usuario ya está registrado en esta empresa';
+      const empresaRol = personaExistente.usuario.empresas[0];
 
-      throw new ConflictException(mensaje);
+      // Si es CLIENTE, permitir promoción a empleado (actualizar rol)
+      if (empresaRol.rol === Rol.CLIENTE) {
+        yaExistia = true;
+        yaEraEmpleadoEmpresa = false;
+        mensaje = 'Cliente promovido a empleado exitosamente';
+
+        // Actualizar el rol de CLIENTE al nuevo rol
+        await this.prisma.empresaUsuarioRol.update({
+          where: { id: empresaRol.id },
+          data: {
+            rol,
+            registradoPor,
+          },
+        });
+
+        // Asignar sedes si se proporcionaron
+        if (sedeIds && sedeIds.length > 0) {
+          const sedeRole = this.mapRolToSedeRole(rol);
+
+          await this.prisma.usuarioSedeRol.createMany({
+            data: sedeIds.map((sedeId) => ({
+              usuarioId: personaExistente.usuario!.id,
+              sedeId,
+              rol: sedeRole,
+              puedeAbrirCaja: createUsuarioDto.puedeAbrirCaja ?? false,
+              puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
+              limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
+              permisos: createUsuarioDto.permisos ?? [],
+              creadoPor: registradoPor,
+            })),
+          });
+        }
+
+        usuario = await this.prisma.usuario.findUnique({
+          where: { id: personaExistente.usuario!.id },
+        });
+
+        this.logger.log(
+          `Cliente (${dni}) promovido a empleado con rol ${rol} en empresa ${empresaId} por usuario ${registradoPor}`,
+        );
+      } else {
+        // Ya es empleado — conflicto real
+        throw new ConflictException(
+          'El usuario ya está registrado en esta empresa',
+        );
+      }
     }
 
     // CASO 2: Usuario existe pero no en esta empresa (asignar)
@@ -142,7 +196,13 @@ export class UsuariosService {
       mensaje = 'Usuario registrado exitosamente';
 
       usuario = await this.crearUsuarioCompleto(
-        { dni, nombres, apellidos, email, telefono },
+        {
+          dni, nombres, apellidos, email, telefono,
+          direccion: createUsuarioDto.direccion,
+          distrito: createUsuarioDto.distrito,
+          provincia: createUsuarioDto.provincia,
+          departamento: createUsuarioDto.departamento,
+        },
         empresaId,
         rol,
         sedeIds,
@@ -391,6 +451,10 @@ export class UsuariosService {
       apellidos: string;
       email?: string;
       telefono?: string;
+      direccion?: string;
+      distrito?: string;
+      provincia?: string;
+      departamento?: string;
     },
     empresaId: string,
     rol: Rol,
@@ -410,6 +474,10 @@ export class UsuariosService {
           apellidos: personaData.apellidos,
           email: personaData.email,
           telefono: personaData.telefono,
+          direccion: personaData.direccion,
+          distrito: personaData.distrito,
+          provincia: personaData.provincia,
+          departamento: personaData.departamento,
           esUsuario: true,
         },
       });
@@ -500,7 +568,6 @@ export class UsuariosService {
       [Rol.LECTURA]: SedeRole.CONSULTOR,
       [Rol.OPERADOR]: SedeRole.ASISTENTE,
       [Rol.CLIENTE]: SedeRole.CAJERO, // No debería llegar aquí
-      [Rol.CLIENTE_EMPRESA]: SedeRole.CAJERO, // No debería llegar aquí
     };
 
     return roleMap[rol] || SedeRole.ASISTENTE;
@@ -574,6 +641,10 @@ export class UsuariosService {
       nombreCompleto: `${persona.nombres} ${persona.apellidos}`,
       email: persona.email || usuario.email || undefined,
       telefono: persona.telefono || usuario.telefono || undefined,
+      direccion: persona.direccion || undefined,
+      distrito: persona.distrito || undefined,
+      provincia: persona.provincia || undefined,
+      departamento: persona.departamento || undefined,
       rolEnEmpresa: empresaUsuario.rol,
       rolGlobal: usuario.rolGlobal || undefined,
       isActive: usuario.isActive,
@@ -615,6 +686,8 @@ export class UsuariosService {
     const where: any = {
       empresaId,
       deletedAt: null,
+      // Excluir clientes — solo mostrar staff/empleados
+      rol: { not: Rol.CLIENTE },
     };
 
     // Filtro por rol
@@ -739,6 +812,10 @@ export class UsuariosService {
         nombreCompleto: `${persona.nombres} ${persona.apellidos}`,
         email: persona.email || usuario.email || undefined,
         telefono: persona.telefono || usuario.telefono || undefined,
+        direccion: persona.direccion || undefined,
+        distrito: persona.distrito || undefined,
+        provincia: persona.provincia || undefined,
+        departamento: persona.departamento || undefined,
         rolEnEmpresa: eu.rol,
         rolGlobal: usuario.rolGlobal || undefined,
         isActive: usuario.isActive,
@@ -816,6 +893,10 @@ export class UsuariosService {
       apellidos,
       email,
       telefono,
+      direccion,
+      distrito,
+      provincia,
+      departamento,
       rol,
       sedeIds,
       puedeAbrirCaja,
@@ -856,7 +937,7 @@ export class UsuariosService {
     // Actualizar en transacción
     await this.prisma.$transaction(async (prisma) => {
       // Actualizar datos de la persona si hay cambios
-      if (nombres || apellidos || email || telefono) {
+      if (nombres || apellidos || email || telefono || direccion !== undefined || distrito !== undefined || provincia !== undefined || departamento !== undefined) {
         await prisma.persona.update({
           where: { id: empresaUsuario.usuario.personaId },
           data: {
@@ -864,6 +945,10 @@ export class UsuariosService {
             ...(apellidos && { apellidos }),
             ...(email && { email }),
             ...(telefono && { telefono }),
+            ...(direccion !== undefined && { direccion }),
+            ...(distrito !== undefined && { distrito }),
+            ...(provincia !== undefined && { provincia }),
+            ...(departamento !== undefined && { departamento }),
           },
         });
       }

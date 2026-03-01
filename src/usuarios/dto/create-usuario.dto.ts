@@ -6,6 +6,7 @@ import {
   IsNotEmpty,
   Length,
   Matches,
+  MaxLength,
   IsBoolean,
   IsArray,
   IsNumber,
@@ -38,6 +39,27 @@ export class CreateUsuarioDto {
   @Length(9, 9, { message: 'El teléfono debe tener 9 dígitos' })
   @Matches(/^9\d{8}$/, { message: 'El teléfono debe comenzar con 9' })
   telefono?: string;
+
+  // Datos de dirección (opcionales)
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  direccion?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  distrito?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  provincia?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  departamento?: string;
 
   // Datos del usuario/trabajador
   @IsEnum(Rol, { message: 'Rol inválido' })

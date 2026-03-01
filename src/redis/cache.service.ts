@@ -113,7 +113,37 @@ export class CacheService {
    * Invalidar todos los caches relacionados a una empresa
    */
   async invalidateEmpresa(empresaId: string): Promise<void> {
-    await this.invalidatePattern(`*:empresa:${empresaId}*`);
+    await Promise.all([
+      this.invalidatePattern(`*:empresa:${empresaId}*`),
+      this.invalidate(`tenant:id:${empresaId}`),
+    ]);
+  }
+
+  /**
+   * Invalidar cache de tenant por subdominio
+   */
+  async invalidateTenant(empresaId: string, subdominio?: string): Promise<void> {
+    const promises: Promise<void>[] = [
+      this.invalidate(`tenant:id:${empresaId}`),
+    ];
+    if (subdominio) {
+      promises.push(this.invalidate(`tenant:subdomain:${subdominio}`));
+    }
+    await Promise.all(promises);
+  }
+
+  /**
+   * Generar clave de cache para contexto de empresa
+   */
+  getEmpresaContextKey(empresaId: string, userId: string): string {
+    return `context:empresa:${empresaId}:user:${userId}`;
+  }
+
+  /**
+   * Generar clave de cache para lista de empresas de usuario
+   */
+  getUserEmpresasKey(userId: string): string {
+    return `user_empresas:${userId}`;
   }
 
   /**

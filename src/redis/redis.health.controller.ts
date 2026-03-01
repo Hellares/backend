@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { RedisService } from './redis.service';
 
@@ -56,64 +56,48 @@ export class RedisHealthController {
     }
   }
 
-  @Get('debug-sessions')
-  @ApiOperation({ summary: 'Debug sessions en Redis' })
-  async debugSessions() {
+  @Get('debug-sessions/:userId')
+  @ApiOperation({ summary: 'Debug sessions en Redis por userId' })
+  async debugSessions(@Param('userId') userId: string) {
     try {
-      const userId = 'cmhsmtt6z000aud8snijk6iir'; // Tu ID de usuario
       const userSessionsKey = `user_sessions:${userId}`;
 
-      // Obtener todos los session IDs del usuario
       const sessionIds = await this.redisService.smembers(userSessionsKey);
 
-      const sessions = [];
+      const sessions = await Promise.all(
+        sessionIds.map(async (sessionId) => {
+          const sessionKey = `session:${sessionId}`;
+          const sessionData = await this.redisService.get(sessionKey);
 
-      for (const sessionId of sessionIds) {
-        const sessionKey = `session:${sessionId}`;
-        const sessionData = await this.redisService.get(sessionKey);
+          if (!sessionData) return { sessionId, error: 'No data' };
 
-        if (sessionData) {
           try {
             const session = JSON.parse(sessionData);
-            sessions.push({
+            return {
               sessionId,
-              sessionData: session,
               isActive: session.isActive,
               expiresAt: session.expiresAt,
-              isExpired: new Date(session.expiresAt) < new Date()
-            });
-          } catch (parseError) {
-            sessions.push({
-              sessionId,
-              error: 'Invalid session data',
-              rawData: sessionData
-            });
+              isExpired: new Date(session.expiresAt) < new Date(),
+              tenantId: session.tenantId,
+              tenantName: session.tenantName,
+            };
+          } catch {
+            return { sessionId, error: 'Invalid session data' };
           }
-        }
-      }
-
-      // También buscar cualquier clave que contenga 'session'
-      const allSessionKeys = await this.redisService.getKeysByPattern('*session*');
+        }),
+      );
 
       return {
-        userSessionsKey,
-        sessionIds,
-        sessions,
-        totalSessionIds: sessionIds.length,
+        userId,
         totalSessions: sessions.length,
-        activeSessions: sessions.filter(s => s.isActive && !s.isExpired).length,
-        allSessionKeys,
-        debug: {
-          userId,
-          currentTime: new Date(),
-          redisWorking: true
-        }
+        activeSessions: sessions.filter((s: any) => s.isActive && !s.isExpired).length,
+        sessions,
+        timestamp: new Date().toISOString(),
       };
     } catch (error) {
       return {
         error: error.message,
         message: 'Error al depurar sesiones',
-        redisWorking: false
       };
     }
   }

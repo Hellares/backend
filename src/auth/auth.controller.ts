@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Put,
   Body,
   Get,
   Delete,
@@ -29,6 +30,7 @@ import {
   ResetPasswordDto,
   ResendVerificationEmailDto,
   SwitchTenantDto,
+  UpdateProfileDto,
 } from './dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
@@ -311,7 +313,7 @@ export class AuthController {
   }
 
   /**
-   * Obtener perfil del usuario autenticado
+   * Obtener perfil del usuario autenticado (desde BD)
    */
   @Get('profile')
   @UseGuards(JwtAuthGuard)
@@ -325,38 +327,46 @@ export class AuthController {
       properties: {
         id: { type: 'string' },
         email: { type: 'string' },
+        dni: { type: 'string', nullable: true },
         nombres: { type: 'string' },
         apellidos: { type: 'string' },
+        telefono: { type: 'string', nullable: true },
+        direccion: { type: 'string', nullable: true },
         emailVerificado: { type: 'boolean' },
-        telefonoVerificado: { type: 'boolean' },
-        rolGlobal: { type: 'string' },
-        lastLoginAt: { type: 'string', format: 'date-time' },
-        tenant: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            name: { type: 'string' },
-            role: { type: 'string' },
-          },
-        },
+        rolGlobal: { type: 'string', nullable: true },
+        metodoPrincipalLogin: { type: 'string', nullable: true },
+        perfilCompleto: { type: 'boolean' },
       },
     },
   })
   @ApiResponse({ status: 401, description: 'No autorizado' })
   async getProfile(@CurrentUser() user: any) {
-    // Aquí podrías obtener información adicional del usuario
-    // incluyendo sus empresas y roles
-    return {
-      id: user.sub,
-      email: user.email,
-      nombres: user.nombres,
-      apellidos: user.apellidos,
-      tenantId: user.tenantId,
-      tenantRole: user.tenantRole,
-      tenantName: user.tenantName,
-      loginMethod: user.loginMethod,
-      sessionId: user.sessionId,
-    };
+    return this.authService.getProfileFromDb(user.sub);
+  }
+
+  /**
+   * Actualizar perfil del usuario autenticado
+   */
+  @Put('profile')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Actualizar perfil del usuario autenticado',
+    description: 'Permite actualizar DNI, teléfono y dirección del usuario',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Perfil actualizado exitosamente',
+  })
+  @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  @ApiResponse({ status: 409, description: 'DNI o teléfono ya registrado' })
+  async updateProfile(
+    @CurrentUser() user: any,
+    @Body() updateProfileDto: UpdateProfileDto,
+  ) {
+    return this.authService.updateProfile(user.sub, updateProfileDto);
   }
 
   /**

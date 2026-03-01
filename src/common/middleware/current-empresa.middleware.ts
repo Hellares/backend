@@ -1,31 +1,44 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CacheService } from '../../redis/cache.service';
 
 /**
  * Middleware para resolver la empresa actual desde el header X-Tenant-ID
  * Este middleware es requerido por el TenantAuthGuard
+ * Usa Redis cache para evitar queries a la BD en cada request
  */
 @Injectable()
 export class CurrentEmpresaMiddleware implements NestMiddleware {
-  constructor(private prisma: PrismaService) {}
+  private static readonly CACHE_TTL = 300; // 5 minutos
+
+  constructor(
+    private prisma: PrismaService,
+    private cache: CacheService,
+  ) {}
 
   async use(req: Request, res: Response, next: NextFunction) {
-    // Leer el header x-tenant-id (case-insensitive)
     const tenantId = req.get('x-tenant-id');
 
     if (tenantId) {
-      // Buscar la empresa en la base de datos
-      const empresa = await this.prisma.empresa.findUnique({
-        where: { id: tenantId },
-        select: {
-          id: true,
-          subdominio: true,
-          nombre: true,
-        },
-      });
+      const cacheKey = `tenant:id:${tenantId}`;
 
-      // Si la empresa existe, asignarla al request
+      const empresa = await this.cache.getOrSet(
+        cacheKey,
+        async () => {
+          const result = await this.prisma.empresa.findUnique({
+            where: { id: tenantId },
+            select: {
+              id: true,
+              subdominio: true,
+              nombre: true,
+            },
+          });
+          return result;
+        },
+        CurrentEmpresaMiddleware.CACHE_TTL,
+      );
+
       if (empresa) {
         req.currentEmpresa = empresa;
       }

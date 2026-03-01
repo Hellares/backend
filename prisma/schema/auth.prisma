@@ -8,6 +8,10 @@ model Persona {
   fechaNacimiento   DateTime?
   genero            Genero?
   observaciones     String?
+  direccion         String?
+  distrito          String?
+  provincia         String?
+  departamento      String?
   isActive          Boolean            @default(true)
   deletedAt         DateTime?
   esCliente         Boolean            @default(false)
@@ -314,7 +318,6 @@ enum Rol {
   LECTURA
   OPERADOR
   CLIENTE
-  CLIENTE_EMPRESA
 }
 
 // Roles específicos para gestión de sedes

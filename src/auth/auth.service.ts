@@ -25,6 +25,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtPayload, RefreshTokenPayload } from './interfaces/jwt-payload.interface';
 
 @Injectable()
@@ -178,6 +179,16 @@ export class AuthService {
 
     // Si hay una empresa, crear la relación empresa-usuario
     if (empresaId) {
+      // Crear relación persona-empresa (para visibilidad en listados de clientes)
+      await this.prisma.empresaPersona.create({
+        data: {
+          personaId: persona.id,
+          empresaId,
+          rol: 'CLIENTE',
+          isActive: true,
+        },
+      });
+
       await this.prisma.empresaUsuarioRol.create({
         data: {
           usuarioId: usuario.id,
@@ -191,8 +202,8 @@ export class AuthService {
         data: {
           usuarioId: usuario.id,
           empresaId,
-          tipoRegistro: 'EMPRESA_REGISTRA',
-          canalRegistro: 'PRESENCIAL',
+          tipoRegistro: 'AUTO_REGISTRO',
+          canalRegistro: 'WEB',
           estado: 'AUTO_APROBADO',
         },
       });
@@ -227,16 +238,9 @@ export class AuthService {
 
     // Retornar información sin datos sensibles
     return {
-      user: {
-        id: usuario.id,
-        email: usuario.email,
-        dni: usuario.persona.dni,
-        nombres: usuario.persona.nombres,
-        apellidos: usuario.persona.apellidos,
-        emailVerificado: usuario.emailVerificado,
-        metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+      user: this.buildUserResponse(usuario, {
         requiereCambioPassword: usuario.requiereCambioPassword,
-      },
+      }),
       ...tokens,
     };
   }
@@ -365,16 +369,7 @@ export class AuthService {
       const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
 
       return {
-        user: {
-          id: usuario.id,
-          email: usuario.email,
-          dni: usuario.persona?.dni,
-          nombres: usuario.persona?.nombres,
-          apellidos: usuario.persona?.apellidos,
-          emailVerificado: usuario.emailVerificado,
-          metodoPrincipalLogin: usuario.metodoPrincipalLogin,
-          requiereCambioPassword: true,
-        },
+        user: this.buildUserResponse(usuario, { requiereCambioPassword: true }),
         message: 'Debe cambiar su contraseña antes de continuar',
         ...tokens, // Incluir tokens para permitir cambio de contraseña
       };
@@ -405,16 +400,7 @@ export class AuthService {
       this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
 
       return {
-        user: {
-          id: usuario.id,
-          email: usuario.email,
-          dni: usuario.persona.dni,
-          nombres: usuario.persona.nombres,
-          apellidos: usuario.persona.apellidos,
-          emailVerificado: usuario.emailVerificado,
-          rolGlobal: usuario.rolGlobal,
-          metodoPrincipalLogin: usuario.metodoPrincipalLogin,
-        },
+        user: this.buildUserResponse(usuario),
         mode: 'marketplace',
         ...tokens,
       };
@@ -468,16 +454,7 @@ export class AuthService {
         this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
 
         return {
-          user: {
-            id: usuario.id,
-            email: usuario.email,
-            dni: usuario.persona.dni,
-            nombres: usuario.persona.nombres,
-            apellidos: usuario.persona.apellidos,
-            emailVerificado: usuario.emailVerificado,
-            rolGlobal: usuario.rolGlobal,
-            metodoPrincipalLogin: usuario.metodoPrincipalLogin,
-          },
+          user: this.buildUserResponse(usuario),
           mode: 'marketplace',
           ...tokens,
         };
@@ -517,15 +494,7 @@ export class AuthService {
         return {
           requiresSelection: true,
           message: '¿Qué deseas hacer?',
-          user: {
-            id: usuario.id,
-            email: usuario.email,
-            dni: usuario.persona.dni,
-            nombres: usuario.persona.nombres,
-            apellidos: usuario.persona.apellidos,
-            emailVerificado: usuario.emailVerificado,
-            metodoPrincipalLogin: usuario.metodoPrincipalLogin,
-          },
+          user: this.buildUserResponse(usuario),
           options: [
             {
               type: 'marketplace',
@@ -615,17 +584,9 @@ export class AuthService {
     });
 
     return {
-      user: {
-        id: usuario.id,
-        email: usuario.email,
-        dni: usuario.persona.dni,
-        nombres: usuario.persona.nombres,
-        apellidos: usuario.persona.apellidos,
-        emailVerificado: usuario.emailVerificado,
-        rolGlobal: usuario.rolGlobal,
-        metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+      user: this.buildUserResponse(usuario, {
         requiereCambioPassword: usuario.requiereCambioPassword,
-      },
+      }),
       mode: empresaId ? 'management' : 'marketplace',
       tenant: empresaId ? {
         id: empresaId,
@@ -1319,15 +1280,7 @@ export class AuthService {
         this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
 
         return {
-          user: {
-            id: usuario.id,
-            email: usuario.email,
-            nombres: usuario.persona.nombres,
-            apellidos: usuario.persona.apellidos,
-            emailVerificado: usuario.emailVerificado,
-            rolGlobal: usuario.rolGlobal,
-            photoUrl,
-          },
+          user: this.buildUserResponse(usuario, { photoUrl }),
           mode: 'marketplace',
           ...tokens,
         };
@@ -1378,15 +1331,7 @@ export class AuthService {
           this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
 
           return {
-            user: {
-              id: usuario.id,
-              email: usuario.email,
-              nombres: usuario.persona.nombres,
-              apellidos: usuario.persona.apellidos,
-              emailVerificado: usuario.emailVerificado,
-              rolGlobal: usuario.rolGlobal,
-              photoUrl,
-            },
+            user: this.buildUserResponse(usuario, { photoUrl }),
             mode: 'marketplace',
             ...tokens,
           };
@@ -1423,14 +1368,7 @@ export class AuthService {
           return {
             requiresSelection: true,
             message: '¿Qué deseas hacer?',
-            user: {
-              id: usuario.id,
-              email: usuario.email,
-              nombres: usuario.persona.nombres,
-              apellidos: usuario.persona.apellidos,
-              emailVerificado: usuario.emailVerificado,
-              photoUrl,
-            },
+            user: this.buildUserResponse(usuario, { photoUrl }),
             options: [
               {
                 type: 'marketplace',
@@ -1505,15 +1443,7 @@ export class AuthService {
       });
 
       return {
-        user: {
-          id: usuario.id,
-          email: usuario.email,
-          nombres: usuario.persona.nombres,
-          apellidos: usuario.persona.apellidos,
-          emailVerificado: usuario.emailVerificado,
-          rolGlobal: usuario.rolGlobal,
-          photoUrl,
-        },
+        user: this.buildUserResponse(usuario, { photoUrl }),
         mode: empresaId ? 'management' : 'marketplace',
         tenant: empresaId ? {
           id: empresaId,
@@ -1627,18 +1557,20 @@ export class AuthService {
     const tenantRoles = rolesEnEmpresa.map(r => r.rol);
     const tenantRole = userRole.rol;
 
-    // Actualizar TODAS las sesiones activas del usuario con el nuevo contexto
+    // Actualizar TODAS las sesiones activas del usuario con el nuevo contexto (en paralelo)
     try {
       const userSessions = await this.sessionService.getUserSessions(userId);
 
-      for (const session of userSessions) {
-        await this.sessionService.updateSessionTenant(session.sessionId, {
-          tenantId: empresaId,
-          tenantRole: tenantRole,
-          tenantName: userRole.empresa.nombre,
-          tenantRoles: tenantRoles,
-        });
-      }
+      await Promise.all(
+        userSessions.map(session =>
+          this.sessionService.updateSessionTenant(session.sessionId, {
+            tenantId: empresaId,
+            tenantRole: tenantRole,
+            tenantName: userRole.empresa.nombre,
+            tenantRoles: tenantRoles,
+          }),
+        ),
+      );
 
       this.logger.info('Updated tenant context in sessions', {
         userId,
@@ -1801,6 +1733,145 @@ export class AuthService {
       exists: true,
       methods: availableMethods, // Ej: ['PASSWORD', 'GOOGLE']
       authMethodsCount: usuario.authMethodsCount,
+    };
+  }
+
+  /**
+   * Obtener perfil completo del usuario desde BD
+   */
+  async getProfileFromDb(userId: string) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      include: { persona: true },
+    });
+
+    if (!usuario || !usuario.isActive) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const persona = usuario.persona;
+    const perfilCompleto = !!(persona.dni && persona.telefono && persona.direccion);
+
+    return {
+      id: usuario.id,
+      email: usuario.email,
+      dni: persona.dni,
+      nombres: persona.nombres,
+      apellidos: persona.apellidos,
+      telefono: persona.telefono || usuario.telefono,
+      direccion: persona.direccion,
+      emailVerificado: usuario.emailVerificado,
+      telefonoVerificado: usuario.telefonoVerificado,
+      rolGlobal: usuario.rolGlobal,
+      metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+      lastLoginAt: usuario.lastLoginAt,
+      perfilCompleto,
+    };
+  }
+
+  /**
+   * Actualizar perfil del usuario (DNI, teléfono, dirección)
+   */
+  async updateProfile(userId: string, data: UpdateProfileDto) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      include: { persona: true },
+    });
+
+    if (!usuario || !usuario.isActive) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // Validar unicidad de DNI si se proporciona
+    if (data.dni && data.dni !== usuario.persona.dni) {
+      const existingDni = await this.prisma.persona.findUnique({
+        where: { dni: data.dni },
+      });
+      if (existingDni && existingDni.id !== usuario.persona.id) {
+        throw new ConflictException('El DNI ya está registrado por otro usuario');
+      }
+    }
+
+    // Validar unicidad de teléfono si se proporciona
+    if (data.telefono && data.telefono !== usuario.telefono) {
+      const existingTelefono = await this.prisma.usuario.findUnique({
+        where: { telefono: data.telefono },
+      });
+      if (existingTelefono && existingTelefono.id !== usuario.id) {
+        throw new ConflictException('El teléfono ya está registrado por otro usuario');
+      }
+    }
+
+    // Actualizar Persona y Usuario en transacción
+    const [personaActualizada] = await this.prisma.$transaction([
+      this.prisma.persona.update({
+        where: { id: usuario.persona.id },
+        data: {
+          ...(data.dni !== undefined && { dni: data.dni }),
+          ...(data.telefono !== undefined && { telefono: data.telefono }),
+          ...(data.direccion !== undefined && { direccion: data.direccion }),
+        },
+      }),
+      // Sincronizar teléfono en Usuario también
+      ...(data.telefono !== undefined
+        ? [
+            this.prisma.usuario.update({
+              where: { id: userId },
+              data: { telefono: data.telefono },
+            }),
+          ]
+        : []),
+    ]);
+
+    const perfilCompleto = !!(
+      (data.dni || usuario.persona.dni) &&
+      (data.telefono || usuario.persona.telefono) &&
+      (data.direccion || usuario.persona.direccion)
+    );
+
+    this.logger.info('User profile updated', {
+      userId,
+      updatedFields: Object.keys(data).filter((k) => data[k] !== undefined),
+    });
+
+    return {
+      success: true,
+      message: 'Perfil actualizado exitosamente',
+      user: {
+        id: usuario.id,
+        email: usuario.email,
+        dni: data.dni || usuario.persona.dni,
+        nombres: personaActualizada.nombres,
+        apellidos: personaActualizada.apellidos,
+        telefono: data.telefono || usuario.persona.telefono,
+        direccion: data.direccion || usuario.persona.direccion,
+        emailVerificado: usuario.emailVerificado,
+        rolGlobal: usuario.rolGlobal,
+        metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+        perfilCompleto,
+      },
+    };
+  }
+
+  /**
+   * Helper para construir el objeto user en respuestas de auth
+   */
+  private buildUserResponse(usuario: any, extra?: Record<string, any>) {
+    const persona = usuario.persona;
+    const perfilCompleto = !!(persona?.dni && (persona?.telefono || usuario.telefono) && persona?.direccion);
+    return {
+      id: usuario.id,
+      email: usuario.email,
+      dni: persona?.dni,
+      nombres: persona?.nombres,
+      apellidos: persona?.apellidos,
+      telefono: persona?.telefono || usuario.telefono,
+      direccion: persona?.direccion,
+      emailVerificado: usuario.emailVerificado,
+      rolGlobal: usuario.rolGlobal,
+      metodoPrincipalLogin: usuario.metodoPrincipalLogin,
+      perfilCompleto,
+      ...extra,
     };
   }
 }

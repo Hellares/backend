@@ -13,7 +13,26 @@ import { RubroEmpresa } from '@prisma/client';
 
 export class CreateEmpresaDto {
   @ApiProperty({
-    description: 'Nombre de la empresa',
+    description: 'RUC de la empresa (11 dígitos) - Obligatorio',
+    example: '20552103816',
+    pattern: '^[0-9]{11}$'
+  })
+  @IsString()
+  @IsNotEmpty({ message: 'El RUC es requerido' })
+  @Matches(/^[0-9]{11}$/, { message: 'El RUC debe tener exactamente 11 dígitos numéricos' })
+  ruc: string;
+
+  @ApiProperty({
+    description: 'Razón social de SUNAT',
+    example: 'AGROLIGHT PERU S.A.C.',
+  })
+  @IsString()
+  @IsNotEmpty({ message: 'La razón social es requerida' })
+  @MaxLength(255, { message: 'La razón social no puede tener más de 255 caracteres' })
+  razonSocial: string;
+
+  @ApiProperty({
+    description: 'Nombre comercial de la empresa (puede diferir de la razón social)',
     example: 'Mi Empresa S.A.C.',
     minLength: 2,
     maxLength: 100
@@ -24,15 +43,57 @@ export class CreateEmpresaDto {
   @MaxLength(100, { message: 'El nombre no puede tener más de 100 caracteres' })
   nombre: string;
 
+  @ApiProperty({
+    description: 'Condición del contribuyente en SUNAT',
+    example: 'HABIDO',
+  })
+  @IsString()
+  @IsNotEmpty({ message: 'La condición del contribuyente es requerida' })
+  condicionContribuyente: string;
+
   @ApiPropertyOptional({
-    description: 'RUC de la empresa (11 dígitos)',
-    example: '20123456789',
-    pattern: '^[0-9]{11}$'
+    description: 'Estado del contribuyente en SUNAT',
+    example: 'ACTIVO',
   })
   @IsString()
   @IsOptional()
-  @Matches(/^[0-9]{11}$/, { message: 'El RUC debe tener exactamente 11 dígitos numéricos' })
-  ruc?: string;
+  estadoContribuyente?: string;
+
+  @ApiPropertyOptional({
+    description: 'Tipo de contribuyente según SUNAT',
+    example: 'SOCIEDAD ANONIMA CERRADA',
+  })
+  @IsString()
+  @IsOptional()
+  tipoContribuyente?: string;
+
+  @ApiPropertyOptional({
+    description: 'Dirección fiscal completa',
+    example: 'PJ. JORGE BASADRE NRO. 158 URB. POP LA UNIVERSAL 2DA ET., LIMA - LIMA - SANTA ANITA',
+  })
+  @IsString()
+  @IsOptional()
+  direccionFiscal?: string;
+
+  @ApiPropertyOptional({ description: 'Departamento', example: 'LIMA' })
+  @IsString()
+  @IsOptional()
+  departamento?: string;
+
+  @ApiPropertyOptional({ description: 'Provincia', example: 'LIMA' })
+  @IsString()
+  @IsOptional()
+  provincia?: string;
+
+  @ApiPropertyOptional({ description: 'Distrito', example: 'SANTA ANITA' })
+  @IsString()
+  @IsOptional()
+  distrito?: string;
+
+  @ApiPropertyOptional({ description: 'Código de ubigeo SUNAT', example: '150137' })
+  @IsString()
+  @IsOptional()
+  ubigeo?: string;
 
   @ApiPropertyOptional({
     description: 'Descripción de la empresa',

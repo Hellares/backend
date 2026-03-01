@@ -11,6 +11,18 @@ model Empresa {
   web                    String?
   telefono               String?
   email                  String?
+
+  // Datos SUNAT
+  razonSocial            String?
+  tipoContribuyente      String?
+  estadoContribuyente    String?   // "ACTIVO", "SUSPENSION TEMPORAL", "BAJA"
+  condicionContribuyente String?   // "HABIDO", "NO HABIDO"
+  direccionFiscal        String?
+  departamento           String?
+  provincia              String?
+  distrito               String?
+  ubigeo                 String?
+
   planSuscripcionId      String?
   fechaInicioSuscripcion DateTime?
   fechaVencimiento       DateTime?

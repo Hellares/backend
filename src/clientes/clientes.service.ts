@@ -43,7 +43,7 @@ export class ClientesService {
     empresaId: string,
     registradoPorId: string,
   ): Promise<RegistroClienteResponseDto> {
-    const { dni, nombres, apellidos, telefono, email, ...restData } =
+    const { dni, nombres, apellidos, telefono, email, notas, ...restData } =
       createDto;
 
     // 1. Buscar si existe una Persona con ese DNI
@@ -170,6 +170,7 @@ export class ClientesService {
             telefono: telefono || persona.telefono,
             ...(email && { email }),
             ...restData,
+            ...(notas && { observaciones: notas }),
             esCliente: true,
           },
         });
@@ -226,7 +227,7 @@ export class ClientesService {
     empresaId: string,
     registradoPorId: string,
   ) {
-    const { dni, nombres, apellidos, telefono, email, ...restData } =
+    const { dni, nombres, apellidos, telefono, email, notas, ...restData } =
       createDto;
 
     return await this.prisma.$transaction(async (tx) => {
@@ -239,6 +240,7 @@ export class ClientesService {
           telefono,
           email,
           ...restData,
+          ...(notas && { observaciones: notas }),
           esUsuario: true,
           esCliente: true,
         },
@@ -617,14 +619,18 @@ export class ClientesService {
       throw new NotFoundException('Cliente no encontrado en esta empresa');
     }
 
-    const { isActive, ...personaData } = updateDto;
+    const { isActive, notas, ...personaData } = updateDto;
 
     await this.prisma.$transaction(async (tx) => {
       // Actualizar datos de la persona (si se proporcionan)
-      if (Object.keys(personaData).length > 0) {
+      const dataToUpdate = {
+        ...personaData,
+        ...(notas !== undefined && { observaciones: notas }),
+      };
+      if (Object.keys(dataToUpdate).length > 0) {
         await tx.persona.update({
           where: { id: clienteExistente.personaId },
-          data: personaData,
+          data: dataToUpdate,
         });
       }
 

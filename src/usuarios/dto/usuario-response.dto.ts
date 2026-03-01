@@ -27,6 +27,18 @@ export class UsuarioResponseDto {
   @ApiPropertyOptional()
   telefono?: string;
 
+  @ApiPropertyOptional()
+  direccion?: string;
+
+  @ApiPropertyOptional()
+  distrito?: string;
+
+  @ApiPropertyOptional()
+  provincia?: string;
+
+  @ApiPropertyOptional()
+  departamento?: string;
+
   @ApiProperty({ enum: Rol })
   rolEnEmpresa: Rol;
 

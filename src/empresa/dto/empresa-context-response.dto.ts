@@ -71,6 +71,76 @@ export class EmpresaInfoDto {
   web?: string;
 
   @ApiProperty({
+    description: 'Razón social registrada en SUNAT',
+    example: 'Mi Empresa S.A.C.',
+    required: false,
+  })
+  razonSocial?: string;
+
+  @ApiProperty({
+    description: 'Rubro de la empresa',
+    example: 'COMERCIO',
+    required: false,
+  })
+  rubro?: string;
+
+  @ApiProperty({
+    description: 'Tipo de contribuyente SUNAT',
+    example: 'SOCIEDAD ANONIMA CERRADA',
+    required: false,
+  })
+  tipoContribuyente?: string;
+
+  @ApiProperty({
+    description: 'Estado del contribuyente en SUNAT',
+    example: 'ACTIVO',
+    required: false,
+  })
+  estadoContribuyente?: string;
+
+  @ApiProperty({
+    description: 'Condición del contribuyente en SUNAT',
+    example: 'HABIDO',
+    required: false,
+  })
+  condicionContribuyente?: string;
+
+  @ApiProperty({
+    description: 'Dirección fiscal registrada en SUNAT',
+    example: 'AV. JAVIER PRADO ESTE 1234',
+    required: false,
+  })
+  direccionFiscal?: string;
+
+  @ApiProperty({
+    description: 'Departamento de la dirección fiscal',
+    example: 'LIMA',
+    required: false,
+  })
+  departamento?: string;
+
+  @ApiProperty({
+    description: 'Provincia de la dirección fiscal',
+    example: 'LIMA',
+    required: false,
+  })
+  provincia?: string;
+
+  @ApiProperty({
+    description: 'Distrito de la dirección fiscal',
+    example: 'SAN ISIDRO',
+    required: false,
+  })
+  distrito?: string;
+
+  @ApiProperty({
+    description: 'Código de ubigeo',
+    example: '150131',
+    required: false,
+  })
+  ubigeo?: string;
+
+  @ApiProperty({
     description: 'ID del plan de suscripción actual',
     example: 'clxxx987654321',
     required: false,

@@ -1,5 +1,6 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { Rol } from '@prisma/client';
 
 @Injectable()
 export class PlanLimitsService {
@@ -128,6 +129,7 @@ export class PlanLimitsService {
       where: {
         empresaId,
         isActive: true,
+        rol: { not: Rol.CLIENTE },
       },
     });
 
@@ -265,7 +267,7 @@ export class PlanLimitsService {
         where: { empresaId, isActive: true },
       }),
       this.prisma.empresaUsuarioRol.count({
-        where: { empresaId, isActive: true },
+        where: { empresaId, isActive: true, rol: { not: Rol.CLIENTE } },
       }),
       this.prisma.sede.count({
         where: { empresaId, isActive: true },

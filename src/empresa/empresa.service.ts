@@ -25,7 +25,9 @@ import {
 
 export interface CreateEmpresaData {
   nombre: string;
-  ruc?: string;
+  ruc: string;
+  razonSocial: string;
+  condicionContribuyente: string;
   rubro?: RubroEmpresa;
   descripcion?: string;
   telefono?: string;
@@ -33,7 +35,14 @@ export interface CreateEmpresaData {
   web?: string;
   subdominio?: string;
   logo?: string;
-  direccion?: string;
+  // Datos SUNAT
+  estadoContribuyente?: string;
+  tipoContribuyente?: string;
+  direccionFiscal?: string;
+  departamento?: string;
+  provincia?: string;
+  distrito?: string;
+  ubigeo?: string;
 }
 
 export interface EmpresaResponse {
@@ -83,253 +92,50 @@ export class EmpresaService {
 
   /**
    * Crear nueva empresa con suscripción básica y asignar rol de admin al usuario
+   * Usa createEmpresaBase + activación automática de catálogos por rubro
    */
   async createEmpresa(data: CreateEmpresaData, userId: string): Promise<EmpresaResponse> {
-    const { nombre, ruc, subdominio, rubro } = data;
-
-    this.logger.info('Creating new empresa', { userId, nombre, ruc, subdominio, rubro });
-
-    // Verificar si ya existe una empresa con el mismo RUC
-    if (ruc) {
-      const existingRuc = await this.prisma.empresa.findFirst({
-        where: {
-          ruc,
-          deletedAt: null
-        }
-      });
-      if (existingRuc) {
-        this.logger.warn('Empresa creation failed: RUC already exists', { ruc, userId });
-        throw new ConflictException('Ya existe una empresa con este RUC');
-      }
-    }
-
-    // Verificar si ya existe una empresa con el mismo subdominio
-    if (subdominio) {
-      const existingSubdomain = await this.prisma.empresa.findFirst({
-        where: {
-          subdominio,
-          deletedAt: null
-        }
-      });
-      if (existingSubdomain) {
-        this.logger.warn('Empresa creation failed: Subdomain already in use', { subdominio, userId });
-        throw new ConflictException('Este subdominio ya está en uso');
-      }
-    }
-
-    // Obtener el plan básico (gratuito)
-    const planBasico = await this.prisma.planSuscripcion.findFirst({
-      where: {
-        nombre: 'BÁSICO',
-        isActive: true
-      }
-    });
-
-    if (!planBasico) {
-      throw new BadRequestException('No se encontró el plan básico. Por favor, contacte al administrador.');
-    }
-
-    // Generar subdominio único si no se proporciona
-    let subdominioFinal = subdominio;
-    if (!subdominioFinal) {
-      subdominioFinal = this.generateSubdominio(nombre);
-      // Asegurar que el subdominio sea único
-      let attempts = 0;
-      while (await this.prisma.empresa.findFirst({
-        where: { subdominio: subdominioFinal, deletedAt: null }
-      })) {
-        subdominioFinal = this.generateSubdominio(nombre, ++attempts);
-      }
-    }
-
-    // Generar fechas de suscripción (30 días de prueba gratuita)
-    const ahora = new Date();
-    const fechaFinPrueba = new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 días
-
-    // Crear la empresa
-    const empresa = await this.prisma.empresa.create({
-      data: {
-        nombre,
-        ruc,
-        rubro: rubro, // Ahora es obligatorio desde el DTO
-        subdominio: subdominioFinal,
-        descripcion: data.descripcion,
-        telefono: data.telefono,
-        email: data.email,
-        web: data.web,
-        logo: data.logo,
-        planSuscripcionId: planBasico.id,
-        fechaInicioSuscripcion: ahora,
-        fechaVencimiento: fechaFinPrueba,
-        estadoSuscripcion: EstadoSuscripcion.ACTIVA,
-        usuariosActuales: 1,
-      },
-      include: {
-        planSuscripcion: true,
-      },
-    });
-
-    // Crear configuración inicial de códigos
-    await this.prisma.configuracionCodigos.create({
-      data: {
-        empresaId: empresa.id,
-        productoCodigo: 'PROD',
-        productoSeparador: '-',
-        productoLongitud: 6,
-        productoIncluirSede: false,
-        servicioCodigo: 'SERV',
-        servicioSeparador: '-',
-        servicioLongitud: 6,
-        servicioIncluirSede: false,
-        facturaCodigo: 'F001',
-        boletaCodigo: 'B001',
-        notaCreditoCodigo: 'NC01',
-        notaDebitoCodigo: 'ND01',
-        documentoSeparador: '-',
-        documentoLongitud: 8,
-        ultimoProducto: 0,
-        ultimoServicio: 0,
-        ultimoFactura: 0,
-        ultimaBoleta: 0,
-        ultimaNotaCredito: 0,
-        ultimaNotaDebito: 0,
-      },
-    });
-
-    // Crear configuración inicial de facturación
-    await this.prisma.configuracionFacturacion.create({
-      data: {
-        empresaId: empresa.id,
-        serieFactura: 'F001',
-        serieBoleta: 'B001',
-        serieNotaCredito: 'NC01',
-        serieNotaDebito: 'ND01',
-        entorno: 'BETA',
-        textoPiePagina: 'Gracias por su compra',
-        incluirIGV: true,
-        incluirDetalles: true,
-        formatoPapel: 'A4',
-        porcentajeIGV: 18.00,
-      },
-    });
-
-    // Crear configuración fiscal/operativa por defecto
-    await this.prisma.configuracionEmpresa.create({
-      data: {
-        empresaId: empresa.id,
-      },
-    });
-
-    // Asignar al usuario como administrador de la empresa
-    await this.prisma.empresaUsuarioRol.create({
-      data: {
-        usuarioId: userId,
-        empresaId: empresa.id,
-        rol: Rol.EMPRESA_ADMIN,
-        estado: 'ACTIVO' as any,
-        creadoPor: userId,
-        registradoPor: userId,
-        fechaAprobacion: ahora,
-        aprobadoPor: userId,
-      },
-    });
-
-    // Crear sede principal por defecto
-    const codigoSede = `SEDE-${String(1).padStart(3, '0')}`; // SEDE-001
-
-    await this.prisma.sede.create({
-      data: {
-        empresaId: empresa.id,
-        codigo: codigoSede,
-        nombre: 'Sede Principal',
-        telefono: data.telefono,
-        email: data.email,
-        direccion: data.direccion || 'Dirección por configurar',
-        esPrincipal: true,
-        tipoSede: 'OPERATIVA_COMPLETA',
-
-        // Series de comprobantes por sede
-        serieFactura: 'F001',
-        serieBoleta: 'B001',
-        serieNotaCredito: 'NC01',
-        serieNotaDebito: 'ND01',
-        serieGuiaRemision: 'GR01',
-
-        // Contadores inicializados en 0
-        ultimoNumeroFactura: 0,
-        ultimoNumeroBoleta: 0,
-        ultimoNumeroNotaCredito: 0,
-        ultimoNumeroNotaDebito: 0,
-        ultimoNumeroGuiaRemision: 0,
-      },
-    });
-
-    // Activar catálogos según el rubro de la empresa
-    try {
-      const catalogosActivados = await this.catalogosService.activarCatalogosSegunRubro(
-        empresa.id,
-        empresa.rubro
-      );
-      this.logger.log(
-        `Catálogos de ${empresa.rubro} activados: ${catalogosActivados.total} catálogos (${catalogosActivados.categorias.length} categorías, ${catalogosActivados.marcas.length} marcas)`
-      );
-    } catch (error) {
-      this.logger.warn(`Error al activar catálogos de ${empresa.rubro}`, {
-        error: error.message,
-        empresaId: empresa.id
-      });
-      // No lanzar error, continuar con la creación de empresa
-    }
-
-    // Activar unidades de medida populares por defecto
-    try {
-      const resultado = await this.catalogosService.activarUnidadesPopularesParaEmpresa(
-        empresa.id
-      );
-      this.logger.log(
-        `Unidades de medida populares activadas: ${resultado.total} unidades`
-      );
-    } catch (error) {
-      this.logger.warn('Error al activar unidades de medida populares', {
-        error: error.message,
-        empresaId: empresa.id
-      });
-      // No lanzar error, continuar con la creación de empresa
-    }
-
-    // Crear configuracion de documentos PDF por defecto
-    try {
-      await this.configuracionDocumentosService.seedDefaults(empresa.id);
-      this.logger.log('Configuracion de documentos creada exitosamente');
-    } catch (error) {
-      this.logger.warn('Error al crear configuracion de documentos', {
-        error: error.message,
-        empresaId: empresa.id,
-      });
-    }
-
-    this.logger.success('Empresa created successfully', {
-      empresaId: empresa.id,
-      nombre: empresa.nombre,
+    this.logger.info('Creating new empresa', {
       userId,
+      nombre: data.nombre,
+      ruc: data.ruc,
+      subdominio: data.subdominio,
+      rubro: data.rubro,
     });
 
-    // Auditoría de creación de empresa
-    this.auditLogger.log({
-      action: AuditAction.TENANT_CREATED,
-      actor: { userId },
-      target: {
-        type: 'Empresa',
-        id: empresa.id,
-        name: empresa.nombre,
-      },
-      metadata: {
-        ruc,
-        subdominio: empresa.subdominio,
-        planSuscripcionId: empresa.planSuscripcionId,
-      },
-      success: true,
-    });
+    const empresa = await this.createEmpresaBase(data, userId);
+
+    // Invalidar cache de lista de empresas del usuario
+    await this.cache.invalidate(this.cache.getUserEmpresasKey(userId));
+
+    // Operaciones no críticas en paralelo: catálogos + unidades de medida
+    const [catalogosResult, unidadesResult] = await Promise.allSettled([
+      this.catalogosService.activarCatalogosSegunRubro(empresa.id, empresa.rubro),
+      this.catalogosService.activarUnidadesPopularesParaEmpresa(empresa.id),
+    ]);
+
+    if (catalogosResult.status === 'fulfilled') {
+      const catalogos = catalogosResult.value;
+      this.logger.log(
+        `Catálogos de ${empresa.rubro} activados: ${catalogos.total} catálogos (${catalogos.categorias.length} categorías, ${catalogos.marcas.length} marcas)`,
+      );
+    } else {
+      this.logger.warn(`Error al activar catálogos de ${empresa.rubro}`, {
+        error: catalogosResult.reason?.message,
+        empresaId: empresa.id,
+      });
+    }
+
+    if (unidadesResult.status === 'fulfilled') {
+      this.logger.log(
+        `Unidades de medida populares activadas: ${unidadesResult.value.total} unidades`,
+      );
+    } else {
+      this.logger.warn('Error al activar unidades de medida populares', {
+        error: unidadesResult.reason?.message,
+        empresaId: empresa.id,
+      });
+    }
 
     return this.formatEmpresaResponse(empresa);
   }
@@ -368,119 +174,100 @@ export class EmpresaService {
         !marcasPersonalizadas;
 
       if (usarRecomendados) {
-        // Si no se especificaron catálogos, usar los recomendados del rubro
-        this.logger.log(
-          `Activando catálogos recomendados para rubro: ${empresa.rubro}`,
-        );
-        const catalogosActivados = await this.catalogosService.activarCatalogosSegunRubro(
-          empresa.id,
-          empresa.rubro,
-        );
-        this.logger.log(
-          `Catálogos activados: ${catalogosActivados.total} (${catalogosActivados.categorias.length} categorías, ${catalogosActivados.marcas.length} marcas)`,
-        );
+        // Catálogos recomendados del rubro + unidades en paralelo
+        const [catalogosResult, unidadesResult] = await Promise.allSettled([
+          this.catalogosService.activarCatalogosSegunRubro(empresa.id, empresa.rubro),
+          this.catalogosService.activarUnidadesPopularesParaEmpresa(empresa.id),
+        ]);
+
+        if (catalogosResult.status === 'fulfilled') {
+          const catalogos = catalogosResult.value;
+          this.logger.log(
+            `Catálogos activados: ${catalogos.total} (${catalogos.categorias.length} categorías, ${catalogos.marcas.length} marcas)`,
+          );
+        } else {
+          this.logger.warn(`Error al activar catálogos: ${catalogosResult.reason?.message}`);
+        }
+
+        if (unidadesResult.status === 'fulfilled') {
+          this.logger.log(`Unidades populares activadas: ${unidadesResult.value.total}`);
+        } else {
+          this.logger.warn(`Error al activar unidades: ${unidadesResult.reason?.message}`);
+        }
       } else {
-        // Activar catálogos personalizados
-        this.logger.log(
-          `Activando catálogos personalizados para empresa ${empresa.id}`,
-        );
+        // Activar catálogos personalizados en paralelo (no secuencialmente)
+        this.logger.log(`Activando catálogos personalizados para empresa ${empresa.id}`);
 
-        let categoriasCount = 0;
-        let marcasCount = 0;
+        const activationPromises: Promise<any>[] = [];
 
-        // Activar categorías maestras seleccionadas
-        if (categoriasMaestrasIds && categoriasMaestrasIds.length > 0) {
-          for (const categoriaId of categoriasMaestrasIds) {
-            try {
-              await this.catalogosService.activarCategoriaParaEmpresa({
+        if (categoriasMaestrasIds?.length > 0) {
+          activationPromises.push(
+            ...categoriasMaestrasIds.map((categoriaId: string) =>
+              this.catalogosService.activarCategoriaParaEmpresa({
                 empresaId: empresa.id,
                 categoriaMaestraId: categoriaId,
-              });
-              categoriasCount++;
-            } catch (error) {
-              this.logger.warn(
-                `Error activando categoría ${categoriaId}: ${error.message}`,
-              );
-            }
-          }
+              }),
+            ),
+          );
         }
 
-        // Activar marcas maestras seleccionadas
-        if (marcasMaestrasIds && marcasMaestrasIds.length > 0) {
-          for (const marcaId of marcasMaestrasIds) {
-            try {
-              await this.catalogosService.activarMarcaParaEmpresa({
+        if (marcasMaestrasIds?.length > 0) {
+          activationPromises.push(
+            ...marcasMaestrasIds.map((marcaId: string) =>
+              this.catalogosService.activarMarcaParaEmpresa({
                 empresaId: empresa.id,
                 marcaMaestraId: marcaId,
-              });
-              marcasCount++;
-            } catch (error) {
-              this.logger.warn(
-                `Error activando marca ${marcaId}: ${error.message}`,
-              );
-            }
-          }
+              }),
+            ),
+          );
         }
 
-        // Crear categorías personalizadas
-        if (categoriasPersonalizadas && categoriasPersonalizadas.length > 0) {
-          for (const categoria of categoriasPersonalizadas) {
-            try {
-              await this.catalogosService.activarCategoriaParaEmpresa({
+        if (categoriasPersonalizadas?.length > 0) {
+          activationPromises.push(
+            ...categoriasPersonalizadas.map((categoria: any) =>
+              this.catalogosService.activarCategoriaParaEmpresa({
                 empresaId: empresa.id,
                 nombrePersonalizado: categoria.nombre,
                 descripcionPersonalizada: categoria.descripcion,
-              });
-              categoriasCount++;
-            } catch (error) {
-              this.logger.warn(
-                `Error creando categoría personalizada: ${error.message}`,
-              );
-            }
-          }
+              }),
+            ),
+          );
         }
 
-        // Crear marcas personalizadas
-        if (marcasPersonalizadas && marcasPersonalizadas.length > 0) {
-          for (const marca of marcasPersonalizadas) {
-            try {
-              await this.catalogosService.activarMarcaParaEmpresa({
+        if (marcasPersonalizadas?.length > 0) {
+          activationPromises.push(
+            ...marcasPersonalizadas.map((marca: any) =>
+              this.catalogosService.activarMarcaParaEmpresa({
                 empresaId: empresa.id,
                 nombrePersonalizado: marca.nombre,
                 descripcionPersonalizada: marca.descripcion,
-              });
-              marcasCount++;
-            } catch (error) {
-              this.logger.warn(
-                `Error creando marca personalizada: ${error.message}`,
-              );
-            }
-          }
+              }),
+            ),
+          );
         }
 
+        // Ejecutar todas las activaciones + unidades en paralelo
+        const results = await Promise.allSettled([
+          ...activationPromises,
+          this.catalogosService.activarUnidadesPopularesParaEmpresa(empresa.id),
+        ]);
+
+        const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+        const failed = results.filter((r) => r.status === 'rejected').length;
         this.logger.log(
-          `Catálogos personalizados activados: ${categoriasCount} categorías, ${marcasCount} marcas`,
+          `Catálogos personalizados: ${succeeded} activados, ${failed} fallidos`,
         );
+
+        if (failed > 0) {
+          results.forEach((result, index) => {
+            if (result.status === 'rejected') {
+              this.logger.warn(`Error en activación ${index}: ${result.reason?.message}`);
+            }
+          });
+        }
       }
     } catch (error) {
       this.logger.warn(`Error al activar catálogos: ${error.message}`);
-      // No lanzar error, la empresa ya fue creada
-    }
-
-    // Activar unidades de medida populares por defecto
-    try {
-      const unidadesActivadas = await this.catalogosService.activarUnidadesPopularesParaEmpresa(
-        empresa.id
-      );
-      this.logger.log(
-        `Unidades de medida populares activadas: ${unidadesActivadas.total} unidades`
-      );
-    } catch (error) {
-      this.logger.warn('Error al activar unidades de medida populares', {
-        error: error.message,
-        empresaId: empresa.id
-      });
-      // No lanzar error, la empresa ya fue creada
     }
 
     return this.formatEmpresaResponse(empresa);
@@ -489,55 +276,74 @@ export class EmpresaService {
   /**
    * Método base para crear empresa (sin activación automática de catálogos)
    * Reutilizable por createEmpresa y createEmpresaConCatalogos
+   *
+   * Optimizaciones:
+   * - Validaciones en paralelo (RUC + subdominio + plan) con Promise.all
+   * - Transacción atómica para empresa + configuraciones + rol + sede
+   * - Creates independientes en paralelo dentro de la transacción
    */
   private async createEmpresaBase(
     data: CreateEmpresaData,
     userId: string,
   ): Promise<any> {
-    const { nombre, ruc, subdominio, rubro } = data;
-
-    // Verificar si ya existe una empresa con el mismo RUC
-    if (ruc) {
-      const existingRuc = await this.prisma.empresa.findFirst({
-        where: {
-          ruc,
-          deletedAt: null,
-        },
-      });
-      if (existingRuc) {
-        this.logger.warn('Empresa creation failed: RUC already exists', {
-          ruc,
-          userId,
-        });
-        throw new ConflictException('Ya existe una empresa con este RUC');
-      }
-    }
-
-    // Verificar si ya existe una empresa con el mismo subdominio
-    if (subdominio) {
-      const existingSubdomain = await this.prisma.empresa.findFirst({
-        where: {
-          subdominio,
-          deletedAt: null,
-        },
-      });
-      if (existingSubdomain) {
-        this.logger.warn(
-          'Empresa creation failed: Subdomain already in use',
-          { subdominio, userId },
-        );
-        throw new ConflictException('Este subdominio ya está en uso');
-      }
-    }
-
-    // Obtener el plan básico (gratuito)
-    const planBasico = await this.prisma.planSuscripcion.findFirst({
-      where: {
-        nombre: 'BÁSICO',
-        isActive: true,
-      },
+    // Validar que el perfil del usuario esté completo
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      include: { persona: true },
     });
 
+    if (!usuario) {
+      throw new BadRequestException('Usuario no encontrado');
+    }
+
+    const persona = usuario.persona;
+    const camposFaltantes: string[] = [];
+    if (!persona.dni) camposFaltantes.push('dni');
+    if (!persona.telefono && !usuario.telefono) camposFaltantes.push('telefono');
+    if (!persona.direccion) camposFaltantes.push('direccion');
+
+    if (camposFaltantes.length > 0) {
+      throw new BadRequestException({
+        message: 'Debes completar tu perfil antes de crear una empresa',
+        errorCode: 'PROFILE_INCOMPLETE',
+        camposFaltantes,
+      });
+    }
+
+    const { nombre, ruc, subdominio, rubro, condicionContribuyente } = data;
+
+    // Validar condición del contribuyente SUNAT
+    if (!condicionContribuyente || condicionContribuyente.toUpperCase() !== 'HABIDO') {
+      this.logger.warn('Empresa creation rejected: condición no es HABIDO', {
+        ruc,
+        condicion: condicionContribuyente,
+      });
+      throw new BadRequestException(
+        `No se puede registrar la empresa. La condición del contribuyente es "${condicionContribuyente}". Solo se permiten empresas con condición HABIDO.`,
+      );
+    }
+
+    // Parallelizar validaciones independientes: RUC + subdominio + plan básico
+    const [existingRuc, existingSubdomain, planBasico] = await Promise.all([
+      ruc
+        ? this.prisma.empresa.findFirst({ where: { ruc, deletedAt: null } })
+        : Promise.resolve(null),
+      subdominio
+        ? this.prisma.empresa.findFirst({ where: { subdominio, deletedAt: null } })
+        : Promise.resolve(null),
+      this.prisma.planSuscripcion.findFirst({
+        where: { nombre: 'BÁSICO', isActive: true },
+      }),
+    ]);
+
+    if (existingRuc) {
+      this.logger.warn('Empresa creation failed: RUC already exists', { ruc, userId });
+      throw new ConflictException('Ya existe una empresa con este RUC');
+    }
+    if (existingSubdomain) {
+      this.logger.warn('Empresa creation failed: Subdomain already in use', { subdominio, userId });
+      throw new ConflictException('Este subdominio ya está en uso');
+    }
     if (!planBasico) {
       throw new BadRequestException(
         'No se encontró el plan básico. Por favor, contacte al administrador.',
@@ -548,7 +354,6 @@ export class EmpresaService {
     let subdominioFinal = subdominio;
     if (!subdominioFinal) {
       subdominioFinal = this.generateSubdominio(nombre);
-      // Asegurar que el subdominio sea único
       let attempts = 0;
       while (
         await this.prisma.empresa.findFirst({
@@ -559,131 +364,140 @@ export class EmpresaService {
       }
     }
 
-    // Generar fechas de suscripción (30 días de prueba gratuita)
     const ahora = new Date();
-    const fechaFinPrueba = new Date(
-      ahora.getTime() + 30 * 24 * 60 * 60 * 1000,
-    ); // 30 días
+    const fechaFinPrueba = new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-    // Crear la empresa
-    const empresa = await this.prisma.empresa.create({
-      data: {
-        nombre,
-        ruc,
-        rubro: rubro,
-        subdominio: subdominioFinal,
-        descripcion: data.descripcion,
-        telefono: data.telefono,
-        email: data.email,
-        web: data.web,
-        logo: data.logo,
-        planSuscripcionId: planBasico.id,
-        fechaInicioSuscripcion: ahora,
-        fechaVencimiento: fechaFinPrueba,
-        estadoSuscripcion: EstadoSuscripcion.ACTIVA,
-        usuariosActuales: 1,
+    // Transacción atómica: crear empresa + configuraciones + rol + sede
+    const empresa = await this.prisma.$transaction(
+      async (tx) => {
+        // 1. Crear la empresa con datos SUNAT
+        const emp = await tx.empresa.create({
+          data: {
+            nombre,
+            ruc,
+            rubro: rubro,
+            subdominio: subdominioFinal,
+            descripcion: data.descripcion,
+            telefono: data.telefono,
+            email: data.email,
+            web: data.web,
+            logo: data.logo,
+            // Datos SUNAT
+            razonSocial: data.razonSocial,
+            tipoContribuyente: data.tipoContribuyente,
+            estadoContribuyente: data.estadoContribuyente,
+            condicionContribuyente: data.condicionContribuyente,
+            direccionFiscal: data.direccionFiscal,
+            departamento: data.departamento,
+            provincia: data.provincia,
+            distrito: data.distrito,
+            ubigeo: data.ubigeo,
+            // Suscripción
+            planSuscripcionId: planBasico.id,
+            fechaInicioSuscripcion: ahora,
+            fechaVencimiento: fechaFinPrueba,
+            estadoSuscripcion: EstadoSuscripcion.ACTIVA,
+            usuariosActuales: 1,
+          },
+          include: {
+            planSuscripcion: true,
+          },
+        });
+
+        // 2. Crear configuraciones, rol y sede en paralelo (solo dependen de empresa.id)
+        const codigoSede = `SEDE-${String(1).padStart(3, '0')}`;
+
+        await Promise.all([
+          tx.configuracionCodigos.create({
+            data: {
+              empresaId: emp.id,
+              productoCodigo: 'PROD',
+              productoSeparador: '-',
+              productoLongitud: 6,
+              productoIncluirSede: false,
+              servicioCodigo: 'SERV',
+              servicioSeparador: '-',
+              servicioLongitud: 6,
+              servicioIncluirSede: false,
+              facturaCodigo: 'F001',
+              boletaCodigo: 'B001',
+              notaCreditoCodigo: 'NC01',
+              notaDebitoCodigo: 'ND01',
+              documentoSeparador: '-',
+              documentoLongitud: 8,
+              ultimoProducto: 0,
+              ultimoServicio: 0,
+              ultimoFactura: 0,
+              ultimaBoleta: 0,
+              ultimaNotaCredito: 0,
+              ultimaNotaDebito: 0,
+            },
+          }),
+          tx.configuracionFacturacion.create({
+            data: {
+              empresaId: emp.id,
+              serieFactura: 'F001',
+              serieBoleta: 'B001',
+              serieNotaCredito: 'NC01',
+              serieNotaDebito: 'ND01',
+              entorno: 'BETA',
+              textoPiePagina: 'Gracias por su compra',
+              incluirIGV: true,
+              incluirDetalles: true,
+              formatoPapel: 'A4',
+              porcentajeIGV: 18.0,
+            },
+          }),
+          tx.configuracionEmpresa.create({
+            data: {
+              empresaId: emp.id,
+            },
+          }),
+          tx.empresaUsuarioRol.create({
+            data: {
+              usuarioId: userId,
+              empresaId: emp.id,
+              rol: Rol.EMPRESA_ADMIN,
+              estado: 'ACTIVO' as any,
+              creadoPor: userId,
+              registradoPor: userId,
+              fechaAprobacion: ahora,
+              aprobadoPor: userId,
+            },
+          }),
+          tx.sede.create({
+            data: {
+              empresaId: emp.id,
+              codigo: codigoSede,
+              nombre: 'Sede Principal',
+              telefono: data.telefono,
+              email: data.email,
+              direccion: data.direccionFiscal || 'Dirección por configurar',
+              departamento: data.departamento,
+              provincia: data.provincia,
+              distrito: data.distrito,
+              esPrincipal: true,
+              tipoSede: 'OPERATIVA_COMPLETA',
+              serieFactura: 'F001',
+              serieBoleta: 'B001',
+              serieNotaCredito: 'NC01',
+              serieNotaDebito: 'ND01',
+              serieGuiaRemision: 'GR01',
+              ultimoNumeroFactura: 0,
+              ultimoNumeroBoleta: 0,
+              ultimoNumeroNotaCredito: 0,
+              ultimoNumeroNotaDebito: 0,
+              ultimoNumeroGuiaRemision: 0,
+            },
+          }),
+        ]);
+
+        return emp;
       },
-      include: {
-        planSuscripcion: true,
-      },
-    });
+      { timeout: 15000 },
+    );
 
-    // Crear configuración inicial de códigos
-    await this.prisma.configuracionCodigos.create({
-      data: {
-        empresaId: empresa.id,
-        productoCodigo: 'PROD',
-        productoSeparador: '-',
-        productoLongitud: 6,
-        productoIncluirSede: false,
-        servicioCodigo: 'SERV',
-        servicioSeparador: '-',
-        servicioLongitud: 6,
-        servicioIncluirSede: false,
-        facturaCodigo: 'F001',
-        boletaCodigo: 'B001',
-        notaCreditoCodigo: 'NC01',
-        notaDebitoCodigo: 'ND01',
-        documentoSeparador: '-',
-        documentoLongitud: 8,
-        ultimoProducto: 0,
-        ultimoServicio: 0,
-        ultimoFactura: 0,
-        ultimaBoleta: 0,
-        ultimaNotaCredito: 0,
-        ultimaNotaDebito: 0,
-      },
-    });
-
-    // Crear configuración inicial de facturación
-    await this.prisma.configuracionFacturacion.create({
-      data: {
-        empresaId: empresa.id,
-        serieFactura: 'F001',
-        serieBoleta: 'B001',
-        serieNotaCredito: 'NC01',
-        serieNotaDebito: 'ND01',
-        entorno: 'BETA',
-        textoPiePagina: 'Gracias por su compra',
-        incluirIGV: true,
-        incluirDetalles: true,
-        formatoPapel: 'A4',
-        porcentajeIGV: 18.0,
-      },
-    });
-
-    // Crear configuración fiscal/operativa por defecto
-    await this.prisma.configuracionEmpresa.create({
-      data: {
-        empresaId: empresa.id,
-      },
-    });
-
-    // Asignar al usuario como administrador de la empresa
-    await this.prisma.empresaUsuarioRol.create({
-      data: {
-        usuarioId: userId,
-        empresaId: empresa.id,
-        rol: Rol.EMPRESA_ADMIN,
-        estado: 'ACTIVO' as any,
-        creadoPor: userId,
-        registradoPor: userId,
-        fechaAprobacion: ahora,
-        aprobadoPor: userId,
-      },
-    });
-
-    // Crear sede principal por defecto
-    const codigoSede = `SEDE-${String(1).padStart(3, '0')}`; // SEDE-001
-
-    await this.prisma.sede.create({
-      data: {
-        empresaId: empresa.id,
-        codigo: codigoSede,
-        nombre: 'Sede Principal',
-        telefono: data.telefono,
-        email: data.email,
-        direccion: data.direccion || 'Dirección por configurar',
-        esPrincipal: true,
-        tipoSede: 'OPERATIVA_COMPLETA',
-
-        // Series de comprobantes por sede
-        serieFactura: 'F001',
-        serieBoleta: 'B001',
-        serieNotaCredito: 'NC01',
-        serieNotaDebito: 'ND01',
-        serieGuiaRemision: 'GR01',
-
-        // Contadores inicializados en 0
-        ultimoNumeroFactura: 0,
-        ultimoNumeroBoleta: 0,
-        ultimoNumeroNotaCredito: 0,
-        ultimoNumeroNotaDebito: 0,
-        ultimoNumeroGuiaRemision: 0,
-      },
-    });
-
-    // Crear configuracion de documentos PDF por defecto
+    // Operación no crítica post-transacción: configuración de documentos PDF
     try {
       await this.configuracionDocumentosService.seedDefaults(empresa.id);
       this.logger.log('Configuracion de documentos creada exitosamente');
@@ -724,6 +538,19 @@ export class EmpresaService {
    * Obtener empresas del usuario con todos sus roles
    */
   async getEmpresasByUsuario(userId: string): Promise<EmpresaResponse[]> {
+    const cacheKey = this.cache.getUserEmpresasKey(userId);
+
+    return this.cache.getOrSet(
+      cacheKey,
+      () => this._fetchEmpresasByUsuario(userId),
+      180, // 3 minutos
+    );
+  }
+
+  /**
+   * Obtiene las empresas del usuario desde la BD (sin cache)
+   */
+  private async _fetchEmpresasByUsuario(userId: string): Promise<EmpresaResponse[]> {
     const empresasUsuario = await this.prisma.empresaUsuarioRol.findMany({
       where: {
         usuarioId: userId,
@@ -856,11 +683,20 @@ export class EmpresaService {
         email: data.email,
         web: data.web,
         logo: data.logo,
+        razonSocial: data.razonSocial,
+        direccionFiscal: data.direccionFiscal,
+        departamento: data.departamento,
+        provincia: data.provincia,
+        distrito: data.distrito,
+        ubigeo: data.ubigeo,
       },
       include: {
         planSuscripcion: true,
       },
     });
+
+    // Invalidar caches relacionados a la empresa
+    await this.cache.invalidateEmpresa(empresaId);
 
     return this.formatEmpresaResponse(empresaActualizada);
   }
@@ -1052,6 +888,19 @@ export class EmpresaService {
   async getEmpresaContext(empresaId: string, userId: string): Promise<EmpresaContextResponseDto> {
     this.logger.info('Getting empresa context', { empresaId, userId });
 
+    const cacheKey = this.cache.getEmpresaContextKey(empresaId, userId);
+
+    return this.cache.getOrSet(
+      cacheKey,
+      () => this._buildEmpresaContext(empresaId, userId),
+      600, // 10 minutos
+    );
+  }
+
+  /**
+   * Construye el contexto completo de empresa (sin cache)
+   */
+  private async _buildEmpresaContext(empresaId: string, userId: string): Promise<EmpresaContextResponseDto> {
     // 1. Verificar que el usuario tenga acceso a esta empresa y obtener sus roles
     const userRoles = await this.prisma.empresaUsuarioRol.findMany({
       where: {
@@ -1121,6 +970,16 @@ export class EmpresaService {
       telefono: empresa.telefono,
       descripcion: empresa.descripcion,
       web: empresa.web,
+      razonSocial: empresa.razonSocial,
+      rubro: empresa.rubro,
+      tipoContribuyente: empresa.tipoContribuyente,
+      estadoContribuyente: empresa.estadoContribuyente,
+      condicionContribuyente: empresa.condicionContribuyente,
+      direccionFiscal: empresa.direccionFiscal,
+      departamento: empresa.departamento,
+      provincia: empresa.provincia,
+      distrito: empresa.distrito,
+      ubigeo: empresa.ubigeo,
       planSuscripcionId: empresa.planSuscripcionId,
       estadoSuscripcion: empresa.estadoSuscripcion,
       usuariosActuales: empresa.usuariosActuales,

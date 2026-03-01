@@ -398,634 +398,270 @@ export class CatalogosService {
   // ============================================
 
   /**
-   * Activar múltiples categorías populares automáticamente
-   * (útil al crear una nueva empresa)
+   * Activar múltiples categorías populares automáticamente (versión bulk)
+   * Usa createMany + skipDuplicates en lugar de loop individual
    */
   async activarCategoriasPopularesParaEmpresa(empresaId: string) {
     const populares = await this.prisma.categoriaMaestra.findMany({
-      where: {
-        esPopular: true,
-        isActive: true,
-      },
+      where: { esPopular: true, isActive: true },
     });
 
-    const activadas = [];
+    if (populares.length === 0) return [];
 
-    for (const cat of populares) {
-      try {
-        const activada = await this.activarCategoriaParaEmpresa({
-          empresaId,
-          categoriaMaestraId: cat.id,
-        });
-        activadas.push(activada);
-      } catch (error) {
-        // Si ya existe, continuar
-        if (error.message !== 'Esta categoría ya está activada') {
-          throw error;
-        }
-      }
-    }
+    await this.prisma.empresaCategoria.createMany({
+      data: populares.map((cat, i) => ({
+        empresaId,
+        categoriaMaestraId: cat.id,
+        orden: i,
+      })),
+      skipDuplicates: true,
+    });
 
     this.logger.log(
-      `${activadas.length} categorías populares activadas para empresa ${empresaId}`,
+      `${populares.length} categorías populares activadas en bulk para empresa ${empresaId}`,
     );
 
-    return activadas;
+    return populares;
   }
 
   /**
-   * Activar múltiples marcas populares automáticamente
+   * Activar múltiples marcas populares automáticamente (versión bulk)
+   * Usa createMany + skipDuplicates en lugar de loop individual
    */
   async activarMarcasPopularesParaEmpresa(empresaId: string) {
     const populares = await this.prisma.marcaMaestra.findMany({
-      where: {
-        esPopular: true,
-        isActive: true,
-      },
+      where: { esPopular: true, isActive: true },
     });
 
-    const activadas = [];
+    if (populares.length === 0) return [];
 
-    for (const marca of populares) {
-      try {
-        const activada = await this.activarMarcaParaEmpresa({
-          empresaId,
-          marcaMaestraId: marca.id,
-        });
-        activadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta marca ya está activada') {
-          throw error;
-        }
-      }
-    }
+    await this.prisma.empresaMarca.createMany({
+      data: populares.map((marca, i) => ({
+        empresaId,
+        marcaMaestraId: marca.id,
+        orden: i,
+      })),
+      skipDuplicates: true,
+    });
 
     this.logger.log(
-      `${activadas.length} marcas populares activadas para empresa ${empresaId}`,
+      `${populares.length} marcas populares activadas en bulk para empresa ${empresaId}`,
     );
 
-    return activadas;
+    return populares;
   }
 
   // ============================================
-  // ACTIVACIÓN POR RUBRO
+  // ACTIVACIÓN POR RUBRO (BULK OPTIMIZADO)
   // ============================================
 
-  /**
-   * Activar catálogos del rubro tecnológico automáticamente
-   * Se usa al crear una nueva empresa que operará en el sector tecnología
-   */
-  async activarCatalogosRubroTecnologico(empresaId: string) {
-    this.logger.log(
-      `Activando catálogos del rubro tecnológico para empresa ${empresaId}`,
-    );
-
-    // Slugs de categorías tecnológicas (deben coincidir con el seed)
-    const categoriasTech = [
-      'electronica',
-      'smartphones',
-      'laptops-computadoras',
-      'tablets',
-      'audio-video',
-      'televisores',
-      'camaras',
-      'gaming',
-      'smartwatches',
-      'componentes-pc',
-      'almacenamiento',
-      'redes',
-      'impresoras',
-      'software',
-      'accesorios-electronicos',
-    ];
-
-    // Obtener categorías tecnológicas
-    const categoriasMaestras = await this.prisma.categoriaMaestra.findMany({
-      where: {
-        slug: { in: categoriasTech },
-        isActive: true,
-      },
-    });
-
-    // Slugs de marcas tecnológicas
-    const marcasTech = [
-      'apple',
-      'samsung',
-      'xiaomi',
-      'sony',
-      'lg',
-      'huawei',
-      'microsoft',
-      'dell',
-      'hp',
-      'lenovo',
-      'asus',
-      'acer',
-      'canon',
-      'nikon',
-      'bose',
-      'jbl',
-      'panasonic',
-      'philips',
-    ];
-
-    // Obtener marcas tecnológicas
-    const marcasMaestras = await this.prisma.marcaMaestra.findMany({
-      where: {
-        slug: { in: marcasTech },
-        isActive: true,
-      },
-    });
-
-    const categoriasActivadas = [];
-    const marcasActivadas = [];
-
-    // Activar categorías
-    for (const cat of categoriasMaestras) {
-      try {
-        const activada = await this.activarCategoriaParaEmpresa({
-          empresaId,
-          categoriaMaestraId: cat.id,
-        });
-        categoriasActivadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta categoría ya está activada') {
-          this.logger.warn(
-            `Error activando categoría ${cat.nombre}: ${error.message}`,
-          );
-        }
-      }
-    }
-
-    // Activar marcas
-    for (const marca of marcasMaestras) {
-      try {
-        const activada = await this.activarMarcaParaEmpresa({
-          empresaId,
-          marcaMaestraId: marca.id,
-        });
-        marcasActivadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta marca ya está activada') {
-          this.logger.warn(
-            `Error activando marca ${marca.nombre}: ${error.message}`,
-          );
-        }
-      }
-    }
-
-    this.logger.log(
-      `Rubro tecnológico activado: ${categoriasActivadas.length} categorías y ${marcasActivadas.length} marcas`,
-    );
-
-    return {
-      categorias: categoriasActivadas,
-      marcas: marcasActivadas,
-      total: categoriasActivadas.length + marcasActivadas.length,
-    };
-  }
-
-  /**
-   * Activar catálogos del rubro gastronomía
-   */
-  async activarCatalogosRubroGastronomia(empresaId: string) {
-    this.logger.log(
-      `Activando catálogos del rubro gastronomía para empresa ${empresaId}`,
-    );
-
-    const categoriasGastronomia = [
-      'alimentos',
-      'bebidas',
-      'postres',
-      'panaderia',
-      'carnes',
-      'lacteos',
-      'frutas-verduras',
-      'comida-rapida',
-      'restaurant-equipamiento',
-      'bar',
-    ];
-
-    const categoriasMaestras = await this.prisma.categoriaMaestra.findMany({
-      where: {
-        slug: { in: categoriasGastronomia },
-        isActive: true,
-      },
-    });
-
-    const categoriasActivadas = [];
-
-    for (const cat of categoriasMaestras) {
-      try {
-        const activada = await this.activarCategoriaParaEmpresa({
-          empresaId,
-          categoriaMaestraId: cat.id,
-        });
-        categoriasActivadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta categoría ya está activada') {
-          this.logger.warn(
-            `Error activando categoría ${cat.nombre}: ${error.message}`,
-          );
-        }
-      }
-    }
-
-    this.logger.log(
-      `Rubro gastronomía activado: ${categoriasActivadas.length} categorías`,
-    );
-
-    return {
-      categorias: categoriasActivadas,
+  /** Configuración de slugs de catálogos por rubro */
+  private static readonly CATALOGOS_POR_RUBRO: Record<
+    string,
+    { categorias: string[]; marcas: string[] }
+  > = {
+    TECNOLOGIA: {
+      categorias: [
+        'electronica', 'smartphones', 'laptops-computadoras', 'tablets',
+        'audio-video', 'televisores', 'camaras', 'gaming', 'smartwatches',
+        'componentes-pc', 'almacenamiento', 'redes', 'impresoras',
+        'software', 'accesorios-electronicos',
+      ],
+      marcas: [
+        'apple', 'samsung', 'xiaomi', 'sony', 'lg', 'huawei', 'microsoft',
+        'dell', 'hp', 'lenovo', 'asus', 'acer', 'canon', 'nikon', 'bose',
+        'jbl', 'panasonic', 'philips',
+      ],
+    },
+    GASTRONOMIA: {
+      categorias: [
+        'alimentos', 'bebidas', 'postres', 'panaderia', 'carnes',
+        'lacteos', 'frutas-verduras', 'comida-rapida', 'restaurant-equipamiento', 'bar',
+      ],
       marcas: [],
-      total: categoriasActivadas.length,
-    };
-  }
-
-  /**
-   * Activar catálogos del rubro moda
-   */
-  async activarCatalogosRubroModa(empresaId: string) {
-    this.logger.log(
-      `Activando catálogos del rubro moda para empresa ${empresaId}`,
-    );
-
-    const categoriasModa = [
-      'ropa',
-      'calzado',
-      'accesorios',
-      'joyeria',
-      'relojes',
-      'bolsos',
-      'ropa-hombre',
-      'ropa-mujer',
-      'ropa-ninos',
-      'deportiva',
-    ];
-
-    const marcasModa = [
-      'nike',
-      'adidas',
-      'zara',
-      'h&m',
-      'gucci',
-      'puma',
-      'reebok',
-    ];
-
-    const categoriasMaestras = await this.prisma.categoriaMaestra.findMany({
-      where: {
-        slug: { in: categoriasModa },
-        isActive: true,
-      },
-    });
-
-    const marcasMaestras = await this.prisma.marcaMaestra.findMany({
-      where: {
-        slug: { in: marcasModa },
-        isActive: true,
-      },
-    });
-
-    const categoriasActivadas = [];
-    const marcasActivadas = [];
-
-    for (const cat of categoriasMaestras) {
-      try {
-        const activada = await this.activarCategoriaParaEmpresa({
-          empresaId,
-          categoriaMaestraId: cat.id,
-        });
-        categoriasActivadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta categoría ya está activada') {
-          this.logger.warn(
-            `Error activando categoría ${cat.nombre}: ${error.message}`,
-          );
-        }
-      }
-    }
-
-    for (const marca of marcasMaestras) {
-      try {
-        const activada = await this.activarMarcaParaEmpresa({
-          empresaId,
-          marcaMaestraId: marca.id,
-        });
-        marcasActivadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta marca ya está activada') {
-          this.logger.warn(
-            `Error activando marca ${marca.nombre}: ${error.message}`,
-          );
-        }
-      }
-    }
-
-    this.logger.log(
-      `Rubro moda activado: ${categoriasActivadas.length} categorías y ${marcasActivadas.length} marcas`,
-    );
-
-    return {
-      categorias: categoriasActivadas,
-      marcas: marcasActivadas,
-      total: categoriasActivadas.length + marcasActivadas.length,
-    };
-  }
-
-  /**
-   * Activar catálogos del rubro hogar
-   */
-  async activarCatalogosRubroHogar(empresaId: string) {
-    this.logger.log(
-      `Activando catálogos del rubro hogar para empresa ${empresaId}`,
-    );
-
-    const categoriasHogar = [
-      'muebles',
-      'decoracion',
-      'electrodomesticos',
-      'cocina',
-      'bano',
-      'jardin',
-      'iluminacion',
-      'textiles-hogar',
-    ];
-
-    const categoriasMaestras = await this.prisma.categoriaMaestra.findMany({
-      where: {
-        slug: { in: categoriasHogar },
-        isActive: true,
-      },
-    });
-
-    const categoriasActivadas = [];
-
-    for (const cat of categoriasMaestras) {
-      try {
-        const activada = await this.activarCategoriaParaEmpresa({
-          empresaId,
-          categoriaMaestraId: cat.id,
-        });
-        categoriasActivadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta categoría ya está activada') {
-          this.logger.warn(
-            `Error activando categoría ${cat.nombre}: ${error.message}`,
-          );
-        }
-      }
-    }
-
-    this.logger.log(
-      `Rubro hogar activado: ${categoriasActivadas.length} categorías`,
-    );
-
-    return {
-      categorias: categoriasActivadas,
+    },
+    MODA: {
+      categorias: [
+        'ropa', 'calzado', 'accesorios', 'joyeria', 'relojes', 'bolsos',
+        'ropa-hombre', 'ropa-mujer', 'ropa-ninos', 'deportiva',
+      ],
+      marcas: ['nike', 'adidas', 'zara', 'h&m', 'gucci', 'puma', 'reebok'],
+    },
+    HOGAR: {
+      categorias: [
+        'muebles', 'decoracion', 'electrodomesticos', 'cocina', 'bano',
+        'jardin', 'iluminacion', 'textiles-hogar',
+      ],
       marcas: [],
-      total: categoriasActivadas.length,
-    };
-  }
+    },
+    SALUD: {
+      categorias: [
+        'farmacia', 'cosmetica', 'cuidado-personal', 'suplementos',
+        'equipamiento-medico', 'belleza',
+      ],
+      marcas: [],
+    },
+  };
 
   /**
-   * Activar catálogos del rubro salud
+   * Método bulk optimizado para activar catálogos por slugs
+   * Reduce ~100+ queries individuales a ~4 queries con createMany + skipDuplicates
    */
-  async activarCatalogosRubroSalud(empresaId: string) {
-    this.logger.log(
-      `Activando catálogos del rubro salud para empresa ${empresaId}`,
-    );
+  private async activarCatalogosRubroBulk(
+    empresaId: string,
+    categorySlugs: string[],
+    brandSlugs: string[],
+  ) {
+    // Fetch maestras en paralelo (2 queries)
+    const [categoriasMaestras, marcasMaestras] = await Promise.all([
+      categorySlugs.length > 0
+        ? this.prisma.categoriaMaestra.findMany({
+            where: { slug: { in: categorySlugs }, isActive: true },
+          })
+        : Promise.resolve([]),
+      brandSlugs.length > 0
+        ? this.prisma.marcaMaestra.findMany({
+            where: { slug: { in: brandSlugs }, isActive: true },
+          })
+        : Promise.resolve([]),
+    ]);
 
-    const categoriasSalud = [
-      'farmacia',
-      'cosmetica',
-      'cuidado-personal',
-      'suplementos',
-      'equipamiento-medico',
-      'belleza',
-    ];
-
-    const categoriasMaestras = await this.prisma.categoriaMaestra.findMany({
-      where: {
-        slug: { in: categoriasSalud },
-        isActive: true,
-      },
-    });
-
-    const categoriasActivadas = [];
-
-    for (const cat of categoriasMaestras) {
-      try {
-        const activada = await this.activarCategoriaParaEmpresa({
-          empresaId,
-          categoriaMaestraId: cat.id,
-        });
-        categoriasActivadas.push(activada);
-      } catch (error) {
-        if (error.message !== 'Esta categoría ya está activada') {
-          this.logger.warn(
-            `Error activando categoría ${cat.nombre}: ${error.message}`,
-          );
-        }
-      }
+    // Bulk create con skipDuplicates en transacción batch (1-2 queries)
+    const txOps: any[] = [];
+    if (categoriasMaestras.length > 0) {
+      txOps.push(
+        this.prisma.empresaCategoria.createMany({
+          data: categoriasMaestras.map((cat, i) => ({
+            empresaId,
+            categoriaMaestraId: cat.id,
+            orden: i,
+          })),
+          skipDuplicates: true,
+        }),
+      );
+    }
+    if (marcasMaestras.length > 0) {
+      txOps.push(
+        this.prisma.empresaMarca.createMany({
+          data: marcasMaestras.map((marca, i) => ({
+            empresaId,
+            marcaMaestraId: marca.id,
+            orden: i,
+          })),
+          skipDuplicates: true,
+        }),
+      );
     }
 
-    this.logger.log(
-      `Rubro salud activado: ${categoriasActivadas.length} categorías`,
-    );
+    if (txOps.length > 0) {
+      await this.prisma.$transaction(txOps);
+    }
 
     return {
-      categorias: categoriasActivadas,
-      marcas: [],
-      total: categoriasActivadas.length,
+      categorias: categoriasMaestras,
+      marcas: marcasMaestras,
+      total: categoriasMaestras.length + marcasMaestras.length,
     };
   }
 
   /**
-   * Activar catálogos según el rubro de la empresa
-   * Método orquestador que delega a métodos específicos
+   * Activar catálogos según el rubro de la empresa (versión bulk optimizada)
+   * Reduce ~100+ queries individuales a ~4 queries con createMany
    */
   async activarCatalogosSegunRubro(empresaId: string, rubro: string) {
     this.logger.log(
       `Activando catálogos para empresa ${empresaId} del rubro: ${rubro}`,
     );
 
-    switch (rubro.toUpperCase()) {
-      case 'TECNOLOGIA':
-        return await this.activarCatalogosRubroTecnologico(empresaId);
+    const rubroKey = rubro.toUpperCase();
+    const config = CatalogosService.CATALOGOS_POR_RUBRO[rubroKey];
 
-      case 'GASTRONOMIA':
-        return await this.activarCatalogosRubroGastronomia(empresaId);
-
-      case 'MODA':
-        return await this.activarCatalogosRubroModa(empresaId);
-
-      case 'HOGAR':
-        return await this.activarCatalogosRubroHogar(empresaId);
-
-      case 'SALUD':
-        return await this.activarCatalogosRubroSalud(empresaId);
-
-      case 'AUTOMOTRIZ':
-      case 'DEPORTES':
-      case 'CONSTRUCCION':
-      case 'EDUCACION':
-      case 'OTRO':
-        // Para estos rubros, activar catálogos populares generales
-        this.logger.log(
-          `Rubro ${rubro} no tiene catálogos específicos, usando populares generales`,
-        );
-        const categorias = await this.activarCategoriasPopularesParaEmpresa(
-          empresaId,
-        );
-        const marcas = await this.activarMarcasPopularesParaEmpresa(empresaId);
-        return {
-          categorias,
-          marcas,
-          total: categorias.length + marcas.length,
-        };
-
-      default:
-        this.logger.warn(`Rubro desconocido: ${rubro}, sin activación automática`);
-        return { categorias: [], marcas: [], total: 0 };
+    if (config) {
+      this.logger.log(`Activando catálogos del rubro ${rubroKey} para empresa ${empresaId}`);
+      const result = await this.activarCatalogosRubroBulk(
+        empresaId,
+        config.categorias,
+        config.marcas,
+      );
+      this.logger.log(
+        `Rubro ${rubroKey} activado: ${result.categorias.length} categorías y ${result.marcas.length} marcas`,
+      );
+      return result;
     }
+
+    // Rubros sin configuración específica: usar populares generales
+    const rubrosGenericos = ['AUTOMOTRIZ', 'DEPORTES', 'CONSTRUCCION', 'EDUCACION', 'OTRO'];
+    if (rubrosGenericos.includes(rubroKey)) {
+      this.logger.log(
+        `Rubro ${rubro} no tiene catálogos específicos, usando populares generales`,
+      );
+      const [categorias, marcas] = await Promise.all([
+        this.activarCategoriasPopularesParaEmpresa(empresaId),
+        this.activarMarcasPopularesParaEmpresa(empresaId),
+      ]);
+      return {
+        categorias,
+        marcas,
+        total: categorias.length + marcas.length,
+      };
+    }
+
+    this.logger.warn(`Rubro desconocido: ${rubro}, sin activación automática`);
+    return { categorias: [], marcas: [], total: 0 };
   }
 
   /**
    * Obtener preview de catálogos que se activarían para un rubro
-   * Útil para mostrar al usuario antes de crear la empresa
+   * Usa la misma configuración de slugs que la activación real
    */
   async getPreviewCatalogosPorRubro(rubro: string) {
     this.logger.log(`Obteniendo preview de catálogos para rubro: ${rubro}`);
 
-    // Definir slugs por rubro
-    let categoriaSlugs: string[] = [];
-    let marcaSlugs: string[] = [];
+    const rubroKey = rubro.toUpperCase();
+    const config = CatalogosService.CATALOGOS_POR_RUBRO[rubroKey];
 
-    switch (rubro.toUpperCase()) {
-      case 'TECNOLOGIA':
-        categoriaSlugs = [
-          'electronica',
-          'smartphones',
-          'laptops-computadoras',
-          'tablets',
-          'audio-video',
-          'televisores',
-          'camaras',
-          'gaming',
-          'smartwatches',
-          'componentes-pc',
-          'almacenamiento',
-          'redes',
-          'impresoras',
-          'software',
-          'accesorios-electronicos',
-        ];
-        marcaSlugs = [
-          'apple',
-          'samsung',
-          'xiaomi',
-          'sony',
-          'lg',
-          'huawei',
-          'microsoft',
-          'dell',
-          'hp',
-          'lenovo',
-          'asus',
-          'canon',
-          'nikon',
-          'bose',
-          'jbl',
-          'panasonic',
-          'philips',
-        ];
-        break;
-
-      case 'MODA':
-        categoriaSlugs = [
-          'ropa-hombre',
-          'ropa-mujer',
-          'ropa-ninos',
-          'calzado',
-          'accesorios-moda',
-        ];
-        marcaSlugs = ['nike', 'adidas', 'zara', 'puma', 'reebok'];
-        break;
-
-      case 'GASTRONOMIA':
-        categoriaSlugs = [
-          'alimentos-bebidas',
-        ];
-        marcaSlugs = [];
-        break;
-
-      case 'HOGAR':
-        categoriaSlugs = ['hogar-jardin'];
-        marcaSlugs = ['ikea', 'philips', 'panasonic', 'whirlpool'];
-        break;
-
-      case 'SALUD':
-        categoriaSlugs = ['belleza-salud'];
-        marcaSlugs = ['loreal', 'nivea', 'dove'];
-        break;
-
-      case 'DEPORTES':
-      case 'AUTOMOTRIZ':
-      case 'CONSTRUCCION':
-      case 'EDUCACION':
-      case 'OTRO':
-        // Para estos rubros, usar catálogos populares
-        const categoriasPopulares = await this.prisma.categoriaMaestra.findMany({
+    // Rubros sin config específica: usar populares
+    const rubrosGenericos = ['AUTOMOTRIZ', 'DEPORTES', 'CONSTRUCCION', 'EDUCACION', 'OTRO'];
+    if (!config && rubrosGenericos.includes(rubroKey)) {
+      const [categoriasPopulares, marcasPopulares] = await Promise.all([
+        this.prisma.categoriaMaestra.findMany({
           where: { esPopular: true, isActive: true },
           select: { id: true, nombre: true, slug: true, icono: true, descripcion: true },
-        });
-        const marcasPopulares = await this.prisma.marcaMaestra.findMany({
+        }),
+        this.prisma.marcaMaestra.findMany({
           where: { esPopular: true, isActive: true },
           select: { id: true, nombre: true, slug: true, logo: true, descripcion: true },
-        });
-        return {
-          rubro,
-          categorias: categoriasPopulares,
-          marcas: marcasPopulares,
-          total: categoriasPopulares.length + marcasPopulares.length,
-        };
-
-      default:
-        return { rubro, categorias: [], marcas: [], total: 0 };
+        }),
+      ]);
+      return {
+        rubro,
+        categorias: categoriasPopulares,
+        marcas: marcasPopulares,
+        total: categoriasPopulares.length + marcasPopulares.length,
+      };
     }
 
-    // Obtener categorías maestras que coincidan con los slugs
-    const categorias = await this.prisma.categoriaMaestra.findMany({
-      where: {
-        slug: { in: categoriaSlugs },
-        isActive: true,
-      },
-      select: {
-        id: true,
-        nombre: true,
-        slug: true,
-        icono: true,
-        descripcion: true,
-      },
-      orderBy: { orden: 'asc' },
-    });
+    if (!config) {
+      return { rubro, categorias: [], marcas: [], total: 0 };
+    }
 
-    // Obtener marcas maestras que coincidan con los slugs
-    const marcas = await this.prisma.marcaMaestra.findMany({
-      where: {
-        slug: { in: marcaSlugs },
-        isActive: true,
-      },
-      select: {
-        id: true,
-        nombre: true,
-        slug: true,
-        logo: true,
-        descripcion: true,
-      },
-      orderBy: { nombre: 'asc' },
-    });
+    // Fetch en paralelo usando los mismos slugs que la activación
+    const [categorias, marcas] = await Promise.all([
+      config.categorias.length > 0
+        ? this.prisma.categoriaMaestra.findMany({
+            where: { slug: { in: config.categorias }, isActive: true },
+            select: { id: true, nombre: true, slug: true, icono: true, descripcion: true },
+            orderBy: { orden: 'asc' },
+          })
+        : Promise.resolve([]),
+      config.marcas.length > 0
+        ? this.prisma.marcaMaestra.findMany({
+            where: { slug: { in: config.marcas }, isActive: true },
+            select: { id: true, nombre: true, slug: true, logo: true, descripcion: true },
+            orderBy: { nombre: 'asc' },
+          })
+        : Promise.resolve([]),
+    ]);
 
     return {
       rubro,
@@ -1268,56 +904,56 @@ export class CatalogosService {
   }
 
   /**
-   * Activar unidades de medida más comunes automáticamente
-   * (útil al crear una nueva empresa)
+   * Activar unidades de medida más comunes automáticamente (versión bulk)
+   * Reduce ~30 queries a ~3 queries usando createMany
    */
   async activarUnidadesPopularesParaEmpresa(empresaId: string) {
     this.logger.log(
       `Activando unidades de medida populares para empresa ${empresaId}`,
     );
 
+    // 1. Fetch unidades populares (1 query)
     const unidadesPopulares = await this.prisma.unidadMedidaMaestra.findMany({
-      where: {
-        esPopular: true,
-        isActive: true,
-      },
+      where: { esPopular: true, isActive: true },
       orderBy: { orden: 'asc' },
     });
 
-    const unidadesActivadas = [];
-
-    for (const unidad of unidadesPopulares) {
-      try {
-        // Verificar si ya está activada
-        const existe = await this.prisma.empresaUnidadMedida.findFirst({
-          where: {
-            empresaId,
-            unidadMaestraId: unidad.id,
-            deletedAt: null,
-          },
-        });
-
-        if (!existe) {
-          const activada = await this.activarUnidadMedidaParaEmpresa({
-            empresaId,
-            unidadMaestraId: unidad.id,
-          });
-          unidadesActivadas.push(activada);
-        }
-      } catch (error) {
-        this.logger.warn(
-          `Error activando unidad ${unidad.nombre}: ${error.message}`,
-        );
-      }
+    if (unidadesPopulares.length === 0) {
+      return { unidades: [], total: 0 };
     }
 
+    // 2. Check existentes en batch (1 query) - para evitar duplicados
+    const existentes = await this.prisma.empresaUnidadMedida.findMany({
+      where: {
+        empresaId,
+        unidadMaestraId: { in: unidadesPopulares.map((u) => u.id) },
+        deletedAt: null,
+      },
+      select: { unidadMaestraId: true },
+    });
+    const existentesIds = new Set(existentes.map((e) => e.unidadMaestraId));
+    const nuevas = unidadesPopulares.filter((u) => !existentesIds.has(u.id));
+
+    if (nuevas.length === 0) {
+      return { unidades: [], total: 0 };
+    }
+
+    // 3. Bulk create (1 query)
+    await this.prisma.empresaUnidadMedida.createMany({
+      data: nuevas.map((unidad, i) => ({
+        empresaId,
+        unidadMaestraId: unidad.id,
+        orden: i,
+      })),
+    });
+
     this.logger.log(
-      `${unidadesActivadas.length} unidades populares activadas para empresa ${empresaId}`,
+      `${nuevas.length} unidades populares activadas para empresa ${empresaId}`,
     );
 
     return {
-      unidades: unidadesActivadas,
-      total: unidadesActivadas.length,
+      unidades: nuevas,
+      total: nuevas.length,
     };
   }
 }
