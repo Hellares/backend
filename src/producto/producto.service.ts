@@ -347,6 +347,17 @@ export class ProductoService {
     const orderBy = this.catalogService.getOrderBy(queryDto.orden);
 
     // 3. Ejecutar consultas en paralelo (usar include clause del CatalogService)
+    // Para búsquedas con texto, usamos count limitado para evitar escanear millones de filas
+    const MAX_COUNT_SCAN = 10000;
+
+    const countQuery = queryDto.search
+      ? this.prisma.producto.findMany({
+          where,
+          select: { id: true },
+          take: MAX_COUNT_SCAN,
+        }).then(rows => rows.length)
+      : this.prisma.producto.count({ where });
+
     const [productos, total] = await Promise.all([
       this.prisma.producto.findMany({
         where,
@@ -355,7 +366,7 @@ export class ProductoService {
         orderBy,
         include: this.catalogService.buildIncludeClause(true, true, false, true),
       }),
-      this.prisma.producto.count({ where }),
+      countQuery,
     ]);
 
     // Si no hay productos, retornar vacío inmediatamente
@@ -1026,6 +1037,17 @@ export class ProductoService {
         ];
       }
 
+      // Para búsquedas con texto, usamos count limitado para evitar escanear millones de filas
+      const MAX_COUNT_SCAN = 10000;
+
+      const countQuery = search
+        ? this.prisma.producto.findMany({
+            where,
+            select: { id: true },
+            take: MAX_COUNT_SCAN,
+          }).then(rows => rows.length)
+        : this.prisma.producto.count({ where });
+
       const [productos, total] = await Promise.all([
         this.prisma.producto.findMany({
           where,
@@ -1036,7 +1058,7 @@ export class ProductoService {
             nombre: 'asc',
           },
         }),
-        this.prisma.producto.count({ where }),
+        countQuery,
       ]);
 
       // Si no hay productos, retornar vacío inmediatamente

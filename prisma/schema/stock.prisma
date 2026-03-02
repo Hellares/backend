@@ -62,6 +62,7 @@ model ProductoStock {
   preciosHistorial       ProductoPrecioHistorialSede[] // Historial de cambios de precio por sede
   itemsReporteIncidencia ReporteIncidenciaItem[] // Items de reportes de incidencias
   itemsInventario        InventarioItem[] // Items de inventarios
+  lotes                  Lote[] // Lotes de producto en esta sede
 
   @@unique([sedeId, productoId, varianteId])
   @@index([sedeId])
@@ -104,6 +105,9 @@ model MovimientoStock {
   // Relación con devoluciones (si aplica)
   devolucionId String?
 
+  // Relación con compras (si aplica)
+  compraId String?
+
   // Usuario responsable
   usuarioId String
 
@@ -116,6 +120,7 @@ model MovimientoStock {
   productoStock          ProductoStock           @relation(fields: [productoStockId], references: [id])
   transferencia          TransferenciaStock?     @relation(fields: [transferenciaId], references: [id])
   devolucion             Devolucion?             @relation(fields: [devolucionId], references: [id])
+  compra                 Compra?                 @relation(fields: [compraId], references: [id])
   itemsReporteIncidencia ReporteIncidenciaItem[] @relation("ItemIncidenciaMovimiento")
   itemsInventario        InventarioItem[]        @relation("InventarioAjuste")
 
@@ -126,6 +131,7 @@ model MovimientoStock {
   @@index([creadoEn])
   @@index([transferenciaId])
   @@index([devolucionId])
+  @@index([compraId])
   @@index([productoStockId, creadoEn]) // Historial de movimientos ordenado
   @@index([sedeId, tipo]) // Filtrar movimientos por sede y tipo
 }

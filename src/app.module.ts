@@ -23,6 +23,7 @@ import { InventarioModule } from './inventario/inventario.module';
 import { CotizacionModule } from './cotizacion/cotizacion.module';
 import { ConfiguracionDocumentosModule } from './configuracion-documentos/configuracion-documentos.module';
 import { ConsultasExternasModule } from './consultas-externas/consultas-externas.module';
+import { CompraModule } from './compra/compra.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -59,6 +60,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     CotizacionModule,
     ConfiguracionDocumentosModule,
     ConsultasExternasModule,
+    CompraModule,
   ],
   controllers: [AppController],
   providers: [

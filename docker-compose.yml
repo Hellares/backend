@@ -54,6 +54,8 @@ services:
       - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME:-}
       - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY:-}
       - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET:-}
+      - FACTILIZA_API_URL=${FACTILIZA_API_URL:-https://api.factiliza.com/v1}
+      - FACTILIZA_API_TOKEN=${FACTILIZA_API_TOKEN}
     # volumes:
     #   - ./logs:/app/logs  # Deshabilitado - solo console logging por ahora
     networks:

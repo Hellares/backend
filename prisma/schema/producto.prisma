@@ -81,6 +81,11 @@ model Producto {
   // Relaciones para cotizaciones
   cotizacionDetalles CotizacionDetalle[]
 
+  // Relaciones para módulo de compras
+  ordenCompraDetalles OrdenCompraDetalle[]
+  compraDetalles      CompraDetalle[]
+  lotes               Lote[]
+
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
   @@index([empresaId])
@@ -245,6 +250,11 @@ model ProductoVariante {
 
   // Relaciones para cotizaciones
   cotizacionDetalles CotizacionDetalle[]
+
+  // Relaciones para módulo de compras
+  ordenCompraDetalles OrdenCompraDetalle[]
+  compraDetalles      CompraDetalle[]
+  lotes               Lote[]
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])

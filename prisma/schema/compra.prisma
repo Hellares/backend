@@ -1,0 +1,312 @@
+// =========================================
+// MÓDULO DE COMPRAS - ÓRDENES, RECEPCIONES Y LOTES
+// =========================================
+
+// ========== ENUMS ==========
+
+enum EstadoOrdenCompra {
+  BORRADOR
+  PENDIENTE
+  APROBADA
+  PARCIAL
+  COMPLETADA
+  CANCELADA
+}
+
+enum EstadoCompra {
+  BORRADOR
+  CONFIRMADA
+  ANULADA
+}
+
+enum EstadoLote {
+  ACTIVO
+  AGOTADO
+  VENCIDO
+  BLOQUEADO
+}
+
+// ========== ORDEN DE COMPRA ==========
+
+/// Orden de Compra a proveedor (PO)
+/// Documento que formaliza el pedido de mercancía a un proveedor
+model OrdenCompra {
+  id         String @id @default(cuid())
+  empresaId  String
+  sedeId     String
+  proveedorId String
+
+  // Identificación
+  codigo String // OC-2026-00001 (único por empresa)
+
+  // Snapshot del proveedor al momento de crear la OC
+  nombreProveedor    String
+  documentoProveedor String?
+  emailProveedor     String?
+  telefonoProveedor  String?
+  direccionProveedor String?
+
+  // Términos comerciales
+  terminosPago TerminosPago?
+  diasCredito  Int?
+
+  // Moneda
+  moneda     String  @default("PEN")
+  tipoCambio Decimal? @db.Decimal(10, 4)
+
+  // Montos calculados
+  subtotal  Decimal @default(0) @db.Decimal(12, 2)
+  descuento Decimal @default(0) @db.Decimal(12, 2)
+  impuestos Decimal @default(0) @db.Decimal(12, 2)
+  total     Decimal @default(0) @db.Decimal(12, 2)
+
+  // Fechas
+  fechaEmision         DateTime  @default(now())
+  fechaEntregaEsperada DateTime?
+  fechaAprobacion      DateTime?
+
+  // Estado
+  estado EstadoOrdenCompra @default(BORRADOR)
+
+  // Observaciones
+  observaciones String?
+  condiciones   String?
+
+  // Auditoría
+  creadoPor      String
+  aprobadoPor    String?
+  actualizadoPor String?
+  creadoEn       DateTime @default(now())
+  actualizadoEn  DateTime @updatedAt
+
+  // Relaciones
+  empresa   Empresa    @relation(fields: [empresaId], references: [id])
+  sede      Sede       @relation(fields: [sedeId], references: [id])
+  proveedor Proveedor  @relation(fields: [proveedorId], references: [id])
+  detalles  OrdenCompraDetalle[]
+  compras   Compra[]
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId, estado])
+  @@index([empresaId, sedeId, estado])
+  @@index([empresaId, proveedorId])
+  @@index([creadoEn])
+}
+
+/// Detalle de una Orden de Compra
+model OrdenCompraDetalle {
+  id             String  @id @default(cuid())
+  ordenCompraId  String
+  productoId     String?
+  varianteId     String?
+
+  // Descripción y cantidades
+  descripcion    String
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(12, 2)
+  descuento      Decimal @default(0) @db.Decimal(12, 2)
+
+  // IGV
+  porcentajeIGV Decimal @default(18) @db.Decimal(5, 2)
+  igv           Decimal @default(0) @db.Decimal(12, 2)
+
+  // Totales
+  subtotal Decimal @default(0) @db.Decimal(12, 2)
+  total    Decimal @default(0) @db.Decimal(12, 2)
+
+  // Tracking de recepción
+  cantidadRecibida  Int @default(0)
+  cantidadPendiente Int
+
+  // Orden de la línea
+  orden Int @default(0)
+
+  // Relaciones
+  ordenCompra    OrdenCompra     @relation(fields: [ordenCompraId], references: [id], onDelete: Cascade)
+  producto       Producto?       @relation(fields: [productoId], references: [id])
+  variante       ProductoVariante? @relation(fields: [varianteId], references: [id])
+  compraDetalles CompraDetalle[]
+
+  @@index([ordenCompraId])
+  @@index([productoId])
+  @@index([varianteId])
+}
+
+// ========== COMPRA (RECEPCIÓN DE MERCANCÍA) ==========
+
+/// Compra / Recepción de mercancía
+/// Registra la entrada física de productos al almacén
+model Compra {
+  id            String  @id @default(cuid())
+  empresaId     String
+  sedeId        String
+  proveedorId   String
+  ordenCompraId String?
+
+  // Identificación
+  codigo String // COMP-2026-00001
+
+  // Snapshot del proveedor
+  nombreProveedor    String
+  documentoProveedor String?
+
+  // Documento del proveedor (factura/boleta del proveedor)
+  tipoDocumentoProveedor   String?
+  serieDocumentoProveedor  String?
+  numeroDocumentoProveedor String?
+
+  // Términos comerciales
+  terminosPago          TerminosPago?
+  diasCredito           Int?
+  fechaVencimientoPago  DateTime?
+
+  // Moneda
+  moneda     String  @default("PEN")
+  tipoCambio Decimal? @db.Decimal(10, 4)
+
+  // Montos calculados
+  subtotal  Decimal @default(0) @db.Decimal(12, 2)
+  descuento Decimal @default(0) @db.Decimal(12, 2)
+  impuestos Decimal @default(0) @db.Decimal(12, 2)
+  total     Decimal @default(0) @db.Decimal(12, 2)
+
+  // Fechas
+  fechaRecepcion DateTime @default(now())
+
+  // Estado
+  estado EstadoCompra @default(BORRADOR)
+
+  // Observaciones
+  observaciones String?
+
+  // Auditoría
+  creadoPor      String
+  confirmadoPor  String?
+  actualizadoPor String?
+  creadoEn       DateTime  @default(now())
+  confirmadoEn   DateTime?
+  actualizadoEn  DateTime  @updatedAt
+
+  // Relaciones
+  empresa      Empresa          @relation(fields: [empresaId], references: [id])
+  sede         Sede             @relation(fields: [sedeId], references: [id])
+  proveedor    Proveedor        @relation(fields: [proveedorId], references: [id])
+  ordenCompra  OrdenCompra?     @relation(fields: [ordenCompraId], references: [id])
+  detalles     CompraDetalle[]
+  lotes        Lote[]
+  movimientos  MovimientoStock[]
+  devoluciones Devolucion[]
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId, estado])
+  @@index([empresaId, sedeId])
+  @@index([empresaId, proveedorId])
+  @@index([ordenCompraId])
+  @@index([creadoEn])
+}
+
+/// Detalle de una Compra
+model CompraDetalle {
+  id                   String  @id @default(cuid())
+  compraId             String
+  ordenCompraDetalleId String?
+  productoId           String?
+  varianteId           String?
+
+  // Descripción y cantidades
+  descripcion    String
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(12, 2)
+  descuento      Decimal @default(0) @db.Decimal(12, 2)
+
+  // IGV
+  porcentajeIGV Decimal @default(18) @db.Decimal(5, 2)
+  igv           Decimal @default(0) @db.Decimal(12, 2)
+
+  // Totales
+  subtotal Decimal @default(0) @db.Decimal(12, 2)
+  total    Decimal @default(0) @db.Decimal(12, 2)
+
+  // Lote asignado al confirmar
+  loteId String?
+
+  // Orden de la línea
+  orden Int @default(0)
+
+  // Relaciones
+  compra             Compra              @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  ordenCompraDetalle OrdenCompraDetalle? @relation(fields: [ordenCompraDetalleId], references: [id])
+  producto           Producto?           @relation(fields: [productoId], references: [id])
+  variante           ProductoVariante?   @relation(fields: [varianteId], references: [id])
+  lote               Lote?               @relation(fields: [loteId], references: [id])
+
+  @@index([compraId])
+  @@index([ordenCompraDetalleId])
+  @@index([productoId])
+  @@index([varianteId])
+  @@index([loteId])
+}
+
+// ========== LOTE (BATCH DE PRODUCTO) ==========
+
+/// Lote/Batch de producto
+/// Cada recepción de mercancía genera un lote con su propio costo
+model Lote {
+  id              String  @id @default(cuid())
+  empresaId       String
+  sedeId          String
+  productoStockId String
+  productoId      String?
+  varianteId      String?
+  compraId        String?
+
+  // Identificación
+  codigo     String  // LOTE-2026-00001
+  numeroLote String? // Número de lote del fabricante
+
+  // Costo unitario de ESTE lote
+  precioCosto Decimal @db.Decimal(12, 2)
+  moneda      String  @default("PEN")
+
+  // Cantidades
+  cantidadInicial   Int
+  cantidadActual    Int
+  cantidadReservada Int @default(0)
+
+  // Fechas
+  fechaIngreso    DateTime  @default(now())
+  fechaProduccion DateTime?
+  fechaVencimiento DateTime?
+
+  // Estado
+  estado EstadoLote @default(ACTIVO)
+
+  // Proveedor referencia
+  proveedorId     String?
+  nombreProveedor String?
+
+  // Auditoría
+  observaciones String?
+  creadoPor     String
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa        Empresa           @relation(fields: [empresaId], references: [id])
+  sede           Sede              @relation(fields: [sedeId], references: [id])
+  productoStock  ProductoStock     @relation(fields: [productoStockId], references: [id])
+  producto       Producto?         @relation(fields: [productoId], references: [id])
+  variante       ProductoVariante? @relation(fields: [varianteId], references: [id])
+  compra         Compra?           @relation(fields: [compraId], references: [id])
+  proveedor      Proveedor?        @relation(fields: [proveedorId], references: [id])
+  detallesCompra CompraDetalle[]
+
+  @@unique([empresaId, codigo])
+  @@index([productoStockId, estado])
+  @@index([productoStockId, fechaIngreso])
+  @@index([empresaId, fechaVencimiento])
+  @@index([empresaId, estado])
+  @@index([sedeId])
+  @@index([compraId])
+  @@index([proveedorId])
+}

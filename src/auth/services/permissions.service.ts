@@ -157,6 +157,17 @@ export class PermissionsService {
       // Gestionar proveedores: Solo administradores
       canManageProveedores: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
 
+      // ==================== COMPRAS ====================
+      // Ver compras: Administradores y contador
+      canViewCompras:
+        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
+
+      // Gestionar compras: Administradores
+      canManageCompras: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+
+      // Aprobar órdenes de compra: Solo administradores de empresa
+      canApproveOrdenesCompra: isSuperAdmin || isEmpresaAdmin,
+
       // ==================== REPORTES DE INCIDENCIA ====================
       // Ver reportes de incidencia: Administradores, SEDE_ADMIN, CONTADOR, TECNICO
       canViewReportesIncidencia:
@@ -213,6 +224,9 @@ export class PermissionsService {
       'canManageCotizaciones',
       'canViewProveedores',
       'canManageProveedores',
+      'canViewCompras',
+      'canManageCompras',
+      'canApproveOrdenesCompra',
       'canViewReportesIncidencia',
       'canManageReportesIncidencia',
     ];

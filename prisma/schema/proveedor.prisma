@@ -87,6 +87,10 @@ model Proveedor {
   empresa                 Empresa             @relation(fields: [empresaId], references: [id])
   productosPreferenciales ProveedorProducto[]
   contactos               ProveedorContacto[]
+  ordenesCompra           OrdenCompra[]
+  compras                 Compra[]
+  lotes                   Lote[]
+  devoluciones            Devolucion[]
 
   @@unique([empresaId, codigo])
   @@unique([empresaId, numeroDocumento])

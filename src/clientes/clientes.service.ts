@@ -438,6 +438,18 @@ export class ClientesService {
       }
     }
 
+    // Obtener datos y count en paralelo
+    // Para búsquedas, usamos count limitado para evitar escanear millones de filas
+    const MAX_COUNT_SCAN = 10000;
+
+    const countQuery = search
+      ? this.prisma.empresaPersona.findMany({
+          where,
+          select: { id: true },
+          take: MAX_COUNT_SCAN,
+        }).then(rows => rows.length)
+      : this.prisma.empresaPersona.count({ where });
+
     const [clientes, total] = await Promise.all([
       this.prisma.empresaPersona.findMany({
         where,
@@ -477,7 +489,7 @@ export class ClientesService {
           },
         },
       }),
-      this.prisma.empresaPersona.count({ where }),
+      countQuery,
     ]);
 
     // Obtener todos los IDs de registradores únicos para una sola query

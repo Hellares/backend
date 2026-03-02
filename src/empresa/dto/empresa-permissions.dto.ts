@@ -95,6 +95,24 @@ export class EmpresaPermissionsDto {
   canManageProveedores: boolean;
 
   @ApiProperty({
+    description: 'Puede ver órdenes de compra, recepciones y lotes',
+    example: true,
+  })
+  canViewCompras: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar compras (crear, editar, confirmar)',
+    example: true,
+  })
+  canManageCompras: boolean;
+
+  @ApiProperty({
+    description: 'Puede aprobar órdenes de compra',
+    example: true,
+  })
+  canApproveOrdenesCompra: boolean;
+
+  @ApiProperty({
     description: 'Puede gestionar sedes',
     example: true,
   })

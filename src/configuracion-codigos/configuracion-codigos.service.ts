@@ -793,6 +793,186 @@ export class ConfiguracionCodigosService {
   }
 
   // =====================================================
+  // GENERACIÓN DE CÓDIGOS DE COMPRAS
+  // =====================================================
+
+  /**
+   * GENERAR CÓDIGO DE ORDEN DE COMPRA
+   * Formato: OC-2026-00001 (basado en año actual)
+   */
+  async generarCodigoOrdenCompra(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoOrdenCompraInTransaction(tx, empresaId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoOrdenCompraInTransaction(
+        txInner,
+        empresaId,
+      );
+    });
+  }
+
+  private async _generarCodigoOrdenCompraInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefijo = `OC-${year}-`;
+
+    const ultimaOC = await tx.ordenCompra.findFirst({
+      where: {
+        empresaId,
+        codigo: { startsWith: prefijo },
+      },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
+    });
+
+    let nuevoNumero = 1;
+    if (ultimaOC) {
+      const match = ultimaOC.codigo.match(/(\d+)$/);
+      if (match) {
+        nuevoNumero = parseInt(match[1], 10) + 1;
+      }
+    }
+
+    const numero = nuevoNumero.toString().padStart(5, '0');
+    const codigo = `${prefijo}${numero}`;
+
+    const existe = await tx.ordenCompra.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(`Código de OC ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoOrdenCompraInTransaction(tx, empresaId);
+    }
+
+    return codigo;
+  }
+
+  /**
+   * GENERAR CÓDIGO DE COMPRA (RECEPCIÓN)
+   * Formato: COMP-2026-00001 (basado en año actual)
+   */
+  async generarCodigoCompra(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoCompraInTransaction(tx, empresaId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoCompraInTransaction(txInner, empresaId);
+    });
+  }
+
+  private async _generarCodigoCompraInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefijo = `COMP-${year}-`;
+
+    const ultimaCompra = await tx.compra.findFirst({
+      where: {
+        empresaId,
+        codigo: { startsWith: prefijo },
+      },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
+    });
+
+    let nuevoNumero = 1;
+    if (ultimaCompra) {
+      const match = ultimaCompra.codigo.match(/(\d+)$/);
+      if (match) {
+        nuevoNumero = parseInt(match[1], 10) + 1;
+      }
+    }
+
+    const numero = nuevoNumero.toString().padStart(5, '0');
+    const codigo = `${prefijo}${numero}`;
+
+    const existe = await tx.compra.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de compra ${codigo} ya existe. Reintentando...`,
+      );
+      return this._generarCodigoCompraInTransaction(tx, empresaId);
+    }
+
+    return codigo;
+  }
+
+  /**
+   * GENERAR CÓDIGO DE LOTE
+   * Formato: LOTE-2026-00001 (basado en año actual)
+   */
+  async generarCodigoLote(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoLoteInTransaction(tx, empresaId);
+    }
+
+    return await this.prisma.$transaction(async (txInner) => {
+      return await this._generarCodigoLoteInTransaction(txInner, empresaId);
+    });
+  }
+
+  private async _generarCodigoLoteInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefijo = `LOTE-${year}-`;
+
+    const ultimoLote = await tx.lote.findFirst({
+      where: {
+        empresaId,
+        codigo: { startsWith: prefijo },
+      },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
+    });
+
+    let nuevoNumero = 1;
+    if (ultimoLote) {
+      const match = ultimoLote.codigo.match(/(\d+)$/);
+      if (match) {
+        nuevoNumero = parseInt(match[1], 10) + 1;
+      }
+    }
+
+    const numero = nuevoNumero.toString().padStart(5, '0');
+    const codigo = `${prefijo}${numero}`;
+
+    const existe = await tx.lote.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(`Código de lote ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoLoteInTransaction(tx, empresaId);
+    }
+
+    return codigo;
+  }
+
+  // =====================================================
   // VISTA PREVIA Y UTILIDADES
   // =====================================================
 

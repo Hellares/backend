@@ -1,0 +1,100 @@
+import {
+  IsString,
+  IsOptional,
+  IsNotEmpty,
+  IsNumber,
+  IsInt,
+  IsArray,
+  ValidateNested,
+  ArrayMinSize,
+  IsDateString,
+  IsEnum,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { TerminosPago } from '@prisma/client';
+
+export class LineaRecepcionOcDto {
+  @ApiProperty({ description: 'ID del detalle de la OC' })
+  @IsString()
+  @IsNotEmpty()
+  ordenCompraDetalleId: string;
+
+  @ApiProperty({ description: 'Cantidad a recibir', example: 10 })
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  cantidad: number;
+
+  @ApiPropertyOptional({ description: 'Precio unitario (si difiere del OC)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  precioUnitario?: number;
+}
+
+export class CreateCompraDesdeOcDto {
+  @ApiProperty({ description: 'ID de la orden de compra' })
+  @IsString()
+  @IsNotEmpty()
+  ordenCompraId: string;
+
+  @ApiPropertyOptional({ description: 'Tipo de documento del proveedor' })
+  @IsOptional()
+  @IsString()
+  tipoDocumentoProveedor?: string;
+
+  @ApiPropertyOptional({ description: 'Serie del documento del proveedor' })
+  @IsOptional()
+  @IsString()
+  serieDocumentoProveedor?: string;
+
+  @ApiPropertyOptional({ description: 'Número del documento del proveedor' })
+  @IsOptional()
+  @IsString()
+  numeroDocumentoProveedor?: string;
+
+  @ApiPropertyOptional({ description: 'Términos de pago', enum: TerminosPago })
+  @IsOptional()
+  @IsEnum(TerminosPago)
+  terminosPago?: TerminosPago;
+
+  @ApiPropertyOptional({ description: 'Días de crédito' })
+  @IsOptional()
+  @IsInt()
+  @Type(() => Number)
+  diasCredito?: number;
+
+  @ApiPropertyOptional({ description: 'Fecha de vencimiento de pago' })
+  @IsOptional()
+  @IsDateString()
+  fechaVencimientoPago?: string;
+
+  @ApiPropertyOptional({ description: 'Moneda', example: 'PEN' })
+  @IsOptional()
+  @IsString()
+  moneda?: string;
+
+  @ApiPropertyOptional({ description: 'Tipo de cambio' })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  tipoCambio?: number;
+
+  @ApiPropertyOptional({ description: 'Observaciones' })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
+
+  @ApiProperty({
+    description: 'Líneas a recibir de la OC',
+    type: [LineaRecepcionOcDto],
+  })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => LineaRecepcionOcDto)
+  lineas: LineaRecepcionOcDto[];
+}
