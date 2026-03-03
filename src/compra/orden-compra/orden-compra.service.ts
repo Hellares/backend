@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../../configuracion-codigos/configuracion-codigos.service';
+import { createCursorPaginatedResponse } from '../../common/utils/pagination.util';
 import {
   CreateOrdenCompraDto,
   CreateOrdenCompraDetalleDto,
@@ -119,7 +120,7 @@ export class OrdenCompraService {
   }
 
   /**
-   * Listar órdenes de compra con filtros
+   * Listar órdenes de compra con filtros y paginación
    */
   async findAll(empresaId: string, filtros?: QueryOrdenesCompraDto) {
     const where: Prisma.OrdenCompraWhereInput = { empresaId };
@@ -136,10 +137,16 @@ export class OrdenCompraService {
 
     if (filtros?.search) {
       where.OR = [
-        { codigo: { contains: filtros.search, mode: 'insensitive' } },
+        { codigo: { startsWith: filtros.search, mode: 'insensitive' } },
         { nombreProveedor: { contains: filtros.search, mode: 'insensitive' } },
       ];
     }
+
+    const limit = filtros?.limit ?? 10;
+
+    const paginationArgs: Prisma.OrdenCompraFindManyArgs = filtros?.cursor
+      ? { cursor: { id: filtros.cursor }, skip: 1, take: limit }
+      : { take: limit };
 
     const [data, total] = await Promise.all([
       this.prisma.ordenCompra.findMany({
@@ -150,11 +157,12 @@ export class OrdenCompraService {
           _count: { select: { detalles: true, compras: true } },
         },
         orderBy: { creadoEn: 'desc' },
+        ...paginationArgs,
       }),
       this.prisma.ordenCompra.count({ where }),
     ]);
 
-    return { data, total };
+    return createCursorPaginatedResponse(data, total, limit, (item) => item.id);
   }
 
   /**

@@ -96,3 +96,61 @@ export function createPaginatedResponse<T>(
     meta: generatePaginationMeta(total, page, pageSize),
   };
 }
+
+// =============================================
+// Cursor-based pagination (para tablas grandes)
+// =============================================
+
+/**
+ * Metadata de paginación basada en cursor
+ * Rendimiento O(log n) constante sin importar la profundidad de la página
+ */
+export class CursorPaginationMeta {
+  @ApiProperty({ description: 'Total de registros' })
+  total: number;
+
+  @ApiProperty({ description: 'Límite de registros por página' })
+  limit: number;
+
+  @ApiProperty({ description: 'Indica si hay más registros' })
+  hasNext: boolean;
+
+  @ApiProperty({ description: 'Cursor para obtener la siguiente página', nullable: true })
+  nextCursor: string | null;
+}
+
+/**
+ * Respuesta paginada con cursor
+ */
+export class CursorPaginatedResponse<T> {
+  @ApiProperty({ description: 'Datos de la página actual', type: [Object] })
+  data: T[];
+
+  @ApiProperty({ description: 'Metadata de paginación cursor', type: CursorPaginationMeta })
+  meta: CursorPaginationMeta;
+}
+
+/**
+ * Crea una respuesta paginada con cursor
+ *
+ * @param data - Array de datos
+ * @param total - Total de registros
+ * @param limit - Límite solicitado
+ * @param getId - Función para obtener el ID del último elemento
+ */
+export function createCursorPaginatedResponse<T>(
+  data: T[],
+  total: number,
+  limit: number,
+  getId: (item: T) => string,
+): CursorPaginatedResponse<T> {
+  return {
+    data,
+    meta: {
+      total,
+      limit,
+      hasNext: data.length === limit,
+      nextCursor: data.length > 0 ? getId(data[data.length - 1]) : null,
+    },
+  };
+}

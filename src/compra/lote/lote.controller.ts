@@ -19,7 +19,7 @@ import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { RequiresPermission } from '../../auth/decorators/requires-permission.decorator';
 import { Permission } from '../../auth/enums/permission.enum';
 import { LoteService } from './lote.service';
-import { EstadoLote } from '@prisma/client';
+import { QueryLotesDto } from '../dto';
 
 @ApiTags('Lotes')
 @Controller('empresas/:empresaId/lotes')
@@ -34,19 +34,9 @@ export class LoteController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findAll(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('sedeId') sedeId?: string,
-    @Query('productoStockId') productoStockId?: string,
-    @Query('proveedorId') proveedorId?: string,
-    @Query('estado') estado?: EstadoLote,
-    @Query('search') search?: string,
+    @Query() queryDto: QueryLotesDto,
   ) {
-    return this.loteService.findAll(empresaId, {
-      sedeId,
-      productoStockId,
-      proveedorId,
-      estado,
-      search,
-    });
+    return this.loteService.findAll(empresaId, queryDto);
   }
 
   @Get('proximos-vencer')

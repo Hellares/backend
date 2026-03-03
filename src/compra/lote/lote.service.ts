@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
+import { createCursorPaginatedResponse } from '../../common/utils/pagination.util';
 import { Prisma, EstadoLote } from '@prisma/client';
 import { QueryLotesDto } from '../dto';
 
@@ -21,7 +22,7 @@ export class LoteService {
   }
 
   /**
-   * Listar lotes con filtros
+   * Listar lotes con filtros y paginación
    */
   async findAll(empresaId: string, filtros?: QueryLotesDto) {
     const where: Prisma.LoteWhereInput = { empresaId };
@@ -33,13 +34,20 @@ export class LoteService {
 
     if (filtros?.search) {
       where.OR = [
-        { codigo: { contains: filtros.search, mode: 'insensitive' } },
+        // startsWith usa el índice @@unique([empresaId, codigo])
+        { codigo: { startsWith: filtros.search, mode: 'insensitive' } },
         { numeroLote: { contains: filtros.search, mode: 'insensitive' } },
         { nombreProveedor: { contains: filtros.search, mode: 'insensitive' } },
       ];
     }
 
-    const [lotes, total] = await Promise.all([
+    const limit = filtros?.limit ?? 10;
+
+    const paginationArgs: Prisma.LoteFindManyArgs = filtros?.cursor
+      ? { cursor: { id: filtros.cursor }, skip: 1, take: limit }
+      : { take: limit };
+
+    const [data, total] = await Promise.all([
       this.prisma.lote.findMany({
         where,
         include: {
@@ -53,11 +61,12 @@ export class LoteService {
           proveedor: { select: { id: true, nombre: true } },
         },
         orderBy: { creadoEn: 'desc' },
+        ...paginationArgs,
       }),
       this.prisma.lote.count({ where }),
     ]);
 
-    return { data: lotes, total };
+    return createCursorPaginatedResponse(data, total, limit, (item) => item.id);
   }
 
   /**
@@ -107,6 +116,7 @@ export class LoteService {
   /**
    * Consumir lotes en orden FIFO (para ventas/salidas)
    * Devuelve los lotes consumidos con sus cantidades
+   * Respeta cantidadReservada: solo consume stock disponible (cantidadActual - cantidadReservada)
    */
   async consumirLotesFIFO(
     productoStockId: string,
@@ -128,7 +138,11 @@ export class LoteService {
     for (const lote of lotes) {
       if (restante <= 0) break;
 
-      const consumir = Math.min(lote.cantidadActual, restante);
+      // Respetar cantidadReservada: solo consumir stock disponible
+      const disponible = lote.cantidadActual - lote.cantidadReservada;
+      if (disponible <= 0) continue;
+
+      const consumir = Math.min(disponible, restante);
       const nuevaCantidad = lote.cantidadActual - consumir;
 
       await tx.lote.update({

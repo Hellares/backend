@@ -1,8 +1,22 @@
-import { IsOptional, IsString, IsEnum, IsDateString } from 'class-validator';
+import { IsOptional, IsString, IsEnum, IsDateString, IsInt, Min, Max } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import { EstadoCompra } from '@prisma/client';
 
 export class QueryComprasDto {
+  @ApiPropertyOptional({ description: 'Elementos por página', example: 10, default: 10 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  @Type(() => Number)
+  limit?: number = 10;
+
+  @ApiPropertyOptional({ description: 'Cursor para paginación (ID del último registro)' })
+  @IsOptional()
+  @IsString()
+  cursor?: string;
+
   @ApiPropertyOptional({ description: 'Filtrar por sede' })
   @IsOptional()
   @IsString()

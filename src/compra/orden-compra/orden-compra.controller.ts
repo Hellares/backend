@@ -30,8 +30,8 @@ import {
   CreateOrdenCompraDto,
   UpdateOrdenCompraDto,
   UpdateEstadoOrdenCompraDto,
+  QueryOrdenesCompraDto,
 } from '../dto';
-import { EstadoOrdenCompra } from '@prisma/client';
 
 @ApiTags('Ordenes de Compra')
 @Controller('empresas/:empresaId/ordenes-compra')
@@ -55,25 +55,13 @@ export class OrdenCompraController {
 
   @Get()
   @RequiresPermission(Permission.VIEW_COMPRAS)
-  @ApiOperation({ summary: 'Listar órdenes de compra' })
+  @ApiOperation({ summary: 'Listar órdenes de compra con paginación' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findAll(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('sedeId') sedeId?: string,
-    @Query('proveedorId') proveedorId?: string,
-    @Query('estado') estado?: EstadoOrdenCompra,
-    @Query('fechaDesde') fechaDesde?: string,
-    @Query('fechaHasta') fechaHasta?: string,
-    @Query('search') search?: string,
+    @Query() queryDto: QueryOrdenesCompraDto,
   ) {
-    return this.ordenCompraService.findAll(empresaId, {
-      sedeId,
-      proveedorId,
-      estado,
-      fechaDesde,
-      fechaHasta,
-      search,
-    });
+    return this.ordenCompraService.findAll(empresaId, queryDto);
   }
 
   @Get(':id')

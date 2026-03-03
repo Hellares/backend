@@ -25,8 +25,7 @@ import { Permission } from '../../auth/enums/permission.enum';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CompraService } from './compra.service';
-import { CreateCompraDto, CreateCompraDesdeOcDto } from '../dto';
-import { EstadoCompra } from '@prisma/client';
+import { CreateCompraDto, CreateCompraDesdeOcDto, DistribuirCompraDto, QueryComprasDto } from '../dto';
 
 @ApiTags('Compras')
 @Controller('empresas/:empresaId/compras')
@@ -63,27 +62,13 @@ export class CompraController {
 
   @Get()
   @RequiresPermission(Permission.VIEW_COMPRAS)
-  @ApiOperation({ summary: 'Listar compras' })
+  @ApiOperation({ summary: 'Listar compras con paginación' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findAll(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('sedeId') sedeId?: string,
-    @Query('proveedorId') proveedorId?: string,
-    @Query('estado') estado?: EstadoCompra,
-    @Query('ordenCompraId') ordenCompraId?: string,
-    @Query('fechaDesde') fechaDesde?: string,
-    @Query('fechaHasta') fechaHasta?: string,
-    @Query('search') search?: string,
+    @Query() queryDto: QueryComprasDto,
   ) {
-    return this.compraService.findAll(empresaId, {
-      sedeId,
-      proveedorId,
-      estado,
-      ordenCompraId,
-      fechaDesde,
-      fechaHasta,
-      search,
-    });
+    return this.compraService.findAll(empresaId, queryDto);
   }
 
   @Get(':id')
@@ -132,6 +117,20 @@ export class CompraController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.compraService.anular(id, empresaId, user.sub);
+  }
+
+  @Post(':id/distribuir')
+  @RequiresPermission(Permission.MANAGE_COMPRAS)
+  @ApiOperation({ summary: 'Distribuir stock de compra a múltiples sedes' })
+  @ApiResponse({ status: 200, description: 'Stock distribuido exitosamente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async distribuir(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Body() dto: DistribuirCompraDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.compraService.distribuir(id, empresaId, dto, user.sub);
   }
 
   @Delete(':id')

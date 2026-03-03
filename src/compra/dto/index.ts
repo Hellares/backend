@@ -8,3 +8,8 @@ export { CreateCompraDesdeOcDto, LineaRecepcionOcDto } from './create-compra-des
 export { QueryOrdenesCompraDto } from './query-ordenes-compra.dto';
 export { QueryComprasDto } from './query-compras.dto';
 export { QueryLotesDto } from './query-lotes.dto';
+export {
+  DistribuirCompraDto,
+  DistribucionItemDto,
+  DistribucionSedeDto,
+} from './distribuir-compra.dto';

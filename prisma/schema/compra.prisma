@@ -90,6 +90,7 @@ model OrdenCompra {
   @@index([empresaId, estado])
   @@index([empresaId, sedeId, estado])
   @@index([empresaId, proveedorId])
+  @@index([empresaId, estado, creadoEn(sort: Desc)])
   @@index([creadoEn])
 }
 
@@ -128,6 +129,7 @@ model OrdenCompraDetalle {
   compraDetalles CompraDetalle[]
 
   @@index([ordenCompraId])
+  @@index([ordenCompraId, cantidadPendiente])
   @@index([productoId])
   @@index([varianteId])
 }
@@ -200,7 +202,9 @@ model Compra {
   @@unique([empresaId, codigo])
   @@index([empresaId, estado])
   @@index([empresaId, sedeId])
+  @@index([empresaId, sedeId, estado])
   @@index([empresaId, proveedorId])
+  @@index([empresaId, estado, creadoEn(sort: Desc)])
   @@index([ordenCompraId])
   @@index([creadoEn])
 }
@@ -306,6 +310,8 @@ model Lote {
   @@index([productoStockId, fechaIngreso])
   @@index([empresaId, fechaVencimiento])
   @@index([empresaId, estado])
+  @@index([empresaId, sedeId, estado])
+  @@index([empresaId, estado, creadoEn(sort: Desc)])
   @@index([sedeId])
   @@index([compraId])
   @@index([proveedorId])
