@@ -7,9 +7,12 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
   Headers,
+  BadRequestException,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { ProductoStockService } from './producto-stock.service';
 import {
@@ -17,6 +20,7 @@ import {
   AjustarStockDto,
   ActualizarPreciosSedeDto,
   AjusteMasivoPreciosDto,
+  QueryHistorialPreciosDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -464,5 +468,47 @@ export class ProductoStockController {
       },
       user.sub,
     );
+  }
+
+  // =====================================================
+  // HISTORIAL DE PRECIOS GLOBAL
+  // =====================================================
+
+  @Get('historial-precios')
+  @ApiOperation({
+    summary: 'Historial global de cambios de precios',
+    description:
+      'Lista el historial de cambios de precios de todos los productos con filtros por sede, producto, fecha y tipo de cambio.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getHistorialPreciosGlobal(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: QueryHistorialPreciosDto,
+  ) {
+    return await this.stockService.getHistorialPreciosGlobal(empresaId, query);
+  }
+
+  @Get('historial-precios/export')
+  @ApiOperation({
+    summary: 'Exportar historial de precios a Excel',
+    description: 'Exporta el historial de cambios de precios filtrado a un archivo Excel.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async exportHistorialPrecios(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: QueryHistorialPreciosDto,
+    @Res() res: Response,
+  ) {
+    if (!query.fechaInicio || !query.fechaFin) {
+      throw new BadRequestException('fechaInicio y fechaFin son requeridos para exportar');
+    }
+    const inicio = new Date(query.fechaInicio);
+    const fin = new Date(query.fechaFin);
+    const maxFin = new Date(inicio);
+    maxFin.setMonth(maxFin.getMonth() + 3);
+    if (fin > maxFin) {
+      throw new BadRequestException('El rango maximo de exportacion es de 3 meses');
+    }
+    await this.stockService.exportHistorialPrecios(empresaId, query, res);
   }
 }

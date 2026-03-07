@@ -8,7 +8,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CrearStockDto } from './dto/crear-stock.dto';
 import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { ActualizarPreciosSedeDto } from './dto/actualizar-precios-sede.dto';
+import { QueryHistorialPreciosDto } from './dto/query-historial-precios.dto';
 import { Prisma, TipoCambioPrecio } from '@prisma/client';
+import * as ExcelJS from 'exceljs';
+import { Response } from 'express';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
 
 // Usar Prisma.Decimal para los valores decimales
@@ -1287,5 +1290,249 @@ export class ProductoStockService {
         ajuste,
       };
     });
+  }
+
+  /**
+   * Lista historial de precios con filtros avanzados y paginacion
+   */
+  async getHistorialPreciosGlobal(
+    empresaId: string,
+    query: QueryHistorialPreciosDto,
+  ) {
+    const limit = query.limit || 50;
+
+    const where: any = {
+      productoStock: { empresaId },
+    };
+
+    if (query.sedeId) where.sedeId = query.sedeId;
+    if (query.tipoCambio) where.tipoCambio = query.tipoCambio;
+
+    if (query.productoId) {
+      where.productoStock = {
+        ...where.productoStock,
+        OR: [
+          { productoId: query.productoId },
+          { varianteId: query.productoId },
+        ],
+      };
+    }
+
+    if (query.search) {
+      where.productoStock = {
+        ...where.productoStock,
+        OR: [
+          { producto: { nombre: { contains: query.search, mode: 'insensitive' } } },
+          { variante: { nombre: { contains: query.search, mode: 'insensitive' } } },
+          { producto: { codigoEmpresa: { contains: query.search, mode: 'insensitive' } } },
+        ],
+      };
+    }
+
+    if (query.fechaInicio || query.fechaFin) {
+      where.creadoEn = {};
+      if (query.fechaInicio) where.creadoEn.gte = new Date(query.fechaInicio);
+      if (query.fechaFin) {
+        const fin = new Date(query.fechaFin);
+        fin.setHours(23, 59, 59, 999);
+        where.creadoEn.lte = fin;
+      }
+    }
+
+    const findArgs: Prisma.ProductoPrecioHistorialSedeFindManyArgs = {
+      where,
+      include: {
+        sede: { select: { id: true, nombre: true } },
+        usuario: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        productoStock: {
+          select: {
+            id: true,
+            productoId: true,
+            varianteId: true,
+            producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+            variante: { select: { id: true, nombre: true, sku: true } },
+          },
+        },
+      },
+      orderBy: { creadoEn: 'desc' },
+      take: limit,
+    };
+
+    if (query.cursor) {
+      findArgs.cursor = { id: query.cursor };
+      findArgs.skip = 1;
+    }
+
+    const data = await this.prisma.productoPrecioHistorialSede.findMany(findArgs);
+
+    return {
+      data,
+      meta: {
+        limit,
+        hasNext: data.length === limit,
+        nextCursor: data.length > 0 ? data[data.length - 1].id : null,
+      },
+    };
+  }
+
+  /**
+   * Exportar historial de precios a Excel (streaming)
+   */
+  async exportHistorialPrecios(
+    empresaId: string,
+    query: QueryHistorialPreciosDto,
+    res: Response,
+  ) {
+    const where: any = {
+      productoStock: { empresaId },
+    };
+
+    if (query.sedeId) where.sedeId = query.sedeId;
+    if (query.tipoCambio) where.tipoCambio = query.tipoCambio;
+
+    if (query.productoId) {
+      where.productoStock = {
+        ...where.productoStock,
+        OR: [
+          { productoId: query.productoId },
+          { varianteId: query.productoId },
+        ],
+      };
+    }
+
+    if (query.fechaInicio || query.fechaFin) {
+      where.creadoEn = {};
+      if (query.fechaInicio) where.creadoEn.gte = new Date(query.fechaInicio);
+      if (query.fechaFin) {
+        const fin = new Date(query.fechaFin);
+        fin.setHours(23, 59, 59, 999);
+        where.creadoEn.lte = fin;
+      }
+    }
+
+    // Validar rango maximo 3 meses
+    if (query.fechaInicio && query.fechaFin) {
+      const inicio = new Date(query.fechaInicio);
+      const fin = new Date(query.fechaFin);
+      const maxFin = new Date(inicio);
+      maxFin.setMonth(maxFin.getMonth() + 3);
+      if (fin > maxFin) {
+        throw new BadRequestException('El rango maximo de exportacion es de 3 meses');
+      }
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Syncronize';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Historial de Precios');
+    sheet.columns = [
+      { header: 'Fecha', key: 'fecha', width: 18 },
+      { header: 'Sede', key: 'sede', width: 20 },
+      { header: 'Codigo', key: 'codigo', width: 15 },
+      { header: 'Producto', key: 'producto', width: 30 },
+      { header: 'Variante', key: 'variante', width: 20 },
+      { header: 'Tipo Cambio', key: 'tipoCambio', width: 16 },
+      { header: 'Precio Anterior', key: 'precioAnterior', width: 16 },
+      { header: 'Precio Nuevo', key: 'precioNuevo', width: 16 },
+      { header: 'Costo Anterior', key: 'costoAnterior', width: 16 },
+      { header: 'Costo Nuevo', key: 'costoNuevo', width: 16 },
+      { header: 'Oferta Anterior', key: 'ofertaAnterior', width: 16 },
+      { header: 'Oferta Nuevo', key: 'ofertaNuevo', width: 16 },
+      { header: 'Razon', key: 'razon', width: 25 },
+      { header: 'Origen', key: 'origen', width: 15 },
+      { header: 'Usuario', key: 'usuario', width: 22 },
+    ];
+
+    const headerStyle: Partial<ExcelJS.Style> = {
+      font: { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } },
+      alignment: { horizontal: 'center', vertical: 'middle' },
+      border: {
+        top: { style: 'thin' },
+        bottom: { style: 'thin' },
+        left: { style: 'thin' },
+        right: { style: 'thin' },
+      },
+    };
+    sheet.getRow(1).eachCell((cell) => { cell.style = headerStyle; });
+    sheet.getRow(1).height = 25;
+
+    const BATCH_SIZE = 2000;
+    let cursor: string | undefined = undefined;
+
+    while (true) {
+      const batch = await this.prisma.productoPrecioHistorialSede.findMany({
+        where,
+        include: {
+          sede: { select: { nombre: true } },
+          usuario: {
+            select: {
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+          productoStock: {
+            select: {
+              producto: { select: { nombre: true, codigoEmpresa: true } },
+              variante: { select: { nombre: true, sku: true } },
+            },
+          },
+        },
+        orderBy: { creadoEn: 'desc' },
+        take: BATCH_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+
+      if (batch.length === 0) break;
+
+      for (const h of batch) {
+        const usuarioNombre = h.usuario?.persona
+          ? `${h.usuario.persona.nombres} ${h.usuario.persona.apellidos}`
+          : '';
+
+        sheet.addRow({
+          fecha: h.creadoEn.toISOString().replace('T', ' ').substring(0, 19),
+          sede: h.sede?.nombre ?? '',
+          codigo: h.productoStock?.producto?.codigoEmpresa ?? '',
+          producto: h.productoStock?.producto?.nombre ?? '',
+          variante: h.productoStock?.variante
+            ? `${h.productoStock.variante.nombre}${h.productoStock.variante.sku ? ` (${h.productoStock.variante.sku})` : ''}`
+            : '',
+          tipoCambio: h.tipoCambio,
+          precioAnterior: h.precioAnterior ? Number(h.precioAnterior) : '',
+          precioNuevo: h.precioNuevo ? Number(h.precioNuevo) : '',
+          costoAnterior: h.precioCostoAnterior ? Number(h.precioCostoAnterior) : '',
+          costoNuevo: h.precioCostoNuevo ? Number(h.precioCostoNuevo) : '',
+          ofertaAnterior: h.precioOfertaAnterior ? Number(h.precioOfertaAnterior) : '',
+          ofertaNuevo: h.precioOfertaNuevo ? Number(h.precioOfertaNuevo) : '',
+          razon: h.razon ?? '',
+          origen: h.origenModulo ?? '',
+          usuario: usuarioNombre,
+        });
+      }
+
+      cursor = batch[batch.length - 1].id;
+      if (batch.length < BATCH_SIZE) break;
+    }
+
+    for (const col of [7, 8, 9, 10, 11, 12]) {
+      sheet.getColumn(col).numFmt = '#,##0.00';
+    }
+
+    const fechaLabel = query.fechaInicio && query.fechaFin
+      ? `${query.fechaInicio}_${query.fechaFin}`
+      : new Date().toISOString().split('T')[0];
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=historial_precios_${fechaLabel}.xlsx`,
+    });
+    await workbook.xlsx.write(res);
+    res.end();
   }
 }
