@@ -6,10 +6,13 @@ import {
   MinLength,
   Matches,
   IsNotEmpty,
-  IsEnum
+  IsEnum,
+  IsBoolean,
+  IsArray,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { RubroEmpresa } from '@prisma/client';
+import { Transform } from 'class-transformer';
 
 export class CreateEmpresaDto {
   @ApiProperty({
@@ -159,4 +162,33 @@ export class CreateEmpresaDto {
   @IsEnum(RubroEmpresa, { message: 'El rubro debe ser uno de los valores permitidos' })
   @IsNotEmpty({ message: 'Debe seleccionar un rubro para su empresa' })
   rubro: RubroEmpresa;
+
+  @ApiPropertyOptional({
+    description: 'Indica si la empresa acepta tercerización de servicios',
+    example: false,
+  })
+  @IsBoolean({ message: 'aceptaTercerizacion debe ser un valor booleano' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' ? true : value === 'false' ? false : value)
+  aceptaTercerizacion?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Descripción de los servicios de tercerización que ofrece',
+    example: 'Reparación de laptops y PCs de escritorio',
+    maxLength: 500,
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(500, { message: 'La descripción de tercerización no puede tener más de 500 caracteres' })
+  descripcionTercerizacion?: string;
+
+  @ApiPropertyOptional({
+    description: 'Tipos de servicio que acepta para tercerización',
+    example: ['REPARACION', 'MANTENIMIENTO'],
+    type: [String],
+  })
+  @IsArray({ message: 'tiposServicioTercerizacion debe ser un arreglo' })
+  @IsString({ each: true, message: 'Cada tipo de servicio debe ser un texto' })
+  @IsOptional()
+  tiposServicioTercerizacion?: string[];
 }

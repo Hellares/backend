@@ -45,6 +45,50 @@ export class ConfiguracionCodigosService {
   }
 
   // =====================================================
+  // TRANSACCIONES SERIALIZABLES CON RETRY
+  // =====================================================
+
+  /**
+   * Ejecuta una función dentro de una transacción Serializable con reintentos.
+   * PostgreSQL puede lanzar serialization failures cuando dos transacciones
+   * concurrentes colisionan. Este wrapper reintenta automáticamente.
+   */
+  private static readonly MAX_CODE_GENERATION_RETRIES = 5;
+
+  private assertRetryLimit(depth: number, entityType: string): void {
+    if (depth >= ConfiguracionCodigosService.MAX_CODE_GENERATION_RETRIES) {
+      throw new Error(
+        `Se excedió el máximo de reintentos (${ConfiguracionCodigosService.MAX_CODE_GENERATION_RETRIES}) generando código de ${entityType}`,
+      );
+    }
+  }
+
+  private async withSerializableTransaction<T>(
+    fn: (tx: Prisma.TransactionClient) => Promise<T>,
+    maxRetries = 3,
+  ): Promise<T> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.prisma.$transaction(fn, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error: any) {
+        const isSerializationError =
+          error?.code === 'P2034' ||
+          error?.message?.includes('could not serialize');
+        if (isSerializationError && attempt < maxRetries) {
+          this.logger.warn(
+            `Conflicto de serialización en generación de código, reintento ${attempt + 1}/${maxRetries}`,
+          );
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error('Se excedió el máximo de reintentos de serialización');
+  }
+
+  // =====================================================
   // GESTIÓN DE CONFIGURACIÓN
   // =====================================================
 
@@ -101,6 +145,76 @@ export class ConfiguracionCodigosService {
       config.ventaLongitud,
     );
 
+    const proximoComponente = this.formatCodigo(
+      config.componenteCodigo,
+      config.componenteSeparador,
+      config.ultimoComponente + 1,
+      config.componenteLongitud,
+    );
+
+    const proximaOrdenServicio = this.formatCodigo(
+      config.ordenServicioCodigo,
+      config.ordenServicioSeparador,
+      config.ultimaOrdenServicio + 1,
+      config.ordenServicioLongitud,
+    );
+
+    const proximoProveedor = this.formatCodigo(
+      config.proveedorCodigo,
+      config.proveedorSeparador,
+      config.ultimoProveedor + 1,
+      config.proveedorLongitud,
+    );
+
+    const proximaTransferencia = this.formatCodigo(
+      config.transferenciaCodigo,
+      config.transferenciaSeparador,
+      config.ultimaTransferencia + 1,
+      config.transferenciaLongitud,
+    );
+
+    const proximaOrdenCompra = this.formatCodigo(
+      config.ordenCompraCodigo,
+      config.ordenCompraSeparador,
+      config.ultimaOrdenCompra + 1,
+      config.ordenCompraLongitud,
+    );
+
+    const proximaCompra = this.formatCodigo(
+      config.compraCodigo,
+      config.compraSeparador,
+      config.ultimaCompra + 1,
+      config.compraLongitud,
+    );
+
+    const proximoLote = this.formatCodigo(
+      config.loteCodigo,
+      config.loteSeparador,
+      config.ultimoLote + 1,
+      config.loteLongitud,
+    );
+
+    const proximaSede = this.formatCodigo(
+      config.sedeCodigo,
+      config.sedeSeparador,
+      config.ultimaSede + 1,
+      config.sedeLongitud,
+    );
+
+    const proximoReporteIncidencia = this.formatCodigo(
+      config.reporteIncidenciaCodigo,
+      config.reporteIncidenciaSeparador,
+      config.ultimoReporteIncidencia + 1,
+      config.reporteIncidenciaLongitud,
+    );
+
+    const proximoInventario = this.formatCodigo(
+      config.inventarioCodigo,
+      config.inventarioSeparador,
+      config.ultimoInventario + 1,
+      config.inventarioLongitud,
+    );
+
     // Verificar restricciones (si existen entidades, no se puede cambiar prefijo)
     const [countProductos, countVariantes, countServicios] =
       await Promise.all([
@@ -148,6 +262,76 @@ export class ConfiguracionCodigosService {
         incluirSede: config.ventaIncluirSede,
         ultimoContador: config.ultimaVenta,
         proximoCodigo: proximaVenta,
+      },
+      componentes: {
+        codigo: config.componenteCodigo,
+        separador: config.componenteSeparador,
+        longitud: config.componenteLongitud,
+        ultimoContador: config.ultimoComponente,
+        proximoCodigo: proximoComponente,
+      },
+      ordenesServicio: {
+        codigo: config.ordenServicioCodigo,
+        separador: config.ordenServicioSeparador,
+        longitud: config.ordenServicioLongitud,
+        ultimoContador: config.ultimaOrdenServicio,
+        proximoCodigo: proximaOrdenServicio,
+      },
+      proveedores: {
+        codigo: config.proveedorCodigo,
+        separador: config.proveedorSeparador,
+        longitud: config.proveedorLongitud,
+        ultimoContador: config.ultimoProveedor,
+        proximoCodigo: proximoProveedor,
+      },
+      transferencias: {
+        codigo: config.transferenciaCodigo,
+        separador: config.transferenciaSeparador,
+        longitud: config.transferenciaLongitud,
+        ultimoContador: config.ultimaTransferencia,
+        proximoCodigo: proximaTransferencia,
+      },
+      ordenesCompra: {
+        codigo: config.ordenCompraCodigo,
+        separador: config.ordenCompraSeparador,
+        longitud: config.ordenCompraLongitud,
+        ultimoContador: config.ultimaOrdenCompra,
+        proximoCodigo: proximaOrdenCompra,
+      },
+      compras: {
+        codigo: config.compraCodigo,
+        separador: config.compraSeparador,
+        longitud: config.compraLongitud,
+        ultimoContador: config.ultimaCompra,
+        proximoCodigo: proximaCompra,
+      },
+      lotes: {
+        codigo: config.loteCodigo,
+        separador: config.loteSeparador,
+        longitud: config.loteLongitud,
+        ultimoContador: config.ultimoLote,
+        proximoCodigo: proximoLote,
+      },
+      sedes: {
+        codigo: config.sedeCodigo,
+        separador: config.sedeSeparador,
+        longitud: config.sedeLongitud,
+        ultimoContador: config.ultimaSede,
+        proximoCodigo: proximaSede,
+      },
+      reportesIncidencia: {
+        codigo: config.reporteIncidenciaCodigo,
+        separador: config.reporteIncidenciaSeparador,
+        longitud: config.reporteIncidenciaLongitud,
+        ultimoContador: config.ultimoReporteIncidencia,
+        proximoCodigo: proximoReporteIncidencia,
+      },
+      inventarios: {
+        codigo: config.inventarioCodigo,
+        separador: config.inventarioSeparador,
+        longitud: config.inventarioLongitud,
+        ultimoContador: config.ultimoInventario,
+        proximoCodigo: proximoInventario,
       },
       documentos: {
         factura: {
@@ -336,7 +520,7 @@ export class ConfiguracionCodigosService {
     }
 
     // Si no hay transacción, crear una nueva
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoProductoInTransaction(
         txInner,
         empresaId,
@@ -352,7 +536,9 @@ export class ConfiguracionCodigosService {
     tx: Prisma.TransactionClient,
     empresaId: string,
     sedeId?: string,
+    depth = 0,
   ): Promise<{ codigoEmpresa: string; codigoSistema: string }> {
+    this.assertRetryLimit(depth, 'producto');
     // Obtener o crear configuración
     let config = await tx.configuracionCodigos.findUnique({
       where: { empresaId },
@@ -390,10 +576,11 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.configuracionCodigos.update({
-            where: { empresaId },
-            data: { ultimoProducto: nuevoContador },
-          });
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoProducto" = GREATEST("ultimoProducto", ${nuevoContador})
+            WHERE "empresaId" = ${empresaId}
+          `;
         }
       }
     }
@@ -445,7 +632,7 @@ export class ConfiguracionCodigosService {
         `Código ${codigoEmpresa} ya existe. Reintentando recursivamente...`,
       );
       // Reintentar recursivamente
-      return this._generarCodigoProductoInTransaction(tx, empresaId, sedeId);
+      return this._generarCodigoProductoInTransaction(tx, empresaId, sedeId, depth + 1);
     }
 
     return { codigoEmpresa, codigoSistema };
@@ -464,7 +651,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoVarianteInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoVarianteInTransaction(txInner, empresaId);
     });
   }
@@ -475,7 +662,9 @@ export class ConfiguracionCodigosService {
   private async _generarCodigoVarianteInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<{ codigoEmpresa: string }> {
+    this.assertRetryLimit(depth, 'variante');
     let config = await tx.configuracionCodigos.findUnique({
       where: { empresaId },
     });
@@ -511,10 +700,11 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.configuracionCodigos.update({
-            where: { empresaId },
-            data: { ultimaVariante: nuevoContador },
-          });
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaVariante" = GREATEST("ultimaVariante", ${nuevoContador})
+            WHERE "empresaId" = ${empresaId}
+          `;
         }
       }
     }
@@ -550,7 +740,7 @@ export class ConfiguracionCodigosService {
       this.logger.warn(
         `Código de variante ${codigoEmpresa} ya existe. Reintentando...`,
       );
-      return this._generarCodigoVarianteInTransaction(tx, empresaId);
+      return this._generarCodigoVarianteInTransaction(tx, empresaId, depth + 1);
     }
 
     return { codigoEmpresa };
@@ -570,7 +760,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoSedeInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoSedeInTransaction(txInner, empresaId);
     });
   }
@@ -582,45 +772,47 @@ export class ConfiguracionCodigosService {
   private async _generarCodigoSedeInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<{ codigoSede: string }> {
-    // Obtener todas las sedes (incluidas eliminadas) para evitar conflictos de código
-    const sedes = await tx.sede.findMany({
-      where: { empresaId },
-      select: { codigo: true },
+    this.assertRetryLimit(depth, 'sede');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
+
+    // Sincronizar contador con BD real
+    const ultimaSede = await tx.sede.findFirst({
+      where: { empresaId, codigo: { startsWith: config.sedeCodigo } },
       orderBy: { codigo: 'desc' },
+      select: { codigo: true },
     });
-
-    let maxNumero = 0;
-
-    // Buscar el número más alto en los códigos existentes
-    for (const sede of sedes) {
-      const match = sede.codigo.match(/\d+$/);
+    if (ultimaSede) {
+      const match = ultimaSede.codigo.match(/(\d+)$/);
       if (match) {
-        const numero = parseInt(match[0], 10);
-        if (numero > maxNumero) {
-          maxNumero = numero;
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimaSede) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaSede" = GREATEST("ultimaSede", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
         }
       }
     }
 
-    const siguiente = maxNumero + 1;
-    const codigoSede = `SEDE-${String(siguiente).padStart(3, '0')}`;
-
-    // Verificación final de duplicados
-    const existe = await tx.sede.findFirst({
-      where: {
-        empresaId,
-        codigo: codigoSede,
-      },
-      select: { id: true },
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimaSede: { increment: 1 } },
     });
 
+    const numero = updated.ultimaSede.toString().padStart(config.sedeLongitud, '0');
+    const codigoSede = `${config.sedeCodigo}${config.sedeSeparador}${numero}`;
+
+    const existe = await tx.sede.findFirst({
+      where: { empresaId, codigo: codigoSede },
+      select: { id: true },
+    });
     if (existe) {
-      this.logger.warn(
-        `Código de sede ${codigoSede} ya existe. Reintentando...`,
-      );
-      // Reintentar recursivamente
-      return this._generarCodigoSedeInTransaction(tx, empresaId);
+      this.logger.warn(`Código de sede ${codigoSede} ya existe. Reintentando...`);
+      return this._generarCodigoSedeInTransaction(tx, empresaId, depth + 1);
     }
 
     return { codigoSede };
@@ -642,7 +834,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoVentaInTransaction(tx, empresaId, sedeId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoVentaInTransaction(
         txInner,
         empresaId,
@@ -722,7 +914,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoTransferenciaInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoTransferenciaInTransaction(
         txInner,
         empresaId,
@@ -737,56 +929,47 @@ export class ConfiguracionCodigosService {
   private async _generarCodigoTransferenciaInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefijo = `TRANS-${year}-`;
+    this.assertRetryLimit(depth, 'transferencia');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
-    // Buscar la última transferencia del año actual
+    // Sincronizar contador con BD real
     const ultimaTransferencia = await tx.transferenciaStock.findFirst({
-      where: {
-        empresaId,
-        codigo: {
-          startsWith: prefijo,
-        },
-      },
-      orderBy: {
-        codigo: 'desc',
-      },
-      select: {
-        codigo: true,
-      },
+      where: { empresaId, codigo: { startsWith: config.transferenciaCodigo } },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
     });
-
-    let nuevoNumero = 1;
-
-    // Si existe una transferencia, extraer el número del código
     if (ultimaTransferencia) {
       const match = ultimaTransferencia.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        nuevoNumero = ultimoNumero + 1;
+        if (ultimoNumero >= config.ultimaTransferencia) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaTransferencia" = GREATEST("ultimaTransferencia", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
       }
     }
 
-    // Generar código
-    const numero = nuevoNumero.toString().padStart(5, '0');
-    const codigo = `${prefijo}${numero}`;
-
-    // Verificación final de duplicados
-    const existe = await tx.transferenciaStock.findFirst({
-      where: {
-        empresaId,
-        codigo,
-      },
-      select: { id: true },
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimaTransferencia: { increment: 1 } },
     });
 
+    const numero = updated.ultimaTransferencia.toString().padStart(config.transferenciaLongitud, '0');
+    const codigo = `${config.transferenciaCodigo}${config.transferenciaSeparador}${numero}`;
+
+    const existe = await tx.transferenciaStock.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
     if (existe) {
-      this.logger.warn(
-        `Código de transferencia ${codigo} ya existe. Reintentando...`,
-      );
-      // Reintentar recursivamente
-      return this._generarCodigoTransferenciaInTransaction(tx, empresaId);
+      this.logger.warn(`Código de transferencia ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoTransferenciaInTransaction(tx, empresaId, depth + 1);
     }
 
     return codigo;
@@ -808,7 +991,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoOrdenCompraInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoOrdenCompraInTransaction(
         txInner,
         empresaId,
@@ -819,38 +1002,46 @@ export class ConfiguracionCodigosService {
   private async _generarCodigoOrdenCompraInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefijo = `OC-${year}-`;
+    this.assertRetryLimit(depth, 'ordenCompra');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
     const ultimaOC = await tx.ordenCompra.findFirst({
-      where: {
-        empresaId,
-        codigo: { startsWith: prefijo },
-      },
+      where: { empresaId, codigo: { startsWith: config.ordenCompraCodigo } },
       orderBy: { codigo: 'desc' },
       select: { codigo: true },
     });
-
-    let nuevoNumero = 1;
     if (ultimaOC) {
       const match = ultimaOC.codigo.match(/(\d+)$/);
       if (match) {
-        nuevoNumero = parseInt(match[1], 10) + 1;
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimaOrdenCompra) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaOrdenCompra" = GREATEST("ultimaOrdenCompra", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
       }
     }
 
-    const numero = nuevoNumero.toString().padStart(5, '0');
-    const codigo = `${prefijo}${numero}`;
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimaOrdenCompra: { increment: 1 } },
+    });
+
+    const numero = updated.ultimaOrdenCompra.toString().padStart(config.ordenCompraLongitud, '0');
+    const codigo = `${config.ordenCompraCodigo}${config.ordenCompraSeparador}${numero}`;
 
     const existe = await tx.ordenCompra.findFirst({
       where: { empresaId, codigo },
       select: { id: true },
     });
-
     if (existe) {
       this.logger.warn(`Código de OC ${codigo} ya existe. Reintentando...`);
-      return this._generarCodigoOrdenCompraInTransaction(tx, empresaId);
+      return this._generarCodigoOrdenCompraInTransaction(tx, empresaId, depth + 1);
     }
 
     return codigo;
@@ -868,7 +1059,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoCompraInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoCompraInTransaction(txInner, empresaId);
     });
   }
@@ -876,40 +1067,46 @@ export class ConfiguracionCodigosService {
   private async _generarCodigoCompraInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefijo = `COMP-${year}-`;
+    this.assertRetryLimit(depth, 'compra');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
     const ultimaCompra = await tx.compra.findFirst({
-      where: {
-        empresaId,
-        codigo: { startsWith: prefijo },
-      },
+      where: { empresaId, codigo: { startsWith: config.compraCodigo } },
       orderBy: { codigo: 'desc' },
       select: { codigo: true },
     });
-
-    let nuevoNumero = 1;
     if (ultimaCompra) {
       const match = ultimaCompra.codigo.match(/(\d+)$/);
       if (match) {
-        nuevoNumero = parseInt(match[1], 10) + 1;
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimaCompra) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaCompra" = GREATEST("ultimaCompra", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
       }
     }
 
-    const numero = nuevoNumero.toString().padStart(5, '0');
-    const codigo = `${prefijo}${numero}`;
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimaCompra: { increment: 1 } },
+    });
+
+    const numero = updated.ultimaCompra.toString().padStart(config.compraLongitud, '0');
+    const codigo = `${config.compraCodigo}${config.compraSeparador}${numero}`;
 
     const existe = await tx.compra.findFirst({
       where: { empresaId, codigo },
       select: { id: true },
     });
-
     if (existe) {
-      this.logger.warn(
-        `Código de compra ${codigo} ya existe. Reintentando...`,
-      );
-      return this._generarCodigoCompraInTransaction(tx, empresaId);
+      this.logger.warn(`Código de compra ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoCompraInTransaction(tx, empresaId, depth + 1);
     }
 
     return codigo;
@@ -927,7 +1124,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoLoteInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoLoteInTransaction(txInner, empresaId);
     });
   }
@@ -935,38 +1132,46 @@ export class ConfiguracionCodigosService {
   private async _generarCodigoLoteInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefijo = `LOTE-${year}-`;
+    this.assertRetryLimit(depth, 'lote');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
     const ultimoLote = await tx.lote.findFirst({
-      where: {
-        empresaId,
-        codigo: { startsWith: prefijo },
-      },
+      where: { empresaId, codigo: { startsWith: config.loteCodigo } },
       orderBy: { codigo: 'desc' },
       select: { codigo: true },
     });
-
-    let nuevoNumero = 1;
     if (ultimoLote) {
       const match = ultimoLote.codigo.match(/(\d+)$/);
       if (match) {
-        nuevoNumero = parseInt(match[1], 10) + 1;
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimoLote) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoLote" = GREATEST("ultimoLote", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
       }
     }
 
-    const numero = nuevoNumero.toString().padStart(5, '0');
-    const codigo = `${prefijo}${numero}`;
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimoLote: { increment: 1 } },
+    });
+
+    const numero = updated.ultimoLote.toString().padStart(config.loteLongitud, '0');
+    const codigo = `${config.loteCodigo}${config.loteSeparador}${numero}`;
 
     const existe = await tx.lote.findFirst({
       where: { empresaId, codigo },
       select: { id: true },
     });
-
     if (existe) {
       this.logger.warn(`Código de lote ${codigo} ya existe. Reintentando...`);
-      return this._generarCodigoLoteInTransaction(tx, empresaId);
+      return this._generarCodigoLoteInTransaction(tx, empresaId, depth + 1);
     }
 
     return codigo;
@@ -1210,7 +1415,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoCotizacionInTransaction(tx, empresaId, sedeId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoCotizacionInTransaction(
         txInner,
         empresaId,
@@ -1226,7 +1431,9 @@ export class ConfiguracionCodigosService {
     tx: Prisma.TransactionClient,
     empresaId: string,
     sedeId?: string,
+    depth = 0,
   ): Promise<{ codigoCotizacion: string }> {
+    this.assertRetryLimit(depth, 'cotizacion');
     let config = await tx.configuracionCodigos.findUnique({
       where: { empresaId },
     });
@@ -1261,10 +1468,11 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.configuracionCodigos.update({
-            where: { empresaId },
-            data: { ultimaCotizacion: nuevoContador },
-          });
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaCotizacion" = GREATEST("ultimaCotizacion", ${nuevoContador})
+            WHERE "empresaId" = ${empresaId}
+          `;
         }
       }
     }
@@ -1312,10 +1520,401 @@ export class ConfiguracionCodigosService {
       this.logger.warn(
         `Código de cotización ${codigoCotizacion} ya existe. Reintentando...`,
       );
-      return this._generarCodigoCotizacionInTransaction(tx, empresaId, sedeId);
+      return this._generarCodigoCotizacionInTransaction(tx, empresaId, sedeId, depth + 1);
     }
 
     return { codigoCotizacion };
+  }
+
+  // =====================================================
+  // GENERACIÓN DE CÓDIGOS DE SERVICIOS
+  // =====================================================
+
+  /**
+   * GENERAR CÓDIGO DE SERVICIO
+   * Usa transacción para evitar race conditions
+   * @param empresaId ID de la empresa
+   * @param sedeId ID de la sede (opcional)
+   * @param tx Transacción de Prisma (opcional)
+   */
+  async generarCodigoServicio(
+    empresaId: string,
+    sedeId?: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ codigoEmpresa: string; codigoSistema: string }> {
+    if (tx) {
+      return await this._generarCodigoServicioInTransaction(
+        tx,
+        empresaId,
+        sedeId,
+      );
+    }
+
+    return await this.withSerializableTransaction(async (txInner) => {
+      return await this._generarCodigoServicioInTransaction(
+        txInner,
+        empresaId,
+        sedeId,
+      );
+    });
+  }
+
+  private async _generarCodigoServicioInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    sedeId?: string,
+    depth = 0,
+  ): Promise<{ codigoEmpresa: string; codigoSistema: string }> {
+    this.assertRetryLimit(depth, 'servicio');
+    let config = await tx.configuracionCodigos.findUnique({
+      where: { empresaId },
+    });
+
+    if (!config) {
+      config = await tx.configuracionCodigos.create({
+        data: { empresaId },
+      });
+    }
+
+    // Sincronizar contador con el estado real de la BD
+    const ultimoServicio = await tx.servicio.findFirst({
+      where: {
+        empresaId,
+        deletedAt: null,
+        codigoEmpresa: {
+          startsWith: config.servicioCodigo,
+        },
+      },
+      orderBy: {
+        codigoEmpresa: 'desc',
+      },
+      select: {
+        codigoEmpresa: true,
+      },
+    });
+
+    let nuevoContador = config.ultimoServicio;
+
+    if (ultimoServicio) {
+      const match = ultimoServicio.codigoEmpresa.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= nuevoContador) {
+          nuevoContador = ultimoNumero;
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoServicio" = GREATEST("ultimoServicio", ${nuevoContador})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
+      }
+    }
+
+    // Incrementar contador atómicamente
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: {
+        ultimoServicio: {
+          increment: 1,
+        },
+      },
+    });
+
+    nuevoContador = updated.ultimoServicio;
+
+    // Generar código
+    const numero = nuevoContador
+      .toString()
+      .padStart(config.servicioLongitud, '0');
+    let codigoEmpresa = `${config.servicioCodigo}${config.servicioSeparador}${numero}`;
+
+    // Si incluye sede
+    if (config.servicioIncluirSede && sedeId) {
+      const sede = await tx.sede.findUnique({
+        where: { id: sedeId },
+        select: { nombre: true },
+      });
+      if (sede) {
+        const sedeCode = sede.nombre.substring(0, 3).toUpperCase();
+        codigoEmpresa = `${config.servicioCodigo}${config.servicioSeparador}${sedeCode}${config.servicioSeparador}${numero}`;
+      }
+    }
+
+    const codigoSistema = `${empresaId.substring(0, 8)}-SRV-${numero}`;
+
+    // Verificación final de duplicados
+    const existe = await tx.servicio.findFirst({
+      where: {
+        empresaId,
+        codigoEmpresa,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de servicio ${codigoEmpresa} ya existe. Reintentando...`,
+      );
+      return this._generarCodigoServicioInTransaction(tx, empresaId, sedeId, depth + 1);
+    }
+
+    return { codigoEmpresa, codigoSistema };
+  }
+
+  /**
+   * GENERAR CÓDIGO DE ORDEN DE SERVICIO
+   * Formato: OS-YYYY-NNNNN (basado en año actual)
+   * @param empresaId ID de la empresa
+   * @param sedeId ID de la sede (opcional)
+   * @param tx Transacción de Prisma (opcional)
+   */
+  async generarCodigoOrdenServicio(
+    empresaId: string,
+    sedeId?: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoOrdenServicioInTransaction(
+        tx,
+        empresaId,
+      );
+    }
+
+    return await this.withSerializableTransaction(async (txInner) => {
+      return await this._generarCodigoOrdenServicioInTransaction(
+        txInner,
+        empresaId,
+      );
+    });
+  }
+
+  private async _generarCodigoOrdenServicioInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    depth = 0,
+  ): Promise<string> {
+    this.assertRetryLimit(depth, 'ordenServicio');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
+
+    const ultimaOrden = await tx.ordenServicio.findFirst({
+      where: { empresaId, codigo: { startsWith: config.ordenServicioCodigo } },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
+    });
+    if (ultimaOrden) {
+      const match = ultimaOrden.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimaOrdenServicio) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaOrdenServicio" = GREATEST("ultimaOrdenServicio", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
+      }
+    }
+
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimaOrdenServicio: { increment: 1 } },
+    });
+
+    const numero = updated.ultimaOrdenServicio.toString().padStart(config.ordenServicioLongitud, '0');
+    const codigo = `${config.ordenServicioCodigo}${config.ordenServicioSeparador}${numero}`;
+
+    const existe = await tx.ordenServicio.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
+    if (existe) {
+      this.logger.warn(`Código de orden ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoOrdenServicioInTransaction(tx, empresaId, depth + 1);
+    }
+
+    return codigo;
+  }
+
+  /**
+   * GENERAR CÓDIGO DE COMPONENTE
+   * Formato configurable: COMP-00001 (por defecto)
+   * @param empresaId ID de la empresa
+   * @param tx Transacción de Prisma (opcional)
+   * @returns Código de componente generado
+   */
+  async generarCodigoComponente(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoComponenteInTransaction(tx, empresaId);
+    }
+
+    return await this.withSerializableTransaction(async (txInner) => {
+      return await this._generarCodigoComponenteInTransaction(
+        txInner,
+        empresaId,
+      );
+    });
+  }
+
+  private async _generarCodigoComponenteInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    depth = 0,
+  ): Promise<string> {
+    this.assertRetryLimit(depth, 'componente');
+    let config = await tx.configuracionCodigos.findUnique({
+      where: { empresaId },
+    });
+
+    if (!config) {
+      config = await tx.configuracionCodigos.create({
+        data: { empresaId },
+      });
+    }
+
+    // Sincronizar contador con el estado real de la BD
+    const ultimoComp = await tx.componente.findFirst({
+      where: {
+        empresaId,
+        deletedAt: null,
+        codigo: {
+          startsWith: config.componenteCodigo,
+        },
+      },
+      orderBy: {
+        codigo: 'desc',
+      },
+      select: {
+        codigo: true,
+      },
+    });
+
+    let nuevoContador = config.ultimoComponente;
+
+    if (ultimoComp) {
+      const match = ultimoComp.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= nuevoContador) {
+          nuevoContador = ultimoNumero;
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoComponente" = GREATEST("ultimoComponente", ${nuevoContador})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
+      }
+    }
+
+    // Incrementar contador atómicamente
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: {
+        ultimoComponente: {
+          increment: 1,
+        },
+      },
+    });
+
+    nuevoContador = updated.ultimoComponente;
+
+    // Generar código
+    const numero = nuevoContador
+      .toString()
+      .padStart(config.componenteLongitud, '0');
+    const codigo = `${config.componenteCodigo}${config.componenteSeparador}${numero}`;
+
+    // Verificación final de duplicados
+    const existe = await tx.componente.findFirst({
+      where: {
+        empresaId,
+        codigo,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+
+    if (existe) {
+      this.logger.warn(
+        `Código de componente ${codigo} ya existe. Reintentando...`,
+      );
+      return this._generarCodigoComponenteInTransaction(tx, empresaId, depth + 1);
+    }
+
+    return codigo;
+  }
+
+  // =====================================================
+  // GENERACIÓN DE CÓDIGO DE INVENTARIO
+  // =====================================================
+
+  /**
+   * GENERAR CÓDIGO DE INVENTARIO
+   * Formato configurable: INV-0001 (por defecto)
+   */
+  async generarCodigoInventario(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoInventarioInTransaction(tx, empresaId);
+    }
+
+    return await this.withSerializableTransaction(async (txInner) => {
+      return await this._generarCodigoInventarioInTransaction(txInner, empresaId);
+    });
+  }
+
+  private async _generarCodigoInventarioInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    depth = 0,
+  ): Promise<string> {
+    this.assertRetryLimit(depth, 'inventario');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
+
+    const ultimoInv = await tx.inventario.findFirst({
+      where: { empresaId, codigo: { startsWith: config.inventarioCodigo } },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
+    });
+    if (ultimoInv) {
+      const match = ultimoInv.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimoInventario) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoInventario" = GREATEST("ultimoInventario", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
+      }
+    }
+
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimoInventario: { increment: 1 } },
+    });
+
+    const numero = updated.ultimoInventario.toString().padStart(config.inventarioLongitud, '0');
+    const codigo = `${config.inventarioCodigo}${config.inventarioSeparador}${numero}`;
+
+    const existe = await tx.inventario.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
+    if (existe) {
+      this.logger.warn(`Código de inventario ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoInventarioInTransaction(tx, empresaId, depth + 1);
+    }
+
+    return codigo;
   }
 
   // =====================================================
@@ -1336,57 +1935,54 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoProveedorInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoProveedorInTransaction(txInner, empresaId);
     });
   }
 
-  /**
-   * Lógica interna de generación de código de proveedor
-   * Busca el número más alto usado para evitar conflictos
-   */
   private async _generarCodigoProveedorInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<{ codigoProveedor: string }> {
-    // Obtener todos los proveedores para evitar conflictos de código
-    const proveedores = await tx.proveedor.findMany({
-      where: { empresaId },
-      select: { codigo: true },
+    this.assertRetryLimit(depth, 'proveedor');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
+
+    const ultimoProv = await tx.proveedor.findFirst({
+      where: { empresaId, codigo: { startsWith: config.proveedorCodigo } },
       orderBy: { codigo: 'desc' },
+      select: { codigo: true },
     });
-
-    let maxNumero = 0;
-
-    // Buscar el número más alto en los códigos existentes
-    for (const proveedor of proveedores) {
-      const match = proveedor.codigo.match(/\d+$/);
+    if (ultimoProv) {
+      const match = ultimoProv.codigo.match(/(\d+)$/);
       if (match) {
-        const numero = parseInt(match[0], 10);
-        if (numero > maxNumero) {
-          maxNumero = numero;
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimoProveedor) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoProveedor" = GREATEST("ultimoProveedor", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
         }
       }
     }
 
-    const siguiente = maxNumero + 1;
-    const codigoProveedor = `PROV-${String(siguiente).padStart(3, '0')}`;
-
-    // Verificación final de duplicados
-    const existe = await tx.proveedor.findFirst({
-      where: {
-        empresaId,
-        codigo: codigoProveedor,
-      },
-      select: { id: true },
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimoProveedor: { increment: 1 } },
     });
 
+    const numero = updated.ultimoProveedor.toString().padStart(config.proveedorLongitud, '0');
+    const codigoProveedor = `${config.proveedorCodigo}${config.proveedorSeparador}${numero}`;
+
+    const existe = await tx.proveedor.findFirst({
+      where: { empresaId, codigo: codigoProveedor },
+      select: { id: true },
+    });
     if (existe) {
-      this.logger.warn(
-        `Código de proveedor ${codigoProveedor} ya existe. Reintentando...`,
-      );
-      // Reintentar recursivamente
-      return this._generarCodigoProveedorInTransaction(tx, empresaId);
+      this.logger.warn(`Código de proveedor ${codigoProveedor} ya existe. Reintentando...`);
+      return this._generarCodigoProveedorInTransaction(tx, empresaId, depth + 1);
     }
 
     return { codigoProveedor };
@@ -1406,7 +2002,7 @@ export class ConfiguracionCodigosService {
       return await this._generarCodigoReporteIncidenciaInTransaction(tx, empresaId);
     }
 
-    return await this.prisma.$transaction(async (txInner) => {
+    return await this.withSerializableTransaction(async (txInner) => {
       return await this._generarCodigoReporteIncidenciaInTransaction(
         txInner,
         empresaId,
@@ -1414,63 +2010,49 @@ export class ConfiguracionCodigosService {
     });
   }
 
-  /**
-   * Lógica interna de generación de código de reporte de incidencia
-   * Busca el número más alto del año actual para evitar duplicados
-   */
   private async _generarCodigoReporteIncidenciaInTransaction(
     tx: Prisma.TransactionClient,
     empresaId: string,
+    depth = 0,
   ): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefijo = `RPI-${year}-`;
+    this.assertRetryLimit(depth, 'reporteIncidencia');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
-    // Buscar el último reporte del año actual
     const ultimoReporte = await tx.reporteIncidencia.findFirst({
-      where: {
-        empresaId,
-        codigo: {
-          startsWith: prefijo,
-        },
-      },
-      orderBy: {
-        codigo: 'desc',
-      },
-      select: {
-        codigo: true,
-      },
+      where: { empresaId, codigo: { startsWith: config.reporteIncidenciaCodigo } },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
     });
-
-    let nuevoNumero = 1;
-
-    // Si existe un reporte, extraer el número del código
     if (ultimoReporte) {
       const match = ultimoReporte.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        nuevoNumero = ultimoNumero + 1;
+        if (ultimoNumero >= config.ultimoReporteIncidencia) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoReporteIncidencia" = GREATEST("ultimoReporteIncidencia", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
       }
     }
 
-    // Generar código
-    const numero = nuevoNumero.toString().padStart(4, '0');
-    const codigo = `${prefijo}${numero}`;
-
-    // Verificación final de duplicados
-    const existe = await tx.reporteIncidencia.findFirst({
-      where: {
-        empresaId,
-        codigo,
-      },
-      select: { id: true },
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimoReporteIncidencia: { increment: 1 } },
     });
 
+    const numero = updated.ultimoReporteIncidencia.toString().padStart(config.reporteIncidenciaLongitud, '0');
+    const codigo = `${config.reporteIncidenciaCodigo}${config.reporteIncidenciaSeparador}${numero}`;
+
+    const existe = await tx.reporteIncidencia.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
     if (existe) {
-      this.logger.warn(
-        `Código de reporte ${codigo} ya existe. Reintentando...`,
-      );
-      // Reintentar recursivamente
-      return this._generarCodigoReporteIncidenciaInTransaction(tx, empresaId);
+      this.logger.warn(`Código de reporte ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoReporteIncidenciaInTransaction(tx, empresaId, depth + 1);
     }
 
     return codigo;

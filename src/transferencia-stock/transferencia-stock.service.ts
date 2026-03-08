@@ -320,7 +320,6 @@ export class TransferenciaStockService {
     // Generar código único para la transferencia
     const codigo = await this.codigosService.generarCodigoTransferencia(
       empresaId,
-      this.prisma,
     );
 
     // Crear UNA transferencia con múltiples items

@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import {
   EstadoInventario,
   EstadoConteoItem,
@@ -21,38 +22,17 @@ import {
 
 @Injectable()
 export class InventarioService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private configuracionCodigosService: ConfiguracionCodigosService,
+  ) {}
 
   /**
    * Genera el código único para un inventario
-   * Formato: INV-YYYY-NNNN
+   * Usa el servicio centralizado de códigos
    */
   private async generarCodigoInventario(empresaId: string): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefix = `INV-${year}`;
-
-    const ultimoInventario = await this.prisma.inventario.findFirst({
-      where: {
-        empresaId,
-        codigo: {
-          startsWith: prefix,
-        },
-      },
-      orderBy: {
-        codigo: 'desc',
-      },
-    });
-
-    let numeroSecuencial = 1;
-    if (ultimoInventario) {
-      const match = ultimoInventario.codigo.match(/-(\d+)$/);
-      if (match) {
-        numeroSecuencial = parseInt(match[1], 10) + 1;
-      }
-    }
-
-    const numero = numeroSecuencial.toString().padStart(4, '0');
-    return `${prefix}-${numero}`;
+    return this.configuracionCodigosService.generarCodigoInventario(empresaId);
   }
 
   /**
@@ -719,31 +699,8 @@ export class InventarioService {
       return;
     }
 
-    // Generar código para el reporte
-    const year = new Date().getFullYear();
-    const prefix = `RPI-${year}`;
-
-    const ultimoReporte = await tx.reporteIncidencia.findFirst({
-      where: {
-        empresaId,
-        codigo: {
-          startsWith: prefix,
-        },
-      },
-      orderBy: {
-        codigo: 'desc',
-      },
-    });
-
-    let numeroSecuencial = 1;
-    if (ultimoReporte) {
-      const match = ultimoReporte.codigo.match(/-(\d+)$/);
-      if (match) {
-        numeroSecuencial = parseInt(match[1], 10) + 1;
-      }
-    }
-
-    const codigo = `${prefix}-${numeroSecuencial.toString().padStart(4, '0')}`;
+    // Generar código para el reporte via servicio centralizado
+    const codigo = await this.configuracionCodigosService.generarCodigoReporteIncidencia(empresaId, tx);
 
     // Crear reporte de incidencias
     const reporte = await tx.reporteIncidencia.create({

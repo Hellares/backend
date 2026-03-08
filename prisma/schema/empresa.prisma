@@ -61,6 +61,7 @@ model Empresa {
   ordenesServicio          OrdenServicio[]
   personalizaciones        PersonalizacionEmpresa[]
   plantillasComprobantes   PlantillaComprobante[]
+  plantillasServicio       PlantillaServicio[]
   productos                Producto[]
   sedes                    Sede[]
   servicios                Servicio[]
@@ -117,6 +118,17 @@ model Empresa {
 
   configuracionEmpresa ConfiguracionEmpresa?
 
+  // Relaciones para tercerización B2B
+  aceptaTercerizacion           Boolean  @default(false)
+  descripcionTercerizacion      String?
+  tiposServicioTercerizacion    Json?    // ["REPARACION","MANTENIMIENTO",...]
+  tercerizacionesEnviadas       TercerizacionServicio[] @relation("TercerizacionOrigen")
+  tercerizacionesRecibidas      TercerizacionServicio[] @relation("TercerizacionDestino")
+
+  // Relaciones para avisos de mantenimiento
+  configuracionAvisoMantenimiento ConfiguracionAvisoMantenimiento?
+  avisosMantenimiento             AvisoMantenimiento[]
+
   // Relaciones para configuracion de documentos PDF
   configuracionDocumentos  ConfiguracionDocumentos?
   plantillasDocumentos     PlantillaDocumento[]
@@ -131,6 +143,7 @@ model Empresa {
   @@index([visibleEnMarketplace])
   @@index([destacadoMarketplace])
   @@index([ordenMarketplace])
+  @@index([aceptaTercerizacion])
 }
 
 model ConfiguracionCodigos {
@@ -161,11 +174,51 @@ model ConfiguracionCodigos {
   ultimoServicio        Int      @default(0)
   ultimaVariante        Int      @default(0)
   ultimaVenta           Int      @default(0)
+  componenteCodigo      String   @default("COMP")
+  componenteSeparador   String   @default("-")
+  componenteLongitud    Int      @default(5)
+  ultimoComponente      Int      @default(0)
   cotizacionCodigo      String   @default("COT")
   cotizacionSeparador   String   @default("-")
   cotizacionLongitud    Int      @default(6)
   cotizacionIncluirSede Boolean  @default(true)
   ultimaCotizacion      Int      @default(0)
+  ordenServicioCodigo       String   @default("OS")
+  ordenServicioSeparador    String   @default("-")
+  ordenServicioLongitud     Int      @default(5)
+  ultimaOrdenServicio       Int      @default(0)
+  proveedorCodigo           String   @default("PROV")
+  proveedorSeparador        String   @default("-")
+  proveedorLongitud         Int      @default(3)
+  ultimoProveedor           Int      @default(0)
+  transferenciaCodigo       String   @default("TRANS")
+  transferenciaSeparador    String   @default("-")
+  transferenciaLongitud     Int      @default(5)
+  ultimaTransferencia       Int      @default(0)
+  ordenCompraCodigo         String   @default("OC")
+  ordenCompraSeparador      String   @default("-")
+  ordenCompraLongitud       Int      @default(5)
+  ultimaOrdenCompra         Int      @default(0)
+  compraCodigo              String   @default("COMPRA")
+  compraSeparador           String   @default("-")
+  compraLongitud            Int      @default(5)
+  ultimaCompra              Int      @default(0)
+  loteCodigo                String   @default("LOTE")
+  loteSeparador             String   @default("-")
+  loteLongitud              Int      @default(5)
+  ultimoLote                Int      @default(0)
+  sedeCodigo                String   @default("SEDE")
+  sedeSeparador             String   @default("-")
+  sedeLongitud              Int      @default(3)
+  ultimaSede                Int      @default(0)
+  reporteIncidenciaCodigo   String   @default("RPI")
+  reporteIncidenciaSeparador String  @default("-")
+  reporteIncidenciaLongitud Int      @default(4)
+  ultimoReporteIncidencia   Int      @default(0)
+  inventarioCodigo          String   @default("INV")
+  inventarioSeparador       String   @default("-")
+  inventarioLongitud        Int      @default(4)
+  ultimoInventario          Int      @default(0)
   ultimoFactura         Int      @default(0)
   ultimaBoleta          Int      @default(0)
   ultimaNotaCredito     Int      @default(0)

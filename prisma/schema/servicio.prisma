@@ -1,10 +1,28 @@
+model PlantillaServicio {
+  id            String                       @id @default(cuid())
+  empresaId     String
+  nombre        String
+  descripcion   String?
+  isActive      Boolean                      @default(true)
+  creadoEn      DateTime                     @default(now())
+  actualizadoEn DateTime                     @updatedAt
+  empresa       Empresa                      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  campos        ConfiguracionCamposServicio[]
+  servicios     Servicio[]
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([isActive])
+}
+
 model Servicio {
   id                    String   @id @default(cuid())
   empresaId             String
   sedeId                String?
   empresaCategoriaId    String?
   unidadMedidaId        String? // Unidad de medida del servicio (ej: hora, día, sesión)
-  codigoEmpresa         String   @unique
+  plantillaServicioId   String?
+  codigoEmpresa         String
   codigoSistema         String   @unique
   nombre                String
   descripcion           String?
@@ -40,8 +58,10 @@ model Servicio {
   unidadMedida        EmpresaUnidadMedida?     @relation(fields: [unidadMedidaId], references: [id])
   empresa             Empresa                  @relation(fields: [empresaId], references: [id])
   sede                Sede?                    @relation(fields: [sedeId], references: [id])
+  plantillaServicio   PlantillaServicio?       @relation(fields: [plantillaServicioId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ServicioComprobante")
   cotizacionDetalles  CotizacionDetalle[]
+  ordenesServicio     OrdenServicio[]
 
   @@unique([empresaId, codigoEmpresa])
   @@index([empresaId])
@@ -49,6 +69,7 @@ model Servicio {
   @@index([empresaCategoriaId])
   @@index([unidadMedidaId])
   @@index([sedeId])
+  @@index([plantillaServicioId])
   @@index([isActive])
   @@index([deletedAt])
   @@index([visibleMarketplace])
@@ -59,25 +80,28 @@ model Servicio {
 }
 
 model ConfiguracionCamposServicio {
-  id            String            @id @default(cuid())
+  id            String             @id @default(cuid())
   empresaId     String
+  plantillaId   String?
   nombre        String
   tipoCampo     TipoCampoServicio
   categoria     CategoriaCampo?
   descripcion   String?
   placeholder   String?
-  esRequerido   Boolean           @default(false)
+  esRequerido   Boolean            @default(false)
   defaultValue  String?
   opciones      Json?
-  permiteOtro   Boolean           @default(false)
-  isActive      Boolean           @default(true)
+  permiteOtro   Boolean            @default(false)
+  isActive      Boolean            @default(true)
   orden         Int?
-  creadoEn      DateTime          @default(now())
-  actualizadoEn DateTime          @updatedAt
-  empresa       Empresa           @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  creadoEn      DateTime           @default(now())
+  actualizadoEn DateTime           @updatedAt
+  empresa       Empresa            @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  plantilla     PlantillaServicio? @relation(fields: [plantillaId], references: [id], onDelete: Cascade)
 
-  @@unique([empresaId, nombre])
+  @@unique([empresaId, plantillaId, nombre])
   @@index([empresaId])
+  @@index([plantillaId])
   @@index([categoria])
   @@index([isActive])
 }
@@ -130,10 +154,10 @@ model Componente {
   id               String               @id @default(cuid())
   empresaId        String
   tipoComponenteId String
-  codigo           String               @unique
+  codigo           String
   marca            String?
   modelo           String?
-  numeroSerie      String?              @unique
+  numeroSerie      String?
   especificaciones Json?
   estado           EstadoComponente     @default(INGRESADO)
   ubicacion        String?
@@ -162,7 +186,7 @@ model OrdenServicio {
   clienteId           String
   tecnicoId           String?
   sedeId              String?
-  codigo              String                  @unique
+  codigo              String
   tipoServicio        TipoServicio
   prioridad           PrioridadServicio       @default(NORMAL)
   tipoEquipo          String?
@@ -172,7 +196,10 @@ model OrdenServicio {
   diagnostico         Json?
   descripcionProblema String?
   sintomas            Json?
-  presupuesto         Decimal?                @db.Decimal(10, 2)
+  costoTotal          Decimal?                @db.Decimal(10, 2)
+  adelanto            Decimal?                @db.Decimal(10, 2)
+  descuento           Decimal?                @db.Decimal(10, 2)
+  metodoPagoAdelanto  String?
   tiempoEstimado      Int?
   fechaEntrega        DateTime?
   estado              EstadoOrdenServicio     @default(RECIBIDO)
@@ -180,15 +207,27 @@ model OrdenServicio {
   notas               String?
   accesorios          Json?
   condicionEquipo     String?
+  datosPersonalizados Json?
+  servicioId          String?
   comprobanteId       String?
+  incluirAvisoMantenimiento Boolean   @default(true)
+  fechaAvisoPersonalizado   DateTime?
+  origenOrden         OrigenOrden             @default(CLIENTE_FINAL)
+  cantidadReingresos  Int                     @default(0)
+  motivoReingreso     String?
   creadoEn            DateTime                @default(now())
   actualizadoEn       DateTime                @updatedAt
   cliente             EmpresaPersona          @relation("OrdenServicioCliente", fields: [clienteId], references: [id])
   comprobante         ComprobanteElectronico? @relation(fields: [comprobanteId], references: [id])
   empresa             Empresa                 @relation(fields: [empresaId], references: [id])
   modeloEquipo        ModeloEquipo?           @relation(fields: [modeloEquipoId], references: [id])
+  servicio            Servicio?               @relation(fields: [servicioId], references: [id])
   tecnico             Usuario?                @relation(fields: [tecnicoId], references: [id])
   componentes         ServicioComponente[]
+  historial           HistorialOrdenServicio[]
+  avisosMantenimiento AvisoMantenimiento[]
+  tercerizacionOrigen  TercerizacionServicio? @relation("OrdenOrigen")
+  tercerizacionDestino TercerizacionServicio? @relation("OrdenDestino")
 
   @@unique([empresaId, codigo])
   @@index([empresaId])
@@ -202,6 +241,7 @@ model OrdenServicio {
   @@index([empresaId, estado])
   @@index([empresaId, creadoEn])
   @@index([empresaId, estado, creadoEn])
+  @@index([servicioId])
 }
 
 model ServicioComponente {
@@ -232,6 +272,24 @@ model ServicioComponente {
   @@index([estadoComponente])
 }
 
+model HistorialOrdenServicio {
+  id               String              @id @default(cuid())
+  ordenServicioId  String
+  estadoAnterior   EstadoOrdenServicio
+  estadoNuevo      EstadoOrdenServicio
+  notas            String?
+  diagnostico      Json?
+  costoTotal       Decimal?            @db.Decimal(10, 2)
+  comunicarCliente Boolean             @default(false)
+  creadoPor        String?
+  creadoEn         DateTime            @default(now())
+  ordenServicio    OrdenServicio       @relation(fields: [ordenServicioId], references: [id], onDelete: Cascade)
+
+  @@index([ordenServicioId])
+  @@index([creadoEn])
+  @@index([estadoNuevo])
+}
+
 enum TipoCampoServicio {
   TEXTO
   NUMERO
@@ -246,6 +304,7 @@ enum TipoCampoServicio {
   ARCHIVO
   TELEFONO
   URL
+  OBJETO
 }
 
 enum CategoriaCampo {
@@ -291,6 +350,7 @@ enum EstadoOrdenServicio {
   ENTREGADO
   CANCELADO
   FINALIZADO
+  TERCERIZADO
 }
 
 enum EstadoDiagnostico {
@@ -332,4 +392,114 @@ enum TipoAccionComponente {
   DESMONTAR
   PROBAR
   CALIBRAR
+}
+
+// ─── Avisos de Mantenimiento Preventivo ───
+
+enum EstadoAviso {
+  PENDIENTE
+  NOTIFICADO
+  ATENDIDO
+  DESCARTADO
+}
+
+model ConfiguracionAvisoMantenimiento {
+  id               String   @id @default(cuid())
+  empresaId        String   @unique
+  intervalos       Json     // {"MANTENIMIENTO": 120, "REPARACION": 180, ...}
+  diasAnticipacion Int      @default(7)
+  habilitado       Boolean  @default(true)
+  creadoEn         DateTime @default(now())
+  actualizadoEn    DateTime @updatedAt
+  empresa          Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+}
+
+model AvisoMantenimiento {
+  id                  String         @id @default(cuid())
+  empresaId           String
+  ordenServicioId     String
+  clienteId           String
+  tipoServicio        String
+  equipoDescripcion   String?
+  fechaUltimoServicio DateTime
+  fechaRecomendada    DateTime
+  estado              EstadoAviso    @default(PENDIENTE)
+  ordenGeneradaId     String?
+  notificadoEn        DateTime?
+  notas               String?
+  creadoEn            DateTime       @default(now())
+  actualizadoEn       DateTime       @updatedAt
+  empresa             Empresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  ordenServicio       OrdenServicio  @relation(fields: [ordenServicioId], references: [id])
+  cliente             EmpresaPersona @relation(fields: [clienteId], references: [id])
+
+  @@index([empresaId, estado])
+  @@index([fechaRecomendada])
+  @@index([clienteId])
+  @@index([ordenServicioId])
+}
+
+// ─── Tercerización B2B de Servicios ───
+
+enum OrigenOrden {
+  CLIENTE_FINAL
+  B2B_RECIBIDO
+  B2B_ENVIADO
+}
+
+enum EstadoTercerizacion {
+  PENDIENTE
+  ACEPTADO
+  RECHAZADO
+  EN_PROCESO
+  COMPLETADO
+  CANCELADO
+}
+
+model TercerizacionServicio {
+  id                 String                @id @default(cuid())
+
+  // Empresa que terceriza (origen)
+  empresaOrigenId    String
+  ordenOrigenId      String                @unique
+  empresaOrigen      Empresa               @relation("TercerizacionOrigen", fields: [empresaOrigenId], references: [id])
+  ordenOrigen        OrdenServicio         @relation("OrdenOrigen", fields: [ordenOrigenId], references: [id])
+
+  // Empresa que ejecuta (destino)
+  empresaDestinoId   String
+  ordenDestinoId     String?               @unique
+  empresaDestino     Empresa               @relation("TercerizacionDestino", fields: [empresaDestinoId], references: [id])
+  ordenDestino       OrdenServicio?        @relation("OrdenDestino", fields: [ordenDestinoId], references: [id])
+
+  // Estado del flujo
+  estado             EstadoTercerizacion   @default(PENDIENTE)
+
+  // Datos compartidos (snapshot al momento de tercerizar)
+  datosEquipo        Json                  // {tipoEquipo, marcaEquipo, numeroSerie, condicionEquipo, accesorios}
+  descripcionProblema String?
+  sintomas           Json?
+  componentesData    Json?                 // Snapshot de componentes a reparar
+
+  // Pricing B2B
+  precioB2B          Decimal?              @db.Decimal(10, 2)
+  metodoPagoB2B      String?
+
+  // Notas y comunicación
+  notasOrigen        String?               // Notas de la empresa que terceriza
+  notasDestino       String?               // Notas de la empresa que ejecuta
+  motivoRechazo      String?
+
+  // Timestamps
+  fechaSolicitud     DateTime              @default(now())
+  fechaRespuesta     DateTime?
+  fechaCompletado    DateTime?
+
+  creadoEn           DateTime              @default(now())
+  actualizadoEn      DateTime              @updatedAt
+
+  @@index([empresaOrigenId])
+  @@index([empresaDestinoId])
+  @@index([estado])
+  @@index([empresaOrigenId, estado])
+  @@index([empresaDestinoId, estado])
 }

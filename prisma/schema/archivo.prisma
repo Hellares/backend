@@ -86,6 +86,7 @@ enum CategoriaArchivo {
   CERTIFICADO
   CONTRATO
   EVIDENCIA
+  FIRMA
 }
 
 enum ProveedorStorage {

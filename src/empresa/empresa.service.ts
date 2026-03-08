@@ -43,6 +43,10 @@ export interface CreateEmpresaData {
   provincia?: string;
   distrito?: string;
   ubigeo?: string;
+  // Tercerización B2B
+  aceptaTercerizacion?: boolean;
+  descripcionTercerizacion?: string;
+  tiposServicioTercerizacion?: string[];
 }
 
 export interface EmpresaResponse {
@@ -70,6 +74,10 @@ export interface EmpresaResponse {
   usuariosActuales: number;
   creadoEn: Date;
   actualizadoEn: Date;
+  // Tercerización B2B
+  aceptaTercerizacion: boolean;
+  descripcionTercerizacion?: string | null;
+  tiposServicioTercerizacion?: string[] | null;
 }
 
 @Injectable()
@@ -689,6 +697,9 @@ export class EmpresaService {
         provincia: data.provincia,
         distrito: data.distrito,
         ubigeo: data.ubigeo,
+        ...(data.aceptaTercerizacion !== undefined && { aceptaTercerizacion: data.aceptaTercerizacion }),
+        ...(data.descripcionTercerizacion !== undefined && { descripcionTercerizacion: data.descripcionTercerizacion }),
+        ...(data.tiposServicioTercerizacion !== undefined && { tiposServicioTercerizacion: data.tiposServicioTercerizacion }),
       },
       include: {
         planSuscripcion: true,
@@ -743,6 +754,10 @@ export class EmpresaService {
       usuariosActuales: empresa.usuariosActuales,
       creadoEn: empresa.creadoEn,
       actualizadoEn: empresa.actualizadoEn,
+      // Tercerización B2B
+      aceptaTercerizacion: empresa.aceptaTercerizacion ?? false,
+      descripcionTercerizacion: empresa.descripcionTercerizacion ?? null,
+      tiposServicioTercerizacion: empresa.tiposServicioTercerizacion ?? null,
     };
   }
 

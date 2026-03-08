@@ -227,6 +227,49 @@ export class PlanLimitsService {
   }
 
   /**
+   * Verifica si la empresa puede crear más campos de configuración de servicio
+   */
+  async checkConfiguracionCamposLimit(empresaId: string): Promise<void> {
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: {
+        planSuscripcion: {
+          select: {
+            limitePlantillasAtributos: true,
+            nombre: true,
+          },
+        },
+      },
+    });
+
+    if (!empresa || !empresa.planSuscripcion) {
+      throw new ForbiddenException(
+        'La empresa no tiene un plan de suscripción activo',
+      );
+    }
+
+    const limite = empresa.planSuscripcion.limitePlantillasAtributos;
+
+    if (limite === null || limite === undefined) {
+      return;
+    }
+
+    const camposActuales = await this.prisma.configuracionCamposServicio.count({
+      where: {
+        empresaId,
+        isActive: true,
+      },
+    });
+
+    if (camposActuales >= limite) {
+      throw new ForbiddenException(
+        `Has alcanzado el límite de ${limite} campo(s) de configuración para el plan ${empresa.planSuscripcion.nombre}. ` +
+        `Actualiza tu plan para crear más campos personalizados.`,
+      );
+    }
+  }
+
+  /**
    * Obtiene información de límites y uso actual del plan
    */
   async getPlanLimitsInfo(empresaId: string) {

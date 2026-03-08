@@ -92,6 +92,36 @@ export class ConfiguracionResponseDto {
   @ApiProperty({ description: 'Configuración de códigos de ventas (Notas de Venta)', type: ConfigProductosDto })
   ventas: ConfigProductosDto;
 
+  @ApiProperty({ description: 'Configuración de códigos de componentes', type: ConfigSeccionDto })
+  componentes: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de órdenes de servicio', type: ConfigSeccionDto })
+  ordenesServicio: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de proveedores', type: ConfigSeccionDto })
+  proveedores: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de transferencias', type: ConfigSeccionDto })
+  transferencias: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de órdenes de compra', type: ConfigSeccionDto })
+  ordenesCompra: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de compras', type: ConfigSeccionDto })
+  compras: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de lotes', type: ConfigSeccionDto })
+  lotes: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de sedes', type: ConfigSeccionDto })
+  sedes: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de reportes de incidencia', type: ConfigSeccionDto })
+  reportesIncidencia: ConfigSeccionDto;
+
+  @ApiProperty({ description: 'Configuración de códigos de inventarios', type: ConfigSeccionDto })
+  inventarios: ConfigSeccionDto;
+
   @ApiProperty({ description: 'Configuración de códigos de documentos', type: ConfigDocumentosDto })
   documentos: ConfigDocumentosDto;
 
