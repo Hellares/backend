@@ -49,7 +49,7 @@ export class ClienteEmpresaService {
         data.empresaId,
       );
 
-    return this.prisma.clienteEmpresa.create({
+    const created = await this.prisma.clienteEmpresa.create({
       data: {
         empresaId: data.empresaId,
         codigo,
@@ -92,6 +92,22 @@ export class ClienteEmpresaService {
         contactos: true,
       },
     });
+
+    // Hint de vinculación: verificar si existe una Empresa tenant con el mismo RUC
+    let empresaVinculable = null;
+    if ((data.tipoDocumento ?? 'RUC') === 'RUC') {
+      empresaVinculable = await this.prisma.empresa.findFirst({
+        where: {
+          ruc: created.numeroDocumento,
+          id: { not: data.empresaId },
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { id: true, nombre: true, logo: true, rubro: true },
+      });
+    }
+
+    return { ...created, empresaVinculable };
   }
 
   async findAll(empresaId: string, query: QueryClienteEmpresaDto) {

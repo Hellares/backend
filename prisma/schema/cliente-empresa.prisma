@@ -47,6 +47,11 @@ model ClienteEmpresa {
   creadoEn       DateTime @default(now())
   actualizadoEn  DateTime @updatedAt
 
+  // Vinculación B2B
+  empresaVinculadaId  String?
+  empresaVinculadaRef Empresa? @relation("EmpresaVinculadaClientes", fields: [empresaVinculadaId], references: [id])
+  vinculaciones       VinculacionEmpresa[]
+
   // Relaciones
   empresa         Empresa                  @relation(fields: [empresaId], references: [id])
   contactos       ClienteEmpresaContacto[]

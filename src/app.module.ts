@@ -28,6 +28,7 @@ import { ServicioModule } from './servicio/servicio.module';
 import { ArchivingModule } from './archiving/archiving.module';
 import { AvisoMantenimientoModule } from './aviso-mantenimiento/aviso-mantenimiento.module';
 import { TercerizacionModule } from './tercerizacion/tercerizacion.module';
+import { VinculacionModule } from './vinculacion/vinculacion.module';
 import { ClienteEmpresaModule } from './cliente-empresa/cliente-empresa.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
@@ -70,6 +71,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     ArchivingModule,
     AvisoMantenimientoModule,
     TercerizacionModule,
+    VinculacionModule,
     ClienteEmpresaModule,
   ],
   controllers: [AppController],

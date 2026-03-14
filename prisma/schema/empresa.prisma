@@ -128,6 +128,11 @@ model Empresa {
   tercerizacionesEnviadas       TercerizacionServicio[] @relation("TercerizacionOrigen")
   tercerizacionesRecibidas      TercerizacionServicio[] @relation("TercerizacionDestino")
 
+  // Relaciones para vinculación B2B
+  vinculacionesSolicitadas   VinculacionEmpresa[] @relation("VinculacionesSolicitadas")
+  vinculacionesRecibidas     VinculacionEmpresa[] @relation("VinculacionesRecibidas")
+  clientesEmpresaVinculados  ClienteEmpresa[]     @relation("EmpresaVinculadaClientes")
+
   // Relaciones para avisos de mantenimiento
   configuracionAvisoMantenimiento ConfiguracionAvisoMantenimiento?
   avisosMantenimiento             AvisoMantenimiento[]

@@ -1,0 +1,33 @@
+// =========================================
+// MÓDULO DE VINCULACIÓN B2B
+// =========================================
+
+enum EstadoVinculacion {
+  PENDIENTE
+  ACEPTADA
+  RECHAZADA
+  CANCELADA
+  DESVINCULADA
+}
+
+model VinculacionEmpresa {
+  id                   String            @id @default(cuid())
+  empresaSolicitanteId String
+  empresaVinculadaId   String
+  clienteEmpresaId     String
+  estado               EstadoVinculacion @default(PENDIENTE)
+  mensaje              String?
+  motivoRechazo        String?
+  fechaSolicitud       DateTime          @default(now())
+  fechaRespuesta       DateTime?
+  creadoEn             DateTime          @default(now())
+  actualizadoEn        DateTime          @updatedAt
+
+  empresaSolicitante Empresa        @relation("VinculacionesSolicitadas", fields: [empresaSolicitanteId], references: [id])
+  empresaVinculada   Empresa        @relation("VinculacionesRecibidas", fields: [empresaVinculadaId], references: [id])
+  clienteEmpresa     ClienteEmpresa @relation(fields: [clienteEmpresaId], references: [id])
+
+  @@unique([empresaSolicitanteId, empresaVinculadaId])
+  @@index([empresaVinculadaId, estado])
+  @@index([clienteEmpresaId])
+}

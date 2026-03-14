@@ -311,6 +311,8 @@ enum TipoCampoServicio {
   TELEFONO
   URL
   OBJETO
+  PATRON_DESBLOQUEO
+  INSPECCION_VISUAL
 }
 
 enum CategoriaCampo {

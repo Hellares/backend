@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
-import { EstadoOrdenServicio, EstadoTercerizacion, OrigenOrden } from '@prisma/client';
+import { EstadoOrdenServicio, EstadoTercerizacion, EstadoVinculacion, OrigenOrden } from '@prisma/client';
 import { CreateTercerizacionDto } from './dto/create-tercerizacion.dto';
 import { RespondTercerizacionDto } from './dto/respond-tercerizacion.dto';
 import { CompleteTercerizacionDto } from './dto/complete-tercerizacion.dto';
@@ -19,6 +19,78 @@ export class TercerizacionService {
     private prisma: PrismaService,
     private configuracionCodigosService: ConfiguracionCodigosService,
   ) {}
+
+  // ─── Empresas vinculadas que aceptan tercerización ───
+
+  async getEmpresasVinculadas(empresaId: string) {
+    // Obtener IDs de empresas vinculadas (aceptadas)
+    const vinculaciones = await this.prisma.vinculacionEmpresa.findMany({
+      where: {
+        estado: EstadoVinculacion.ACEPTADA,
+        OR: [
+          { empresaSolicitanteId: empresaId },
+          { empresaVinculadaId: empresaId },
+        ],
+      },
+      select: {
+        empresaSolicitanteId: true,
+        empresaVinculadaId: true,
+      },
+    });
+
+    // Extraer IDs de las otras empresas
+    const empresaIds = vinculaciones.map((v) =>
+      v.empresaSolicitanteId === empresaId
+        ? v.empresaVinculadaId
+        : v.empresaSolicitanteId,
+    );
+
+    if (empresaIds.length === 0) return [];
+
+    // Buscar solo las que aceptan tercerización
+    const empresas = await this.prisma.empresa.findMany({
+      where: {
+        id: { in: empresaIds },
+        aceptaTercerizacion: true,
+        isActive: true,
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        nombre: true,
+        logo: true,
+        rubro: true,
+        telefono: true,
+        email: true,
+        descripcionTercerizacion: true,
+        tiposServicioTercerizacion: true,
+        departamento: true,
+        provincia: true,
+        distrito: true,
+        direccionFiscal: true,
+        sedes: {
+          where: { esPrincipal: true, isActive: true },
+          select: {
+            id: true,
+            nombre: true,
+            direccion: true,
+            distrito: true,
+            provincia: true,
+            departamento: true,
+          },
+          take: 1,
+        },
+      },
+      orderBy: { nombre: 'asc' },
+    });
+
+    return empresas.map((e) => ({
+      ...e,
+      sedePrincipal: e.sedes[0] || null,
+      sedes: undefined,
+      esVinculada: true,
+    }));
+  }
 
   // ─── Directorio: buscar empresas que aceptan tercerización ───
 

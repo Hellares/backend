@@ -29,6 +29,17 @@ import { QueryDirectorioDto } from './dto/query-directorio.dto';
 export class TercerizacionController {
   constructor(private readonly tercerizacionService: TercerizacionService) {}
 
+  // ─── Empresas vinculadas ───
+
+  @Get('vinculadas')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Obtener empresas vinculadas que aceptan tercerización' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  getEmpresasVinculadas(@Headers('x-tenant-id') empresaId: string) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.tercerizacionService.getEmpresasVinculadas(empresaId);
+  }
+
   // ─── Directorio de empresas ───
 
   @Get('directorio')
