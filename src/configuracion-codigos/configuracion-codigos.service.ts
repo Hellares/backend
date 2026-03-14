@@ -2121,6 +2121,75 @@ export class ConfiguracionCodigosService {
     return { codigoClienteEmpresa };
   }
 
+  // =====================================================
+  // GENERAR CÓDIGO DE CITA
+  // =====================================================
+
+  /**
+   * GENERAR CÓDIGO DE CITA
+   * Formato configurable: CITA-00001 (por defecto)
+   */
+  async generarCodigoCita(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    if (tx) {
+      return await this._generarCodigoCitaInTransaction(tx, empresaId);
+    }
+
+    return await this.withSerializableTransaction(async (txInner) => {
+      return await this._generarCodigoCitaInTransaction(txInner, empresaId);
+    });
+  }
+
+  private async _generarCodigoCitaInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    depth = 0,
+  ): Promise<string> {
+    this.assertRetryLimit(depth, 'cita');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
+
+    const ultimaCita = await tx.cita.findFirst({
+      where: { empresaId, codigo: { startsWith: config.citaCodigo } },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
+    });
+    if (ultimaCita) {
+      const match = ultimaCita.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimaCita) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimaCita" = GREATEST("ultimaCita", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
+      }
+    }
+
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimaCita: { increment: 1 } },
+    });
+
+    const numero = updated.ultimaCita.toString().padStart(config.citaLongitud, '0');
+    const codigo = `${config.citaCodigo}${config.citaSeparador}${numero}`;
+
+    const existe = await tx.cita.findFirst({
+      where: { empresaId, codigo },
+      select: { id: true },
+    });
+    if (existe) {
+      this.logger.warn(`Código de cita ${codigo} ya existe. Reintentando...`);
+      return this._generarCodigoCitaInTransaction(tx, empresaId, depth + 1);
+    }
+
+    return codigo;
+  }
+
   /**
    * Formatear código con prefijo, separador y número
    */

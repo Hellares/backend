@@ -141,6 +141,9 @@ model Empresa {
   configuracionDocumentos  ConfiguracionDocumentos?
   plantillasDocumentos     PlantillaDocumento[]
 
+  // Relaciones para módulo de citas
+  citas Cita[]
+
   @@index([subdominio])
   @@index([isActive])
   @@index([ruc])
@@ -231,6 +234,10 @@ model ConfiguracionCodigos {
   clienteEmpresaSeparador String   @default("-")
   clienteEmpresaLongitud  Int      @default(3)
   ultimoClienteEmpresa    Int      @default(0)
+  citaCodigo              String   @default("CITA")
+  citaSeparador           String   @default("-")
+  citaLongitud            Int      @default(5)
+  ultimaCita              Int      @default(0)
   ultimoFactura         Int      @default(0)
   ultimaBoleta          Int      @default(0)
   ultimaNotaCredito     Int      @default(0)
@@ -323,6 +330,9 @@ model Sede {
   ordenesCompra OrdenCompra[]
   compras       Compra[]
   lotes         Lote[]
+
+  // Relaciones para módulo de citas
+  citas Cita[]
 
   // Relaciones futuras (descomentar cuando se implementen)
   // ventas      Venta[]
@@ -423,6 +433,15 @@ model ConfiguracionEmpresa {
   monedasPermitidas         String[] @default(["PEN", "USD"])
   diasVigenciaCotizacion    Int      @default(30)
   condicionesDefault        String?
+
+  // Etiquetas personalizables para sección equipo en órdenes de servicio
+  etiquetaSeccionEquipo     String?  // "EQUIPO", "VEHICULO", "SERVICIO", etc.
+  etiquetaTipoEquipo        String?  // "Tipo de equipo", "Tipo de vehículo", etc.
+  etiquetaMarcaEquipo       String?  // "Marca", "Marca/Modelo", etc.
+  etiquetaNumeroSerie       String?  // "Número de serie", "Placa", "N° Chasis", etc.
+  etiquetaCondicionEquipo   String?  // "Condición del equipo", "Estado del vehículo", etc.
+  mostrarSeccionEquipo      Boolean  @default(true)  // Permite ocultar la sección completa
+
   creadoEn                  DateTime @default(now())
   actualizadoEn             DateTime @updatedAt
   empresa                   Empresa  @relation(fields: [empresaId], references: [id])

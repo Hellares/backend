@@ -1370,6 +1370,70 @@ export class EmpresaService {
   /**
    * Obtener configuración fiscal/operativa de la empresa
    */
+  getEtiquetasDefaultPorRubro(rubro: string) {
+    const defaults: Record<string, any> = {
+      TECNOLOGIA: {
+        etiquetaSeccionEquipo: 'EQUIPO',
+        etiquetaTipoEquipo: 'Tipo de equipo',
+        etiquetaMarcaEquipo: 'Marca',
+        etiquetaNumeroSerie: 'Número de serie',
+        etiquetaCondicionEquipo: 'Condición del equipo',
+        mostrarSeccionEquipo: true,
+      },
+      AUTOMOTRIZ: {
+        etiquetaSeccionEquipo: 'VEHÍCULO',
+        etiquetaTipoEquipo: 'Tipo de vehículo',
+        etiquetaMarcaEquipo: 'Marca / Modelo',
+        etiquetaNumeroSerie: 'Placa',
+        etiquetaCondicionEquipo: 'Estado del vehículo',
+        mostrarSeccionEquipo: true,
+      },
+      SALUD: {
+        etiquetaSeccionEquipo: 'EQUIPO MÉDICO',
+        etiquetaTipoEquipo: 'Tipo de equipo',
+        etiquetaMarcaEquipo: 'Marca / Modelo',
+        etiquetaNumeroSerie: 'Número de serie',
+        etiquetaCondicionEquipo: 'Estado del equipo',
+        mostrarSeccionEquipo: true,
+      },
+      HOGAR: {
+        etiquetaSeccionEquipo: 'ELECTRODOMÉSTICO',
+        etiquetaTipoEquipo: 'Tipo de electrodoméstico',
+        etiquetaMarcaEquipo: 'Marca / Modelo',
+        etiquetaNumeroSerie: 'Número de serie',
+        etiquetaCondicionEquipo: 'Estado del equipo',
+        mostrarSeccionEquipo: true,
+      },
+      CONSTRUCCION: {
+        etiquetaSeccionEquipo: 'MAQUINARIA',
+        etiquetaTipoEquipo: 'Tipo de maquinaria',
+        etiquetaMarcaEquipo: 'Marca / Modelo',
+        etiquetaNumeroSerie: 'Número de serie / Placa',
+        etiquetaCondicionEquipo: 'Estado de la maquinaria',
+        mostrarSeccionEquipo: true,
+      },
+      GASTRONOMIA: {
+        mostrarSeccionEquipo: false,
+      },
+      MODA: {
+        mostrarSeccionEquipo: false,
+      },
+      EDUCACION: {
+        mostrarSeccionEquipo: false,
+      },
+      DEPORTES: {
+        etiquetaSeccionEquipo: 'ARTÍCULO',
+        etiquetaTipoEquipo: 'Tipo de artículo',
+        etiquetaMarcaEquipo: 'Marca',
+        etiquetaNumeroSerie: 'Referencia',
+        etiquetaCondicionEquipo: 'Estado del artículo',
+        mostrarSeccionEquipo: true,
+      },
+    };
+
+    return defaults[rubro] ?? defaults.TECNOLOGIA;
+  }
+
   async getConfiguracion(empresaId: string, userId: string): Promise<ConfiguracionEmpresaResponseDto> {
     this.logger.info('Getting empresa configuration', { empresaId, userId });
 
@@ -1446,6 +1510,12 @@ export class EmpresaService {
         ...(data.monedasPermitidas !== undefined && { monedasPermitidas: data.monedasPermitidas }),
         ...(data.diasVigenciaCotizacion !== undefined && { diasVigenciaCotizacion: data.diasVigenciaCotizacion }),
         ...(data.condicionesDefault !== undefined && { condicionesDefault: data.condicionesDefault }),
+        ...(data.etiquetaSeccionEquipo !== undefined && { etiquetaSeccionEquipo: data.etiquetaSeccionEquipo }),
+        ...(data.etiquetaTipoEquipo !== undefined && { etiquetaTipoEquipo: data.etiquetaTipoEquipo }),
+        ...(data.etiquetaMarcaEquipo !== undefined && { etiquetaMarcaEquipo: data.etiquetaMarcaEquipo }),
+        ...(data.etiquetaNumeroSerie !== undefined && { etiquetaNumeroSerie: data.etiquetaNumeroSerie }),
+        ...(data.etiquetaCondicionEquipo !== undefined && { etiquetaCondicionEquipo: data.etiquetaCondicionEquipo }),
+        ...(data.mostrarSeccionEquipo !== undefined && { mostrarSeccionEquipo: data.mostrarSeccionEquipo }),
       },
       create: {
         empresaId,

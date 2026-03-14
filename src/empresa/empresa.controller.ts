@@ -370,6 +370,15 @@ export class EmpresaController {
   }
 
   /**
+   * Obtener etiquetas por defecto según rubro
+   */
+  @Get('etiquetas-equipo/:rubro')
+  @ApiOperation({ summary: 'Obtener etiquetas de equipo por defecto según rubro' })
+  getEtiquetasDefault(@Param('rubro') rubro: string) {
+    return this.empresaService.getEtiquetasDefaultPorRubro(rubro);
+  }
+
+  /**
    * Obtener configuración fiscal/operativa de la empresa
    */
   @Get(':id/configuracion')

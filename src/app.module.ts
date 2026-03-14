@@ -30,6 +30,7 @@ import { AvisoMantenimientoModule } from './aviso-mantenimiento/aviso-mantenimie
 import { TercerizacionModule } from './tercerizacion/tercerizacion.module';
 import { VinculacionModule } from './vinculacion/vinculacion.module';
 import { ClienteEmpresaModule } from './cliente-empresa/cliente-empresa.module';
+import { CitaModule } from './cita/cita.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -73,6 +74,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     TercerizacionModule,
     VinculacionModule,
     ClienteEmpresaModule,
+    CitaModule,
   ],
   controllers: [AppController],
   providers: [

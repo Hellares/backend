@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsInt, IsOptional, IsArray, Min, Max, ArrayNotEmpty } from 'class-validator';
+import { IsString, IsNumber, IsInt, IsOptional, IsArray, IsBoolean, Min, Max, ArrayNotEmpty } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class ConfiguracionEmpresaDto {
@@ -64,6 +64,36 @@ export class ConfiguracionEmpresaDto {
   @IsOptional()
   @IsString()
   condicionesDefault?: string;
+
+  @ApiPropertyOptional({ description: 'Etiqueta para la sección equipo', example: 'VEHICULO' })
+  @IsOptional()
+  @IsString()
+  etiquetaSeccionEquipo?: string;
+
+  @ApiPropertyOptional({ description: 'Etiqueta para tipo de equipo', example: 'Tipo de vehículo' })
+  @IsOptional()
+  @IsString()
+  etiquetaTipoEquipo?: string;
+
+  @ApiPropertyOptional({ description: 'Etiqueta para marca', example: 'Marca/Modelo' })
+  @IsOptional()
+  @IsString()
+  etiquetaMarcaEquipo?: string;
+
+  @ApiPropertyOptional({ description: 'Etiqueta para número de serie', example: 'Placa' })
+  @IsOptional()
+  @IsString()
+  etiquetaNumeroSerie?: string;
+
+  @ApiPropertyOptional({ description: 'Etiqueta para condición', example: 'Estado del vehículo' })
+  @IsOptional()
+  @IsString()
+  etiquetaCondicionEquipo?: string;
+
+  @ApiPropertyOptional({ description: 'Mostrar/ocultar sección equipo', default: true })
+  @IsOptional()
+  @IsBoolean()
+  mostrarSeccionEquipo?: boolean;
 }
 
 export class ConfiguracionEmpresaResponseDto {
@@ -93,6 +123,24 @@ export class ConfiguracionEmpresaResponseDto {
 
   @ApiPropertyOptional()
   condicionesDefault?: string;
+
+  @ApiPropertyOptional()
+  etiquetaSeccionEquipo?: string;
+
+  @ApiPropertyOptional()
+  etiquetaTipoEquipo?: string;
+
+  @ApiPropertyOptional()
+  etiquetaMarcaEquipo?: string;
+
+  @ApiPropertyOptional()
+  etiquetaNumeroSerie?: string;
+
+  @ApiPropertyOptional()
+  etiquetaCondicionEquipo?: string;
+
+  @ApiProperty({ default: true })
+  mostrarSeccionEquipo: boolean;
 
   @ApiProperty()
   creadoEn: Date;

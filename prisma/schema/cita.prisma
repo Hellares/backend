@@ -1,0 +1,65 @@
+// =========================================
+// MÓDULO DE CITAS / AGENDAMIENTO
+// =========================================
+
+enum EstadoCita {
+  PENDIENTE
+  CONFIRMADA
+  EN_PROCESO
+  COMPLETADA
+  CANCELADA
+  NO_ASISTIO
+}
+
+model Cita {
+  id                String     @id @default(cuid())
+  empresaId         String
+  sedeId            String
+  servicioId        String
+  tecnicoId         String
+  clienteId         String?      // EmpresaPersona (persona natural)
+  clienteEmpresaId  String?      // ClienteEmpresa (empresa)
+  codigo            String       // CITA-00001
+  fecha             DateTime     @db.Date
+  horaInicio        String       // "09:00"
+  horaFin           String       // "10:00"
+  estado            EstadoCita   @default(PENDIENTE)
+  notas             String?
+  ordenServicioId   String?
+  creadoPor         String?
+  canceladoPor      String?
+  motivoCancelacion String?
+  creadoEn          DateTime     @default(now())
+  actualizadoEn     DateTime     @updatedAt
+
+  empresa          Empresa         @relation(fields: [empresaId], references: [id])
+  sede             Sede            @relation(fields: [sedeId], references: [id])
+  servicio         Servicio        @relation(fields: [servicioId], references: [id])
+  tecnico          Usuario         @relation("CitasTecnico", fields: [tecnicoId], references: [id])
+  cliente          EmpresaPersona? @relation(fields: [clienteId], references: [id])
+  clienteEmpresa   ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
+  ordenServicio    OrdenServicio?  @relation(fields: [ordenServicioId], references: [id])
+  historial        HistorialCita[]
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId, fecha])
+  @@index([empresaId, tecnicoId, fecha])
+  @@index([empresaId, estado])
+  @@index([sedeId, fecha])
+  @@index([clienteId])
+  @@index([clienteEmpresaId])
+  @@index([ordenServicioId])
+}
+
+model HistorialCita {
+  id             String     @id @default(cuid())
+  citaId         String
+  estadoAnterior EstadoCita
+  estadoNuevo    EstadoCita
+  notas          String?
+  creadoPor      String?
+  creadoEn       DateTime   @default(now())
+  cita           Cita       @relation(fields: [citaId], references: [id], onDelete: Cascade)
+
+  @@index([citaId])
+}

@@ -101,6 +101,9 @@ model Usuario {
   // Relaciones para cotizaciones
   cotizacionesVendedor Cotizacion[] @relation("CotizacionVendedor")
 
+  // Relaciones para módulo de citas
+  citasTecnico Cita[] @relation("CitasTecnico")
+
   @@index([email])
   @@index([telefono])
   @@index([personaId])
@@ -146,6 +149,7 @@ model EmpresaPersona {
   ordenesServicio     OrdenServicio[]          @relation("OrdenServicioCliente")
   cotizaciones        Cotizacion[]
   avisosMantenimiento AvisoMantenimiento[]
+  citas               Cita[]
 
   @@unique([personaId, empresaId])
   @@index([empresaId])

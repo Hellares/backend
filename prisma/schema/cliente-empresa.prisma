@@ -58,6 +58,7 @@ model ClienteEmpresa {
   ordenesServicio OrdenServicio[]
   cotizaciones    Cotizacion[]
   comprobantes    ComprobanteElectronico[] @relation("ComprobanteClienteEmpresa")
+  citas           Cita[]
 
   @@unique([empresaId, codigo])
   @@unique([empresaId, numeroDocumento])
