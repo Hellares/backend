@@ -14,6 +14,7 @@ import {
   QueryTecnicosDisponiblesDto,
 } from './dto/query-cita.dto';
 import { TransitionEstadoCitaDto } from './dto/transition-estado-cita.dto';
+import { CreateCitaItemDto, UpdateCitaItemDto } from './dto/cita-item.dto';
 
 // State machine de citas
 const VALID_TRANSITIONS: Record<EstadoCita, EstadoCita[]> = {
@@ -43,7 +44,13 @@ const CITA_BASE_INCLUDE = {
 const CITA_DETAIL_INCLUDE = {
   ...CITA_BASE_INCLUDE,
   ordenServicio: { select: { id: true, codigo: true, estado: true } },
+  siguienteCita: { select: { id: true, codigo: true, fecha: true, horaInicio: true, estado: true } },
+  citaAnterior: { select: { id: true, codigo: true, fecha: true, horaInicio: true, estado: true } },
   historial: { orderBy: { creadoEn: 'desc' as const } },
+  items: {
+    include: { producto: { select: { id: true, nombre: true, codigoEmpresa: true } } },
+    orderBy: { creadoEn: 'asc' as const },
+  },
 } as const;
 
 @Injectable()
@@ -252,7 +259,7 @@ export class CitaService {
       }
     }
 
-    return this.prisma.cita.update({
+    const updated = await this.prisma.cita.update({
       where: { id },
       data: {
         ...(dto.servicioId && { servicioId: dto.servicioId }),
@@ -263,9 +270,21 @@ export class CitaService {
         ...(dto.horaInicio && { horaInicio: dto.horaInicio }),
         ...(dto.horaFin && { horaFin: dto.horaFin }),
         ...(dto.notas !== undefined && { notas: dto.notas }),
+        ...(dto.costoServicio !== undefined && { costoServicio: dto.costoServicio }),
+        ...(dto.descuento !== undefined && { descuento: dto.descuento }),
+        ...(dto.adelanto !== undefined && { adelanto: dto.adelanto }),
+        ...(dto.metodoPagoAdelanto !== undefined && { metodoPagoAdelanto: dto.metodoPagoAdelanto }),
+        ...(dto.datosPersonalizados !== undefined && { datosPersonalizados: dto.datosPersonalizados }),
       },
       include: CITA_BASE_INCLUDE,
     });
+
+    // Recalcular total si cambiaron costos
+    if (dto.costoServicio !== undefined || dto.descuento !== undefined) {
+      await this.recalcularCostos(id);
+    }
+
+    return updated;
   }
 
   // ─── State Machine ───
@@ -330,6 +349,39 @@ export class CitaService {
       },
     });
 
+    // Programar siguiente cita si se solicita
+    let siguienteCitaCreada = null;
+    if (
+      dto.nuevoEstado === EstadoCita.COMPLETADA &&
+      dto.siguienteCita
+    ) {
+      const sc = dto.siguienteCita;
+      const codigoSiguiente = await this.configuracionCodigosService.generarCodigoCita(empresaId);
+      siguienteCitaCreada = await this.prisma.cita.create({
+        data: {
+          empresaId,
+          sedeId: cita.sedeId,
+          servicioId: cita.servicioId,
+          tecnicoId: sc.tecnicoId ?? cita.tecnicoId,
+          clienteId: cita.clienteId,
+          clienteEmpresaId: cita.clienteEmpresaId,
+          codigo: codigoSiguiente,
+          fecha: new Date(sc.fecha),
+          horaInicio: sc.horaInicio,
+          horaFin: sc.horaFin,
+          notas: sc.notas,
+          creadoPor: usuarioId,
+        },
+        select: { id: true, codigo: true, fecha: true, horaInicio: true },
+      });
+
+      // Vincular cita actual → siguiente
+      await this.prisma.cita.update({
+        where: { id },
+        data: { siguienteCitaId: siguienteCitaCreada.id },
+      });
+    }
+
     return {
       ...citaActualizada,
       ...(ordenServicioCreada && {
@@ -338,6 +390,45 @@ export class CitaService {
           codigo: ordenServicioCreada.codigo,
         },
       }),
+      ...(siguienteCitaCreada && {
+        siguienteCitaCreada: {
+          id: siguienteCitaCreada.id,
+          codigo: siguienteCitaCreada.codigo,
+        },
+      }),
+    };
+  }
+
+  // ─── Historial de citas por cliente ───
+
+  async getHistorialCliente(
+    empresaId: string,
+    clienteId: string,
+    clienteEmpresaId?: string,
+  ) {
+    const where: any = { empresaId };
+
+    if (clienteId) {
+      where.clienteId = clienteId;
+    } else if (clienteEmpresaId) {
+      where.clienteEmpresaId = clienteEmpresaId;
+    } else {
+      return { citas: [], total: 0 };
+    }
+
+    const citas = await this.prisma.cita.findMany({
+      where,
+      include: {
+        ...CITA_BASE_INCLUDE,
+        siguienteCita: { select: { id: true, codigo: true, fecha: true, horaInicio: true, estado: true } },
+      },
+      orderBy: [{ fecha: 'desc' }, { horaInicio: 'desc' }],
+      take: 50,
+    });
+
+    return {
+      citas,
+      total: citas.length,
     };
   }
 
@@ -501,6 +592,101 @@ export class CitaService {
     });
   }
 
+  // ─── Items / Productos de la cita ───
+
+  async addItem(empresaId: string, citaId: string, dto: CreateCitaItemDto) {
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    // Si viene productoId, validar que existe y tomar nombre
+    if (dto.productoId) {
+      const producto = await this.prisma.producto.findFirst({
+        where: { id: dto.productoId, empresaId, isActive: true },
+      });
+      if (!producto) throw new NotFoundException('Producto no encontrado');
+      if (!dto.nombre) dto.nombre = producto.nombre;
+    }
+
+    const subtotal = dto.cantidad * dto.precioUnitario;
+
+    const item = await this.prisma.citaItem.create({
+      data: {
+        citaId,
+        productoId: dto.productoId,
+        nombre: dto.nombre,
+        descripcion: dto.descripcion,
+        cantidad: dto.cantidad,
+        precioUnitario: dto.precioUnitario,
+        subtotal,
+      },
+      include: {
+        producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+      },
+    });
+
+    await this.recalcularCostos(citaId);
+    return item;
+  }
+
+  async updateItem(empresaId: string, citaId: string, itemId: string, dto: UpdateCitaItemDto) {
+    const existingItem = await this.prisma.citaItem.findFirst({
+      where: { id: itemId, cita: { id: citaId, empresaId } },
+    });
+    if (!existingItem) throw new NotFoundException('Item no encontrado');
+
+    const cantidad = dto.cantidad ?? Number(existingItem.cantidad);
+    const precioUnitario = dto.precioUnitario ?? Number(existingItem.precioUnitario);
+    const subtotal = cantidad * precioUnitario;
+
+    const updated = await this.prisma.citaItem.update({
+      where: { id: itemId },
+      data: {
+        ...(dto.nombre && { nombre: dto.nombre }),
+        ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
+        ...(dto.cantidad && { cantidad: dto.cantidad }),
+        ...(dto.precioUnitario !== undefined && { precioUnitario: dto.precioUnitario }),
+        subtotal,
+      },
+      include: {
+        producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+      },
+    });
+
+    await this.recalcularCostos(citaId);
+    return updated;
+  }
+
+  async removeItem(empresaId: string, citaId: string, itemId: string) {
+    const existingItem = await this.prisma.citaItem.findFirst({
+      where: { id: itemId, cita: { id: citaId, empresaId } },
+    });
+    if (!existingItem) throw new NotFoundException('Item no encontrado');
+
+    await this.prisma.citaItem.delete({ where: { id: itemId } });
+    await this.recalcularCostos(citaId);
+  }
+
+  async getItems(empresaId: string, citaId: string) {
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    const items = await this.prisma.citaItem.findMany({
+      where: { citaId },
+      include: {
+        producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+      },
+      orderBy: { creadoEn: 'asc' },
+    });
+
+    const total = items.reduce((acc, item) => acc + Number(item.subtotal), 0);
+
+    return { items, total };
+  }
+
   // ─── Helpers privados ───
 
   private generarSlots(
@@ -622,6 +808,34 @@ export class CitaService {
         descripcionProblema: cita.notas,
       },
       select: { id: true, codigo: true },
+    });
+  }
+
+  /**
+   * Recalcula costoProductos y costoTotal de una cita
+   */
+  private async recalcularCostos(citaId: string) {
+    const items = await this.prisma.citaItem.findMany({
+      where: { citaId },
+      select: { subtotal: true },
+    });
+    const costoProductos = items.reduce((acc, i) => acc + Number(i.subtotal), 0);
+
+    const cita = await this.prisma.cita.findUnique({
+      where: { id: citaId },
+      select: { costoServicio: true, descuento: true },
+    });
+
+    const costoServicio = Number(cita?.costoServicio ?? 0);
+    const descuento = Number(cita?.descuento ?? 0);
+    const costoTotal = costoServicio + costoProductos - descuento;
+
+    await this.prisma.cita.update({
+      where: { id: citaId },
+      data: {
+        costoProductos,
+        costoTotal: Math.max(0, costoTotal),
+      },
     });
   }
 

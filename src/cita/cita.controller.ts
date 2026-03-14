@@ -4,11 +4,14 @@ import {
   Post,
   Put,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
   UseGuards,
   Headers,
+  HttpCode,
+  HttpStatus,
   BadRequestException,
 } from '@nestjs/common';
 import {
@@ -34,6 +37,7 @@ import {
   QueryTecnicosDisponiblesDto,
 } from './dto/query-cita.dto';
 import { TransitionEstadoCitaDto } from './dto/transition-estado-cita.dto';
+import { CreateCitaItemDto, UpdateCitaItemDto } from './dto/cita-item.dto';
 
 @ApiTags('Citas')
 @Controller('citas')
@@ -130,5 +134,73 @@ export class CitaController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.citaService.transitionEstado(empresaId, id, dto, usuarioId);
+  }
+
+  @Get('historial-cliente/:clienteId')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Historial de citas de un cliente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  getHistorialCliente(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('clienteId') clienteId: string,
+    @Query('clienteEmpresaId') clienteEmpresaId?: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.getHistorialCliente(empresaId, clienteId, clienteEmpresaId);
+  }
+
+  // ─── Items / Productos ───
+
+  @Get(':id/items')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Listar items de una cita' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  getItems(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.getItems(empresaId, id);
+  }
+
+  @Post(':id/items')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Agregar item/producto a una cita' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  addItem(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Body() dto: CreateCitaItemDto,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.addItem(empresaId, id, dto);
+  }
+
+  @Put(':id/items/:itemId')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Actualizar item de una cita' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  updateItem(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpdateCitaItemDto,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.updateItem(empresaId, id, itemId, dto);
+  }
+
+  @Delete(':id/items/:itemId')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Eliminar item de una cita' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  removeItem(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.removeItem(empresaId, id, itemId);
   }
 }

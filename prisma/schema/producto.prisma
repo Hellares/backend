@@ -86,6 +86,9 @@ model Producto {
   compraDetalles      CompraDetalle[]
   lotes               Lote[]
 
+  // Relaciones para módulo de citas
+  citaItems CitaItem[]
+
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
   @@index([empresaId])
