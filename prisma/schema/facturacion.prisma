@@ -101,6 +101,7 @@ model ComprobanteElectronico {
   id               String               @id @default(cuid())
   empresaId        String
   clienteId        String?
+  clienteEmpresaId String?
   tipoComprobante  TipoComprobante
   serie            String
   correlativo      String
@@ -132,6 +133,7 @@ model ComprobanteElectronico {
   creadoEn         DateTime             @default(now())
   actualizadoEn    DateTime             @updatedAt
   cliente          EmpresaPersona?      @relation("ComoCliente", fields: [clienteId], references: [id])
+  clienteEmpresa   ClienteEmpresa?      @relation("ComprobanteClienteEmpresa", fields: [clienteEmpresaId], references: [id])
   empresa          Empresa              @relation(fields: [empresaId], references: [id])
   detalles         DetalleComprobante[]
   ordenesServicio  OrdenServicio[]

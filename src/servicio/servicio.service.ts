@@ -1,6 +1,7 @@
 import {
   Injectable,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
@@ -155,8 +156,25 @@ export class ServicioService {
     });
   }
 
+  // B14 FIX: Verificar que no haya órdenes activas antes de eliminar servicio
   async remove(empresaId: string, id: string) {
     await this.findOne(empresaId, id);
+
+    const ordenesActivas = await this.prisma.ordenServicio.count({
+      where: {
+        servicioId: id,
+        empresaId,
+        estado: {
+          notIn: ['CANCELADO', 'FINALIZADO'],
+        },
+      },
+    });
+
+    if (ordenesActivas > 0) {
+      throw new BadRequestException(
+        `No se puede eliminar el servicio: tiene ${ordenesActivas} orden(es) activa(s)`,
+      );
+    }
 
     return this.prisma.servicio.update({
       where: { id },

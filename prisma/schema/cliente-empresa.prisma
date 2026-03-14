@@ -1,0 +1,82 @@
+// =========================================
+// MÓDULO DE CLIENTES EMPRESA (B2B)
+// =========================================
+
+/// Empresa cliente (persona jurídica) — patrón espejo de Proveedor
+model ClienteEmpresa {
+  id        String @id @default(cuid())
+  empresaId String
+
+  // Identificación
+  codigo          String // CE-001 (único por empresa)
+  razonSocial     String
+  nombreComercial String?
+  tipoDocumento   TipoDocumentoIdentidad @default(RUC)
+  numeroDocumento String
+
+  // Información de Contacto
+  email               String?
+  telefono            String?
+  telefonoAlternativo String?
+  sitioWeb            String?
+
+  // Dirección
+  direccion    String?
+  ciudad       String?
+  provincia    String?
+  departamento String?
+  distrito     String?
+  pais         String @default("PE")
+
+  // Datos SUNAT (snapshot al consultar RUC)
+  estadoContribuyente    String? // "ACTIVO", "SUSPENSION TEMPORAL", "BAJA"
+  condicionContribuyente String? // "HABIDO", "NO HABIDO"
+  ubigeo                 String?
+
+  // Datos Adicionales
+  notas String?
+
+  // Control
+  isActive       Boolean   @default(true)
+  deletedAt      DateTime?
+  motivoInactivo String?
+
+  // Auditoría
+  creadoPor      String
+  actualizadoPor String?
+  creadoEn       DateTime @default(now())
+  actualizadoEn  DateTime @updatedAt
+
+  // Relaciones
+  empresa         Empresa                  @relation(fields: [empresaId], references: [id])
+  contactos       ClienteEmpresaContacto[]
+  ordenesServicio OrdenServicio[]
+  cotizaciones    Cotizacion[]
+  comprobantes    ComprobanteElectronico[] @relation("ComprobanteClienteEmpresa")
+
+  @@unique([empresaId, codigo])
+  @@unique([empresaId, numeroDocumento])
+  @@index([empresaId, isActive])
+  @@index([empresaId, deletedAt])
+}
+
+/// Contactos de la empresa cliente (la "persona del pasaje")
+model ClienteEmpresaContacto {
+  id               String @id @default(cuid())
+  clienteEmpresaId String
+
+  nombre        String
+  cargo         String?
+  dni           String?
+  email         String?
+  telefono      String?
+  telefonoMovil String?
+  esPrincipal   Boolean @default(false)
+
+  creadoEn DateTime @default(now())
+
+  clienteEmpresa  ClienteEmpresa  @relation(fields: [clienteEmpresaId], references: [id], onDelete: Cascade)
+  ordenesServicio OrdenServicio[]
+
+  @@index([clienteEmpresaId])
+}

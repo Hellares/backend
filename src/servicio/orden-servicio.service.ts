@@ -15,18 +15,18 @@ import { TransitionEstadoDto } from './dto/transition-estado.dto';
 import { QueryOrdenServicioDto } from './dto/query-orden-servicio.dto';
 import { createCursorPaginatedResponse } from '../common/utils/pagination.util';
 
+// B1 FIX: TERCERIZADO removido de transiciones directas — solo se permite via tercerizacion.crear()
+// B13 FIX: LISTO_ENTREGA ahora permite revertir a EN_REPARACION y CANCELADO
 const VALID_TRANSITIONS: Record<EstadoOrdenServicio, EstadoOrdenServicio[]> = {
-  RECIBIDO: [EstadoOrdenServicio.EN_DIAGNOSTICO, EstadoOrdenServicio.CANCELADO, EstadoOrdenServicio.TERCERIZADO],
+  RECIBIDO: [EstadoOrdenServicio.EN_DIAGNOSTICO, EstadoOrdenServicio.CANCELADO],
   EN_DIAGNOSTICO: [
     EstadoOrdenServicio.ESPERANDO_APROBACION,
     EstadoOrdenServicio.EN_REPARACION,
     EstadoOrdenServicio.CANCELADO,
-    EstadoOrdenServicio.TERCERIZADO,
   ],
   ESPERANDO_APROBACION: [
     EstadoOrdenServicio.EN_REPARACION,
     EstadoOrdenServicio.CANCELADO,
-    EstadoOrdenServicio.TERCERIZADO,
   ],
   EN_REPARACION: [
     EstadoOrdenServicio.PENDIENTE_PIEZAS,
@@ -38,12 +38,50 @@ const VALID_TRANSITIONS: Record<EstadoOrdenServicio, EstadoOrdenServicio[]> = {
     EstadoOrdenServicio.CANCELADO,
   ],
   REPARADO: [EstadoOrdenServicio.LISTO_ENTREGA],
-  LISTO_ENTREGA: [EstadoOrdenServicio.ENTREGADO],
+  LISTO_ENTREGA: [EstadoOrdenServicio.ENTREGADO, EstadoOrdenServicio.EN_REPARACION, EstadoOrdenServicio.CANCELADO],
   ENTREGADO: [EstadoOrdenServicio.FINALIZADO, EstadoOrdenServicio.EN_DIAGNOSTICO],
   CANCELADO: [],
   FINALIZADO: [EstadoOrdenServicio.EN_DIAGNOSTICO],
   TERCERIZADO: [EstadoOrdenServicio.REPARADO, EstadoOrdenServicio.RECIBIDO],
 };
+
+// Estados terminales: no permiten edición ni asignación de técnico
+const ESTADOS_TERMINALES: EstadoOrdenServicio[] = [
+  EstadoOrdenServicio.CANCELADO,
+  EstadoOrdenServicio.FINALIZADO,
+  EstadoOrdenServicio.TERCERIZADO,
+];
+
+// Include reutilizable para OrdenServicio
+const ORDEN_SERVICIO_BASE_INCLUDE = {
+  cliente: { include: { persona: true } },
+  clienteEmpresa: { include: { contactos: true } },
+  contactoClienteEmpresa: true,
+  tecnico: { include: { persona: true } },
+  modeloEquipo: true,
+  servicio: true,
+} as const;
+
+const ORDEN_SERVICIO_FULL_INCLUDE = {
+  ...ORDEN_SERVICIO_BASE_INCLUDE,
+  componentes: {
+    include: { componente: { include: { tipoComponente: true } } },
+  },
+} as const;
+
+const ORDEN_SERVICIO_DETAIL_INCLUDE = {
+  ...ORDEN_SERVICIO_FULL_INCLUDE,
+  tercerizacionOrigen: {
+    include: {
+      empresaDestino: { select: { id: true, nombre: true, logo: true, telefono: true } },
+    },
+  },
+  tercerizacionDestino: {
+    include: {
+      empresaOrigen: { select: { id: true, nombre: true, logo: true, telefono: true } },
+    },
+  },
+} as const;
 
 @Injectable()
 export class OrdenServicioService {
@@ -55,18 +93,59 @@ export class OrdenServicioService {
   ) {}
 
   async create(dto: CreateOrdenServicioDto) {
-    // Validar que el cliente existe y pertenece a la empresa
-    const cliente = await this.prisma.empresaPersona.findFirst({
-      where: {
-        id: dto.clienteId,
-        empresaId: dto.empresaId,
-      },
-    });
-
-    if (!cliente) {
+    // Validar XOR: debe tener clienteId O clienteEmpresaId, pero no ambos ni ninguno
+    if (!dto.clienteId && !dto.clienteEmpresaId) {
       throw new BadRequestException(
-        'El cliente no existe o no pertenece a esta empresa',
+        'Debe especificar clienteId (persona) o clienteEmpresaId (empresa)',
       );
+    }
+    if (dto.clienteId && dto.clienteEmpresaId) {
+      throw new BadRequestException(
+        'No puede especificar clienteId y clienteEmpresaId simultáneamente',
+      );
+    }
+
+    // Validar contacto solo si es cliente empresa
+    if (dto.contactoClienteEmpresaId && !dto.clienteEmpresaId) {
+      throw new BadRequestException(
+        'contactoClienteEmpresaId solo aplica cuando se usa clienteEmpresaId',
+      );
+    }
+
+    // Validar cliente persona
+    if (dto.clienteId) {
+      const cliente = await this.prisma.empresaPersona.findFirst({
+        where: { id: dto.clienteId, empresaId: dto.empresaId },
+      });
+      if (!cliente) {
+        throw new BadRequestException(
+          'El cliente no existe o no pertenece a esta empresa',
+        );
+      }
+    }
+
+    // Validar cliente empresa
+    if (dto.clienteEmpresaId) {
+      const clienteEmpresa = await this.prisma.clienteEmpresa.findFirst({
+        where: { id: dto.clienteEmpresaId, empresaId: dto.empresaId, deletedAt: null, isActive: true },
+      });
+      if (!clienteEmpresa) {
+        throw new BadRequestException(
+          'El cliente empresa no existe, está inactivo o no pertenece a esta empresa',
+        );
+      }
+
+      // Validar contacto si se especificó
+      if (dto.contactoClienteEmpresaId) {
+        const contacto = await this.prisma.clienteEmpresaContacto.findFirst({
+          where: { id: dto.contactoClienteEmpresaId, clienteEmpresaId: dto.clienteEmpresaId },
+        });
+        if (!contacto) {
+          throw new BadRequestException(
+            'El contacto no existe o no pertenece al cliente empresa',
+          );
+        }
+      }
     }
 
     // Validar que el técnico existe y pertenece a la empresa
@@ -146,15 +225,7 @@ export class OrdenServicioService {
           ? new Date(fechaAvisoPersonalizado)
           : undefined,
       },
-      include: {
-        cliente: { include: { persona: true } },
-        tecnico: { include: { persona: true } },
-        modeloEquipo: true,
-        servicio: true,
-        componentes: {
-          include: { componente: { include: { tipoComponente: true } } },
-        },
-      },
+      include: ORDEN_SERVICIO_FULL_INCLUDE,
     });
   }
 
@@ -164,140 +235,157 @@ export class OrdenServicioService {
     dto: TransitionEstadoDto,
     usuarioId?: string,
   ) {
-    const orden = await this.findOne(empresaId, id);
-
-    const allowed = VALID_TRANSITIONS[orden.estado];
-    if (!allowed || !allowed.includes(dto.nuevoEstado)) {
+    // B1 FIX: Bloquear transición directa a TERCERIZADO desde este endpoint
+    if (dto.nuevoEstado === EstadoOrdenServicio.TERCERIZADO) {
       throw new BadRequestException(
-        `No se puede cambiar de "${orden.estado}" a "${dto.nuevoEstado}". ` +
-        `Transiciones válidas: ${allowed?.join(', ') || 'ninguna (estado terminal)'}`,
+        'No se puede cambiar a TERCERIZADO directamente. Use el módulo de tercerización.',
       );
     }
 
-    const updateData: any = {
-      estado: dto.nuevoEstado,
-    };
+    // Verificar que la orden existe antes de iniciar la transacción
+    await this.findOne(empresaId, id);
 
-    if (dto.notas) {
-      updateData.notas = dto.notas;
-    }
+    // B2 FIX: Toda la lógica de transición dentro de una transacción para evitar race conditions
+    const updatedOrden = await this.prisma.$transaction(async (tx) => {
+      // Re-leer la orden DENTRO de la transacción para evitar race conditions
+      const orden = await tx.ordenServicio.findFirst({
+        where: { id, empresaId },
+        include: {
+          componentes: {
+            include: { componente: { include: { tipoComponente: true } } },
+          },
+        },
+      });
 
-    if (dto.diagnostico) {
-      updateData.diagnostico = dto.diagnostico;
-    }
-
-    // Costos: costoTotal, adelanto, descuento - permitidos en estados operativos
-    const allowCostStates: EstadoOrdenServicio[] = [
-      EstadoOrdenServicio.RECIBIDO,
-      EstadoOrdenServicio.EN_DIAGNOSTICO,
-      EstadoOrdenServicio.ESPERANDO_APROBACION,
-      EstadoOrdenServicio.EN_REPARACION,
-      EstadoOrdenServicio.REPARADO,
-      EstadoOrdenServicio.LISTO_ENTREGA,
-      EstadoOrdenServicio.ENTREGADO,
-    ];
-    if (dto.costoTotal !== undefined) {
-      if (allowCostStates.includes(dto.nuevoEstado)) {
-        updateData.costoTotal = dto.costoTotal;
+      if (!orden) {
+        throw new NotFoundException('Orden de servicio no encontrada');
       }
-    }
-    if (dto.adelanto !== undefined) {
-      if (allowCostStates.includes(dto.nuevoEstado)) {
-        updateData.adelanto = dto.adelanto;
-        if (dto.metodoPagoAdelanto) {
-          updateData.metodoPagoAdelanto = dto.metodoPagoAdelanto;
-        }
-      }
-    }
-    if (dto.descuento !== undefined) {
-      if (allowCostStates.includes(dto.nuevoEstado)) {
-        updateData.descuento = dto.descuento;
-      }
-    }
 
-    // Actualizar estadoDiagnostico según el estado
-    if (dto.nuevoEstado === EstadoOrdenServicio.EN_DIAGNOSTICO) {
-      updateData.estadoDiagnostico = EstadoDiagnostico.EN_PROGRESO;
-    } else if (dto.nuevoEstado === EstadoOrdenServicio.ESPERANDO_APROBACION) {
-      updateData.estadoDiagnostico = EstadoDiagnostico.COMPLETADO;
-    } else if (
-      dto.nuevoEstado === EstadoOrdenServicio.EN_REPARACION ||
-      dto.nuevoEstado === EstadoOrdenServicio.REPARADO ||
-      dto.nuevoEstado === EstadoOrdenServicio.ENTREGADO ||
-      dto.nuevoEstado === EstadoOrdenServicio.FINALIZADO ||
-      dto.nuevoEstado === EstadoOrdenServicio.CANCELADO
-    ) {
-      // Limpiar estadoDiagnostico cuando se sale de fase de diagnóstico
-      if (orden.estadoDiagnostico && orden.estadoDiagnostico !== EstadoDiagnostico.COMPLETADO) {
-        updateData.estadoDiagnostico = EstadoDiagnostico.COMPLETADO;
-      }
-    }
-
-    // Registrar fecha de entrega
-    if (dto.nuevoEstado === EstadoOrdenServicio.ENTREGADO) {
-      updateData.fechaEntrega = new Date();
-    }
-
-    // Sincronizar estado de componentes según transición
-    const syncComponentes =
-      dto.nuevoEstado === EstadoOrdenServicio.EN_REPARACION ||
-      dto.nuevoEstado === EstadoOrdenServicio.REPARADO ||
-      dto.nuevoEstado === EstadoOrdenServicio.ENTREGADO;
-
-    let componenteEstado: EstadoComponente | null = null;
-    if (syncComponentes) {
-      componenteEstado =
-        dto.nuevoEstado === EstadoOrdenServicio.EN_REPARACION
-          ? EstadoComponente.EN_REPARACION
-          : dto.nuevoEstado === EstadoOrdenServicio.REPARADO
-            ? EstadoComponente.DISPONIBLE
-            : EstadoComponente.EN_USO; // ENTREGADO
-    }
-
-    // Reingreso: cuando se reabre una orden entregada/finalizada
-    const isReingreso =
-      (orden.estado === EstadoOrdenServicio.ENTREGADO ||
-        orden.estado === EstadoOrdenServicio.FINALIZADO) &&
-      dto.nuevoEstado === EstadoOrdenServicio.EN_DIAGNOSTICO;
-
-    if (isReingreso) {
-      if (!dto.motivoReingreso && !dto.notas) {
+      const allowed = VALID_TRANSITIONS[orden.estado];
+      if (!allowed || !allowed.includes(dto.nuevoEstado)) {
         throw new BadRequestException(
-          'Debe indicar el motivo del reingreso',
+          `No se puede cambiar de "${orden.estado}" a "${dto.nuevoEstado}". ` +
+          `Transiciones válidas: ${allowed?.join(', ') || 'ninguna (estado terminal)'}`,
         );
       }
-      updateData.cantidadReingresos = { increment: 1 };
-      updateData.motivoReingreso = dto.motivoReingreso || dto.notas;
-      updateData.estadoDiagnostico = EstadoDiagnostico.PENDIENTE;
-      updateData.fechaEntrega = null;
-    }
 
-    // Usar transacción interactiva para garantizar atomicidad completa
-    // (incluye validación de reingresos, update de orden, historial y sync de componentes)
-    const updatedOrden = await this.prisma.$transaction(async (tx) => {
-      // Re-leer la orden dentro de la transacción para evitar race condition en reingresos
+      const updateData: any = {
+        estado: dto.nuevoEstado,
+      };
+
+      if (dto.notas) {
+        updateData.notas = dto.notas;
+      }
+
+      if (dto.diagnostico) {
+        updateData.diagnostico = dto.diagnostico;
+      }
+
+      // Costos: costoTotal, adelanto, descuento - permitidos en estados operativos
+      const allowCostStates: EstadoOrdenServicio[] = [
+        EstadoOrdenServicio.RECIBIDO,
+        EstadoOrdenServicio.EN_DIAGNOSTICO,
+        EstadoOrdenServicio.ESPERANDO_APROBACION,
+        EstadoOrdenServicio.EN_REPARACION,
+        EstadoOrdenServicio.REPARADO,
+        EstadoOrdenServicio.LISTO_ENTREGA,
+        EstadoOrdenServicio.ENTREGADO,
+      ];
+
+      // B8 FIX: Validar que adelanto y descuento no excedan costoTotal
+      const effectiveCostoTotal = dto.costoTotal ?? (orden.costoTotal ? Number(orden.costoTotal) : null);
+      if (dto.adelanto !== undefined && effectiveCostoTotal !== null && dto.adelanto > effectiveCostoTotal) {
+        throw new BadRequestException('El adelanto no puede ser mayor al costo total');
+      }
+      if (dto.descuento !== undefined && effectiveCostoTotal !== null && dto.descuento > effectiveCostoTotal) {
+        throw new BadRequestException('El descuento no puede ser mayor al costo total');
+      }
+
+      if (dto.costoTotal !== undefined) {
+        if (allowCostStates.includes(dto.nuevoEstado)) {
+          updateData.costoTotal = dto.costoTotal;
+        }
+      }
+      if (dto.adelanto !== undefined) {
+        if (allowCostStates.includes(dto.nuevoEstado)) {
+          updateData.adelanto = dto.adelanto;
+          if (dto.metodoPagoAdelanto) {
+            updateData.metodoPagoAdelanto = dto.metodoPagoAdelanto;
+          }
+        }
+      }
+      if (dto.descuento !== undefined) {
+        if (allowCostStates.includes(dto.nuevoEstado)) {
+          updateData.descuento = dto.descuento;
+        }
+      }
+
+      // Actualizar estadoDiagnostico según el estado
+      if (dto.nuevoEstado === EstadoOrdenServicio.EN_DIAGNOSTICO) {
+        updateData.estadoDiagnostico = EstadoDiagnostico.EN_PROGRESO;
+      } else if (dto.nuevoEstado === EstadoOrdenServicio.ESPERANDO_APROBACION) {
+        updateData.estadoDiagnostico = EstadoDiagnostico.COMPLETADO;
+      } else if (
+        dto.nuevoEstado === EstadoOrdenServicio.EN_REPARACION ||
+        dto.nuevoEstado === EstadoOrdenServicio.REPARADO ||
+        dto.nuevoEstado === EstadoOrdenServicio.ENTREGADO ||
+        dto.nuevoEstado === EstadoOrdenServicio.FINALIZADO ||
+        dto.nuevoEstado === EstadoOrdenServicio.CANCELADO
+      ) {
+        if (orden.estadoDiagnostico && orden.estadoDiagnostico !== EstadoDiagnostico.COMPLETADO) {
+          updateData.estadoDiagnostico = EstadoDiagnostico.COMPLETADO;
+        }
+      }
+
+      // Registrar fecha de entrega
+      if (dto.nuevoEstado === EstadoOrdenServicio.ENTREGADO) {
+        updateData.fechaEntrega = new Date();
+      }
+
+      // Sincronizar estado de componentes según transición
+      const syncComponentes =
+        dto.nuevoEstado === EstadoOrdenServicio.EN_REPARACION ||
+        dto.nuevoEstado === EstadoOrdenServicio.REPARADO ||
+        dto.nuevoEstado === EstadoOrdenServicio.ENTREGADO;
+
+      let componenteEstado: EstadoComponente | null = null;
+      if (syncComponentes) {
+        componenteEstado =
+          dto.nuevoEstado === EstadoOrdenServicio.EN_REPARACION
+            ? EstadoComponente.EN_REPARACION
+            : dto.nuevoEstado === EstadoOrdenServicio.REPARADO
+              ? EstadoComponente.DISPONIBLE
+              : EstadoComponente.EN_USO; // ENTREGADO
+      }
+
+      // Reingreso: cuando se reabre una orden entregada/finalizada
+      const isReingreso =
+        (orden.estado === EstadoOrdenServicio.ENTREGADO ||
+          orden.estado === EstadoOrdenServicio.FINALIZADO) &&
+        dto.nuevoEstado === EstadoOrdenServicio.EN_DIAGNOSTICO;
+
       if (isReingreso) {
-        const freshOrden = await tx.ordenServicio.findUnique({ where: { id } });
-        if (freshOrden && freshOrden.cantidadReingresos >= 5) {
+        if (!dto.motivoReingreso && !dto.notas) {
+          throw new BadRequestException(
+            'Debe indicar el motivo del reingreso',
+          );
+        }
+        if (orden.cantidadReingresos >= 5) {
           throw new BadRequestException(
             'Se excedió el máximo de reingresos (5) para esta orden',
           );
         }
+        updateData.cantidadReingresos = { increment: 1 };
+        updateData.motivoReingreso = dto.motivoReingreso || dto.notas;
+        updateData.estadoDiagnostico = EstadoDiagnostico.PENDIENTE;
+        updateData.fechaEntrega = null;
       }
 
       const [result] = await Promise.all([
         tx.ordenServicio.update({
           where: { id },
           data: updateData,
-          include: {
-            cliente: { include: { persona: true } },
-            tecnico: { include: { persona: true } },
-            modeloEquipo: true,
-            servicio: true,
-            componentes: {
-              include: { componente: { include: { tipoComponente: true } } },
-            },
-          },
+          include: ORDEN_SERVICIO_FULL_INCLUDE,
         }),
         tx.historialOrdenServicio.create({
           data: {
@@ -326,11 +414,12 @@ export class OrdenServicioService {
       return result;
     });
 
-    // Generar aviso de mantenimiento al completar la orden
+    // Generar aviso de mantenimiento al completar la orden (solo para clientes persona)
     if (
       (dto.nuevoEstado === EstadoOrdenServicio.ENTREGADO ||
         dto.nuevoEstado === EstadoOrdenServicio.FINALIZADO) &&
-      updatedOrden.incluirAvisoMantenimiento
+      updatedOrden.incluirAvisoMantenimiento &&
+      updatedOrden.clienteId
     ) {
       try {
         await this.avisoMantenimientoService.crearAvisoParaOrden({
@@ -378,6 +467,7 @@ export class OrdenServicioService {
     if (query.tipoServicio) where.tipoServicio = query.tipoServicio;
     if (query.prioridad) where.prioridad = query.prioridad;
     if (query.clienteId) where.clienteId = query.clienteId;
+    if (query.clienteEmpresaId) where.clienteEmpresaId = query.clienteEmpresaId;
     if (query.tecnicoId) where.tecnicoId = query.tecnicoId;
 
     if (query.fechaDesde && query.fechaHasta) {
@@ -389,19 +479,19 @@ export class OrdenServicioService {
     if (query.fechaDesde || query.fechaHasta) {
       where.creadoEn = {};
       if (query.fechaDesde) where.creadoEn.gte = new Date(query.fechaDesde);
-      if (query.fechaHasta) where.creadoEn.lte = new Date(query.fechaHasta);
+      // B10 FIX: Incluir todo el día de fechaHasta (hasta las 23:59:59.999)
+      if (query.fechaHasta) {
+        const endDate = new Date(query.fechaHasta);
+        endDate.setHours(23, 59, 59, 999);
+        where.creadoEn.lte = endDate;
+      }
     }
 
     const findArgs: any = {
       where,
       orderBy: { creadoEn: 'desc' },
       take: limit,
-      include: {
-        cliente: { include: { persona: true } },
-        tecnico: { include: { persona: true } },
-        modeloEquipo: true,
-        servicio: true,
-      },
+      include: ORDEN_SERVICIO_BASE_INCLUDE,
     };
 
     if (query.cursor) {
@@ -420,25 +510,7 @@ export class OrdenServicioService {
   async findOne(empresaId: string, id: string) {
     const orden = await this.prisma.ordenServicio.findFirst({
       where: { id, empresaId },
-      include: {
-        cliente: { include: { persona: true } },
-        tecnico: { include: { persona: true } },
-        modeloEquipo: true,
-        servicio: true,
-        componentes: {
-          include: { componente: { include: { tipoComponente: true } } },
-        },
-        tercerizacionOrigen: {
-          include: {
-            empresaDestino: { select: { id: true, nombre: true, logo: true, telefono: true } },
-          },
-        },
-        tercerizacionDestino: {
-          include: {
-            empresaOrigen: { select: { id: true, nombre: true, logo: true, telefono: true } },
-          },
-        },
-      },
+      include: ORDEN_SERVICIO_DETAIL_INCLUDE,
     });
 
     if (!orden) {
@@ -448,36 +520,36 @@ export class OrdenServicioService {
     return orden;
   }
 
+  // B4 FIX: Validar que la orden no esté en estado terminal antes de permitir update
   async update(empresaId: string, id: string, dto: UpdateOrdenServicioDto) {
     const existing = await this.findOne(empresaId, id);
+
+    if (ESTADOS_TERMINALES.includes(existing.estado)) {
+      throw new BadRequestException(
+        `No se puede editar una orden en estado ${existing.estado}`,
+      );
+    }
 
     return this.prisma.ordenServicio.update({
       where: { id: existing.id },
       data: dto,
-      include: {
-        cliente: { include: { persona: true } },
-        tecnico: { include: { persona: true } },
-        modeloEquipo: true,
-        servicio: true,
-        componentes: {
-          include: { componente: { include: { tipoComponente: true } } },
-        },
-        tercerizacionOrigen: {
-          include: {
-            empresaDestino: { select: { id: true, nombre: true, logo: true, telefono: true } },
-          },
-        },
-        tercerizacionDestino: {
-          include: {
-            empresaOrigen: { select: { id: true, nombre: true, logo: true, telefono: true } },
-          },
-        },
-      },
+      include: ORDEN_SERVICIO_DETAIL_INCLUDE,
     });
   }
 
+  // B9 FIX: Validar estado y tecnicoId antes de asignar técnico
   async assignTecnico(empresaId: string, id: string, tecnicoId: string) {
-    await this.findOne(empresaId, id);
+    if (!tecnicoId) {
+      throw new BadRequestException('tecnicoId es requerido');
+    }
+
+    const orden = await this.findOne(empresaId, id);
+
+    if (ESTADOS_TERMINALES.includes(orden.estado)) {
+      throw new BadRequestException(
+        `No se puede asignar técnico a una orden en estado ${orden.estado}`,
+      );
+    }
 
     // Verificar que el técnico existe y pertenece a la empresa
     const tecnico = await this.prisma.usuario.findFirst({
@@ -494,12 +566,7 @@ export class OrdenServicioService {
     return this.prisma.ordenServicio.update({
       where: { id },
       data: { tecnicoId },
-      include: {
-        cliente: { include: { persona: true } },
-        tecnico: { include: { persona: true } },
-        modeloEquipo: true,
-        servicio: true,
-      },
+      include: ORDEN_SERVICIO_BASE_INCLUDE,
     });
   }
 

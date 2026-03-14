@@ -100,6 +100,9 @@ model Empresa {
   devoluciones    Devolucion[]
   devolucionItems DevolucionItem[]
 
+  // Relaciones para módulo de clientes empresa
+  clientesEmpresa ClienteEmpresa[]
+
   // Relaciones para módulo de proveedores
   proveedores           Proveedor[]
   proveedorEvaluaciones ProveedorEvaluacion[]
@@ -219,6 +222,10 @@ model ConfiguracionCodigos {
   inventarioSeparador       String   @default("-")
   inventarioLongitud        Int      @default(4)
   ultimoInventario          Int      @default(0)
+  clienteEmpresaCodigo    String   @default("CE")
+  clienteEmpresaSeparador String   @default("-")
+  clienteEmpresaLongitud  Int      @default(3)
+  ultimoClienteEmpresa    Int      @default(0)
   ultimoFactura         Int      @default(0)
   ultimaBoleta          Int      @default(0)
   ultimaNotaCredito     Int      @default(0)

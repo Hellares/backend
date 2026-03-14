@@ -19,10 +19,20 @@ export class CreateOrdenServicioDto {
   @IsNotEmpty()
   empresaId: string;
 
-  @ApiProperty({ description: 'ID del cliente (EmpresaPersona)' })
+  @ApiPropertyOptional({ description: 'ID del cliente persona (EmpresaPersona)' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  clienteId: string;
+  clienteId?: string;
+
+  @ApiPropertyOptional({ description: 'ID del cliente empresa (ClienteEmpresa)' })
+  @IsOptional()
+  @IsString()
+  clienteEmpresaId?: string;
+
+  @ApiPropertyOptional({ description: 'ID del contacto de la empresa cliente' })
+  @IsOptional()
+  @IsString()
+  contactoClienteEmpresaId?: string;
 
   @ApiPropertyOptional({ description: 'ID del técnico asignado' })
   @IsOptional()

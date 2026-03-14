@@ -2058,6 +2058,69 @@ export class ConfiguracionCodigosService {
     return codigo;
   }
 
+  // ─── GENERAR CÓDIGO DE CLIENTE EMPRESA ───
+
+  async generarCodigoClienteEmpresa(
+    empresaId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ codigoClienteEmpresa: string }> {
+    if (tx) {
+      return await this._generarCodigoClienteEmpresaInTransaction(tx, empresaId);
+    }
+
+    return await this.withSerializableTransaction(async (txInner) => {
+      return await this._generarCodigoClienteEmpresaInTransaction(txInner, empresaId);
+    });
+  }
+
+  private async _generarCodigoClienteEmpresaInTransaction(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    depth = 0,
+  ): Promise<{ codigoClienteEmpresa: string }> {
+    this.assertRetryLimit(depth, 'clienteEmpresa');
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
+
+    const ultimoCE = await tx.clienteEmpresa.findFirst({
+      where: { empresaId, codigo: { startsWith: config.clienteEmpresaCodigo } },
+      orderBy: { codigo: 'desc' },
+      select: { codigo: true },
+    });
+    if (ultimoCE) {
+      const match = ultimoCE.codigo.match(/(\d+)$/);
+      if (match) {
+        const ultimoNumero = parseInt(match[1], 10);
+        if (ultimoNumero >= config.ultimoClienteEmpresa) {
+          await tx.$executeRaw`
+            UPDATE "ConfiguracionCodigos"
+            SET "ultimoClienteEmpresa" = GREATEST("ultimoClienteEmpresa", ${ultimoNumero})
+            WHERE "empresaId" = ${empresaId}
+          `;
+        }
+      }
+    }
+
+    const updated = await tx.configuracionCodigos.update({
+      where: { empresaId },
+      data: { ultimoClienteEmpresa: { increment: 1 } },
+    });
+
+    const numero = updated.ultimoClienteEmpresa.toString().padStart(config.clienteEmpresaLongitud, '0');
+    const codigoClienteEmpresa = `${config.clienteEmpresaCodigo}${config.clienteEmpresaSeparador}${numero}`;
+
+    const existe = await tx.clienteEmpresa.findFirst({
+      where: { empresaId, codigo: codigoClienteEmpresa },
+      select: { id: true },
+    });
+    if (existe) {
+      this.logger.warn(`Código de cliente empresa ${codigoClienteEmpresa} ya existe. Reintentando...`);
+      return this._generarCodigoClienteEmpresaInTransaction(tx, empresaId, depth + 1);
+    }
+
+    return { codigoClienteEmpresa };
+  }
+
   /**
    * Formatear código con prefijo, separador y número
    */

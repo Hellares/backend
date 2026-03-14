@@ -1,9 +1,10 @@
 model Cotizacion {
-  id         String  @id @default(cuid())
-  empresaId  String
-  sedeId     String
-  clienteId  String?
-  vendedorId String
+  id               String  @id @default(cuid())
+  empresaId        String
+  sedeId           String
+  clienteId        String?
+  clienteEmpresaId String?
+  vendedorId       String
 
   // Identificacion
   codigo String
@@ -47,8 +48,9 @@ model Cotizacion {
   // Relaciones
   empresa  Empresa             @relation(fields: [empresaId], references: [id])
   sede     Sede                @relation(fields: [sedeId], references: [id])
-  cliente  EmpresaPersona?     @relation(fields: [clienteId], references: [id])
-  vendedor Usuario             @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
+  cliente        EmpresaPersona? @relation(fields: [clienteId], references: [id])
+  clienteEmpresa ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
+  vendedor       Usuario         @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
   detalles CotizacionDetalle[]
 
   @@unique([empresaId, codigo])
@@ -56,6 +58,7 @@ model Cotizacion {
   @@index([sedeId])
   @@index([vendedorId])
   @@index([clienteId])
+  @@index([clienteEmpresaId])
   @@index([estado])
   @@index([fechaEmision])
   @@index([empresaId, estado])

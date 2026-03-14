@@ -210,14 +210,28 @@ export class TercerizacionService {
       },
     }));
 
+    // B3 FIX: Guardar estado previo para restaurar al rechazar/cancelar
+    const estadoPrevioOrigen = orden.estado;
+
     // Crear tercerización y actualizar orden en transacción
     const result = await this.prisma.$transaction(async (tx) => {
+      // B3.1: Re-verificar que la orden no fue tercerizada concurrentemente
+      const ordenActual = await tx.ordenServicio.findUnique({ where: { id: ordenOrigenId } });
+      if (ordenActual?.estado === EstadoOrdenServicio.TERCERIZADO) {
+        throw new BadRequestException('Esta orden ya está siendo tercerizada');
+      }
+
+      const existente = await tx.tercerizacionServicio.findUnique({ where: { ordenOrigenId } });
+      if (existente) {
+        throw new BadRequestException('Esta orden ya tiene una solicitud de tercerización');
+      }
+
       const tercerizacion = await tx.tercerizacionServicio.create({
         data: {
           empresaOrigenId,
           empresaDestinoId,
           ordenOrigenId,
-          datosEquipo,
+          datosEquipo: { ...datosEquipo, estadoPrevioOrigen },
           descripcionProblema: dtoDescripcion || orden.descripcionProblema,
           sintomas: dtoSintomas || orden.sintomas,
           componentesData: componentesData.length > 0 ? componentesData : undefined,
@@ -298,11 +312,14 @@ export class TercerizacionService {
           },
         });
 
-        // Devolver orden origen a su estado anterior (RECIBIDO)
+        // B3 FIX: Restaurar estado previo en vez de siempre RECIBIDO
+        const datosEquipo = tercerizacion.datosEquipo as any;
+        const estadoRestaurar = datosEquipo?.estadoPrevioOrigen || EstadoOrdenServicio.RECIBIDO;
+
         await tx.ordenServicio.update({
           where: { id: tercerizacion.ordenOrigenId },
           data: {
-            estado: EstadoOrdenServicio.RECIBIDO,
+            estado: estadoRestaurar,
             origenOrden: OrigenOrden.CLIENTE_FINAL,
           },
         });
@@ -311,7 +328,7 @@ export class TercerizacionService {
           data: {
             ordenServicioId: tercerizacion.ordenOrigenId,
             estadoAnterior: EstadoOrdenServicio.TERCERIZADO,
-            estadoNuevo: EstadoOrdenServicio.RECIBIDO,
+            estadoNuevo: estadoRestaurar,
             notas: `Tercerización rechazada: ${dto.motivoRechazo}`,
           },
         });
@@ -422,10 +439,8 @@ export class TercerizacionService {
       throw new ForbiddenException('No tienes permiso para completar esta tercerización');
     }
 
-    if (
-      tercerizacion.estado !== EstadoTercerizacion.ACEPTADO &&
-      tercerizacion.estado !== EstadoTercerizacion.EN_PROCESO
-    ) {
+    // B6 FIX: Solo permitir completar desde ACEPTADO (EN_PROCESO era estado muerto)
+    if (tercerizacion.estado !== EstadoTercerizacion.ACEPTADO) {
       throw new BadRequestException(
         `No se puede completar una tercerización en estado ${tercerizacion.estado}`,
       );
@@ -459,12 +474,36 @@ export class TercerizacionService {
         },
       });
 
-      // Marcar orden destino como finalizada
+      // B5 FIX: Verificar estado de la orden destino antes de forzar FINALIZADO
       if (tercerizacion.ordenDestinoId) {
-        await tx.ordenServicio.update({
+        const ordenDestino = await tx.ordenServicio.findUnique({
           where: { id: tercerizacion.ordenDestinoId },
-          data: { estado: EstadoOrdenServicio.FINALIZADO },
         });
+
+        if (ordenDestino) {
+          const estadosCompletables: EstadoOrdenServicio[] = [
+            EstadoOrdenServicio.REPARADO,
+            EstadoOrdenServicio.LISTO_ENTREGA,
+            EstadoOrdenServicio.ENTREGADO,
+          ];
+
+          // Solo finalizar si la orden destino pasó por el flujo de reparación
+          if (estadosCompletables.includes(ordenDestino.estado)) {
+            await tx.ordenServicio.update({
+              where: { id: tercerizacion.ordenDestinoId },
+              data: { estado: EstadoOrdenServicio.FINALIZADO },
+            });
+
+            await tx.historialOrdenServicio.create({
+              data: {
+                ordenServicioId: tercerizacion.ordenDestinoId,
+                estadoAnterior: ordenDestino.estado,
+                estadoNuevo: EstadoOrdenServicio.FINALIZADO,
+                notas: `Tercerización completada. Precio B2B: ${dto.precioB2B}`,
+              },
+            });
+          }
+        }
       }
 
       return updated;
@@ -499,11 +538,14 @@ export class TercerizacionService {
         data: { estado: EstadoTercerizacion.CANCELADO },
       });
 
-      // Devolver orden origen a RECIBIDO
+      // B3 FIX: Restaurar estado previo en vez de siempre RECIBIDO
+      const datosEquipo = tercerizacion.datosEquipo as any;
+      const estadoRestaurar = datosEquipo?.estadoPrevioOrigen || EstadoOrdenServicio.RECIBIDO;
+
       await tx.ordenServicio.update({
         where: { id: tercerizacion.ordenOrigenId },
         data: {
-          estado: EstadoOrdenServicio.RECIBIDO,
+          estado: estadoRestaurar,
           origenOrden: OrigenOrden.CLIENTE_FINAL,
         },
       });
@@ -512,7 +554,7 @@ export class TercerizacionService {
         data: {
           ordenServicioId: tercerizacion.ordenOrigenId,
           estadoAnterior: EstadoOrdenServicio.TERCERIZADO,
-          estadoNuevo: EstadoOrdenServicio.RECIBIDO,
+          estadoNuevo: estadoRestaurar,
           notas: 'Tercerización cancelada por la empresa origen',
         },
       });

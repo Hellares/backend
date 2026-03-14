@@ -183,7 +183,9 @@ model Componente {
 model OrdenServicio {
   id                  String                  @id @default(cuid())
   empresaId           String
-  clienteId           String
+  clienteId           String?
+  clienteEmpresaId    String?
+  contactoClienteEmpresaId String?
   tecnicoId           String?
   sedeId              String?
   codigo              String
@@ -217,7 +219,9 @@ model OrdenServicio {
   motivoReingreso     String?
   creadoEn            DateTime                @default(now())
   actualizadoEn       DateTime                @updatedAt
-  cliente             EmpresaPersona          @relation("OrdenServicioCliente", fields: [clienteId], references: [id])
+  cliente             EmpresaPersona?         @relation("OrdenServicioCliente", fields: [clienteId], references: [id])
+  clienteEmpresa      ClienteEmpresa?         @relation(fields: [clienteEmpresaId], references: [id])
+  contactoClienteEmpresa ClienteEmpresaContacto? @relation(fields: [contactoClienteEmpresaId], references: [id])
   comprobante         ComprobanteElectronico? @relation(fields: [comprobanteId], references: [id])
   empresa             Empresa                 @relation(fields: [empresaId], references: [id])
   modeloEquipo        ModeloEquipo?           @relation(fields: [modeloEquipoId], references: [id])
@@ -232,6 +236,8 @@ model OrdenServicio {
   @@unique([empresaId, codigo])
   @@index([empresaId])
   @@index([clienteId])
+  @@index([clienteEmpresaId])
+  @@index([contactoClienteEmpresaId])
   @@index([tecnicoId])
   @@index([estado])
   @@index([estadoDiagnostico])
