@@ -79,3 +79,4 @@ grafana/provisioning/dashboards/json/*.json
 
 # Posiciones de Promtail (archivo temporal)
 positions.yaml
+firebase-env-value.txt
