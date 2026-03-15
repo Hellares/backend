@@ -19,6 +19,9 @@ export const PERMISSIONS_KEY = 'permissions';
  * @RequiresPermission('canManageProducts')
  * @Post()
  * create() { ... }
+ *
+ * IMPORTANTE: Debe usarse DESPUÉS de TenantAuthGuard, que cachea los roles
+ * en request._tenantRoles para evitar queries duplicadas.
  */
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -54,24 +57,33 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
-    // 4. Obtener roles del usuario en la empresa desde la BD
-    const userRoles = await this.prisma.empresaUsuarioRol.findMany({
-      where: {
-        usuarioId: user.sub || user.id,
-        empresaId: tenantId,
-        isActive: true,
-        deletedAt: null,
-      },
-    });
+    // 4. Reutilizar roles cacheados por TenantAuthGuard (0 queries)
+    //    Fallback a query directa si no están disponibles
+    let roles: Rol[];
 
-    if (!userRoles.length) {
-      throw new ForbiddenException('No tienes acceso a esta empresa');
+    if (request._tenantRoles && request._tenantRoles.length > 0) {
+      roles = request._tenantRoles as Rol[];
+    } else {
+      // Fallback: query directa (solo si TenantAuthGuard no se ejecutó antes)
+      const userRoles = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          usuarioId: user.sub || user.id,
+          empresaId: tenantId,
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { rol: true },
+      });
+
+      if (!userRoles.length) {
+        throw new ForbiddenException('No tienes acceso a esta empresa');
+      }
+
+      roles = userRoles.map(r => r.rol);
     }
 
     // 5. Calcular permisos basados en los roles usando el servicio centralizado
-    const permissions = this.permissionsService.calculatePermissions(
-      userRoles.map((r) => r.rol),
-    );
+    const permissions = this.permissionsService.calculatePermissions(roles);
 
     // 6. Verificar si tiene el permiso requerido
     if (!permissions[requiredPermission]) {

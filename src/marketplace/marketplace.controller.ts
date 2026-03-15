@@ -17,6 +17,56 @@ export class MarketplaceController {
   constructor(private readonly marketplaceService: MarketplaceService) {}
 
   /**
+   * Buscar productos en todo el marketplace
+   */
+  @Get('productos')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Buscar productos en todo el marketplace' })
+  async searchProductos(
+    @Query('search') search?: string,
+    @Query('categoriaId') categoriaId?: string,
+    @Query('marcaId') marcaId?: string,
+    @Query('precioMin') precioMin?: string,
+    @Query('precioMax') precioMax?: string,
+    @Query('departamento') departamento?: string,
+    @Query('orden') orden?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.marketplaceService.searchProductos({
+      search,
+      categoriaId,
+      marcaId,
+      precioMin: precioMin ? parseFloat(precioMin) : undefined,
+      precioMax: precioMax ? parseFloat(precioMax) : undefined,
+      departamento,
+      orden,
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 20,
+    });
+  }
+
+  /**
+   * Detalle de un producto del marketplace
+   */
+  @Get('productos/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Detalle de un producto del marketplace' })
+  async getProductoDetalle(@Param('id') id: string) {
+    return this.marketplaceService.getProductoDetalle(id);
+  }
+
+  /**
+   * Categorías disponibles en el marketplace
+   */
+  @Get('categorias')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Categorías con productos en el marketplace' })
+  async getCategorias() {
+    return this.marketplaceService.getCategorias();
+  }
+
+  /**
    * Obtener todas las empresas del marketplace
    */
   @Get('empresas')

@@ -104,6 +104,11 @@ model Usuario {
   // Relaciones para módulo de citas
   citasTecnico Cita[] @relation("CitasTecnico")
 
+  // Relaciones para notificaciones push
+  dispositivos              DispositivoNotificacion[]
+  notificaciones            Notificacion[]
+  preferenciasNotificacion  PreferenciaNotificacion[]
+
   @@index([email])
   @@index([telefono])
   @@index([personaId])

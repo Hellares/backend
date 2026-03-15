@@ -15,6 +15,7 @@ import { generatePaginationMeta } from '../common/utils/pagination.util';
 import * as bcrypt from 'bcryptjs';
 import { Rol, SedeRole } from '@prisma/client';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
+import { CacheService } from '../redis/cache.service';
 
 @Injectable()
 export class UsuariosService {
@@ -23,6 +24,7 @@ export class UsuariosService {
   constructor(
     private prisma: PrismaService,
     private planLimitsService: PlanLimitsService,
+    private cache: CacheService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -129,9 +131,7 @@ export class UsuariosService {
           });
         }
 
-        usuario = await this.prisma.usuario.findUnique({
-          where: { id: personaExistente.usuario!.id },
-        });
+        usuario = { id: personaExistente.usuario!.id };
 
         this.logger.log(
           `Cliente (${dni}) promovido a empleado con rol ${rol} en empresa ${empresaId} por usuario ${registradoPor}`,
@@ -214,6 +214,9 @@ export class UsuariosService {
         `Nuevo usuario creado: ${dni} - ${nombres} ${apellidos} con rol ${rol} por usuario ${registradoPor}`,
       );
     }
+
+    // Invalidar caché de acceso tenant
+    await this.cache.invalidateTenantAccess(usuario.id, empresaId);
 
     // Obtener datos completos del usuario para la respuesta
     const usuarioCompleto = await this.obtenerUsuarioCompleto(
@@ -335,10 +338,8 @@ export class UsuariosService {
         });
       }
 
-      // Retornar usuario actualizado
-      return prisma.usuario.findUnique({
-        where: { id: usuarioId },
-      });
+      // Retornar solo el id (obtenerUsuarioCompleto trae datos completos)
+      return { id: usuarioId };
     });
   }
 
@@ -1030,6 +1031,9 @@ export class UsuariosService {
       }
     });
 
+    // Invalidar caché de acceso (rol pudo haber cambiado)
+    await this.cache.invalidateTenantAccess(usuarioId, empresaId);
+
     this.logger.log(
       `Usuario ${usuarioId} actualizado en empresa ${empresaId} por usuario ${modificadoPor}`,
     );
@@ -1103,6 +1107,9 @@ export class UsuariosService {
         });
       }
     });
+
+    // Invalidar caché de acceso (usuario ya no tiene acceso)
+    await this.cache.invalidateTenantAccess(usuarioId, empresaId);
 
     this.logger.log(
       `Usuario ${usuarioId} desactivado en empresa ${empresaId} por usuario ${modificadoPor}`,

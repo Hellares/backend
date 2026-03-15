@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
-import { EstadoCita, EstadoOrdenServicio } from '@prisma/client';
+import { EstadoCita, EstadoOrdenServicio, TipoNotificacion } from '@prisma/client';
 import { CreateCitaDto } from './dto/create-cita.dto';
 import { UpdateCitaDto } from './dto/update-cita.dto';
 import {
@@ -15,10 +15,11 @@ import {
 } from './dto/query-cita.dto';
 import { TransitionEstadoCitaDto } from './dto/transition-estado-cita.dto';
 import { CreateCitaItemDto, UpdateCitaItemDto } from './dto/cita-item.dto';
+import { NotificacionService } from '../notificacion/notificacion.service';
 
 // State machine de citas
 const VALID_TRANSITIONS: Record<EstadoCita, EstadoCita[]> = {
-  PENDIENTE: [EstadoCita.CONFIRMADA, EstadoCita.CANCELADA, EstadoCita.NO_ASISTIO],
+  PENDIENTE: [EstadoCita.CONFIRMADA, EstadoCita.CANCELADA],
   CONFIRMADA: [EstadoCita.EN_PROCESO, EstadoCita.CANCELADA, EstadoCita.NO_ASISTIO],
   EN_PROCESO: [EstadoCita.COMPLETADA, EstadoCita.CANCELADA],
   COMPLETADA: [],
@@ -31,6 +32,11 @@ const ESTADOS_ACTIVOS: EstadoCita[] = [
   EstadoCita.PENDIENTE,
   EstadoCita.CONFIRMADA,
   EstadoCita.EN_PROCESO,
+];
+const ESTADOS_TERMINALES: EstadoCita[] = [
+  EstadoCita.COMPLETADA,
+  EstadoCita.CANCELADA,
+  EstadoCita.NO_ASISTIO,
 ];
 
 const CITA_BASE_INCLUDE = {
@@ -58,16 +64,33 @@ export class CitaService {
   constructor(
     private prisma: PrismaService,
     private configuracionCodigosService: ConfiguracionCodigosService,
+    private notificacionService: NotificacionService,
   ) {}
 
   // ─── CRUD ───
 
   async create(dto: CreateCitaDto) {
-    // Validar que al menos un tipo de cliente exista
+    // Validar que exactamente un tipo de cliente exista
     if (!dto.clienteId && !dto.clienteEmpresaId) {
       throw new BadRequestException(
         'Debe especificar clienteId (persona) o clienteEmpresaId (empresa)',
       );
+    }
+    if (dto.clienteId && dto.clienteEmpresaId) {
+      throw new BadRequestException(
+        'Debe especificar solo uno: clienteId (persona) o clienteEmpresaId (empresa), no ambos',
+      );
+    }
+
+    // Validar que horaInicio < horaFin
+    if (dto.horaInicio >= dto.horaFin) {
+      throw new BadRequestException('La hora de inicio debe ser anterior a la hora de fin');
+    }
+
+    // Validar que la fecha no sea en el pasado (comparar solo la parte date en UTC)
+    const hoyStr = new Date().toISOString().split('T')[0];
+    if (dto.fecha < hoyStr) {
+      throw new BadRequestException('No se puede crear una cita en una fecha pasada');
     }
 
     // Validar sede pertenece a empresa
@@ -76,6 +99,9 @@ export class CitaService {
     });
     if (!sede) throw new NotFoundException('Sede no encontrada');
 
+    // Validar que la cita esté dentro del horario de atención de la sede
+    this.validarHorarioSede(sede, dto.fecha, dto.horaInicio, dto.horaFin);
+
     // Validar servicio pertenece a empresa
     const servicio = await this.prisma.servicio.findFirst({
       where: { id: dto.servicioId, empresaId: dto.empresaId, isActive: true },
@@ -83,40 +109,10 @@ export class CitaService {
     if (!servicio) throw new NotFoundException('Servicio no encontrado');
 
     // Validar técnico: acepta UsuarioSedeRol.TECNICO_SERVICIO o EmpresaUsuarioRol.TECNICO
-    const tecnicoSede = await this.prisma.usuarioSedeRol.findFirst({
-      where: {
-        usuarioId: dto.tecnicoId,
-        sedeId: dto.sedeId,
-        rol: 'TECNICO_SERVICIO',
-        isActive: true,
-      },
-    });
-    if (!tecnicoSede) {
-      // Fallback: verificar si tiene rol TECNICO a nivel empresa
-      const tecnicoEmpresa = await this.prisma.empresaUsuarioRol.findFirst({
-        where: {
-          usuarioId: dto.tecnicoId,
-          empresaId: dto.empresaId,
-          rol: 'TECNICO',
-          isActive: true,
-        },
-      });
-      if (!tecnicoEmpresa) {
-        throw new BadRequestException('El técnico no tiene rol de técnico en esta empresa');
-      }
-    }
-
-    // Validar solapamiento
-    await this.validarSolapamiento(
-      dto.empresaId,
-      dto.tecnicoId,
-      dto.fecha,
-      dto.horaInicio,
-      dto.horaFin,
-    );
+    await this.validarTecnico(dto.tecnicoId, dto.sedeId, dto.empresaId);
 
     // Validar antigüedad mínima
-    if (servicio.antigenciaMinimaHoras) {
+    if (servicio.antigenciaMinimaHoras != null && servicio.antigenciaMinimaHoras > 0) {
       const ahora = new Date();
       const fechaCita = new Date(dto.fecha);
       const [h, m] = dto.horaInicio.split(':').map(Number);
@@ -129,28 +125,88 @@ export class CitaService {
       }
     }
 
-    // Generar código
-    const codigo = await this.configuracionCodigosService.generarCodigoCita(
+    // Usar transacción serializable para prevenir race conditions en solapamiento
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Validar solapamiento dentro de la transacción
+      const citasExistentes = await tx.cita.findMany({
+        where: {
+          empresaId: dto.empresaId,
+          tecnicoId: dto.tecnicoId,
+          fecha: new Date(dto.fecha),
+          estado: { notIn: [EstadoCita.CANCELADA, EstadoCita.NO_ASISTIO] },
+        },
+        select: { horaInicio: true, horaFin: true },
+      });
+
+      if (this.haySolapamiento(dto.horaInicio, dto.horaFin, citasExistentes)) {
+        throw new BadRequestException('El técnico ya tiene una cita en ese horario');
+      }
+
+      // Generar código
+      const codigo = await this.configuracionCodigosService.generarCodigoCita(
+        dto.empresaId,
+      );
+
+      return tx.cita.create({
+        data: {
+          empresaId: dto.empresaId,
+          sedeId: dto.sedeId,
+          servicioId: dto.servicioId,
+          tecnicoId: dto.tecnicoId,
+          clienteId: dto.clienteId,
+          clienteEmpresaId: dto.clienteEmpresaId,
+          codigo,
+          fecha: new Date(dto.fecha),
+          horaInicio: dto.horaInicio,
+          horaFin: dto.horaFin,
+          costoServicio: servicio.precio ? Number(servicio.precio) : 0,
+          costoTotal: servicio.precio ? Number(servicio.precio) : 0,
+          notas: dto.notas,
+          creadoPor: dto.creadoPor,
+        },
+        include: CITA_BASE_INCLUDE,
+      });
+    }, { isolationLevel: 'Serializable' });
+
+    // Notificar al técnico (fire-and-forget)
+    const fechaStr = new Date(dto.fecha).toISOString().split('T')[0];
+    this.notificacionService.enviarAUsuario(
+      dto.tecnicoId,
+      'Nueva cita asignada',
+      `Cita ${result.codigo} para el ${fechaStr} a las ${dto.horaInicio}`,
+      {
+        tipo: TipoNotificacion.CITA,
+        data: { citaId: result.id, action: 'created' },
+        empresaId: dto.empresaId,
+      },
+    ).catch(() => {});
+
+    // Notificar al cliente (si tiene cuenta de usuario)
+    this.notificarCliente(
+      result,
+      'Tu cita ha sido agendada',
+      `Cita ${result.codigo} programada para el ${fechaStr} a las ${dto.horaInicio}`,
       dto.empresaId,
+      { citaId: result.id, action: 'created' },
     );
 
-    return this.prisma.cita.create({
-      data: {
-        empresaId: dto.empresaId,
-        sedeId: dto.sedeId,
-        servicioId: dto.servicioId,
-        tecnicoId: dto.tecnicoId,
-        clienteId: dto.clienteId,
-        clienteEmpresaId: dto.clienteEmpresaId,
-        codigo,
-        fecha: new Date(dto.fecha),
-        horaInicio: dto.horaInicio,
-        horaFin: dto.horaFin,
-        notas: dto.notas,
-        creadoPor: dto.creadoPor,
-      },
-      include: CITA_BASE_INCLUDE,
+    return result;
+  }
+
+  async findCitasCliente(empresaId: string, personaId: string, query: QueryCitaDto) {
+    // Buscar el EmpresaPersona del cliente en esta empresa
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
     });
+
+    if (!empresaPersona) {
+      return { data: [], total: 0, page: 1, limit: 20, totalPages: 0 };
+    }
+
+    // Reutilizar findAll con el clienteId forzado
+    query.clienteId = empresaPersona.id;
+    return this.findAll(empresaId, query);
   }
 
   async findAll(empresaId: string, query: QueryCitaDto) {
@@ -217,74 +273,117 @@ export class CitaService {
       );
     }
 
+    // Validar exclusividad mutua de clientes
+    const clienteIdFinal = dto.clienteId !== undefined ? dto.clienteId : cita.clienteId;
+    const clienteEmpresaIdFinal = dto.clienteEmpresaId !== undefined ? dto.clienteEmpresaId : cita.clienteEmpresaId;
+    if (clienteIdFinal && clienteEmpresaIdFinal) {
+      throw new BadRequestException(
+        'Una cita no puede tener clienteId y clienteEmpresaId al mismo tiempo',
+      );
+    }
+
+    // Validar existencia del nuevo cliente si cambia
+    if (dto.clienteId) {
+      const cliente = await this.prisma.empresaPersona.findFirst({
+        where: { id: dto.clienteId, empresaId },
+      });
+      if (!cliente) throw new NotFoundException('Cliente persona no encontrado');
+    }
+    if (dto.clienteEmpresaId) {
+      const clienteEmpresa = await this.prisma.clienteEmpresa.findFirst({
+        where: { id: dto.clienteEmpresaId, empresaId },
+      });
+      if (!clienteEmpresa) throw new NotFoundException('Cliente empresa no encontrado');
+    }
+
     const tecnicoId = dto.tecnicoId ?? cita.tecnicoId;
     const fecha = dto.fecha ?? cita.fecha.toISOString().split('T')[0];
     const horaInicio = dto.horaInicio ?? cita.horaInicio;
     const horaFin = dto.horaFin ?? cita.horaFin;
 
-    // Si cambia técnico, fecha u hora, revalidar solapamiento
-    if (dto.tecnicoId || dto.fecha || dto.horaInicio || dto.horaFin) {
-      await this.validarSolapamiento(
-        empresaId,
-        tecnicoId,
-        fecha,
-        horaInicio,
-        horaFin,
-        id, // excluir la propia cita
-      );
+    // Validar que horaInicio < horaFin
+    if (horaInicio >= horaFin) {
+      throw new BadRequestException('La hora de inicio debe ser anterior a la hora de fin');
+    }
+
+    // Si cambia fecha u hora, validar horario de sede
+    if (dto.fecha || dto.horaInicio || dto.horaFin) {
+      const sede = await this.prisma.sede.findFirst({
+        where: { id: cita.sedeId, empresaId, isActive: true },
+      });
+      if (sede) {
+        this.validarHorarioSede(sede, fecha, horaInicio, horaFin);
+      }
     }
 
     // Si cambia técnico, validar que pertenece a la empresa
     if (dto.tecnicoId) {
-      const tecnicoSede = await this.prisma.usuarioSedeRol.findFirst({
-        where: {
-          usuarioId: dto.tecnicoId,
-          sedeId: cita.sedeId,
-          rol: 'TECNICO_SERVICIO',
-          isActive: true,
-        },
-      });
-      if (!tecnicoSede) {
-        const tecnicoEmpresa = await this.prisma.empresaUsuarioRol.findFirst({
-          where: {
-            usuarioId: dto.tecnicoId,
-            empresaId,
-            rol: 'TECNICO',
-            isActive: true,
-          },
-        });
-        if (!tecnicoEmpresa) {
-          throw new BadRequestException('El técnico no tiene rol de técnico en esta empresa');
-        }
+      await this.validarTecnico(dto.tecnicoId, cita.sedeId, empresaId);
+    }
+
+    // Validar adelanto no exceda costoTotal
+    if (dto.adelanto !== undefined) {
+      const costoServicio = dto.costoServicio ?? Number(cita.costoServicio ?? 0);
+      const costoProductos = Number(cita.costoProductos ?? 0);
+      const descuento = dto.descuento ?? Number(cita.descuento ?? 0);
+      const costoTotal = costoServicio + costoProductos - descuento;
+      if (dto.adelanto > Math.max(0, costoTotal)) {
+        throw new BadRequestException(
+          `El adelanto (${dto.adelanto}) no puede ser mayor al costo total (${Math.max(0, costoTotal)})`,
+        );
       }
     }
 
-    const updated = await this.prisma.cita.update({
-      where: { id },
-      data: {
-        ...(dto.servicioId && { servicioId: dto.servicioId }),
-        ...(dto.tecnicoId && { tecnicoId: dto.tecnicoId }),
-        ...(dto.clienteId !== undefined && { clienteId: dto.clienteId }),
-        ...(dto.clienteEmpresaId !== undefined && { clienteEmpresaId: dto.clienteEmpresaId }),
-        ...(dto.fecha && { fecha: new Date(dto.fecha) }),
-        ...(dto.horaInicio && { horaInicio: dto.horaInicio }),
-        ...(dto.horaFin && { horaFin: dto.horaFin }),
-        ...(dto.notas !== undefined && { notas: dto.notas }),
-        ...(dto.costoServicio !== undefined && { costoServicio: dto.costoServicio }),
-        ...(dto.descuento !== undefined && { descuento: dto.descuento }),
-        ...(dto.adelanto !== undefined && { adelanto: dto.adelanto }),
-        ...(dto.metodoPagoAdelanto !== undefined && { metodoPagoAdelanto: dto.metodoPagoAdelanto }),
-        ...(dto.datosPersonalizados !== undefined && { datosPersonalizados: dto.datosPersonalizados }),
-      },
-      include: CITA_BASE_INCLUDE,
-    });
+    // Si cambia técnico, fecha u hora, revalidar solapamiento con transacción
+    if (dto.tecnicoId || dto.fecha || dto.horaInicio || dto.horaFin) {
+      return this.prisma.$transaction(async (tx) => {
+        const citasExistentes = await tx.cita.findMany({
+          where: {
+            empresaId,
+            tecnicoId,
+            fecha: new Date(fecha),
+            estado: { notIn: [EstadoCita.CANCELADA, EstadoCita.NO_ASISTIO] },
+            id: { not: id },
+          },
+          select: { horaInicio: true, horaFin: true },
+        });
 
-    // Recalcular total si cambiaron costos
-    if (dto.costoServicio !== undefined || dto.descuento !== undefined) {
-      await this.recalcularCostos(id);
+        if (this.haySolapamiento(horaInicio, horaFin, citasExistentes)) {
+          throw new BadRequestException('El técnico ya tiene una cita en ese horario');
+        }
+
+        const updated = await tx.cita.update({
+          where: { id },
+          data: this.buildUpdateData(dto),
+          include: CITA_BASE_INCLUDE,
+        });
+
+        if (dto.costoServicio !== undefined || dto.descuento !== undefined) {
+          await this.recalcularCostosInTx(tx, id);
+        }
+
+        return updated;
+      }, { isolationLevel: 'Serializable' });
     }
 
-    return updated;
+    // Si cambian costos, usar transacción para atomicidad
+    if (dto.costoServicio !== undefined || dto.descuento !== undefined) {
+      return this.prisma.$transaction(async (tx) => {
+        const updated = await tx.cita.update({
+          where: { id },
+          data: this.buildUpdateData(dto),
+          include: CITA_BASE_INCLUDE,
+        });
+        await this.recalcularCostosInTx(tx, id);
+        return updated;
+      });
+    }
+
+    return this.prisma.cita.update({
+      where: { id },
+      data: this.buildUpdateData(dto),
+      include: CITA_BASE_INCLUDE,
+    });
   }
 
   // ─── State Machine ───
@@ -356,13 +455,37 @@ export class CitaService {
       dto.siguienteCita
     ) {
       const sc = dto.siguienteCita;
+      const tecnicoIdSiguiente = sc.tecnicoId ?? cita.tecnicoId;
+
+      // Validar que horaInicio < horaFin
+      if (sc.horaInicio >= sc.horaFin) {
+        throw new BadRequestException('La hora de inicio de la siguiente cita debe ser anterior a la hora de fin');
+      }
+
+      // Validar solapamiento del técnico en la fecha de la siguiente cita
+      await this.validarSolapamiento(
+        empresaId,
+        tecnicoIdSiguiente,
+        sc.fecha,
+        sc.horaInicio,
+        sc.horaFin,
+      );
+
+      // Validar horario de sede
+      const sede = await this.prisma.sede.findFirst({
+        where: { id: cita.sedeId, empresaId, isActive: true },
+      });
+      if (sede) {
+        this.validarHorarioSede(sede, sc.fecha, sc.horaInicio, sc.horaFin);
+      }
+
       const codigoSiguiente = await this.configuracionCodigosService.generarCodigoCita(empresaId);
       siguienteCitaCreada = await this.prisma.cita.create({
         data: {
           empresaId,
           sedeId: cita.sedeId,
           servicioId: cita.servicioId,
-          tecnicoId: sc.tecnicoId ?? cita.tecnicoId,
+          tecnicoId: tecnicoIdSiguiente,
           clienteId: cita.clienteId,
           clienteEmpresaId: cita.clienteEmpresaId,
           codigo: codigoSiguiente,
@@ -382,7 +505,7 @@ export class CitaService {
       });
     }
 
-    return {
+    const resultado = {
       ...citaActualizada,
       ...(ordenServicioCreada && {
         ordenServicioGenerada: {
@@ -397,6 +520,146 @@ export class CitaService {
         },
       }),
     };
+
+    // Notificar al técnico sobre el cambio de estado (fire-and-forget)
+    const estadoLabel = {
+      CONFIRMADA: 'confirmada',
+      EN_PROCESO: 'en proceso',
+      COMPLETADA: 'completada',
+      CANCELADA: 'cancelada',
+      NO_ASISTIO: 'marcada como no asistió',
+    }[dto.nuevoEstado] ?? dto.nuevoEstado;
+
+    this.notificacionService.enviarAUsuario(
+      cita.tecnicoId,
+      `Cita ${estadoLabel}`,
+      `La cita ${citaActualizada.codigo} ha sido ${estadoLabel}`,
+      {
+        tipo: TipoNotificacion.CITA,
+        data: { citaId: id, action: 'status_changed', nuevoEstado: dto.nuevoEstado },
+        empresaId,
+      },
+    ).catch(() => {});
+
+    // Notificar al cliente sobre el cambio de estado
+    const clienteEstadoMsg: Record<string, string> = {
+      CONFIRMADA: 'Tu cita ha sido confirmada',
+      EN_PROCESO: 'Tu cita está en proceso',
+      COMPLETADA: 'Tu cita ha sido completada',
+      CANCELADA: 'Tu cita ha sido cancelada',
+    };
+    const msgCliente = clienteEstadoMsg[dto.nuevoEstado];
+    if (msgCliente) {
+      this.notificarCliente(
+        cita,
+        msgCliente,
+        `Cita ${citaActualizada.codigo} — ${msgCliente.toLowerCase()}`,
+        empresaId,
+        { citaId: id, action: 'status_changed', nuevoEstado: dto.nuevoEstado },
+      );
+    }
+
+    return resultado;
+  }
+
+  // ─── Clientes con citas ───
+
+  async getClientesConCitas(empresaId: string, search?: string) {
+    // Obtener clienteIds únicos que tienen al menos una cita
+    const citasPersona = await this.prisma.cita.findMany({
+      where: { empresaId, clienteId: { not: null } },
+      select: { clienteId: true },
+      distinct: ['clienteId'],
+    });
+
+    const citasEmpresa = await this.prisma.cita.findMany({
+      where: { empresaId, clienteEmpresaId: { not: null } },
+      select: { clienteEmpresaId: true },
+      distinct: ['clienteEmpresaId'],
+    });
+
+    const clienteIds = citasPersona.map((c) => c.clienteId).filter(Boolean) as string[];
+    const clienteEmpresaIds = citasEmpresa.map((c) => c.clienteEmpresaId).filter(Boolean) as string[];
+
+    // Buscar personas
+    const wherePersona: any = { id: { in: clienteIds } };
+    if (search) {
+      wherePersona.persona = {
+        OR: [
+          { nombres: { contains: search, mode: 'insensitive' } },
+          { apellidos: { contains: search, mode: 'insensitive' } },
+          { telefono: { contains: search } },
+        ],
+      };
+    }
+
+    const personas = clienteIds.length > 0
+      ? await this.prisma.empresaPersona.findMany({
+          where: wherePersona,
+          include: {
+            persona: { select: { nombres: true, apellidos: true, telefono: true, email: true } },
+          },
+          take: 50,
+        })
+      : [];
+
+    // Buscar empresas cliente
+    const whereEmpresa: any = { id: { in: clienteEmpresaIds } };
+    if (search) {
+      whereEmpresa.OR = [
+        { razonSocial: { contains: search, mode: 'insensitive' } },
+        { nombreComercial: { contains: search, mode: 'insensitive' } },
+        { telefono: { contains: search } },
+      ];
+    }
+
+    const empresas = clienteEmpresaIds.length > 0
+      ? await this.prisma.clienteEmpresa.findMany({
+          where: whereEmpresa,
+          select: { id: true, razonSocial: true, nombreComercial: true, telefono: true },
+          take: 50,
+        })
+      : [];
+
+    // Contar citas por cliente
+    const conteos = await this.prisma.cita.groupBy({
+      by: ['clienteId', 'clienteEmpresaId'],
+      where: { empresaId },
+      _count: true,
+    });
+
+    const conteoMap = new Map<string, number>();
+    for (const c of conteos) {
+      const key = c.clienteId ?? c.clienteEmpresaId;
+      if (key) conteoMap.set(key, c._count);
+    }
+
+    // Unificar resultados
+    const clientes = [
+      ...personas.map((p) => ({
+        tipo: 'persona' as const,
+        clienteId: p.id,
+        clienteEmpresaId: null as string | null,
+        nombre: `${p.persona.nombres} ${p.persona.apellidos}`,
+        telefono: p.persona.telefono,
+        email: p.persona.email,
+        totalCitas: conteoMap.get(p.id) ?? 0,
+      })),
+      ...empresas.map((e) => ({
+        tipo: 'empresa' as const,
+        clienteId: null as string | null,
+        clienteEmpresaId: e.id,
+        nombre: e.nombreComercial ?? e.razonSocial,
+        telefono: e.telefono,
+        email: null as string | null,
+        totalCitas: conteoMap.get(e.id) ?? 0,
+      })),
+    ];
+
+    // Ordenar por total de citas descendente
+    clientes.sort((a, b) => b.totalCitas - a.totalCitas);
+
+    return { clientes, total: clientes.length };
   }
 
   // ─── Historial de citas por cliente ───
@@ -600,6 +863,12 @@ export class CitaService {
     });
     if (!cita) throw new NotFoundException('Cita no encontrada');
 
+    if (ESTADOS_TERMINALES.includes(cita.estado)) {
+      throw new BadRequestException(
+        `No se pueden agregar items a una cita en estado ${cita.estado}`,
+      );
+    }
+
     // Si viene productoId, validar que existe y tomar nombre
     if (dto.productoId) {
       const producto = await this.prisma.producto.findFirst({
@@ -611,26 +880,40 @@ export class CitaService {
 
     const subtotal = dto.cantidad * dto.precioUnitario;
 
-    const item = await this.prisma.citaItem.create({
-      data: {
-        citaId,
-        productoId: dto.productoId,
-        nombre: dto.nombre,
-        descripcion: dto.descripcion,
-        cantidad: dto.cantidad,
-        precioUnitario: dto.precioUnitario,
-        subtotal,
-      },
-      include: {
-        producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const item = await tx.citaItem.create({
+        data: {
+          citaId,
+          productoId: dto.productoId,
+          nombre: dto.nombre,
+          descripcion: dto.descripcion,
+          cantidad: dto.cantidad,
+          precioUnitario: dto.precioUnitario,
+          subtotal,
+        },
+        include: {
+          producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+        },
+      });
 
-    await this.recalcularCostos(citaId);
-    return item;
+      await this.recalcularCostosInTx(tx, citaId);
+      return item;
+    });
   }
 
   async updateItem(empresaId: string, citaId: string, itemId: string, dto: UpdateCitaItemDto) {
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId },
+      select: { estado: true },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    if (ESTADOS_TERMINALES.includes(cita.estado)) {
+      throw new BadRequestException(
+        `No se pueden modificar items de una cita en estado ${cita.estado}`,
+      );
+    }
+
     const existingItem = await this.prisma.citaItem.findFirst({
       where: { id: itemId, cita: { id: citaId, empresaId } },
     });
@@ -640,32 +923,48 @@ export class CitaService {
     const precioUnitario = dto.precioUnitario ?? Number(existingItem.precioUnitario);
     const subtotal = cantidad * precioUnitario;
 
-    const updated = await this.prisma.citaItem.update({
-      where: { id: itemId },
-      data: {
-        ...(dto.nombre && { nombre: dto.nombre }),
-        ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
-        ...(dto.cantidad && { cantidad: dto.cantidad }),
-        ...(dto.precioUnitario !== undefined && { precioUnitario: dto.precioUnitario }),
-        subtotal,
-      },
-      include: {
-        producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.citaItem.update({
+        where: { id: itemId },
+        data: {
+          ...(dto.nombre && { nombre: dto.nombre }),
+          ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
+          ...(dto.cantidad && { cantidad: dto.cantidad }),
+          ...(dto.precioUnitario !== undefined && { precioUnitario: dto.precioUnitario }),
+          subtotal,
+        },
+        include: {
+          producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+        },
+      });
 
-    await this.recalcularCostos(citaId);
-    return updated;
+      await this.recalcularCostosInTx(tx, citaId);
+      return updated;
+    });
   }
 
   async removeItem(empresaId: string, citaId: string, itemId: string) {
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId },
+      select: { estado: true },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    if (ESTADOS_TERMINALES.includes(cita.estado)) {
+      throw new BadRequestException(
+        `No se pueden eliminar items de una cita en estado ${cita.estado}`,
+      );
+    }
+
     const existingItem = await this.prisma.citaItem.findFirst({
       where: { id: itemId, cita: { id: citaId, empresaId } },
     });
     if (!existingItem) throw new NotFoundException('Item no encontrado');
 
-    await this.prisma.citaItem.delete({ where: { id: itemId } });
-    await this.recalcularCostos(citaId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.citaItem.delete({ where: { id: itemId } });
+      await this.recalcularCostosInTx(tx, citaId);
+    });
   }
 
   async getItems(empresaId: string, citaId: string) {
@@ -705,8 +1004,16 @@ export class CitaService {
       tecnicosDisponibles: number;
     }[] = [];
 
+    if (duracionMinutos <= 0) {
+      return [];
+    }
+
     let cursor = this.horaToMinutos(horaInicioSede);
     const finSede = this.horaToMinutos(horaFinSede);
+
+    if (cursor >= finSede) {
+      return [];
+    }
 
     const ahora = new Date();
 
@@ -726,7 +1033,7 @@ export class CitaService {
       let disponible = tecnicosLibres > 0;
 
       // Validar antigüencia mínima
-      if (disponible && antigenciaMinHoras) {
+      if (disponible && antigenciaMinHoras != null && antigenciaMinHoras > 0) {
         const slotDate = new Date(fecha);
         const [h, m] = slotInicio.split(':').map(Number);
         slotDate.setHours(h, m, 0, 0);
@@ -841,6 +1148,9 @@ export class CitaService {
 
   private horaToMinutos(hora: string): number {
     const [h, m] = hora.split(':').map(Number);
+    if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+      throw new BadRequestException(`Formato de hora inválido: ${hora}. Use HH:mm (00:00-23:59)`);
+    }
     return h * 60 + m;
   }
 
@@ -852,5 +1162,167 @@ export class CitaService {
 
   private sumarMinutos(hora: string, minutos: number): string {
     return this.minutosToHora(this.horaToMinutos(hora) + minutos);
+  }
+
+  /**
+   * Valida que la cita esté dentro del horario de atención de la sede
+   */
+  private validarHorarioSede(
+    sede: any,
+    fecha: string,
+    horaInicio: string,
+    horaFin: string,
+  ) {
+    const dias = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+    const diaSemana = dias[new Date(fecha).getDay()];
+    const horario = (sede.horarioAtencion as any)?.[diaSemana];
+
+    if (!horario || !horario.inicio || !horario.fin) {
+      throw new BadRequestException(`La sede no atiende el día ${diaSemana}`);
+    }
+
+    const sedeInicio = this.horaToMinutos(horario.inicio);
+    const sedeFin = this.horaToMinutos(horario.fin);
+    const citaInicio = this.horaToMinutos(horaInicio);
+    const citaFin = this.horaToMinutos(horaFin);
+
+    if (citaInicio < sedeInicio || citaFin > sedeFin) {
+      throw new BadRequestException(
+        `La cita debe estar dentro del horario de atención de la sede (${horario.inicio} - ${horario.fin})`,
+      );
+    }
+  }
+
+  /**
+   * Valida que el técnico pertenezca a la sede o empresa con rol adecuado
+   */
+  private async validarTecnico(tecnicoId: string, sedeId: string, empresaId: string) {
+    // Buscar como TECNICO_SERVICIO en la sede
+    const tecnicoSede = await this.prisma.usuarioSedeRol.findFirst({
+      where: {
+        usuarioId: tecnicoId,
+        sedeId,
+        rol: 'TECNICO_SERVICIO',
+        isActive: true,
+      },
+    });
+    if (tecnicoSede) return;
+
+    // Fallback: buscar como TECNICO a nivel empresa
+    const tecnicoEmpresa = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        usuarioId: tecnicoId,
+        empresaId,
+        rol: 'TECNICO',
+        isActive: true,
+      },
+    });
+    if (tecnicoEmpresa) return;
+
+    throw new BadRequestException(
+      'El técnico no tiene rol de técnico en esta sede o empresa',
+    );
+  }
+
+  /**
+   * Construye el objeto de datos para actualizar una cita desde el DTO
+   */
+  private buildUpdateData(dto: UpdateCitaDto) {
+    const data: any = {};
+    if (dto.servicioId !== undefined) data.servicioId = dto.servicioId;
+    if (dto.tecnicoId !== undefined) data.tecnicoId = dto.tecnicoId;
+    if (dto.clienteId !== undefined) data.clienteId = dto.clienteId;
+    if (dto.clienteEmpresaId !== undefined) data.clienteEmpresaId = dto.clienteEmpresaId;
+    if (dto.fecha !== undefined) data.fecha = new Date(dto.fecha);
+    if (dto.horaInicio !== undefined) data.horaInicio = dto.horaInicio;
+    if (dto.horaFin !== undefined) data.horaFin = dto.horaFin;
+    if (dto.costoServicio !== undefined) data.costoServicio = dto.costoServicio;
+    if (dto.descuento !== undefined) data.descuento = dto.descuento;
+    if (dto.adelanto !== undefined) data.adelanto = dto.adelanto;
+    if (dto.metodoPagoAdelanto !== undefined) data.metodoPagoAdelanto = dto.metodoPagoAdelanto;
+    if (dto.datosPersonalizados !== undefined) data.datosPersonalizados = dto.datosPersonalizados;
+    if (dto.notas !== undefined) data.notas = dto.notas;
+    return data;
+  }
+
+  /**
+   * Recalcula costoProductos y costoTotal dentro de una transacción
+   */
+  private async recalcularCostosInTx(tx: any, citaId: string) {
+    const items = await tx.citaItem.findMany({
+      where: { citaId },
+      select: { subtotal: true },
+    });
+    const costoProductos = items.reduce((acc: number, i: any) => acc + Number(i.subtotal), 0);
+
+    const cita = await tx.cita.findUnique({
+      where: { id: citaId },
+      select: { costoServicio: true, descuento: true },
+    });
+
+    const costoServicio = Number(cita?.costoServicio ?? 0);
+    const descuento = Number(cita?.descuento ?? 0);
+    const costoTotal = costoServicio + costoProductos - descuento;
+
+    await tx.cita.update({
+      where: { id: citaId },
+      data: {
+        costoProductos,
+        costoTotal: Math.max(0, costoTotal),
+      },
+    });
+  }
+
+  /**
+   * Obtiene el usuarioId del cliente de una cita (si tiene cuenta)
+   * Busca: EmpresaPersona → Persona → Usuario
+   */
+  private async getClienteUsuarioId(
+    clienteId?: string | null,
+    clienteEmpresaId?: string | null,
+  ): Promise<string | null> {
+    if (clienteId) {
+      const empresaPersona = await this.prisma.empresaPersona.findUnique({
+        where: { id: clienteId },
+        select: {
+          persona: {
+            select: {
+              usuario: { select: { id: true } },
+            },
+          },
+        },
+      });
+      return empresaPersona?.persona?.usuario?.id ?? null;
+    }
+    // ClienteEmpresa no tiene usuario asociado directamente
+    return null;
+  }
+
+  /**
+   * Notifica al cliente de la cita (si tiene cuenta de usuario)
+   */
+  private async notificarCliente(
+    cita: { clienteId?: string | null; clienteEmpresaId?: string | null; codigo: string },
+    titulo: string,
+    cuerpo: string,
+    empresaId: string,
+    extraData?: Record<string, string>,
+  ) {
+    const clienteUsuarioId = await this.getClienteUsuarioId(
+      cita.clienteId,
+      cita.clienteEmpresaId,
+    );
+    if (!clienteUsuarioId) return;
+
+    this.notificacionService.enviarAUsuario(
+      clienteUsuarioId,
+      titulo,
+      cuerpo,
+      {
+        tipo: TipoNotificacion.CITA,
+        data: { ...extraData },
+        empresaId,
+      },
+    ).catch(() => {});
   }
 }

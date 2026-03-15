@@ -83,6 +83,8 @@ export class AuthSessionService {
   /**
    * Obtener información de una sesión
    */
+  private static readonly LAST_ACCESS_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutos
+
   async getSession(sessionId: string): Promise<SessionInfo | null> {
     const sessionKey = `session:${sessionId}`;
     const sessionData = await this.redisService.get(sessionKey);
@@ -105,12 +107,20 @@ export class AuthSessionService {
         return null;
       }
 
-      // Actualizar último acceso
-      session.lastAccessAt = new Date();
-      await this.redisService.setex(sessionKey,
-        Math.floor((session.expiresAt.getTime() - Date.now()) / 1000),
-        JSON.stringify(session)
-      );
+      // Actualizar último acceso solo si han pasado más de 5 minutos
+      // Evita escrituras innecesarias a Redis en cada request
+      const now = Date.now();
+      const timeSinceLastUpdate = now - session.lastAccessAt.getTime();
+
+      if (timeSinceLastUpdate > AuthSessionService.LAST_ACCESS_UPDATE_INTERVAL) {
+        session.lastAccessAt = new Date(now);
+        const ttl = Math.floor((session.expiresAt.getTime() - now) / 1000);
+        if (ttl > 0) {
+          // Escritura asíncrona sin esperar — no bloquea el request
+          this.redisService.setex(sessionKey, ttl, JSON.stringify(session))
+            .catch(() => {}); // Ignorar errores de actualización de lastAccess
+        }
+      }
 
       return session;
     } catch (error) {

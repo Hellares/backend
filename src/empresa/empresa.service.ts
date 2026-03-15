@@ -173,6 +173,9 @@ export class EmpresaService {
     // Crear la empresa base (sin activación automática de catálogos)
     const empresa = await this.createEmpresaBase(empresaData, userId);
 
+    // Invalidar cache de lista de empresas del usuario
+    await this.cache.invalidate(this.cache.getUserEmpresasKey(userId));
+
     // Activar catálogos según preferencias
     try {
       const usarRecomendados =

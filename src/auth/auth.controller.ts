@@ -35,6 +35,7 @@ import {
 import { GoogleAuthDto } from './dto/google-auth.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
+import { LinkAccountDto } from './dto/link-account.dto';
 
 @ApiTags('Autenticación')
 @Controller('auth')
@@ -231,7 +232,7 @@ export class AuthController {
     @CurrentUser() user: any,
     @Body() changePasswordDto: ChangePasswordDto,
   ) {
-    return this.authService.changePassword(user.sub, changePasswordDto);
+    return this.authService.changePassword(user.sub, changePasswordDto, user.sessionId);
   }
 
   /**
@@ -283,7 +284,7 @@ export class AuthController {
     } catch (error) {
       // Redirigir al frontend con error
       const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-      return res.redirect(`${frontendUrl}/auth/email-verified?success=false&error=${encodeURIComponent(error.message)}`);
+      return res.redirect(`${frontendUrl}/auth/email-verified?success=false&error=${encodeURIComponent((error as any)?.message || 'Error desconocido')}`);
     }
   }
 
@@ -488,6 +489,28 @@ export class AuthController {
     @Body() setPasswordDto: SetPasswordDto,
   ) {
     return this.authService.setPassword(user.sub, setPasswordDto.password);
+  }
+
+  /**
+   * Vincular cuenta actual (Google) con una cuenta existente (DNI)
+   */
+  @Post('link-account')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Vincular cuenta de Google con cuenta existente por DNI',
+    description: 'Fusiona la cuenta actual (Google) con una cuenta que ya existe en el sistema (registrada por una empresa con DNI)',
+  })
+  @ApiResponse({ status: 200, description: 'Cuentas vinculadas exitosamente' })
+  @ApiResponse({ status: 404, description: 'Cuenta destino no encontrada' })
+  @ApiResponse({ status: 409, description: 'La cuenta destino ya tiene Google vinculado' })
+  async linkAccount(
+    @CurrentUser() user: any,
+    @Body() linkAccountDto: LinkAccountDto,
+    @Request() req: any,
+  ) {
+    return this.authService.linkAccount(user.sub, linkAccountDto, req);
   }
 
   /**

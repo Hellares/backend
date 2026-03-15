@@ -6,6 +6,255 @@ export class MarketplaceService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
+   * Buscar productos en todo el marketplace (global)
+   */
+  async searchProductos(query: {
+    search?: string;
+    categoriaId?: string;
+    marcaId?: string;
+    precioMin?: number;
+    precioMax?: number;
+    departamento?: string;
+    orden?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 50);
+    const skip = (page - 1) * limit;
+
+    const where: any = {
+      visibleMarketplace: true,
+      isActive: true,
+      deletedAt: null,
+      empresa: { isActive: true, deletedAt: null, visibleEnMarketplace: true },
+    };
+
+    if (query.search) {
+      where.OR = [
+        { nombre: { contains: query.search, mode: 'insensitive' } },
+        { descripcion: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (query.categoriaId) {
+      where.empresaCategoria = { categoriaMaestraId: query.categoriaId };
+    }
+
+    if (query.marcaId) {
+      where.empresaMarca = { marcaMaestraId: query.marcaId };
+    }
+
+    if (query.departamento) {
+      where.empresa = { ...where.empresa, departamento: query.departamento };
+    }
+
+    if (query.precioMin || query.precioMax) {
+      where.stocksPorSede = {
+        some: {
+          precioConfigurado: true,
+          ...(query.precioMin && { precio: { gte: query.precioMin } }),
+          ...(query.precioMax && { precio: { lte: query.precioMax } }),
+        },
+      };
+    }
+
+    let orderBy: any = [{ destacado: 'desc' }, { creadoEn: 'desc' }];
+    if (query.orden === 'recientes') orderBy = { creadoEn: 'desc' };
+
+    const [productos, total] = await Promise.all([
+      this.prisma.producto.findMany({
+        where,
+        include: {
+          empresaCategoria: {
+            include: {
+              categoriaMaestra: { select: { id: true, nombre: true } },
+            },
+          },
+          empresaMarca: {
+            include: {
+              marcaMaestra: { select: { id: true, nombre: true } },
+            },
+          },
+          empresa: {
+            select: {
+              id: true, nombre: true, logo: true, subdominio: true,
+              departamento: true, provincia: true, distrito: true, telefono: true,
+            },
+          },
+          stocksPorSede: {
+            where: { precioConfigurado: true },
+            select: { precio: true, precioOferta: true, enOferta: true, stockActual: true },
+            take: 1,
+            orderBy: { precio: 'asc' },
+          },
+        },
+        orderBy,
+        skip,
+        take: limit,
+      }),
+      this.prisma.producto.count({ where }),
+    ]);
+
+    // Obtener imágenes de productos en una sola query (evita N+1)
+    const productoIds = productos.map((p) => p.id);
+    const imagenes = productoIds.length > 0
+      ? await this.prisma.archivo.findMany({
+          where: {
+            entidadTipo: 'PRODUCTO',
+            entidadId: { in: productoIds },
+            tipoArchivo: 'IMAGEN',
+            isActive: true,
+            deletedAt: null,
+          },
+          select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
+          orderBy: { orden: 'asc' },
+        })
+      : [];
+
+    // Mapa: primera imagen por producto
+    const imagenMap = new Map<string, string>();
+    for (const img of imagenes) {
+      if (img.entidadId && !imagenMap.has(img.entidadId)) {
+        imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
+      }
+    }
+
+    const data = productos.map((p) => {
+      const stock = p.stocksPorSede[0];
+      return {
+        id: p.id,
+        nombre: p.nombre,
+        descripcion: p.descripcion?.substring(0, 120) || null,
+        categoria: p.empresaCategoria?.nombrePersonalizado
+          || p.empresaCategoria?.categoriaMaestra?.nombre || null,
+        marca: p.empresaMarca?.nombrePersonalizado
+          || p.empresaMarca?.marcaMaestra?.nombre || null,
+        precio: stock?.precio ? Number(stock.precio) : null,
+        precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: stock?.enOferta ?? false,
+        hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+        imagen: imagenMap.get(p.id) ?? null,
+        destacado: p.destacado,
+        creadoEn: p.creadoEn,
+        empresa: {
+          id: p.empresa.id,
+          nombre: p.empresa.nombre,
+          logo: p.empresa.logo,
+          subdominio: p.empresa.subdominio,
+          telefono: p.empresa.telefono,
+          ubicacion: [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
+            .filter(Boolean).join(', '),
+        },
+      };
+    });
+
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  /**
+   * Detalle de un producto (búsqueda global por ID)
+   */
+  async getProductoDetalle(id: string) {
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, visibleMarketplace: true, isActive: true, deletedAt: null },
+      include: {
+        empresaCategoria: {
+          include: { categoriaMaestra: { select: { id: true, nombre: true } } },
+        },
+        empresaMarca: {
+          include: { marcaMaestra: { select: { id: true, nombre: true } } },
+        },
+        empresa: {
+          select: {
+            id: true, nombre: true, logo: true, subdominio: true, descripcion: true,
+            rubro: true, departamento: true, provincia: true, distrito: true,
+            telefono: true, email: true, web: true,
+          },
+        },
+        stocksPorSede: {
+          where: { precioConfigurado: true },
+          select: {
+            precio: true, precioOferta: true, enOferta: true, stockActual: true,
+            sede: { select: { nombre: true } },
+          },
+        },
+        atributosValores: {
+          include: {
+            atributo: { select: { nombre: true, mostrarEnMarketplace: true } },
+          },
+        },
+      },
+    });
+
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+
+    // Obtener imágenes
+    const imagenes = await this.prisma.archivo.findMany({
+      where: {
+        entidadTipo: 'PRODUCTO',
+        entidadId: producto.id,
+        tipoArchivo: 'IMAGEN',
+        isActive: true,
+        deletedAt: null,
+      },
+      select: { id: true, url: true, urlThumbnail: true },
+      orderBy: { orden: 'asc' },
+    });
+
+    const stock = producto.stocksPorSede[0];
+
+    return {
+      id: producto.id,
+      nombre: producto.nombre,
+      descripcion: producto.descripcion,
+      categoria: producto.empresaCategoria?.nombrePersonalizado
+        || producto.empresaCategoria?.categoriaMaestra?.nombre || null,
+      marca: producto.empresaMarca?.nombrePersonalizado
+        || producto.empresaMarca?.marcaMaestra?.nombre || null,
+      precio: stock?.precio ? Number(stock.precio) : null,
+      precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
+      enOferta: stock?.enOferta ?? false,
+      hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+      stockActual: stock?.stockActual ?? 0,
+      imagenes: imagenes.map((i) => ({ id: i.id, url: i.url, thumbnail: i.urlThumbnail })),
+      atributos: producto.atributosValores
+        .filter((a) => a.atributo.mostrarEnMarketplace)
+        .map((a) => ({ nombre: a.atributo.nombre, valor: a.valor })),
+      empresa: {
+        id: producto.empresa.id,
+        nombre: producto.empresa.nombre,
+        logo: producto.empresa.logo,
+        subdominio: producto.empresa.subdominio,
+        descripcion: producto.empresa.descripcion,
+        rubro: producto.empresa.rubro,
+        telefono: producto.empresa.telefono,
+        email: producto.empresa.email,
+        web: producto.empresa.web,
+        ubicacion: [producto.empresa.distrito, producto.empresa.provincia, producto.empresa.departamento]
+          .filter(Boolean).join(', '),
+      },
+    };
+  }
+
+  /**
+   * Categorías disponibles en el marketplace
+   */
+  async getCategorias() {
+    return this.prisma.categoriaMaestra.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        nombre: true,
+        slug: true,
+        icono: true,
+        padreId: true,
+      },
+      orderBy: { nombre: 'asc' },
+    });
+  }
+
+  /**
    * Obtener todas las empresas activas para el marketplace público
    */
   async getAllEmpresas(page: number = 1, limit: number = 20, search?: string) {
@@ -135,6 +384,15 @@ export class MarketplaceService {
           },
         },
         creadoEn: true,
+        // Personalización (banner, colores)
+        personalizaciones: {
+          select: {
+            bannerPrincipalUrl: true,
+            bannerPrincipalTexto: true,
+            colorPrimario: true,
+          },
+          take: 1,
+        },
         // Contar productos y servicios activos
         _count: {
           select: {
@@ -171,14 +429,8 @@ export class MarketplaceService {
     limit: number = 20,
     search?: string,
   ) {
-    // Primero verificar que la empresa existe
     const empresa = await this.prisma.empresa.findFirst({
-      where: {
-        subdominio,
-        isActive: true,
-        deletedAt: null,
-        visibleEnMarketplace: true,
-      },
+      where: { subdominio, isActive: true, deletedAt: null, visibleEnMarketplace: true },
       select: { id: true },
     });
 
@@ -188,16 +440,15 @@ export class MarketplaceService {
 
     const skip = (page - 1) * limit;
 
-    const where = {
+    const where: any = {
       empresaId: empresa.id,
+      visibleMarketplace: true,
       isActive: true,
       deletedAt: null,
-      visibleMarketplace: true, // Solo productos visibles en marketplace
       ...(search && {
         OR: [
           { nombre: { contains: search, mode: 'insensitive' as const } },
           { descripcion: { contains: search, mode: 'insensitive' as const } },
-          { codigoEmpresa: { contains: search, mode: 'insensitive' as const } },
         ],
       }),
     };
@@ -205,85 +456,82 @@ export class MarketplaceService {
     const [productos, total] = await Promise.all([
       this.prisma.producto.findMany({
         where,
-        skip,
-        take: limit,
-        select: {
-          id: true,
-          nombre: true,
-          codigoEmpresa: true,
-          descripcion: true,
-          // ❌ precio/precioCosto - DEPRECATED: Ahora en ProductoStock
-          // ❌ enOferta/precioOferta/fechas - DEPRECATED: Ahora en ProductoStock
-          destacado: true,
-          // Stock por sede (ahora incluye precios)
-          stocksPorSede: {
-            select: {
-              stockActual: true,
-              stockMinimo: true,
-              // ✅ Precios ahora vienen de ProductoStock
-              precio: true,
-              precioCosto: true,
-              precioOferta: true,
-              enOferta: true,
-              fechaInicioOferta: true,
-              fechaFinOferta: true,
-              precioConfigurado: true,
-              sede: {
-                select: {
-                  id: true,
-                  nombre: true,
-                  codigo: true,
-                },
-              },
-            },
-          },
+        include: {
           empresaCategoria: {
-            select: {
-              id: true,
-              nombreLocal: true,
-              categoriaMaestra: {
-                select: {
-                  nombre: true,
-                  slug: true,
-                },
-              },
-              nombrePersonalizado: true,
-            },
+            include: { categoriaMaestra: { select: { id: true, nombre: true } } },
           },
           empresaMarca: {
+            include: { marcaMaestra: { select: { id: true, nombre: true } } },
+          },
+          empresa: {
             select: {
-              id: true,
-              nombreLocal: true,
-              marcaMaestra: {
-                select: {
-                  nombre: true,
-                  slug: true,
-                  logo: true,
-                },
-              },
-              nombrePersonalizado: true,
+              id: true, nombre: true, logo: true, subdominio: true,
+              departamento: true, provincia: true, distrito: true, telefono: true,
             },
           },
-          creadoEn: true,
+          stocksPorSede: {
+            where: { precioConfigurado: true },
+            select: { precio: true, precioOferta: true, enOferta: true, stockActual: true },
+            take: 1,
+            orderBy: { precio: 'asc' as const },
+          },
         },
-        orderBy: [
-          { destacado: 'desc' }, // Destacados primero
-          { ordenMarketplace: 'asc' }, // Orden personalizado
-          // ❌ { enOferta: 'desc' } - DEPRECATED: enOferta ahora en ProductoStock
-          { creadoEn: 'desc' }, // Más recientes al final
-        ],
+        orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }],
+        skip,
+        take: limit,
       }),
       this.prisma.producto.count({ where }),
     ]);
 
+    // Obtener imágenes
+    const productoIds = productos.map((p) => p.id);
+    const imagenes = productoIds.length > 0
+      ? await this.prisma.archivo.findMany({
+          where: { entidadTipo: 'PRODUCTO', entidadId: { in: productoIds }, tipoArchivo: 'IMAGEN', isActive: true, deletedAt: null },
+          select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
+          orderBy: { orden: 'asc' },
+        })
+      : [];
+
+    const imagenMap = new Map<string, string>();
+    for (const img of imagenes) {
+      if (img.entidadId && !imagenMap.has(img.entidadId)) {
+        imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
+      }
+    }
+
+    const data = productos.map((p) => {
+      const stock = p.stocksPorSede[0];
+      return {
+        id: p.id,
+        nombre: p.nombre,
+        descripcion: p.descripcion?.substring(0, 120) || null,
+        categoria: p.empresaCategoria?.nombrePersonalizado
+          || p.empresaCategoria?.categoriaMaestra?.nombre || null,
+        marca: p.empresaMarca?.nombrePersonalizado
+          || p.empresaMarca?.marcaMaestra?.nombre || null,
+        precio: stock?.precio ? Number(stock.precio) : null,
+        precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: stock?.enOferta ?? false,
+        hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+        imagen: imagenMap.get(p.id) ?? null,
+        destacado: p.destacado,
+        creadoEn: p.creadoEn,
+        empresa: {
+          id: p.empresa.id,
+          nombre: p.empresa.nombre,
+          logo: p.empresa.logo,
+          subdominio: p.empresa.subdominio,
+          telefono: p.empresa.telefono,
+          ubicacion: [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
+            .filter(Boolean).join(', '),
+        },
+      };
+    });
+
     return {
-      data: productos,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      data,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
 

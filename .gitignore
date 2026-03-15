@@ -3,6 +3,10 @@
 /node_modules
 /build
 
+# Firebase service account (NEVER commit)
+firebase-service-account.json
+*firebase-adminsdk*
+
 # Logs
 logs
 *.log

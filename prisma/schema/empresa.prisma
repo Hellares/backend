@@ -144,6 +144,9 @@ model Empresa {
   // Relaciones para módulo de citas
   citas Cita[]
 
+  // Relaciones para notificaciones
+  notificaciones Notificacion[]
+
   @@index([subdominio])
   @@index([isActive])
   @@index([ruc])

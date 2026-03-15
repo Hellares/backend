@@ -85,6 +85,18 @@ export class CitaController {
     return this.citaService.create(dto);
   }
 
+  @Get('mis-citas')
+  @ApiOperation({ summary: 'Listar mis citas como cliente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  findMisCitas(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @Query() query: QueryCitaDto,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.findCitasCliente(empresaId, user.personaId, query);
+  }
+
   @Get()
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar citas' })
@@ -95,6 +107,18 @@ export class CitaController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.citaService.findAll(empresaId, query);
+  }
+
+  @Get('clientes-con-citas')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Listar clientes que tienen citas' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  getClientesConCitas(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('search') search?: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.getClientesConCitas(empresaId, search);
   }
 
   @Get(':id')

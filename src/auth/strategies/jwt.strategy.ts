@@ -36,18 +36,28 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       if (!session || !session.isActive) {
         throw new UnauthorizedException('Sesión inválida o expirada. Por favor, inicia sesión nuevamente.');
       }
+
+      // Usar datos de tenant de la sesión Redis (se actualizan en switch-tenant)
+      // con fallback al JWT payload para compatibilidad con tokens sin sesión
+      return {
+        ...payload,
+        id: payload.sub,
+        userId: payload.sub,
+        empresaId: session.tenantId || payload.tenantId,
+        tenantId: session.tenantId || payload.tenantId,
+        tenantRole: session.tenantRole || payload.tenantRole,
+        tenantName: session.tenantName || payload.tenantName,
+        tenantRoles: session.tenantRoles || payload.tenantRoles,
+        roles: session.tenantRoles || payload.tenantRoles || [],
+      };
     }
 
-    // Retornar toda la información del payload para que esté disponible en los controllers
+    // Sin sessionId: usar datos del JWT payload (compatibilidad)
     return {
       ...payload,
-      // Mapear sub a id para compatibilidad
       id: payload.sub,
-      // Mantener también userId por si se usa en otro lugar
       userId: payload.sub,
-      // Mapear tenantId a empresaId para compatibilidad con controllers
       empresaId: payload.tenantId,
-      // Mapear tenantRoles a roles para compatibilidad con RolesGuard
       roles: payload.tenantRoles || [],
     };
   }

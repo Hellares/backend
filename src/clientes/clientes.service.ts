@@ -16,6 +16,7 @@ import {
 } from './dto/cliente-response.dto';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
 import { AppLoggerService } from '../common/logger';
+import { CacheService } from '../redis/cache.service';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
@@ -24,6 +25,7 @@ export class ClientesService {
 
   constructor(
     private prisma: PrismaService,
+    private cache: CacheService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -203,6 +205,11 @@ export class ClientesService {
       this.logger.log(
         `Nuevo cliente creado: ${dni} - ${nombres} ${apellidos} por usuario ${registradoPorId}`,
       );
+    }
+
+    // Invalidar caché de acceso tenant para el usuario
+    if (usuario?.id) {
+      await this.cache.invalidateTenantAccess(usuario.id, empresaId);
     }
 
     // Obtener datos completos del cliente para la respuesta
@@ -675,6 +682,11 @@ export class ClientesService {
         empresaId,
         deletedAt: null,
       },
+      include: {
+        persona: {
+          select: { usuario: { select: { id: true } } },
+        },
+      },
     });
 
     if (!cliente) {
@@ -685,6 +697,12 @@ export class ClientesService {
       where: { id: clienteId },
       data: { deletedAt: new Date() },
     });
+
+    // Invalidar caché de acceso tenant
+    const usuarioId = cliente.persona?.usuario?.id;
+    if (usuarioId) {
+      await this.cache.invalidateTenantAccess(usuarioId, empresaId);
+    }
 
     this.logger.log(
       `Cliente ${clienteId} eliminado (soft delete) de empresa ${empresaId}`,

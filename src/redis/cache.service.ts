@@ -147,6 +147,20 @@ export class CacheService {
   }
 
   /**
+   * Invalidar caché de acceso tenant para un usuario en una empresa
+   */
+  async invalidateTenantAccess(userId: string, empresaId: string): Promise<void> {
+    await this.invalidate(`tenant_access:${userId}:${empresaId}`);
+  }
+
+  /**
+   * Invalidar caché de acceso tenant para todos los usuarios de una empresa
+   */
+  async invalidateAllTenantAccess(empresaId: string): Promise<void> {
+    await this.invalidatePattern(`tenant_access:*:${empresaId}`);
+  }
+
+  /**
    * Generar hash simple para cache keys
    * No necesita ser criptográficamente seguro, solo único
    */

@@ -56,6 +56,8 @@ services:
       - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET:-}
       - FACTILIZA_API_URL=${FACTILIZA_API_URL:-https://api.factiliza.com/v1}
       - FACTILIZA_API_TOKEN=${FACTILIZA_API_TOKEN}
+      - GOOGLE_ANDROID_CLIENT_ID=${GOOGLE_ANDROID_CLIENT_ID:-}
+      - FIREBASE_SERVICE_ACCOUNT=${FIREBASE_SERVICE_ACCOUNT:-}
     # volumes:
     #   - ./logs:/app/logs  # Deshabilitado - solo console logging por ahora
     networks:

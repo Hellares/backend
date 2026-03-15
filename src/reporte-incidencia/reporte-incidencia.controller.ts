@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   Query,
+  Headers,
   UseGuards,
   Request,
 } from '@nestjs/common';
@@ -19,12 +20,10 @@ import {
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
-import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { EstadoReporteIncidencia } from '@prisma/client';
 
 @Controller('reportes-incidencia')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard)
 export class ReporteIncidenciaController {
   constructor(
     private readonly reporteIncidenciaService: ReporteIncidenciaService,
@@ -35,24 +34,12 @@ export class ReporteIncidenciaController {
    * POST /reportes-incidencia
    */
   @Post()
-  async crear(@Request() req, @Body() dto: CrearReporteIncidenciaDto) {
-    try {
-      const empresaId = req.user.empresaId || req.get('x-tenant-id');
-      const usuarioId = req.user.userId;
-
-      console.log('=== DEBUG CREAR REPORTE ===');
-      console.log('empresaId:', empresaId);
-      console.log('usuarioId:', usuarioId);
-      console.log('dto:', JSON.stringify(dto, null, 2));
-      console.log('req.user:', JSON.stringify(req.user, null, 2));
-
-      return await this.reporteIncidenciaService.crear(empresaId, dto, usuarioId);
-    } catch (error) {
-      console.error('=== ERROR EN CREAR REPORTE ===');
-      console.error('Error:', error);
-      console.error('Stack:', error.stack);
-      throw error;
-    }
+  async crear(
+    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CrearReporteIncidenciaDto,
+  ) {
+    return this.reporteIncidenciaService.crear(empresaId, dto, req.user.userId);
   }
 
   /**
@@ -61,14 +48,13 @@ export class ReporteIncidenciaController {
    */
   @Get()
   async listar(
-    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Query('sedeId') sedeId?: string,
     @Query('estado') estado?: EstadoReporteIncidencia,
     @Query('tipoReporte') tipoReporte?: string,
     @Query('fechaDesde') fechaDesde?: string,
     @Query('fechaHasta') fechaHasta?: string,
   ) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
     return this.reporteIncidenciaService.listar(empresaId, {
       sedeId,
       estado,
@@ -83,8 +69,10 @@ export class ReporteIncidenciaController {
    * GET /reportes-incidencia/:id
    */
   @Get(':id')
-  async obtenerPorId(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
+  async obtenerPorId(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
     return this.reporteIncidenciaService.obtenerPorId(empresaId, id);
   }
 
@@ -94,11 +82,10 @@ export class ReporteIncidenciaController {
    */
   @Put(':id')
   async actualizar(
-    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @Body() dto: ActualizarReporteIncidenciaDto,
   ) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
     return this.reporteIncidenciaService.actualizar(empresaId, id, dto);
   }
 
@@ -108,11 +95,10 @@ export class ReporteIncidenciaController {
    */
   @Post(':id/items')
   async agregarItem(
-    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Param('id') reporteId: string,
     @Body() dto: AgregarItemReporteDto,
   ) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
     return this.reporteIncidenciaService.agregarItem(empresaId, reporteId, dto);
   }
 
@@ -122,11 +108,10 @@ export class ReporteIncidenciaController {
    */
   @Delete(':id/items/:itemId')
   async eliminarItem(
-    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Param('id') reporteId: string,
     @Param('itemId') itemId: string,
   ) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
     return this.reporteIncidenciaService.eliminarItem(
       empresaId,
       reporteId,
@@ -139,8 +124,10 @@ export class ReporteIncidenciaController {
    * POST /reportes-incidencia/:id/enviar
    */
   @Post(':id/enviar')
-  async enviarParaRevision(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
+  async enviarParaRevision(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
     return this.reporteIncidenciaService.enviarParaRevision(empresaId, id);
   }
 
@@ -149,10 +136,12 @@ export class ReporteIncidenciaController {
    * POST /reportes-incidencia/:id/aprobar
    */
   @Post(':id/aprobar')
-  async aprobar(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
-    const usuarioId = req.user.userId;
-    return this.reporteIncidenciaService.aprobar(empresaId, id, usuarioId);
+  async aprobar(
+    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.reporteIncidenciaService.aprobar(empresaId, id, req.user.userId);
   }
 
   /**
@@ -162,15 +151,14 @@ export class ReporteIncidenciaController {
   @Post(':id/rechazar')
   async rechazar(
     @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @Body('motivo') motivo?: string,
   ) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
-    const usuarioId = req.user.userId;
     return this.reporteIncidenciaService.rechazar(
       empresaId,
       id,
-      usuarioId,
+      req.user.userId,
       motivo,
     );
   }
@@ -182,18 +170,17 @@ export class ReporteIncidenciaController {
   @Post(':id/items/:itemId/resolver')
   async resolverItem(
     @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Param('id') reporteId: string,
     @Param('itemId') itemId: string,
     @Body() dto: ResolverItemDto,
   ) {
-    const empresaId = req.user.empresaId || req.get('x-tenant-id');
-    const usuarioId = req.user.userId;
     return this.reporteIncidenciaService.resolverItem(
       empresaId,
       reporteId,
       itemId,
       dto,
-      usuarioId,
+      req.user.userId,
     );
   }
 }

@@ -6,6 +6,7 @@ import {
   Body,
   Param,
   Query,
+  Headers,
   UseGuards,
   Request,
 } from '@nestjs/common';
@@ -16,10 +17,11 @@ import {
   RegistrarConteoDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { EstadoInventario } from '@prisma/client';
 
 @Controller('inventarios')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantAuthGuard)
 export class InventarioController {
   constructor(private readonly inventarioService: InventarioService) {}
 
@@ -28,10 +30,12 @@ export class InventarioController {
    * POST /inventarios
    */
   @Post()
-  async crear(@Request() req, @Body() dto: CrearInventarioDto) {
-    const empresaId = req.user.empresaId;
-    const usuarioId = req.user.userId;
-    return this.inventarioService.crear(empresaId, dto, usuarioId);
+  async crear(
+    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CrearInventarioDto,
+  ) {
+    return this.inventarioService.crear(empresaId, dto, req.user.userId);
   }
 
   /**
@@ -40,14 +44,13 @@ export class InventarioController {
    */
   @Get()
   async listar(
-    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Query('sedeId') sedeId?: string,
     @Query('estado') estado?: EstadoInventario,
     @Query('tipoInventario') tipoInventario?: string,
     @Query('fechaDesde') fechaDesde?: string,
     @Query('fechaHasta') fechaHasta?: string,
   ) {
-    const empresaId = req.user.empresaId;
     return this.inventarioService.listar(empresaId, {
       sedeId,
       estado,
@@ -62,8 +65,10 @@ export class InventarioController {
    * GET /inventarios/:id
    */
   @Get(':id')
-  async obtenerPorId(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId;
+  async obtenerPorId(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
     return this.inventarioService.obtenerPorId(empresaId, id);
   }
 
@@ -73,11 +78,10 @@ export class InventarioController {
    */
   @Put(':id')
   async actualizar(
-    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @Body() dto: ActualizarInventarioDto,
   ) {
-    const empresaId = req.user.empresaId;
     return this.inventarioService.actualizar(empresaId, id, dto);
   }
 
@@ -86,8 +90,10 @@ export class InventarioController {
    * POST /inventarios/:id/iniciar
    */
   @Post(':id/iniciar')
-  async iniciar(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId;
+  async iniciar(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
     return this.inventarioService.iniciar(empresaId, id);
   }
 
@@ -98,18 +104,17 @@ export class InventarioController {
   @Post(':id/items/:itemId/contar')
   async registrarConteo(
     @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
     @Param('id') inventarioId: string,
     @Param('itemId') itemId: string,
     @Body() dto: RegistrarConteoDto,
   ) {
-    const empresaId = req.user.empresaId;
-    const usuarioId = req.user.userId;
     return this.inventarioService.registrarConteo(
       empresaId,
       inventarioId,
       itemId,
       dto,
-      usuarioId,
+      req.user.userId,
     );
   }
 
@@ -118,8 +123,10 @@ export class InventarioController {
    * POST /inventarios/:id/finalizar-conteo
    */
   @Post(':id/finalizar-conteo')
-  async finalizarConteo(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId;
+  async finalizarConteo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
     return this.inventarioService.finalizarConteo(empresaId, id);
   }
 
@@ -128,10 +135,12 @@ export class InventarioController {
    * POST /inventarios/:id/aprobar
    */
   @Post(':id/aprobar')
-  async aprobar(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId;
-    const usuarioId = req.user.userId;
-    return this.inventarioService.aprobar(empresaId, id, usuarioId);
+  async aprobar(
+    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.inventarioService.aprobar(empresaId, id, req.user.userId);
   }
 
   /**
@@ -139,10 +148,12 @@ export class InventarioController {
    * POST /inventarios/:id/aplicar-ajustes
    */
   @Post(':id/aplicar-ajustes')
-  async aplicarAjustes(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId;
-    const usuarioId = req.user.userId;
-    return this.inventarioService.aplicarAjustes(empresaId, id, usuarioId);
+  async aplicarAjustes(
+    @Request() req,
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.inventarioService.aplicarAjustes(empresaId, id, req.user.userId);
   }
 
   /**
@@ -150,8 +161,10 @@ export class InventarioController {
    * POST /inventarios/:id/cancelar
    */
   @Post(':id/cancelar')
-  async cancelar(@Request() req, @Param('id') id: string) {
-    const empresaId = req.user.empresaId;
+  async cancelar(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
     return this.inventarioService.cancelar(empresaId, id);
   }
 }

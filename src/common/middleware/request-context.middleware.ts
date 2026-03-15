@@ -32,7 +32,9 @@ export class RequestContextMiddleware implements NestMiddleware {
         const user = (req as any).user;
         namespace.set('userId', user.sub || user.id);
         namespace.set('email', user.email);
-        namespace.set('tenantId', user.tenantId);
+        // Preferir header x-tenant-id (fuente de verdad tras switch-tenant)
+        const tenantId = req.get('x-tenant-id') || user.tenantId;
+        namespace.set('tenantId', tenantId);
       }
 
       // Agregar requestId a headers de respuesta

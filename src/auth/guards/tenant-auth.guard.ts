@@ -1,10 +1,21 @@
 import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CacheService } from '../../redis/cache.service';
+
+interface TenantAccessCache {
+  roles: string[];     // Roles del usuario en la empresa (EmpresaUsuarioRol)
+  isClient: boolean;   // Si tiene acceso como cliente (EmpresaPersona)
+}
 
 @Injectable()
 export class TenantAuthGuard implements CanActivate {
-  constructor(private prisma: PrismaService) {}
+  private static readonly CACHE_TTL = 300; // 5 minutos
+
+  constructor(
+    private prisma: PrismaService,
+    private cache: CacheService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
@@ -19,19 +30,42 @@ export class TenantAuthGuard implements CanActivate {
       return true;
     }
 
-    // Verificar acceso a la empresa
-    const tieneAccesoEmpresa = await this.prisma.empresaUsuarioRol.findFirst({
-      where: { usuarioId: user.id, empresaId: empresa.id, isActive: true, deletedAt: null },
-    });
+    // Obtener roles y acceso con caché Redis
+    const cacheKey = `tenant_access:${user.id}:${empresa.id}`;
 
-    if (tieneAccesoEmpresa) return true;
+    const accessData = await this.cache.getOrSet<TenantAccessCache>(
+      cacheKey,
+      async () => {
+        // Obtener todos los roles del usuario en la empresa
+        const userRoles = await this.prisma.empresaUsuarioRol.findMany({
+          where: { usuarioId: user.id, empresaId: empresa.id, isActive: true, deletedAt: null },
+          select: { rol: true },
+        });
 
-    // También puede ser cliente
-    const esCliente = await this.prisma.empresaPersona.findFirst({
-      where: { personaId: user.personaId, empresaId: empresa.id, isActive: true, deletedAt: null },
-    });
+        if (userRoles.length > 0) {
+          return { roles: userRoles.map(r => r.rol), isClient: false };
+        }
 
-    if (esCliente) return true;
+        // Verificar si es cliente
+        const esCliente = await this.prisma.empresaPersona.findFirst({
+          where: { personaId: user.personaId, empresaId: empresa.id, isActive: true, deletedAt: null },
+          select: { id: true },
+        });
+
+        if (esCliente) {
+          return { roles: [], isClient: true };
+        }
+
+        return { roles: [], isClient: false };
+      },
+      TenantAuthGuard.CACHE_TTL,
+    );
+
+    if (accessData.roles.length > 0 || accessData.isClient) {
+      // Inyectar roles en el request para que PermissionsGuard los reutilice
+      (request as any)._tenantRoles = accessData.roles;
+      return true;
+    }
 
     throw new UnauthorizedException('No tienes acceso a esta empresa');
   }

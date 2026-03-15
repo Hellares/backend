@@ -59,6 +59,18 @@ export class OrdenServicioController {
     return this.ordenServicioService.create(dto);
   }
 
+  @Get('mis-ordenes')
+  @ApiOperation({ summary: 'Listar mis órdenes de servicio como cliente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  findMisOrdenes(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @Query() query: QueryOrdenServicioDto,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.ordenServicioService.findOrdenesCliente(empresaId, user.personaId, query);
+  }
+
   @Get()
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar órdenes de servicio' })

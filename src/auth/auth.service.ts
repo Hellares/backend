@@ -218,14 +218,15 @@ export class AuthService {
         } else {
           this.logger.warn('Verification email was not sent (check email service logs for details)', { email });
         }
-      } catch (error) {
-        this.logger.error('Failed to send verification email', error.stack, { email });
+      } catch (error: any) {
+        this.logger.error('Failed to send verification email', error?.stack, { email });
       }
     }
 
     // Log de auditoría
     this.auditLogger.logUserRegistered(usuario.id, email || dni || usuario.id, empresaId);
 
+    
     // Generar tokens
     const tokens = await this.generateTokens(usuario, empresaId);
 
@@ -490,7 +491,12 @@ export class AuthService {
         // Limpiar intentos fallidos
         await this.securityService.clearFailedAttempts(credencial, 'login');
 
-        // Retornar opciones de modo SIN generar tokens
+        // Generar tokens sin contexto de tenant (el usuario seleccionará después via switch-tenant)
+        const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+
+        // Log de auditoría
+        this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
+
         return {
           requiresSelection: true,
           message: '¿Qué deseas hacer?',
@@ -508,6 +514,7 @@ export class AuthService {
               availableCompanies,
             },
           ],
+          ...tokens,
         };
       }
     }
@@ -663,9 +670,9 @@ export class AuthService {
         clientInfo,
         session?.tenantRoles
       );
-    } catch (error) {
+    } catch (error: any) {
       // Verificar si el refresh token ya fue usado (prevenir replay attacks)
-      if (refreshToken && error.name !== 'TokenExpiredError') {
+      if (refreshToken && error?.name !== 'TokenExpiredError') {
         const tokenKey = `used_refresh_token:${refreshToken.substring(0, 32)}`;
         const wasUsed = await this.sessionService['redisService'].get(tokenKey);
         if (wasUsed) {
@@ -841,8 +848,8 @@ export class AuthService {
       } else {
         this.logger.warn('Welcome email was not sent (check email service logs for details)', { email: usuario.email });
       }
-    } catch (error) {
-      this.logger.error('Failed to send welcome email', error.stack, { email: usuario.email });
+    } catch (error: any) {
+      this.logger.error('Failed to send welcome email', error?.stack, { email: usuario.email });
     }
 
     this.logger.success('Email verified successfully', {
@@ -932,8 +939,8 @@ export class AuthService {
         this.logger.warn('Verification email could not be sent', { email: usuario.email });
         throw new BadRequestException('No se pudo enviar el email de verificación. Intenta nuevamente más tarde.');
       }
-    } catch (error) {
-      this.logger.error('Failed to resend verification email', error.stack, { email: usuario.email });
+    } catch (error: any) {
+      this.logger.error('Failed to resend verification email', error?.stack, { email: usuario.email });
       throw new BadRequestException('Error al enviar el email de verificación. Intenta nuevamente más tarde.');
     }
 
@@ -1008,7 +1015,7 @@ export class AuthService {
       } else {
         this.logger.warn(`Password recovery email was not sent to ${email} (check email service logs for details)`);
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to send password recovery email to ${email}:`, error);
     }
 
@@ -1051,13 +1058,20 @@ export class AuthService {
       },
     });
 
+    // Revocar TODAS las sesiones del usuario (reset-password no tiene sesión actual)
+    const revokedCount = await this.sessionService.revokeAllUserSessions(usuario.id);
+    this.logger.info('All sessions revoked after password reset', {
+      userId: usuario.id,
+      revokedCount,
+    });
+
     return { message: 'Contraseña actualizada exitosamente' };
   }
 
   /**
    * Cambiar contraseña (usuario autenticado)
    */
-  async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
+  async changePassword(userId: string, changePasswordDto: ChangePasswordDto, currentSessionId?: string) {
     const { currentPassword, newPassword, confirmPassword } = changePasswordDto;
 
     if (newPassword !== confirmPassword) {
@@ -1090,6 +1104,16 @@ export class AuthService {
         ultimoCambioPassword: new Date(),
       },
     });
+
+    // Revocar todas las sesiones EXCEPTO la actual
+    if (currentSessionId) {
+      const revokedCount = await this.sessionService.revokeAllOtherSessions(userId, currentSessionId);
+      this.logger.info('Other sessions revoked after password change', {
+        userId,
+        currentSessionId,
+        revokedCount,
+      });
+    }
 
     // Log de auditoría
     this.auditLogger.logPasswordChanged(userId, usuario.email || usuario.id, userId);
@@ -1453,14 +1477,14 @@ export class AuthService {
         } : undefined,
         ...tokens,
       };
-    } catch (error) {
-      this.logger.error('Google authentication failed', error.stack);
+    } catch (error: any) {
+      this.logger.error('Google authentication failed', error?.stack);
 
       if (error instanceof UnauthorizedException) {
         throw error;
       }
 
-      throw new UnauthorizedException('Error al autenticar con Google: ' + error.message);
+      throw new UnauthorizedException('Error al autenticar con Google: ' + (error?.message || 'Error desconocido'));
     }
   }
 
@@ -1577,11 +1601,11 @@ export class AuthService {
         sessionCount: userSessions.length,
         newTenantId: empresaId,
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn('Failed to update some sessions during tenant switch', {
         userId,
         empresaId,
-        error: error.message,
+        error: error?.message || String(error),
       });
       // No lanzar error - el switch es exitoso aunque falle actualizar sesiones
     }
@@ -1635,6 +1659,13 @@ export class AuthService {
           requiereCambioPassword: false,
           ultimoCambioPassword: new Date(),
         },
+      });
+
+      // Revocar TODAS las sesiones (el usuario será redirigido al login)
+      const revokedCount = await this.sessionService.revokeAllUserSessions(userId);
+      this.logger.info('All sessions revoked after temporary password change', {
+        userId,
+        revokedCount,
       });
 
       // Log de auditoría
@@ -1808,8 +1839,13 @@ export class AuthService {
         where: { id: usuario.persona.id },
         data: {
           ...(data.dni !== undefined && { dni: data.dni }),
+          ...(data.nombres !== undefined && { nombres: data.nombres }),
+          ...(data.apellidos !== undefined && { apellidos: data.apellidos }),
           ...(data.telefono !== undefined && { telefono: data.telefono }),
           ...(data.direccion !== undefined && { direccion: data.direccion }),
+          ...(data.departamento !== undefined && { departamento: data.departamento }),
+          ...(data.provincia !== undefined && { provincia: data.provincia }),
+          ...(data.distrito !== undefined && { distrito: data.distrito }),
         },
       }),
       // Sincronizar teléfono en Usuario también
@@ -1856,6 +1892,205 @@ export class AuthService {
   /**
    * Helper para construir el objeto user en respuestas de auth
    */
+  /**
+   * Vincula la cuenta actual (Google) con una cuenta existente (DNI)
+   * Mueve el AuthProvider de Google al usuario original y elimina el duplicado
+   */
+  async linkAccount(currentUserId: string, dto: { dni: string; targetPersonaId: string }, request?: any) {
+    // 1. Cargar ambas cuentas
+    const currentUser = await this.prisma.usuario.findUnique({
+      where: { id: currentUserId },
+      include: { persona: true },
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('Usuario actual no encontrado');
+    }
+
+    const targetPersona = await this.prisma.persona.findUnique({
+      where: { id: dto.targetPersonaId },
+      include: { usuario: true },
+    });
+
+    if (!targetPersona || !targetPersona.usuario) {
+      throw new NotFoundException('Cuenta destino no encontrada');
+    }
+
+    const targetUser = targetPersona.usuario;
+
+    // 2. Validaciones
+    if (targetPersona.dni !== dto.dni) {
+      throw new BadRequestException('El DNI no coincide con la cuenta destino');
+    }
+
+    if (currentUser.id === targetUser.id) {
+      throw new BadRequestException('No puedes vincular tu cuenta contigo mismo');
+    }
+
+    if (!targetUser.isActive) {
+      throw new BadRequestException('La cuenta destino está desactivada');
+    }
+
+    // Verificar que el usuario actual tiene Google
+    const currentGoogleProvider = await this.prisma.authProvider.findFirst({
+      where: { userId: currentUser.id, provider: 'GOOGLE', isActive: true },
+    });
+
+    if (!currentGoogleProvider) {
+      throw new BadRequestException('Tu cuenta no tiene Google vinculado');
+    }
+
+    // Verificar que la cuenta destino NO tiene Google ya
+    const targetGoogleProvider = await this.prisma.authProvider.findFirst({
+      where: { userId: targetUser.id, provider: 'GOOGLE', isActive: true },
+    });
+
+    if (targetGoogleProvider) {
+      throw new ConflictException('La cuenta destino ya tiene una cuenta de Google vinculada');
+    }
+
+    // 3. Ejecutar merge en transacción
+    const emailToTransfer = currentUser.email;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Primero: limpiar email y telefono del usuario duplicado para evitar unique constraint
+      await tx.usuario.update({
+        where: { id: currentUser.id },
+        data: { email: null, telefono: null },
+      });
+
+      // Mover Google AuthProvider al usuario destino
+      await tx.authProvider.update({
+        where: { id: currentGoogleProvider.id },
+        data: { userId: targetUser.id },
+      });
+
+      // Actualizar email y datos del usuario destino
+      await tx.usuario.update({
+        where: { id: targetUser.id },
+        data: {
+          email: emailToTransfer || targetUser.email,
+          emailVerificado: true,
+          authMethodsCount: { increment: 1 },
+        },
+      });
+
+      // Actualizar email en persona destino
+      if (emailToTransfer && !targetPersona.email) {
+        await tx.persona.update({
+          where: { id: targetPersona.id },
+          data: { email: emailToTransfer },
+        });
+      }
+
+      // Mover dispositivos FCM (eliminar duplicados primero)
+      const targetDevices = await tx.dispositivoNotificacion.findMany({
+        where: { usuarioId: targetUser.id },
+        select: { fcmToken: true },
+      });
+      const targetTokens = new Set(targetDevices.map(d => d.fcmToken));
+
+      // Eliminar devices del usuario actual que ya existen en destino
+      if (targetTokens.size > 0) {
+        await tx.dispositivoNotificacion.deleteMany({
+          where: {
+            usuarioId: currentUser.id,
+            fcmToken: { in: Array.from(targetTokens) },
+          },
+        });
+      }
+
+      // Mover los restantes
+      await tx.dispositivoNotificacion.updateMany({
+        where: { usuarioId: currentUser.id },
+        data: { usuarioId: targetUser.id },
+      });
+
+      // Mover notificaciones
+      await tx.notificacion.updateMany({
+        where: { usuarioId: currentUser.id },
+        data: { usuarioId: targetUser.id },
+      });
+
+      // Mover preferencias (eliminar duplicados)
+      const targetPrefs = await tx.preferenciaNotificacion.findMany({
+        where: { usuarioId: targetUser.id },
+        select: { tipo: true },
+      });
+      const targetTipos = new Set(targetPrefs.map(p => p.tipo));
+
+      if (targetTipos.size > 0) {
+        await tx.preferenciaNotificacion.deleteMany({
+          where: {
+            usuarioId: currentUser.id,
+            tipo: { in: Array.from(targetTipos) },
+          },
+        });
+      }
+
+      await tx.preferenciaNotificacion.updateMany({
+        where: { usuarioId: currentUser.id },
+        data: { usuarioId: targetUser.id },
+      });
+
+      // Limpiar relaciones del usuario duplicado (EmpresaPersona, EmpresaUsuarioRol)
+      await tx.empresaUsuarioRol.deleteMany({
+        where: { usuarioId: currentUser.id },
+      });
+
+      await tx.empresaPersona.deleteMany({
+        where: { personaId: currentUser.persona.id },
+      });
+
+      // Eliminar otros AuthProviders del duplicado
+      await tx.authProvider.deleteMany({
+        where: { userId: currentUser.id },
+      });
+
+      // Eliminar usuario duplicado
+      await tx.usuario.delete({
+        where: { id: currentUser.id },
+      });
+
+      // Eliminar persona duplicada
+      await tx.persona.delete({
+        where: { id: currentUser.persona.id },
+      });
+    });
+
+    // 4. Revocar sesiones del usuario duplicado (fuera de transacción)
+    await this.sessionService.revokeAllUserSessions(currentUser.id);
+
+    // 5. Generar nuevos tokens para el usuario destino
+    const clientInfo = request ? this.securityService.getClientInfo(request) : {
+      ip: '127.0.0.1',
+      userAgent: 'Unknown Device',
+      device: 'Link Account',
+      platform: 'Unknown',
+    };
+
+    // Recargar usuario destino con datos actualizados
+    const updatedTargetUser = await this.prisma.usuario.findUnique({
+      where: { id: targetUser.id },
+      include: { persona: true },
+    });
+
+    const tokens = await this.generateTokens(updatedTargetUser, undefined, undefined, undefined, clientInfo, undefined);
+
+    this.logger.success('Accounts linked successfully', {
+      duplicateUserId: currentUser.id,
+      targetUserId: targetUser.id,
+      dni: dto.dni,
+    });
+
+    return {
+      success: true,
+      message: 'Cuentas vinculadas exitosamente. Ahora puedes usar Google y DNI para acceder.',
+      user: this.buildUserResponse(updatedTargetUser),
+      ...tokens,
+    };
+  }
+
   private buildUserResponse(usuario: any, extra?: Record<string, any>) {
     const persona = usuario.persona;
     const perfilCompleto = !!(persona?.dni && (persona?.telefono || usuario.telefono) && persona?.direccion);

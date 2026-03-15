@@ -1,0 +1,66 @@
+// =========================================
+// MÓDULO DE NOTIFICACIONES PUSH
+// =========================================
+
+enum TipoNotificacion {
+  CITA
+  ORDEN_SERVICIO
+  PROMOCION
+  AVISO_MANTENIMIENTO
+  SISTEMA
+}
+
+model DispositivoNotificacion {
+  id          String   @id @default(cuid())
+  usuarioId   String
+  fcmToken    String
+  platform    String   // 'android' | 'ios' | 'web'
+  deviceInfo  String?
+  isActive    Boolean  @default(true)
+  lastUsedAt  DateTime @default(now()) // Para limpiar tokens viejos
+  creadoEn    DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  usuario     Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, fcmToken])
+  @@index([usuarioId, isActive])
+  @@index([fcmToken])
+  @@index([isActive, lastUsedAt])
+}
+
+model PreferenciaNotificacion {
+  id          String   @id @default(cuid())
+  usuarioId   String
+  tipo        TipoNotificacion
+  habilitado  Boolean  @default(true)
+  creadoEn    DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  usuario     Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, tipo])
+  @@index([usuarioId])
+}
+
+model Notificacion {
+  id          String            @id @default(cuid())
+  usuarioId   String
+  empresaId   String?
+  titulo      String
+  cuerpo      String
+  tipo        TipoNotificacion  @default(SISTEMA)
+  data        Json?
+  leida       Boolean           @default(false)
+  leidaEn     DateTime?
+  creadoEn    DateTime          @default(now())
+
+  usuario     Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  empresa     Empresa? @relation(fields: [empresaId], references: [id])
+
+  @@index([usuarioId, leida])
+  @@index([usuarioId, creadoEn])
+  @@index([usuarioId, empresaId, creadoEn])
+  @@index([empresaId])
+  @@index([creadoEn])
+}

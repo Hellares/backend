@@ -8,6 +8,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AvisoMantenimientoService } from '../aviso-mantenimiento/aviso-mantenimiento.service';
+import { NotificacionService } from '../notificacion/notificacion.service';
+import { TipoNotificacion } from '@prisma/client';
 import { EstadoOrdenServicio, EstadoDiagnostico, EstadoComponente } from '@prisma/client';
 import { CreateOrdenServicioDto } from './dto/create-orden-servicio.dto';
 import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
@@ -90,6 +92,7 @@ export class OrdenServicioService {
     private configuracionCodigosService: ConfiguracionCodigosService,
     @Inject(forwardRef(() => AvisoMantenimientoService))
     private avisoMantenimientoService: AvisoMantenimientoService,
+    private notificacionService: NotificacionService,
   ) {}
 
   async create(dto: CreateOrdenServicioDto) {
@@ -215,7 +218,7 @@ export class OrdenServicioService {
 
     const { empresaId, fechaAvisoPersonalizado, ...restDto } = dto;
 
-    return this.prisma.ordenServicio.create({
+    const orden = await this.prisma.ordenServicio.create({
       data: {
         empresaId,
         ...restDto,
@@ -227,6 +230,19 @@ export class OrdenServicioService {
       },
       include: ORDEN_SERVICIO_FULL_INCLUDE,
     });
+
+    // Notificar al cliente (fire-and-forget)
+    const servicioNombre = orden.servicio?.nombre ?? 'Servicio';
+    this.notificarClienteOrden(
+      orden.clienteId,
+      'Nueva orden de servicio',
+      `Tu orden ${orden.codigo} (${servicioNombre}) ha sido registrada`,
+      empresaId,
+      orden.id,
+      'created',
+    ).catch(() => {});
+
+    return orden;
   }
 
   async transitionEstado(
@@ -438,6 +454,31 @@ export class OrdenServicioService {
       }
     }
 
+    // Notificar al cliente sobre el cambio de estado (fire-and-forget)
+    const estadoLabels: Record<string, string> = {
+      EN_DIAGNOSTICO: 'En diagnóstico',
+      ESPERANDO_APROBACION: 'Esperando tu aprobación',
+      EN_REPARACION: 'En reparación',
+      PENDIENTE_PIEZAS: 'Pendiente de piezas',
+      REPARADO: 'Reparado',
+      LISTO_ENTREGA: 'Listo para entrega',
+      ENTREGADO: 'Entregado',
+      FINALIZADO: 'Finalizado',
+      CANCELADO: 'Cancelado',
+    };
+
+    const estadoLabel = estadoLabels[dto.nuevoEstado] ?? dto.nuevoEstado;
+
+    const servicioNombreTransition = updatedOrden.servicio?.nombre ?? 'Servicio';
+    this.notificarClienteOrden(
+      updatedOrden.clienteId,
+      `Orden ${estadoLabel.toLowerCase()}`,
+      `Tu orden ${updatedOrden.codigo} (${servicioNombreTransition}) está: ${estadoLabel}`,
+      empresaId,
+      id,
+      'status_changed',
+    ).catch(() => {});
+
     return updatedOrden;
   }
 
@@ -449,6 +490,55 @@ export class OrdenServicioService {
       where: { ordenServicioId: ordenId },
       orderBy: { creadoEn: 'asc' },
     });
+  }
+
+  /**
+   * Notifica al cliente sobre su orden de servicio
+   * Busca el usuarioId a partir del clienteId (EmpresaPersona)
+   */
+  private async notificarClienteOrden(
+    clienteId: string | null,
+    titulo: string,
+    cuerpo: string,
+    empresaId: string,
+    ordenId: string,
+    action: string,
+  ) {
+    if (!clienteId) return;
+
+    // Obtener el usuarioId del cliente
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { id: clienteId },
+      select: { persona: { select: { usuario: { select: { id: true } } } } },
+    });
+
+    const usuarioId = empresaPersona?.persona?.usuario?.id;
+    if (!usuarioId) return;
+
+    await this.notificacionService.enviarAUsuario(
+      usuarioId,
+      titulo,
+      cuerpo,
+      {
+        tipo: TipoNotificacion.ORDEN_SERVICIO,
+        data: { ordenId, action },
+        empresaId,
+      },
+    );
+  }
+
+  async findOrdenesCliente(empresaId: string, personaId: string, query: QueryOrdenServicioDto) {
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!empresaPersona) {
+      return { data: [], total: 0, page: 1, limit: 10, totalPages: 0 };
+    }
+
+    query.clienteId = empresaPersona.id;
+    return this.findAll(empresaId, query);
   }
 
   async findAll(empresaId: string, query: QueryOrdenServicioDto) {
