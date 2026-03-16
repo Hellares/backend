@@ -32,6 +32,8 @@ import { VinculacionModule } from './vinculacion/vinculacion.module';
 import { ClienteEmpresaModule } from './cliente-empresa/cliente-empresa.module';
 import { CitaModule } from './cita/cita.module';
 import { NotificacionModule } from './notificacion/notificacion.module';
+import { VentaModule } from './venta/venta.module';
+import { DevolucionVentaModule } from './devolucion-venta/devolucion-venta.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -66,6 +68,8 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     ReporteIncidenciaModule,
     InventarioModule,
     CotizacionModule,
+    VentaModule,
+    DevolucionVentaModule,
     ConfiguracionDocumentosModule,
     ConsultasExternasModule,
     CompraModule,

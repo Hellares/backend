@@ -149,6 +149,38 @@ export class PermissionsService {
         isSedeAdmin ||
         isVendedor,
 
+      // ==================== VENTAS ====================
+      // Ver ventas: Administradores, vendedores, cajeros y contadores
+      canViewVentas:
+        isSuperAdmin ||
+        isEmpresaAdmin ||
+        isSedeAdmin ||
+        isVendedor ||
+        isCajero ||
+        isContador,
+
+      // Gestionar ventas: Administradores, vendedores y cajeros
+      canManageVentas:
+        isSuperAdmin ||
+        isEmpresaAdmin ||
+        isSedeAdmin ||
+        isVendedor ||
+        isCajero,
+
+      // ==================== DEVOLUCIONES ====================
+      // Ver devoluciones: Administradores, vendedores, cajeros y contadores
+      canViewDevoluciones:
+        isSuperAdmin ||
+        isEmpresaAdmin ||
+        isSedeAdmin ||
+        isVendedor ||
+        isCajero ||
+        isContador,
+
+      // Gestionar devoluciones: Administradores
+      canManageDevoluciones:
+        isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+
       // ==================== PROVEEDORES ====================
       // Ver proveedores: Administradores y contador
       canViewProveedores:
@@ -222,6 +254,10 @@ export class PermissionsService {
       'canAssignDiscounts',
       'canViewCotizaciones',
       'canManageCotizaciones',
+      'canViewVentas',
+      'canManageVentas',
+      'canViewDevoluciones',
+      'canManageDevoluciones',
       'canViewProveedores',
       'canManageProveedores',
       'canViewCompras',

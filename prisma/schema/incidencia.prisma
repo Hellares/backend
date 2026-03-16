@@ -398,7 +398,9 @@ model Devolucion {
   // Relaciones
   empresa     Empresa           @relation(fields: [empresaId], references: [id])
   sede        Sede              @relation(fields: [sedeId], references: [id])
+  venta       Venta?            @relation(fields: [ventaId], references: [id])
   compra      Compra?           @relation(fields: [compraId], references: [id])
+  cliente     EmpresaPersona?   @relation(fields: [clienteId], references: [id])
   proveedor   Proveedor?        @relation(fields: [proveedorId], references: [id])
   items       DevolucionItem[]
   movimientos MovimientoStock[]

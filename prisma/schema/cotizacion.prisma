@@ -37,6 +37,9 @@ model Cotizacion {
   // Referencia a comprobante (si se convierte)
   comprobanteId String?
 
+  // Referencia a venta (cuando se convierte a venta)
+  ventaId String?
+
   // Observaciones
   observaciones String?
   condiciones   String?
@@ -51,6 +54,8 @@ model Cotizacion {
   cliente        EmpresaPersona? @relation(fields: [clienteId], references: [id])
   clienteEmpresa ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
   vendedor       Usuario         @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
+  venta          Venta?          @relation("CotizacionVenta", fields: [ventaId], references: [id])
+  ventasOrigen   Venta[]         @relation("VentaCotizacion") // Back-relation: ventas created from this cotizacion
   detalles CotizacionDetalle[]
 
   @@unique([empresaId, codigo])
@@ -60,6 +65,7 @@ model Cotizacion {
   @@index([clienteId])
   @@index([clienteEmpresaId])
   @@index([estado])
+  @@index([ventaId])
   @@index([fechaEmision])
   @@index([empresaId, estado])
   @@index([empresaId, sedeId, estado])

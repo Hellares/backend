@@ -37,6 +37,14 @@ export enum Permission {
   VIEW_COTIZACIONES = 'canViewCotizaciones',       // Ver lista de cotizaciones
   MANAGE_COTIZACIONES = 'canManageCotizaciones',   // Crear, editar, eliminar cotizaciones
 
+  // Ventas
+  VIEW_VENTAS = 'canViewVentas',                         // Ver lista de ventas
+  MANAGE_VENTAS = 'canManageVentas',                     // Crear, editar, confirmar, anular ventas
+
+  // Devoluciones
+  VIEW_DEVOLUCIONES = 'canViewDevoluciones',                 // Ver lista de devoluciones
+  MANAGE_DEVOLUCIONES = 'canManageDevoluciones',             // Crear, aprobar, procesar devoluciones
+
   // Compras
   VIEW_COMPRAS = 'canViewCompras',                       // Ver órdenes de compra, compras y lotes
   MANAGE_COMPRAS = 'canManageCompras',                   // Crear, editar, eliminar compras

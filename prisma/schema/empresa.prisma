@@ -114,6 +114,9 @@ model Empresa {
   // Relaciones para cotizaciones
   cotizaciones Cotizacion[]
 
+  // Relaciones para ventas
+  ventas Venta[]
+
   // Relaciones para módulo de compras
   ordenesCompra OrdenCompra[]
   compras       Compra[]
@@ -328,6 +331,9 @@ model Sede {
 
   // Relaciones para cotizaciones
   cotizaciones Cotizacion[]
+
+  // Relaciones para ventas
+  ventas Venta[]
 
   // Relaciones para módulo de compras
   ordenesCompra OrdenCompra[]

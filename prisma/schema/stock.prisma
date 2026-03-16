@@ -108,6 +108,9 @@ model MovimientoStock {
   // Relación con compras (si aplica)
   compraId String?
 
+  // Relación con ventas (si aplica)
+  ventaId String?
+
   // Usuario responsable
   usuarioId String
 
@@ -121,6 +124,7 @@ model MovimientoStock {
   transferencia          TransferenciaStock?     @relation(fields: [transferenciaId], references: [id])
   devolucion             Devolucion?             @relation(fields: [devolucionId], references: [id])
   compra                 Compra?                 @relation(fields: [compraId], references: [id])
+  venta                  Venta?                  @relation(fields: [ventaId], references: [id])
   itemsReporteIncidencia ReporteIncidenciaItem[] @relation("ItemIncidenciaMovimiento")
   itemsInventario        InventarioItem[]        @relation("InventarioAjuste")
 
@@ -132,6 +136,7 @@ model MovimientoStock {
   @@index([transferenciaId])
   @@index([devolucionId])
   @@index([compraId])
+  @@index([ventaId])
   @@index([productoStockId, creadoEn]) // Historial de movimientos ordenado
   @@index([sedeId, tipo]) // Filtrar movimientos por sede y tipo
 }

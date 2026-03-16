@@ -81,6 +81,9 @@ model Producto {
   // Relaciones para cotizaciones
   cotizacionDetalles CotizacionDetalle[]
 
+  // Relaciones para ventas
+  ventaDetalles VentaDetalle[]
+
   // Relaciones para módulo de compras
   ordenCompraDetalles OrdenCompraDetalle[]
   compraDetalles      CompraDetalle[]
@@ -253,6 +256,9 @@ model ProductoVariante {
 
   // Relaciones para cotizaciones
   cotizacionDetalles CotizacionDetalle[]
+
+  // Relaciones para ventas
+  ventaDetalles VentaDetalle[]
 
   // Relaciones para módulo de compras
   ordenCompraDetalles OrdenCompraDetalle[]

@@ -57,6 +57,7 @@ model ClienteEmpresa {
   contactos       ClienteEmpresaContacto[]
   ordenesServicio OrdenServicio[]
   cotizaciones    Cotizacion[]
+  ventas          Venta[]
   comprobantes    ComprobanteElectronico[] @relation("ComprobanteClienteEmpresa")
   citas           Cita[]
 

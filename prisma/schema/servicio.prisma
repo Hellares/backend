@@ -61,6 +61,7 @@ model Servicio {
   plantillaServicio   PlantillaServicio?       @relation(fields: [plantillaServicioId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ServicioComprobante")
   cotizacionDetalles  CotizacionDetalle[]
+  ventaDetalles       VentaDetalle[]
   ordenesServicio     OrdenServicio[]
   citas               Cita[]
 

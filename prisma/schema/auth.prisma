@@ -101,6 +101,9 @@ model Usuario {
   // Relaciones para cotizaciones
   cotizacionesVendedor Cotizacion[] @relation("CotizacionVendedor")
 
+  // Relaciones para ventas
+  ventasVendedor Venta[] @relation("VentaVendedor")
+
   // Relaciones para módulo de citas
   citasTecnico Cita[] @relation("CitasTecnico")
 
@@ -153,6 +156,8 @@ model EmpresaPersona {
   persona         Persona                  @relation(fields: [personaId], references: [id])
   ordenesServicio     OrdenServicio[]          @relation("OrdenServicioCliente")
   cotizaciones        Cotizacion[]
+  ventas              Venta[]
+  devoluciones        Devolucion[]
   avisosMantenimiento AvisoMantenimiento[]
   citas               Cita[]
 

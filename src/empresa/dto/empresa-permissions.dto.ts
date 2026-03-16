@@ -83,6 +83,30 @@ export class EmpresaPermissionsDto {
   canManageCotizaciones: boolean;
 
   @ApiProperty({
+    description: 'Puede ver la lista de ventas',
+    example: true,
+  })
+  canViewVentas: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar ventas (crear, confirmar, anular)',
+    example: true,
+  })
+  canManageVentas: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver la lista de devoluciones',
+    example: true,
+  })
+  canViewDevoluciones: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar devoluciones (crear, aprobar, procesar)',
+    example: true,
+  })
+  canManageDevoluciones: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de proveedores',
     example: true,
   })
