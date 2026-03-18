@@ -1,0 +1,35 @@
+model CampanaPromocion {
+  id          String              @id @default(cuid())
+  empresaId   String
+  titulo      String
+  mensaje     String
+  tipo        TipoCampana         @default(MANUAL)
+  estado      EstadoCampana       @default(ENVIADA)
+
+  // Estadísticas
+  totalDestinatarios Int          @default(0)
+  totalEnviados      Int          @default(0)
+
+  // Datos adicionales
+  productosIds  Json?             // Array de IDs de productos incluidos
+  data          Json?             // Metadata adicional
+
+  creadoPor   String
+  creadoEn    DateTime            @default(now())
+
+  empresa     Empresa             @relation(fields: [empresaId], references: [id])
+  usuario     Usuario             @relation(fields: [creadoPor], references: [id])
+
+  @@index([empresaId, creadoEn])
+  @@index([empresaId, tipo])
+}
+
+enum TipoCampana {
+  MANUAL
+  AUTOMATICA
+}
+
+enum EstadoCampana {
+  ENVIADA
+  FALLIDA
+}

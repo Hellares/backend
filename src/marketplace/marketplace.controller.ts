@@ -30,6 +30,8 @@ export class MarketplaceController {
     @Query('precioMax') precioMax?: string,
     @Query('departamento') departamento?: string,
     @Query('orden') orden?: string,
+    @Query('lat') lat?: string,
+    @Query('lng') lng?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -41,6 +43,8 @@ export class MarketplaceController {
       precioMax: precioMax ? parseFloat(precioMax) : undefined,
       departamento,
       orden,
+      lat: lat ? parseFloat(lat) : undefined,
+      lng: lng ? parseFloat(lng) : undefined,
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 20,
     });

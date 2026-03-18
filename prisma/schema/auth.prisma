@@ -111,6 +111,13 @@ model Usuario {
   dispositivos              DispositivoNotificacion[]
   notificaciones            Notificacion[]
   preferenciasNotificacion  PreferenciaNotificacion[]
+  campanasPromocion         CampanaPromocion[]
+  mensajesServicio          MensajeServicio[]
+  preguntasProducto         PreguntaProducto[] @relation("PreguntasProducto")
+  respuestasProducto        PreguntaProducto[] @relation("RespuestasProducto")
+  opinionesProducto         OpinionProducto[]
+  favoritosProducto         FavoritoProducto[] @relation("FavoritosProducto")
+  productosVistos           ProductoVisto[]    @relation("ProductosVistos")
 
   @@index([email])
   @@index([telefono])
@@ -277,22 +284,26 @@ model RegistroCliente {
 }
 
 model DireccionPersona {
-  id            String        @id @default(cuid())
-  personaId     String
-  tipo          TipoDireccion
-  direccion     String
-  referencia    String?
-  distrito      String?
-  provincia     String?
-  departamento  String?
-  pais          String?       @default("PERU")
-  isActive      Boolean       @default(true)
-  deletedAt     DateTime?
-  creadoEn      DateTime      @default(now())
-  actualizadoEn DateTime      @updatedAt
-  persona       Persona       @relation(fields: [personaId], references: [id])
+  id               String        @id @default(cuid())
+  personaId        String
+  tipo             TipoDireccion
+  etiqueta         String?
+  direccion        String
+  referencia       String?
+  distrito         String?
+  provincia        String?
+  departamento     String?
+  pais             String?       @default("PERU")
+  coordenadas      Json?
+  esPredeterminada Boolean       @default(false)
+  isActive         Boolean       @default(true)
+  deletedAt        DateTime?
+  creadoEn         DateTime      @default(now())
+  actualizadoEn    DateTime      @updatedAt
+  persona          Persona       @relation(fields: [personaId], references: [id])
 
   @@index([personaId])
+  @@index([personaId, esPredeterminada])
   @@index([deletedAt])
 }
 
@@ -383,6 +394,7 @@ enum TipoDireccion {
   ENVIO
   FISCAL
   TRABAJO
+  OTRO
 }
 
 enum TipoRegistro {

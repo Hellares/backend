@@ -78,6 +78,14 @@ export class CreateSedeDto {
   referencia?: string;
 
   @ApiPropertyOptional({
+    description: 'Número o nombre de stand/puesto',
+    example: 'Stand 45',
+  })
+  @IsOptional()
+  @IsString()
+  stand?: string;
+
+  @ApiPropertyOptional({
     description: 'Distrito',
     example: 'San Isidro',
   })
@@ -120,6 +128,13 @@ export class CreateSedeDto {
     lat: number;
     lon: number;
   };
+
+  @ApiPropertyOptional({
+    description: 'URLs de imágenes referenciales de la sede',
+    example: ['https://example.com/sede1.jpg'],
+  })
+  @IsOptional()
+  imagenes?: string[];
 
   @ApiPropertyOptional({
     description: 'Horario de atención en formato JSON',

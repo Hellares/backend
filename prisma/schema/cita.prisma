@@ -51,6 +51,7 @@ model Cita {
   citaAnterior     Cita?           @relation("CitaSiguiente")
   historial        HistorialCita[]
   items            CitaItem[]
+  mensajes         MensajeServicio[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId, fecha])

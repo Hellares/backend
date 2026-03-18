@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -160,9 +161,11 @@ export class ArchivingService {
 
     for (const [table, threshold] of Object.entries(ArchivingService.PARTITION_THRESHOLDS)) {
       try {
-        const result = await this.prisma.$queryRawUnsafe<[{ count: bigint }]>(
-          `SELECT COUNT(*) as count FROM "${table}"`
-        );
+        const allowedTables = Object.keys(ArchivingService.PARTITION_THRESHOLDS);
+        if (!allowedTables.includes(table)) continue;
+        const result = await this.prisma.$queryRaw<[{ count: bigint }]>`
+          SELECT COUNT(*) as count FROM ${Prisma.raw(`"${table}"`)}
+        `;
         const count = Number(result[0].count);
 
         if (count >= threshold) {
@@ -198,9 +201,11 @@ export class ArchivingService {
 
     for (const [table, threshold] of Object.entries(ArchivingService.PARTITION_THRESHOLDS)) {
       try {
-        const result = await this.prisma.$queryRawUnsafe<[{ count: bigint }]>(
-          `SELECT COUNT(*) as count FROM "${table}"`
-        );
+        const allowedTables = Object.keys(ArchivingService.PARTITION_THRESHOLDS);
+        if (!allowedTables.includes(table)) continue;
+        const result = await this.prisma.$queryRaw<[{ count: bigint }]>`
+          SELECT COUNT(*) as count FROM ${Prisma.raw(`"${table}"`)}
+        `;
         const count = Number(result[0].count);
         sizes.push({
           table,

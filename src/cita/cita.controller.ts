@@ -97,6 +97,56 @@ export class CitaController {
     return this.citaService.findCitasCliente(empresaId, user.personaId, query);
   }
 
+  @Get('mis-citas/:id')
+  @ApiOperation({ summary: 'Ver detalle de mi cita como cliente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  findMiCita(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.findCitaCliente(empresaId, user.personaId, id);
+  }
+
+  @Get('mis-citas/:id/historial')
+  @ApiOperation({ summary: 'Ver historial de mi cita como cliente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  getMiCitaHistorial(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.findHistorialCitaCliente(empresaId, user.personaId, id);
+  }
+
+  @Get('mis-citas/:id/mensajes')
+  @ApiOperation({ summary: 'Listar mensajes de mi cita como cliente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  getMisCitaMensajes(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.listarMensajesCitaCliente(empresaId, user.personaId, id);
+  }
+
+  @Post('mis-citas/:id/mensajes')
+  @ApiOperation({ summary: 'Enviar mensaje como cliente en cita' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  enviarMiCitaMensaje(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body('contenido') contenido: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    if (!contenido?.trim()) throw new BadRequestException('El mensaje no puede estar vacío');
+    return this.citaService.enviarMensajeCitaCliente(empresaId, user.personaId, user.sub, id, contenido.trim());
+  }
+
   @Get()
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar citas' })
@@ -119,6 +169,33 @@ export class CitaController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.citaService.getClientesConCitas(empresaId, search);
+  }
+
+  @Get(':id/mensajes')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Listar mensajes de una cita' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  getCitaMensajes(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.citaService.listarMensajesCita(empresaId, id);
+  }
+
+  @Post(':id/mensajes')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Enviar mensaje como técnico en cita' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  enviarCitaMensaje(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+    @Body('contenido') contenido: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    if (!contenido?.trim()) throw new BadRequestException('El mensaje no puede estar vacío');
+    return this.citaService.enviarMensajeCitaTecnico(empresaId, usuarioId, id, contenido.trim());
   }
 
   @Get(':id')

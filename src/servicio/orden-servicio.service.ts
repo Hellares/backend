@@ -541,6 +541,113 @@ export class OrdenServicioService {
     return this.findAll(empresaId, query);
   }
 
+  /**
+   * Detalle de orden para el cliente (vista simplificada)
+   */
+  async findOrdenCliente(empresaId: string, personaId: string, ordenId: string) {
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!empresaPersona) {
+      throw new NotFoundException('No eres cliente de esta empresa');
+    }
+
+    const orden = await this.prisma.ordenServicio.findFirst({
+      where: {
+        id: ordenId,
+        empresaId,
+        clienteId: empresaPersona.id,
+      },
+      include: {
+        servicio: true,
+        modeloEquipo: true,
+        componentes: {
+          include: { componente: { include: { tipoComponente: true } } },
+        },
+      },
+    });
+
+    if (!orden) {
+      throw new NotFoundException('Orden no encontrada');
+    }
+
+    // Retornar solo lo necesario para el cliente
+    return {
+      id: orden.id,
+      codigo: orden.codigo,
+      tipoServicio: orden.tipoServicio,
+      estado: orden.estado,
+      estadoDiagnostico: orden.estadoDiagnostico,
+      prioridad: orden.prioridad,
+      // Equipo
+      tipoEquipo: orden.tipoEquipo,
+      marcaEquipo: orden.marcaEquipo,
+      modeloEquipo: orden.modeloEquipo
+        ? `${orden.modeloEquipo.marca} ${orden.modeloEquipo.modelo}`
+        : null,
+      numeroSerie: orden.numeroSerie,
+      // Servicio
+      servicio: orden.servicio ? { id: orden.servicio.id, nombre: orden.servicio.nombre } : null,
+      // Descripción
+      descripcionProblema: orden.descripcionProblema,
+      notas: orden.notas,
+      diagnostico: orden.diagnostico,
+      // Costos
+      costoTotal: orden.costoTotal ? Number(orden.costoTotal) : null,
+      descuento: orden.descuento ? Number(orden.descuento) : null,
+      adelanto: orden.adelanto ? Number(orden.adelanto) : null,
+      // Componentes
+      componentes: orden.componentes?.map((c) => ({
+        nombre: c.componente?.codigo ?? 'Componente',
+        tipo: c.componente?.tipoComponente?.nombre,
+        costoAccion: c.costoAccion ? Number(c.costoAccion) : null,
+        tipoAccion: c.tipoAccion,
+      })),
+      // Fechas
+      fechaEntrega: orden.fechaEntrega,
+      creadoEn: orden.creadoEn,
+    };
+  }
+
+  /**
+   * Historial de orden para el cliente (verifica que sea su orden)
+   */
+  async findHistorialCliente(empresaId: string, personaId: string, ordenId: string) {
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!empresaPersona) {
+      throw new NotFoundException('No eres cliente de esta empresa');
+    }
+
+    // Verificar que la orden pertenece al cliente
+    const orden = await this.prisma.ordenServicio.findFirst({
+      where: { id: ordenId, empresaId, clienteId: empresaPersona.id },
+      select: { id: true },
+    });
+
+    if (!orden) {
+      throw new NotFoundException('Orden no encontrada');
+    }
+
+    return this.prisma.historialOrdenServicio.findMany({
+      where: { ordenServicioId: ordenId },
+      orderBy: { creadoEn: 'asc' },
+      select: {
+        id: true,
+        estadoAnterior: true,
+        estadoNuevo: true,
+        notas: true,
+        comunicarCliente: true,
+        creadoEn: true,
+      },
+    });
+  }
+
   async findAll(empresaId: string, query: QueryOrdenServicioDto) {
     const limit = Math.min(query.limit ?? 10, 100);
 
@@ -678,6 +785,163 @@ export class OrdenServicioService {
           `El campo "${campo.nombre}" es requerido`,
         );
       }
+    }
+  }
+
+  // ─── Mensajería ───
+
+  private readonly MENSAJE_SELECT = {
+    id: true,
+    contenido: true,
+    esCliente: true,
+    usuarioId: true,
+    creadoEn: true,
+    leidoEn: true,
+    usuario: {
+      select: {
+        persona: { select: { nombres: true, apellidos: true } },
+      },
+    },
+  } as const;
+
+  async listarMensajes(empresaId: string, ordenServicioId: string) {
+    await this.findOne(empresaId, ordenServicioId);
+
+    // Marcar mensajes del cliente como leídos
+    await this.prisma.mensajeServicio.updateMany({
+      where: { ordenServicioId, esCliente: true, leidoEn: null },
+      data: { leidoEn: new Date() },
+    });
+
+    return this.prisma.mensajeServicio.findMany({
+      where: { ordenServicioId },
+      select: this.MENSAJE_SELECT,
+      orderBy: { creadoEn: 'asc' },
+    });
+  }
+
+  async listarMensajesCliente(empresaId: string, personaId: string, ordenServicioId: string) {
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!empresaPersona) throw new NotFoundException('No eres cliente de esta empresa');
+
+    const orden = await this.prisma.ordenServicio.findFirst({
+      where: { id: ordenServicioId, empresaId, clienteId: empresaPersona.id },
+      select: { id: true },
+    });
+    if (!orden) throw new NotFoundException('Orden no encontrada');
+
+    // Marcar mensajes del técnico como leídos
+    await this.prisma.mensajeServicio.updateMany({
+      where: { ordenServicioId, esCliente: false, leidoEn: null },
+      data: { leidoEn: new Date() },
+    });
+
+    return this.prisma.mensajeServicio.findMany({
+      where: { ordenServicioId },
+      select: this.MENSAJE_SELECT,
+      orderBy: { creadoEn: 'asc' },
+    });
+  }
+
+  async enviarMensajeTecnico(empresaId: string, usuarioId: string, ordenServicioId: string, contenido: string) {
+    const orden = await this.findOne(empresaId, ordenServicioId);
+
+    const mensaje = await this.prisma.mensajeServicio.create({
+      data: {
+        empresaId,
+        ordenServicioId,
+        usuarioId,
+        contenido,
+        esCliente: false,
+      },
+      select: this.MENSAJE_SELECT,
+    });
+
+    // Notificar al cliente
+    this.notificarClienteOrden(
+      orden.clienteId,
+      'Nuevo mensaje sobre tu servicio',
+      contenido.length > 100 ? contenido.substring(0, 100) + '...' : contenido,
+      empresaId,
+      ordenServicioId,
+      'MENSAJE',
+    ).catch(() => {});
+
+    return mensaje;
+  }
+
+  async enviarMensajeCliente(
+    empresaId: string,
+    personaId: string,
+    usuarioId: string,
+    ordenServicioId: string,
+    contenido: string,
+  ) {
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!empresaPersona) throw new NotFoundException('No eres cliente de esta empresa');
+
+    const orden = await this.prisma.ordenServicio.findFirst({
+      where: { id: ordenServicioId, empresaId, clienteId: empresaPersona.id },
+      select: { id: true, tecnicoId: true, codigo: true },
+    });
+    if (!orden) throw new NotFoundException('Orden no encontrada');
+
+    const mensaje = await this.prisma.mensajeServicio.create({
+      data: {
+        empresaId,
+        ordenServicioId,
+        usuarioId,
+        contenido,
+        esCliente: true,
+      },
+      select: this.MENSAJE_SELECT,
+    });
+
+    // Notificar al técnico o admins de la empresa
+    const notifTitulo = `Mensaje del cliente - ${orden.codigo}`;
+    const notifCuerpo = contenido.length > 100 ? contenido.substring(0, 100) + '...' : contenido;
+    const notifOpts = {
+      tipo: TipoNotificacion.MENSAJE,
+      data: { ordenServicioId, action: 'MENSAJE' },
+      empresaId,
+    };
+
+    if (orden.tecnicoId) {
+      this.notificacionService.enviarAUsuario(
+        orden.tecnicoId, notifTitulo, notifCuerpo, notifOpts,
+      ).catch(() => {});
+    } else {
+      // Sin técnico asignado: notificar a admins de la empresa
+      this.notificarAdminsEmpresa(empresaId, notifTitulo, notifCuerpo, notifOpts).catch(() => {});
+    }
+
+    return mensaje;
+  }
+
+  private async notificarAdminsEmpresa(
+    empresaId: string,
+    titulo: string,
+    cuerpo: string,
+    options: { tipo: TipoNotificacion; data: Record<string, string>; empresaId: string },
+  ) {
+    const admins = await this.prisma.empresaUsuarioRol.findMany({
+      where: {
+        empresaId,
+        estado: 'ACTIVO',
+        rol: { in: ['EMPRESA_ADMIN', 'SUPER_ADMIN'] },
+      },
+      select: { usuarioId: true },
+    });
+
+    const adminIds = admins.map((a) => a.usuarioId);
+    if (adminIds.length > 0) {
+      await this.notificacionService.enviarAUsuarios(adminIds, titulo, cuerpo, options);
     }
   }
 }

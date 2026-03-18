@@ -1,0 +1,27 @@
+model FavoritoProducto {
+  id         String   @id @default(cuid())
+  usuarioId  String
+  productoId String
+  creadoEn   DateTime @default(now())
+
+  usuario    Usuario  @relation("FavoritosProducto", fields: [usuarioId], references: [id], onDelete: Cascade)
+  producto   Producto @relation("FavoritosProducto", fields: [productoId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, productoId])
+  @@index([usuarioId, creadoEn])
+  @@index([productoId])
+}
+
+model ProductoVisto {
+  id         String   @id @default(cuid())
+  usuarioId  String
+  productoId String
+  vistoEn    DateTime @default(now())
+
+  usuario    Usuario  @relation("ProductosVistos", fields: [usuarioId], references: [id], onDelete: Cascade)
+  producto   Producto @relation("ProductosVistos", fields: [productoId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, productoId])
+  @@index([usuarioId, vistoEn])
+  @@index([productoId])
+}

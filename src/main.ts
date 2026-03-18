@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from './prisma/prisma.service';
 import { AppLoggerService } from './common/logger/logger.service';
 import { logger as winstonLogger } from './common/logger/winston.config';
+import helmet from 'helmet';
 
 // Capturar errores no manejados
 process.on('unhandledRejection', (reason, promise) => {
@@ -106,8 +107,8 @@ async function bootstrap() {
       console.log('ℹ️  Tabla de migraciones no encontrada');
     }
 
-  } catch (error) {
-    appLogger.error('Error al conectar a la base de datos', error.stack);
+  } catch (error: any) {
+    appLogger.error('Error al conectar a la base de datos', error?.stack);
     appLogger.warn('La aplicación continuará, pero la conexión a la base de datos falló');
     appLogger.warn('Verifica tu archivo .env y la configuración de la base de datos');
 
@@ -123,14 +124,23 @@ async function bootstrap() {
     }
   }
 
-  const corsOrigins = configService.get('CORS_ORIGIN')?.split(',') || '*';
+  // Seguridad HTTP headers
+  app.use(helmet({
+    contentSecurityPolicy: false, // Deshabilitado para Swagger UI
+    crossOriginEmbedderPolicy: false,
+  }));
 
-  // CORS (permitir frontend)
+  // CORS
+  const corsOriginEnv = configService.get('CORS_ORIGIN');
+  const corsOrigins = corsOriginEnv
+    ? corsOriginEnv.split(',').map((o: string) => o.trim())
+    : ['http://localhost:3000', 'http://localhost:3001'];
+
   app.enableCors({
     origin: corsOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-tenant-id'],
   });
 
   // Prefijo global de API

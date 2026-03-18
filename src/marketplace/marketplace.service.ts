@@ -8,6 +8,19 @@ export class MarketplaceService {
   /**
    * Buscar productos en todo el marketplace (global)
    */
+  /**
+   * Calcular distancia entre dos puntos (Haversine) en km
+   */
+  private calcularDistancia(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
   async searchProductos(query: {
     search?: string;
     categoriaId?: string;
@@ -16,6 +29,8 @@ export class MarketplaceService {
     precioMax?: number;
     departamento?: string;
     orden?: string;
+    lat?: number;
+    lng?: number;
     page?: number;
     limit?: number;
   }) {
@@ -84,7 +99,11 @@ export class MarketplaceService {
           },
           stocksPorSede: {
             where: { precioConfigurado: true },
-            select: { precio: true, precioOferta: true, enOferta: true, stockActual: true },
+            select: {
+              precio: true, precioOferta: true, enOferta: true, stockActual: true,
+              fechaInicioOferta: true, fechaFinOferta: true,
+              sede: { select: { coordenadas: true } },
+            },
             take: 1,
             orderBy: { precio: 'asc' },
           },
@@ -120,8 +139,57 @@ export class MarketplaceService {
       }
     }
 
-    const data = productos.map((p) => {
+    // Opiniones: promedio y total por producto
+    const opiniones = productoIds.length > 0
+      ? await this.prisma.opinionProducto.groupBy({
+          by: ['productoId'],
+          where: { productoId: { in: productoIds } },
+          _avg: { calificacion: true },
+          _count: true,
+        })
+      : [];
+
+    const opinionMap = new Map<string, { promedio: number; total: number }>();
+    for (const o of opiniones) {
+      opinionMap.set(o.productoId, {
+        promedio: Math.round((o._avg.calificacion ?? 0) * 10) / 10,
+        total: o._count,
+      });
+    }
+
+    const userLat = query.lat;
+    const userLng = query.lng;
+
+    let data = productos.map((p: any) => {
       const stock = p.stocksPorSede[0];
+      const coordenadas = stock?.sede?.coordenadas as any;
+      let distancia: number | null = null;
+
+      const coordLng = coordenadas?.lng ?? coordenadas?.lon;
+      if (userLat && userLng && coordenadas?.lat && coordLng) {
+        distancia = Math.round(
+          this.calcularDistancia(userLat, userLng, coordenadas.lat, coordLng) * 10
+        ) / 10;
+      }
+
+      // Validar si la oferta está vigente
+      let ofertaActiva = false;
+      if (stock?.enOferta && stock?.precioOferta) {
+        const ahora = new Date();
+        const inicio = stock.fechaInicioOferta ? new Date(stock.fechaInicioOferta) : null;
+        const fin = stock.fechaFinOferta ? new Date(stock.fechaFinOferta) : null;
+
+        if (inicio && fin) {
+          ofertaActiva = ahora >= inicio && ahora <= fin;
+        } else if (inicio) {
+          ofertaActiva = ahora >= inicio;
+        } else if (fin) {
+          ofertaActiva = ahora <= fin;
+        } else {
+          ofertaActiva = true; // Sin fechas = siempre activa
+        }
+      }
+
       return {
         id: p.id,
         nombre: p.nombre,
@@ -131,10 +199,14 @@ export class MarketplaceService {
         marca: p.empresaMarca?.nombrePersonalizado
           || p.empresaMarca?.marcaMaestra?.nombre || null,
         precio: stock?.precio ? Number(stock.precio) : null,
-        precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
-        enOferta: stock?.enOferta ?? false,
+        precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: ofertaActiva,
         hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
         imagen: imagenMap.get(p.id) ?? null,
+        calificacion: opinionMap.get(p.id)?.promedio ?? null,
+        totalOpiniones: opinionMap.get(p.id)?.total ?? 0,
+        distancia,
+        coordenadas: coordenadas ? { lat: coordenadas.lat, lng: coordenadas.lng ?? coordenadas.lon } : null,
         destacado: p.destacado,
         creadoEn: p.creadoEn,
         empresa: {
@@ -148,6 +220,27 @@ export class MarketplaceService {
         },
       };
     });
+
+    // Si el usuario tiene ubicación, priorizar productos cercanos (20 km)
+    if (userLat && userLng) {
+      const RADIO_CERCANO = 20; // km
+      data = data.sort((a, b) => {
+        const aCercano = a.distancia !== null && a.distancia <= RADIO_CERCANO;
+        const bCercano = b.distancia !== null && b.distancia <= RADIO_CERCANO;
+
+        // Primero los cercanos (dentro de 20 km)
+        if (aCercano && !bCercano) return -1;
+        if (!aCercano && bCercano) return 1;
+
+        // Dentro del mismo grupo, ordenar por distancia
+        if (aCercano && bCercano) {
+          return a.distancia - b.distancia;
+        }
+
+        // Los lejanos mantienen el orden original (destacados + recientes)
+        return 0;
+      });
+    }
 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
@@ -176,7 +269,8 @@ export class MarketplaceService {
           where: { precioConfigurado: true },
           select: {
             precio: true, precioOferta: true, enOferta: true, stockActual: true,
-            sede: { select: { nombre: true } },
+            fechaInicioOferta: true, fechaFinOferta: true,
+            sede: { select: { nombre: true, coordenadas: true, direccion: true, distrito: true, provincia: true } },
           },
         },
         atributosValores: {
@@ -204,6 +298,18 @@ export class MarketplaceService {
 
     const stock = producto.stocksPorSede[0];
 
+    // Validar oferta vigente
+    let ofertaActiva = false;
+    if (stock?.enOferta && stock?.precioOferta) {
+      const ahora = new Date();
+      const inicio = stock.fechaInicioOferta ? new Date(stock.fechaInicioOferta) : null;
+      const fin = stock.fechaFinOferta ? new Date(stock.fechaFinOferta) : null;
+      if (inicio && fin) ofertaActiva = ahora >= inicio && ahora <= fin;
+      else if (inicio) ofertaActiva = ahora >= inicio;
+      else if (fin) ofertaActiva = ahora <= fin;
+      else ofertaActiva = true;
+    }
+
     return {
       id: producto.id,
       nombre: producto.nombre,
@@ -213,8 +319,8 @@ export class MarketplaceService {
       marca: producto.empresaMarca?.nombrePersonalizado
         || producto.empresaMarca?.marcaMaestra?.nombre || null,
       precio: stock?.precio ? Number(stock.precio) : null,
-      precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
-      enOferta: stock?.enOferta ?? false,
+      precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
+      enOferta: ofertaActiva,
       hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
       stockActual: stock?.stockActual ?? 0,
       imagenes: imagenes.map((i) => ({ id: i.id, url: i.url, thumbnail: i.urlThumbnail })),
@@ -234,6 +340,13 @@ export class MarketplaceService {
         ubicacion: [producto.empresa.distrito, producto.empresa.provincia, producto.empresa.departamento]
           .filter(Boolean).join(', '),
       },
+      sede: stock?.sede ? {
+        nombre: stock.sede.nombre,
+        direccion: stock.sede.direccion,
+        distrito: stock.sede.distrito,
+        provincia: stock.sede.provincia,
+        coordenadas: (stock.sede.coordenadas as any) ?? null,
+      } : null,
     };
   }
 
@@ -393,6 +506,27 @@ export class MarketplaceService {
           },
           take: 1,
         },
+        // Sedes activas con información de ubicación
+        sedes: {
+          where: { isActive: true, deletedAt: null },
+          select: {
+            id: true,
+            nombre: true,
+            telefono: true,
+            email: true,
+            direccion: true,
+            referencia: true,
+            stand: true,
+            distrito: true,
+            provincia: true,
+            departamento: true,
+            coordenadas: true,
+            imagenes: true,
+            horarioAtencion: true,
+            esPrincipal: true,
+          },
+          orderBy: { esPrincipal: 'desc' },
+        },
         // Contar productos y servicios activos
         _count: {
           select: {
@@ -500,6 +634,24 @@ export class MarketplaceService {
       }
     }
 
+    // Opiniones
+    const opinionesEmp = productoIds.length > 0
+      ? await this.prisma.opinionProducto.groupBy({
+          by: ['productoId'],
+          where: { productoId: { in: productoIds } },
+          _avg: { calificacion: true },
+          _count: true,
+        })
+      : [];
+
+    const opinionMapEmp = new Map<string, { promedio: number; total: number }>();
+    for (const o of opinionesEmp) {
+      opinionMapEmp.set(o.productoId, {
+        promedio: Math.round((o._avg.calificacion ?? 0) * 10) / 10,
+        total: o._count,
+      });
+    }
+
     const data = productos.map((p) => {
       const stock = p.stocksPorSede[0];
       return {
@@ -515,6 +667,8 @@ export class MarketplaceService {
         enOferta: stock?.enOferta ?? false,
         hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
         imagen: imagenMap.get(p.id) ?? null,
+        calificacion: opinionMapEmp.get(p.id)?.promedio ?? null,
+        totalOpiniones: opinionMapEmp.get(p.id)?.total ?? 0,
         destacado: p.destacado,
         creadoEn: p.creadoEn,
         empresa: {

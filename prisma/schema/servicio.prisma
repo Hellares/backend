@@ -235,6 +235,7 @@ model OrdenServicio {
   tercerizacionOrigen  TercerizacionServicio? @relation("OrdenOrigen")
   tercerizacionDestino TercerizacionServicio? @relation("OrdenDestino")
   citas                Cita[]
+  mensajes             MensajeServicio[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

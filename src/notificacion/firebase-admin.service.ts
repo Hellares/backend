@@ -92,15 +92,6 @@ export class FirebaseAdminService implements OnModuleInit {
             defaultSound: true,
           },
         },
-        apns: {
-          payload: {
-            aps: {
-              alert: { title, body },
-              sound: 'default',
-              badge: 1,
-            },
-          },
-        },
       };
 
       const response = await admin.messaging().send(message);
@@ -139,15 +130,6 @@ export class FirebaseAdminService implements OnModuleInit {
           channelId: 'syncronize_default',
           priority: 'high',
           defaultSound: true,
-        },
-      },
-      apns: {
-        payload: {
-          aps: {
-            alert: { title, body },
-            sound: 'default',
-            badge: 1,
-          },
         },
       },
     };

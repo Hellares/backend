@@ -32,6 +32,8 @@ import { VinculacionModule } from './vinculacion/vinculacion.module';
 import { ClienteEmpresaModule } from './cliente-empresa/cliente-empresa.module';
 import { CitaModule } from './cita/cita.module';
 import { NotificacionModule } from './notificacion/notificacion.module';
+import { PromocionModule } from './promocion/promocion.module';
+import { DireccionPersonaModule } from './direccion-persona/direccion-persona.module';
 import { VentaModule } from './venta/venta.module';
 import { DevolucionVentaModule } from './devolucion-venta/devolucion-venta.module';
 import { LoggerModule } from './common/logger/logger.module';
@@ -81,6 +83,8 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     ClienteEmpresaModule,
     CitaModule,
     NotificacionModule,
+    PromocionModule,
+    DireccionPersonaModule,
   ],
   controllers: [AppController],
   providers: [

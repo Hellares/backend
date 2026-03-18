@@ -388,6 +388,7 @@ export class NotificacionService {
       aviso: TipoNotificacion.AVISO_MANTENIMIENTO,
       sistema: TipoNotificacion.SISTEMA,
       promocion: TipoNotificacion.PROMOCION,
+      mensaje: TipoNotificacion.MENSAJE,
     };
     return map[tipo.toLowerCase()] ?? TipoNotificacion.SISTEMA;
   }

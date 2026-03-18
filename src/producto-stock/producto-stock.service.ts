@@ -4,12 +4,14 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CrearStockDto } from './dto/crear-stock.dto';
 import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { ActualizarPreciosSedeDto } from './dto/actualizar-precios-sede.dto';
 import { QueryHistorialPreciosDto } from './dto/query-historial-precios.dto';
 import { Prisma, TipoCambioPrecio } from '@prisma/client';
+import { PromocionService } from '../promocion/promocion.service';
 import * as ExcelJS from 'exceljs';
 import { Response } from 'express';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
@@ -22,7 +24,10 @@ type DecimalType = Prisma.Decimal;
 export class ProductoStockService {
   private readonly logger = new Logger(ProductoStockService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly promocionService: PromocionService,
+  ) {}
 
   /**
    * Obtiene el stock de un producto/variante en una sede específica
@@ -660,6 +665,19 @@ export class ProductoStockService {
       this.logger.log(
         `Precios actualizados para ${stock.producto?.nombre || stock.variante?.nombre} en sede ${stock.sede.nombre}`,
       );
+
+      // Auto-trigger: notificar clientes cuando se activa una oferta
+      if (dto.enOferta === true && !stock.enOferta && stock.producto) {
+        this.promocionService
+          .notificarOfertaAutomatica(empresaId, usuarioId, {
+            id: stock.producto.id,
+            nombre: stock.producto.nombre,
+            precioOferta: dto.precioOferta ? Number(dto.precioOferta) : undefined,
+          })
+          .catch((err) =>
+            this.logger.error(`Error en notificación automática de oferta: ${err.message}`),
+          );
+      }
 
       return stockActualizado;
     });
@@ -1534,5 +1552,28 @@ export class ProductoStockService {
     });
     await workbook.xlsx.write(res);
     res.end();
+  }
+
+  /**
+   * Cron: Desactivar ofertas expiradas (cada hora)
+   */
+  @Cron('0 * * * *')
+  async desactivarOfertasExpiradas() {
+    try {
+      const ahora = new Date();
+      const result = await this.prisma.productoStock.updateMany({
+        where: {
+          enOferta: true,
+          fechaFinOferta: { not: null, lt: ahora },
+        },
+        data: { enOferta: false },
+      });
+
+      if (result.count > 0) {
+        this.logger.log(`[Ofertas] ${result.count} ofertas expiradas desactivadas`);
+      }
+    } catch (error: any) {
+      this.logger.error(`[Ofertas] Error desactivando ofertas: ${error.message}`);
+    }
   }
 }

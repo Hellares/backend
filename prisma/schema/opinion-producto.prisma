@@ -1,0 +1,21 @@
+model OpinionProducto {
+  id            String   @id @default(cuid())
+  productoId    String
+  empresaId     String
+  usuarioId     String
+  calificacion  Int      // 1-5
+  comentario    String?
+  imagenes      String[] // URLs de imágenes
+  verificada    Boolean  @default(false)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  producto      Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  empresa       Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  usuario       Usuario  @relation(fields: [usuarioId], references: [id])
+
+  @@unique([productoId, usuarioId])
+  @@index([productoId, creadoEn])
+  @@index([empresaId])
+  @@index([calificacion])
+}

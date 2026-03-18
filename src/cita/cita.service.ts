@@ -1325,4 +1325,202 @@ export class CitaService {
       },
     ).catch(() => {});
   }
+
+  // ─── Endpoints para cliente ───
+
+  private async resolveClienteId(empresaId: string, personaId: string) {
+    const ep = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!ep) throw new NotFoundException('No eres cliente de esta empresa');
+    return ep.id;
+  }
+
+  async findCitaCliente(empresaId: string, personaId: string, citaId: string) {
+    const clienteId = await this.resolveClienteId(empresaId, personaId);
+
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId, clienteId },
+      include: {
+        servicio: { select: { id: true, nombre: true, duracionMinutos: true } },
+        sede: { select: { id: true, nombre: true } },
+        ordenServicio: { select: { id: true, codigo: true, estado: true } },
+      },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    return {
+      id: cita.id,
+      codigo: cita.codigo,
+      estado: cita.estado,
+      fecha: cita.fecha,
+      horaInicio: cita.horaInicio,
+      horaFin: cita.horaFin,
+      servicio: cita.servicio ? { id: cita.servicio.id, nombre: cita.servicio.nombre, duracion: cita.servicio.duracionMinutos } : null,
+      sede: cita.sede ? { id: cita.sede.id, nombre: cita.sede.nombre } : null,
+      notas: cita.notas,
+      costoServicio: cita.costoServicio ? Number(cita.costoServicio) : null,
+      costoProductos: cita.costoProductos ? Number(cita.costoProductos) : null,
+      costoTotal: cita.costoTotal ? Number(cita.costoTotal) : null,
+      descuento: cita.descuento ? Number(cita.descuento) : null,
+      adelanto: cita.adelanto ? Number(cita.adelanto) : null,
+      ordenServicio: cita.ordenServicio,
+      motivoCancelacion: cita.motivoCancelacion,
+      creadoEn: cita.creadoEn,
+    };
+  }
+
+  async findHistorialCitaCliente(empresaId: string, personaId: string, citaId: string) {
+    const clienteId = await this.resolveClienteId(empresaId, personaId);
+
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId, clienteId },
+      select: { id: true },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    return this.prisma.historialCita.findMany({
+      where: { citaId },
+      orderBy: { creadoEn: 'asc' },
+      select: {
+        id: true,
+        estadoAnterior: true,
+        estadoNuevo: true,
+        notas: true,
+        creadoEn: true,
+      },
+    });
+  }
+
+  // ─── Mensajería en citas ───
+
+  private readonly MENSAJE_CITA_SELECT = {
+    id: true,
+    contenido: true,
+    esCliente: true,
+    usuarioId: true,
+    creadoEn: true,
+    leidoEn: true,
+    usuario: {
+      select: {
+        persona: { select: { nombres: true, apellidos: true } },
+      },
+    },
+  } as const;
+
+  async listarMensajesCita(empresaId: string, citaId: string) {
+    await this.findOne(empresaId, citaId);
+
+    await this.prisma.mensajeServicio.updateMany({
+      where: { citaId, esCliente: true, leidoEn: null },
+      data: { leidoEn: new Date() },
+    });
+
+    return this.prisma.mensajeServicio.findMany({
+      where: { citaId },
+      select: this.MENSAJE_CITA_SELECT,
+      orderBy: { creadoEn: 'asc' },
+    });
+  }
+
+  async listarMensajesCitaCliente(empresaId: string, personaId: string, citaId: string) {
+    const clienteId = await this.resolveClienteId(empresaId, personaId);
+
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId, clienteId },
+      select: { id: true },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    await this.prisma.mensajeServicio.updateMany({
+      where: { citaId, esCliente: false, leidoEn: null },
+      data: { leidoEn: new Date() },
+    });
+
+    return this.prisma.mensajeServicio.findMany({
+      where: { citaId },
+      select: this.MENSAJE_CITA_SELECT,
+      orderBy: { creadoEn: 'asc' },
+    });
+  }
+
+  async enviarMensajeCitaTecnico(empresaId: string, usuarioId: string, citaId: string, contenido: string) {
+    const cita = await this.findOne(empresaId, citaId);
+
+    const mensaje = await this.prisma.mensajeServicio.create({
+      data: { empresaId, citaId, usuarioId, contenido, esCliente: false },
+      select: this.MENSAJE_CITA_SELECT,
+    });
+
+    // Notificar al cliente
+    if (cita.clienteId) {
+      const ep = await this.prisma.empresaPersona.findFirst({
+        where: { id: cita.clienteId },
+        select: { persona: { select: { usuario: { select: { id: true } } } } },
+      });
+      const clienteUsuarioId = ep?.persona?.usuario?.id;
+      if (clienteUsuarioId) {
+        this.notificacionService.enviarAUsuario(
+          clienteUsuarioId,
+          'Nuevo mensaje sobre tu cita',
+          contenido.length > 100 ? contenido.substring(0, 100) + '...' : contenido,
+          { tipo: TipoNotificacion.MENSAJE, data: { citaId, action: 'MENSAJE' }, empresaId },
+        ).catch(() => {});
+      }
+    }
+
+    return mensaje;
+  }
+
+  async enviarMensajeCitaCliente(empresaId: string, personaId: string, usuarioId: string, citaId: string, contenido: string) {
+    const clienteId = await this.resolveClienteId(empresaId, personaId);
+
+    const cita = await this.prisma.cita.findFirst({
+      where: { id: citaId, empresaId, clienteId },
+      select: { id: true, tecnicoId: true, codigo: true },
+    });
+    if (!cita) throw new NotFoundException('Cita no encontrada');
+
+    const mensaje = await this.prisma.mensajeServicio.create({
+      data: { empresaId, citaId, usuarioId, contenido, esCliente: true },
+      select: this.MENSAJE_CITA_SELECT,
+    });
+
+    const notifTitulo = `Mensaje del cliente - ${cita.codigo}`;
+    const notifCuerpo = contenido.length > 100 ? contenido.substring(0, 100) + '...' : contenido;
+    const notifOpts = { tipo: TipoNotificacion.MENSAJE, data: { citaId, action: 'MENSAJE' }, empresaId };
+
+    if (cita.tecnicoId) {
+      this.notificacionService.enviarAUsuario(
+        cita.tecnicoId, notifTitulo, notifCuerpo, notifOpts,
+      ).catch(() => {});
+    } else {
+      // Sin técnico: notificar admins
+      this.notificarAdminsEmpresa(empresaId, notifTitulo, notifCuerpo, notifOpts).catch(() => {});
+    }
+
+    return mensaje;
+  }
+
+  private async notificarAdminsEmpresa(
+    empresaId: string,
+    titulo: string,
+    cuerpo: string,
+    options: { tipo: TipoNotificacion; data: Record<string, string>; empresaId: string },
+  ) {
+    const admins = await this.prisma.empresaUsuarioRol.findMany({
+      where: {
+        empresaId,
+        estado: 'ACTIVO',
+        rol: { in: ['EMPRESA_ADMIN', 'SUPER_ADMIN'] },
+      },
+      select: { usuarioId: true },
+    });
+
+    const adminIds = admins.map((a) => a.usuarioId);
+    if (adminIds.length > 0) {
+      await this.notificacionService.enviarAUsuarios(adminIds, titulo, cuerpo, options);
+    }
+  }
 }

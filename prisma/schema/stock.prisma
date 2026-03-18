@@ -73,6 +73,7 @@ model ProductoStock {
   @@index([sedeId, stockActual]) // Ordenar por stock en sede
   @@index([precio]) // Búsquedas por precio
   @@index([enOferta]) // Filtrar productos en oferta por sede
+  @@index([enOferta, fechaFinOferta]) // Cron de expiración de ofertas
   @@index([precioConfigurado]) // Filtrar productos con/sin precio configurado
   @@index([sedeId, precioConfigurado]) // Productos con precio por sede
   @@index([sedeId, precioConfigurado, stockActual]) // Productos vendibles por sede

@@ -92,6 +92,12 @@ model Producto {
   // Relaciones para módulo de citas
   citaItems CitaItem[]
 
+  // Marketplace
+  preguntas   PreguntaProducto[]
+  opiniones   OpinionProducto[]
+  favoritos   FavoritoProducto[] @relation("FavoritosProducto")
+  vistas      ProductoVisto[]    @relation("ProductosVistos")
+
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
   @@index([empresaId])
