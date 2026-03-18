@@ -72,6 +72,17 @@ export class CotizacionController {
     });
   }
 
+  @Get('cola-pos')
+  @RequiresPermission(Permission.VIEW_COTIZACIONES)
+  @ApiOperation({ summary: 'Cola POS - Cotizaciones aprobadas para cobro' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async colaPOS(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return this.cotizacionService.getColaPOS(empresaId, sedeId);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_COTIZACIONES)
   @ApiOperation({ summary: 'Obtener cotizacion por ID' })

@@ -333,50 +333,7 @@ export class ConfiguracionCodigosService {
         ultimoContador: config.ultimoInventario,
         proximoCodigo: proximoInventario,
       },
-      documentos: {
-        factura: {
-          codigo: config.facturaCodigo,
-          ultimoContador: config.ultimoFactura,
-          proximoCodigo: this.formatCodigo(
-            config.facturaCodigo,
-            config.documentoSeparador,
-            config.ultimoFactura + 1,
-            config.documentoLongitud,
-          ),
-        },
-        boleta: {
-          codigo: config.boletaCodigo,
-          ultimoContador: config.ultimaBoleta,
-          proximoCodigo: this.formatCodigo(
-            config.boletaCodigo,
-            config.documentoSeparador,
-            config.ultimaBoleta + 1,
-            config.documentoLongitud,
-          ),
-        },
-        notaCredito: {
-          codigo: config.notaCreditoCodigo,
-          ultimoContador: config.ultimaNotaCredito,
-          proximoCodigo: this.formatCodigo(
-            config.notaCreditoCodigo,
-            config.documentoSeparador,
-            config.ultimaNotaCredito + 1,
-            config.documentoLongitud,
-          ),
-        },
-        notaDebito: {
-          codigo: config.notaDebitoCodigo,
-          ultimoContador: config.ultimaNotaDebito,
-          proximoCodigo: this.formatCodigo(
-            config.notaDebitoCodigo,
-            config.documentoSeparador,
-            config.ultimaNotaDebito + 1,
-            config.documentoLongitud,
-          ),
-        },
-        separador: config.documentoSeparador,
-        longitud: config.documentoLongitud,
-      },
+      // Documentos de facturación: series y correlativos se gestionan por Sede (punto de emisión)
       restricciones: {
         puedeModificarProductoCodigo: countProductos === 0,
         puedeModificarVarianteCodigo: countVariantes === 0,
@@ -1236,34 +1193,6 @@ export class ConfiguracionCodigosService {
         prefijo = config.servicioCodigo;
         separador = config.servicioSeparador;
         longitud = config.servicioLongitud;
-        codigo = this.formatCodigo(prefijo, separador, numero, longitud);
-        break;
-
-      case TipoCodigo.FACTURA:
-        prefijo = config.facturaCodigo;
-        separador = config.documentoSeparador;
-        longitud = config.documentoLongitud;
-        codigo = this.formatCodigo(prefijo, separador, numero, longitud);
-        break;
-
-      case TipoCodigo.BOLETA:
-        prefijo = config.boletaCodigo;
-        separador = config.documentoSeparador;
-        longitud = config.documentoLongitud;
-        codigo = this.formatCodigo(prefijo, separador, numero, longitud);
-        break;
-
-      case TipoCodigo.NOTA_CREDITO:
-        prefijo = config.notaCreditoCodigo;
-        separador = config.documentoSeparador;
-        longitud = config.documentoLongitud;
-        codigo = this.formatCodigo(prefijo, separador, numero, longitud);
-        break;
-
-      case TipoCodigo.NOTA_DEBITO:
-        prefijo = config.notaDebitoCodigo;
-        separador = config.documentoSeparador;
-        longitud = config.documentoLongitud;
         codigo = this.formatCodigo(prefijo, separador, numero, longitud);
         break;
 

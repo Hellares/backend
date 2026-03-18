@@ -189,7 +189,7 @@ export class VentaService {
     });
 
     return this.prisma.$transaction(async (tx) => {
-      // Validar cotización
+      // 1. Validar cotización
       const cotizacion = await tx.cotizacion.findFirst({
         where: { id: cotizacionId, empresaId },
         include: {
@@ -207,7 +207,14 @@ export class VentaService {
         );
       }
 
-      // Generar código de venta
+      // 2. Protección contra duplicados
+      if (cotizacion.ventaId) {
+        throw new BadRequestException(
+          'Esta cotización ya fue convertida a venta',
+        );
+      }
+
+      // 3. Generar código de venta
       const { codigoVenta } =
         await this.configuracionCodigos.generarCodigoVenta(
           empresaId,
@@ -215,14 +222,17 @@ export class VentaService {
           tx,
         );
 
+      const totalVenta = Number(cotizacion.total);
       const montoCambio =
-        dto.montoRecibido && dto.montoRecibido > Number(cotizacion.total)
-          ? Math.round(
-              (dto.montoRecibido - Number(cotizacion.total)) * 100,
-            ) / 100
+        dto.montoRecibido && dto.montoRecibido > totalVenta
+          ? Math.round((dto.montoRecibido - totalVenta) * 100) / 100
           : null;
 
-      // Crear venta con datos de la cotización
+      // Determinar estado de la venta
+      const esCredito = dto.esCredito ?? false;
+      const estaPagada = !esCredito && dto.montoRecibido && dto.montoRecibido >= totalVenta;
+
+      // 4. Crear venta con datos de la cotización
       const venta = await tx.venta.create({
         data: {
           empresaId,
@@ -246,12 +256,14 @@ export class VentaService {
           metodoPago: dto.metodoPago,
           montoRecibido: dto.montoRecibido,
           montoCambio,
-          esCredito: dto.esCredito ?? false,
+          esCredito,
           plazoCredito: dto.plazoCredito,
           fechaVencimientoPago: dto.fechaVencimientoPago
             ? new Date(dto.fechaVencimientoPago)
             : null,
           observaciones: dto.observaciones ?? cotizacion.observaciones,
+          // Venta POS: CONFIRMADA (con stock descontado) o PAGADA_COMPLETA
+          estado: estaPagada ? EstadoVenta.PAGADA_COMPLETA : EstadoVenta.CONFIRMADA,
           detalles: {
             create: cotizacion.detalles.map((d) => ({
               productoId: d.productoId,
@@ -272,7 +284,168 @@ export class VentaService {
         include: this.getInclude(),
       });
 
-      // Cambiar estado de cotización a CONVERTIDA
+      // 5. Descontar stock de productos (venta POS = confirmación inmediata)
+      for (const detalle of cotizacion.detalles) {
+        if (!detalle.productoId && !detalle.varianteId) {
+          continue; // Servicios no afectan stock
+        }
+
+        const productoStock = await tx.productoStock.findFirst({
+          where: {
+            sedeId: cotizacion.sedeId,
+            productoId: detalle.productoId ?? null,
+            varianteId: detalle.varianteId ?? null,
+          },
+        });
+
+        if (!productoStock) {
+          this.logger.warn(`No existe stock para "${detalle.descripcion}" en sede ${cotizacion.sedeId}`);
+          continue;
+        }
+
+        // Lock para concurrencia
+        const [stockLocked] = await tx.$queryRaw<
+          Array<{ id: string; stockActual: number }>
+        >`SELECT id, "stockActual" FROM "ProductoStock" WHERE id = ${productoStock.id} FOR UPDATE`;
+
+        if (!stockLocked) continue;
+
+        const cantidad = Number(detalle.cantidad);
+        const stockAnterior = stockLocked.stockActual;
+        const nuevoStock = Math.max(0, stockAnterior - cantidad);
+
+        await tx.productoStock.update({
+          where: { id: productoStock.id },
+          data: { stockActual: nuevoStock },
+        });
+
+        await tx.movimientoStock.create({
+          data: {
+            sedeId: cotizacion.sedeId,
+            empresaId,
+            productoStockId: productoStock.id,
+            tipo: TipoMovimientoStock.SALIDA_VENTA,
+            tipoDocumento: 'VENTA',
+            numeroDocumento: codigoVenta,
+            cantidadAnterior: stockAnterior,
+            cantidad: -cantidad,
+            cantidadNueva: nuevoStock,
+            motivo: `Venta POS ${codigoVenta} - ${detalle.descripcion}`,
+            ventaId: venta.id,
+            usuarioId: cotizacion.vendedorId,
+          },
+        });
+      }
+
+      // 6. Registrar pago
+      if (dto.montoRecibido && dto.montoRecibido > 0 && !esCredito) {
+        await tx.pagoVenta.create({
+          data: {
+            ventaId: venta.id,
+            metodoPago: dto.metodoPago || 'EFECTIVO',
+            monto: Math.min(dto.montoRecibido, totalVenta),
+            referencia: dto.referenciaPago || null,
+          },
+        });
+      }
+
+      // 7. Crear comprobante electrónico
+      const tipoComprobante = dto.tipoComprobante || 'BOLETA';
+
+      // ConfiguracionFacturacion = datos tributarios globales (IGV, credenciales SUNAT)
+      const configFacturacion = await tx.configuracionFacturacion.findUnique({
+        where: { empresaId },
+      });
+
+      // Sede = punto de emisión (series y correlativos)
+      const sede = await tx.sede.findFirst({ where: { id: cotizacion.sedeId } });
+
+      if (!sede) {
+        this.logger.warn(`Sede ${cotizacion.sedeId} no encontrada, comprobante no generado`);
+      }
+
+      if (sede) {
+        const serie = tipoComprobante === 'FACTURA'
+          ? sede.serieFactura
+          : sede.serieBoleta;
+
+        let correlativo: string;
+        if (tipoComprobante === 'FACTURA') {
+          correlativo = String(sede.ultimoNumeroFactura + 1);
+          await tx.sede.update({ where: { id: sede.id }, data: { ultimoNumeroFactura: sede.ultimoNumeroFactura + 1 } });
+        } else {
+          correlativo = String(sede.ultimoNumeroBoleta + 1);
+          await tx.sede.update({ where: { id: sede.id }, data: { ultimoNumeroBoleta: sede.ultimoNumeroBoleta + 1 } });
+        }
+
+        const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
+
+        // Usar subtotal e IGV ya calculados en la cotización (ya contemplan precioIncluyeIgv)
+        const comprobante = await tx.comprobanteElectronico.create({
+          data: {
+            empresaId,
+            clienteId: cotizacion.clienteId,
+            clienteEmpresaId: cotizacion.clienteEmpresaId,
+            tipoComprobante: tipoComprobante as any,
+            serie,
+            correlativo: correlativo.padStart(8, '0'),
+            codigoGenerado,
+            tipoDocumento: dto.tipoDocumentoCliente || (tipoComprobante === 'FACTURA' ? '6' : '1'),
+            numeroDocumento: cotizacion.documentoCliente,
+            nombreCliente: cotizacion.nombreCliente || 'CLIENTE VARIOS',
+            direccionCliente: cotizacion.direccionCliente,
+            emailCliente: cotizacion.emailCliente,
+            moneda: cotizacion.moneda || 'PEN',
+            // subtotal e impuestos ya vienen correctos de la cotización
+            gravada: cotizacion.subtotal || new Prisma.Decimal(0),
+            igv: cotizacion.impuestos || new Prisma.Decimal(0),
+            totalIgv: cotizacion.impuestos || new Prisma.Decimal(0),
+            total: cotizacion.total || new Prisma.Decimal(0),
+            estado: 'REGISTRADO' as any,
+            detalles: {
+              create: cotizacion.detalles.map((d) => {
+                // Usar subtotal e IGV ya calculados por item (respetan precioIncluyeIgv)
+                const subtotalItem = Number(d.subtotal || 0);
+                const igvItem = Number(d.igv || 0);
+                const totalItem = Number(d.total || subtotalItem + igvItem);
+                const cant = Number(d.cantidad || 1);
+                const valorUnit = cant > 0 ? subtotalItem / cant : 0;
+                const precioUnit = cant > 0 ? totalItem / cant : 0;
+                return {
+                  descripcion: d.descripcion,
+                  cantidad: d.cantidad,
+                  valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
+                  precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
+                  valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
+                  igv: new Prisma.Decimal(igvItem.toFixed(2)),
+                  subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
+                  total: new Prisma.Decimal(totalItem.toFixed(2)),
+                  ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
+                };
+              }),
+            },
+          },
+        });
+
+        // Registrar pago del comprobante (registro tributario)
+        const montoPago = esCredito
+          ? 0
+          : Math.min(dto.montoRecibido || totalVenta, totalVenta);
+
+        await tx.pagoComprobante.create({
+          data: {
+            comprobanteId: comprobante.id,
+            metodoPago: dto.metodoPago || 'EFECTIVO',
+            monto: new Prisma.Decimal(montoPago.toFixed(2)),
+            referencia: dto.referenciaPago || null,
+            estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
+          },
+        });
+
+        this.logger.log(`Comprobante ${codigoGenerado} generado para venta ${venta.codigo}`);
+      }
+
+      // 8. Cambiar estado de cotización a CONVERTIDA
       await tx.cotizacion.update({
         where: { id: cotizacion.id },
         data: {

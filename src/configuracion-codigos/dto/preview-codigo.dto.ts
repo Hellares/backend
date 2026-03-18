@@ -6,10 +6,6 @@ export enum TipoCodigo {
   VARIANTE = 'VARIANTE',
   SERVICIO = 'SERVICIO',
   VENTA = 'VENTA',
-  FACTURA = 'FACTURA',
-  BOLETA = 'BOLETA',
-  NOTA_CREDITO = 'NOTA_CREDITO',
-  NOTA_DEBITO = 'NOTA_DEBITO',
 }
 
 export class PreviewCodigoDto {

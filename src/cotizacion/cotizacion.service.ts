@@ -11,8 +11,9 @@ import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
 import { UpdateEstadoCotizacionDto } from './dto/update-estado-cotizacion.dto';
 import { CreateCotizacionDetalleDto } from './dto/create-cotizacion-detalle.dto';
-import { EstadoCotizacion, Prisma } from '@prisma/client';
+import { EstadoCotizacion, Prisma, TipoNotificacion } from '@prisma/client';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
+import { NotificacionService } from '../notificacion/notificacion.service';
 
 @Injectable()
 export class CotizacionService {
@@ -23,6 +24,7 @@ export class CotizacionService {
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     private readonly compatibilidadService: CompatibilidadService,
     private readonly planLimitsService: PlanLimitsService,
+    private readonly notificacionService: NotificacionService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -407,7 +409,7 @@ export class CotizacionService {
       );
     }
 
-    return this.prisma.cotizacion.update({
+    const updated = await this.prisma.cotizacion.update({
       where: { id },
       data: {
         estado: dto.estado,
@@ -423,6 +425,17 @@ export class CotizacionService {
         },
       },
     });
+
+    // Notificar cajeros cuando se aprueba (cola POS)
+    if (dto.estado === EstadoCotizacion.APROBADA) {
+      this.notificarCajerosNuevaCotizacion(
+        empresaId,
+        cotizacion.codigo,
+        cotizacion.total ? Number(cotizacion.total) : 0,
+      ).catch(() => {});
+    }
+
+    return updated;
   }
 
   /**
@@ -565,11 +578,25 @@ export class CotizacionService {
     const precioUnitario = dto.precioUnitario;
     const descuento = dto.descuento ?? 0;
     const porcentajeIGV = dto.porcentajeIGV ?? 18;
+    const incluyeIgv = dto.precioIncluyeIgv ?? false;
 
     const subtotalBruto = cantidad * precioUnitario;
-    const subtotal = subtotalBruto - descuento;
-    const igv = subtotal * (porcentajeIGV / 100);
-    const total = subtotal + igv;
+
+    let subtotal: number;
+    let igv: number;
+    let total: number;
+
+    if (incluyeIgv) {
+      // Precio ya incluye IGV → extraer base e IGV
+      total = subtotalBruto - descuento;
+      subtotal = total / (1 + porcentajeIGV / 100);
+      igv = total - subtotal;
+    } else {
+      // Precio sin IGV → sumar IGV
+      subtotal = subtotalBruto - descuento;
+      igv = subtotal * (porcentajeIGV / 100);
+      total = subtotal + igv;
+    }
 
     return {
       productoId: dto.productoId || null,
@@ -614,6 +641,89 @@ export class CotizacionService {
     if (!permitidos || !permitidos.includes(nuevo)) {
       throw new BadRequestException(
         `No se puede cambiar de ${actual} a ${nuevo}`,
+      );
+    }
+  }
+
+  /**
+   * Cola POS: cotizaciones aprobadas listas para cobro
+   */
+  async getColaPOS(empresaId: string, sedeId?: string) {
+    const where: any = {
+      empresaId,
+      estado: EstadoCotizacion.APROBADA,
+    };
+    if (sedeId) where.sedeId = sedeId;
+
+    const cotizaciones = await this.prisma.cotizacion.findMany({
+      where,
+      orderBy: { creadoEn: 'asc' }, // Las más antiguas primero (FIFO)
+      include: {
+        sede: { select: { id: true, nombre: true } },
+        cliente: {
+          include: { persona: { select: { nombres: true, apellidos: true } } },
+        },
+        vendedor: {
+          select: { persona: { select: { nombres: true, apellidos: true } } },
+        },
+        detalles: {
+          include: {
+            producto: { select: { id: true, nombre: true } },
+            variante: { select: { id: true, nombre: true } },
+          },
+        },
+        _count: { select: { detalles: true } },
+      },
+    });
+
+    return cotizaciones.map((c) => ({
+      id: c.id,
+      codigo: c.codigo,
+      nombreCliente: c.nombreCliente ||
+        (c.cliente?.persona ? `${c.cliente.persona.nombres} ${c.cliente.persona.apellidos}` : 'Sin cliente'),
+      vendedor: c.vendedor?.persona
+        ? `${c.vendedor.persona.nombres} ${c.vendedor.persona.apellidos}`
+        : 'Sin vendedor',
+      sede: c.sede?.nombre,
+      total: c.total ? Number(c.total) : 0,
+      moneda: c.moneda,
+      totalItems: c._count.detalles,
+      detalles: c.detalles.map((d) => ({
+        id: d.id,
+        producto: d.producto?.nombre || d.variante?.nombre || d.descripcion,
+        cantidad: d.cantidad,
+        precioUnitario: d.precioUnitario ? Number(d.precioUnitario) : 0,
+        subtotal: d.subtotal ? Number(d.subtotal) : 0,
+      })),
+      creadoEn: c.creadoEn,
+    }));
+  }
+
+  /**
+   * Notificar a cajeros cuando una cotización se aprueba
+   */
+  async notificarCajerosNuevaCotizacion(empresaId: string, cotizacionCodigo: string, total: number) {
+    // Buscar usuarios con rol CAJERO en esta empresa
+    const cajeros = await this.prisma.empresaUsuarioRol.findMany({
+      where: {
+        empresaId,
+        estado: 'ACTIVO',
+        rol: { in: ['CAJERO', 'EMPRESA_ADMIN', 'SUPER_ADMIN'] },
+      },
+      select: { usuarioId: true },
+    });
+
+    const cajeroIds = cajeros.map((c) => c.usuarioId);
+    if (cajeroIds.length > 0) {
+      await this.notificacionService.enviarAUsuarios(
+        cajeroIds,
+        `Nueva cotización ${cotizacionCodigo}`,
+        `Lista para cobro - Total: S/ ${total.toFixed(2)}`,
+        {
+          tipo: TipoNotificacion.SISTEMA,
+          empresaId,
+          data: { action: 'COLA_POS', cotizacionCodigo },
+        },
       );
     }
   }

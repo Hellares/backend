@@ -75,10 +75,6 @@ model ConfiguracionFacturacion {
   direccionFiscal    String?
   telefono           String?
   emailFacturacion   String?
-  serieFactura       String   @default("F001")
-  serieBoleta        String   @default("B001")
-  serieNotaCredito   String   @default("NC01")
-  serieNotaDebito    String   @default("ND01")
   certificadoDigital String?
   claveCertificado   String?
   usuarioSol         String?

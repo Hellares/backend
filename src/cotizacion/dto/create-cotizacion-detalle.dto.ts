@@ -54,4 +54,8 @@ export class CreateCotizacionDetalleDto {
   @Min(0)
   @Type(() => Number)
   porcentajeIGV?: number;
+
+  @ApiPropertyOptional({ description: 'El precio ya incluye IGV', example: true })
+  @IsOptional()
+  precioIncluyeIgv?: boolean;
 }

@@ -10,8 +10,9 @@ import { ConfiguracionCodigosService } from '../configuracion-codigos/configurac
 import { AvisoMantenimientoService } from '../aviso-mantenimiento/aviso-mantenimiento.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { TipoNotificacion } from '@prisma/client';
-import { EstadoOrdenServicio, EstadoDiagnostico, EstadoComponente } from '@prisma/client';
+import { EstadoOrdenServicio, EstadoDiagnostico, EstadoComponente, Prisma } from '@prisma/client';
 import { CreateOrdenServicioDto } from './dto/create-orden-servicio.dto';
+import { CobrarOrdenDto } from './dto/cobrar-orden.dto';
 import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
 import { TransitionEstadoDto } from './dto/transition-estado.dto';
 import { QueryOrdenServicioDto } from './dto/query-orden-servicio.dto';
@@ -943,5 +944,240 @@ export class OrdenServicioService {
     if (adminIds.length > 0) {
       await this.notificacionService.enviarAUsuarios(adminIds, titulo, cuerpo, options);
     }
+  }
+
+  /**
+   * Cobrar una orden de servicio: genera ComprobanteElectronico + PagoComprobante
+   * y cambia el estado a ENTREGADO
+   */
+  async cobrarOrden(empresaId: string, ordenId: string, dto: CobrarOrdenDto, usuarioId: string) {
+    return await this.prisma.$transaction(async (tx) => {
+      const ordenRaw = await tx.ordenServicio.findFirst({
+        where: { id: ordenId, empresaId },
+        include: {
+          cliente: { include: { persona: true } },
+          clienteEmpresa: true,
+          componentes: {
+            include: { componente: true },
+          },
+          servicio: true,
+        },
+      });
+
+      if (!ordenRaw) {
+        throw new NotFoundException('Orden de servicio no encontrada');
+      }
+
+      const orden = ordenRaw as any;
+
+      // Validar que la orden esté en un estado cobrable
+      const estadosCobrables: EstadoOrdenServicio[] = [
+        EstadoOrdenServicio.REPARADO,
+        EstadoOrdenServicio.LISTO_ENTREGA,
+      ];
+      if (!estadosCobrables.includes(orden.estado)) {
+        throw new BadRequestException(
+          `No se puede cobrar una orden en estado ${orden.estado}. Debe estar en REPARADO o LISTO_ENTREGA`,
+        );
+      }
+
+      if (!orden.costoTotal || Number(orden.costoTotal) <= 0) {
+        throw new BadRequestException('La orden no tiene costo total definido');
+      }
+
+      const costoTotal = Number(orden.costoTotal);
+      const adelanto = Number(orden.adelanto || 0);
+      const descuento = Number(orden.descuento || 0);
+      const saldoPendiente = costoTotal - adelanto - descuento;
+
+      // Datos del cliente
+      const nombreCliente = orden.clienteEmpresa?.razonSocial
+        || (orden.cliente?.persona
+          ? `${orden.cliente.persona.nombres} ${orden.cliente.persona.apellidos || ''}`.trim()
+          : 'CLIENTE VARIOS');
+      const documentoCliente = orden.clienteEmpresa?.ruc
+        || orden.cliente?.persona?.numeroDocumento || null;
+      const emailCliente = orden.clienteEmpresa?.email
+        || orden.cliente?.persona?.email || null;
+      const direccionCliente = orden.clienteEmpresa?.direccion || null;
+
+      // Crear comprobante electrónico
+      const tipoComprobante = dto.tipoComprobante || 'BOLETA';
+
+      // ConfiguracionFacturacion = datos tributarios de la empresa (IGV, credenciales SUNAT)
+      const configFacturacion = await tx.configuracionFacturacion.findUnique({
+        where: { empresaId },
+      });
+
+      // Sede = punto de emisión (series y correlativos)
+      const sede = orden.sedeId
+        ? await tx.sede.findFirst({ where: { id: orden.sedeId } })
+        : null;
+
+      let comprobanteId: string | null = null;
+
+      if (sede) {
+        // Series y correlativos vienen de la Sede (punto de emisión)
+        const serie = tipoComprobante === 'FACTURA'
+          ? sede.serieFactura
+          : sede.serieBoleta;
+
+        let correlativo: string;
+        if (tipoComprobante === 'FACTURA') {
+          correlativo = String(sede.ultimoNumeroFactura + 1);
+          await tx.sede.update({ where: { id: sede.id }, data: { ultimoNumeroFactura: sede.ultimoNumeroFactura + 1 } });
+        } else {
+          correlativo = String(sede.ultimoNumeroBoleta + 1);
+          await tx.sede.update({ where: { id: sede.id }, data: { ultimoNumeroBoleta: sede.ultimoNumeroBoleta + 1 } });
+        }
+
+        const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
+
+        // IGV desde ConfiguracionFacturacion (config tributaria global)
+        const porcentajeIGV = Number(configFacturacion?.porcentajeIGV || 18);
+        const factorIGV = 1 + porcentajeIGV / 100;
+        const incluyeIGV = configFacturacion?.incluirIGV ?? true;
+        const subtotal = incluyeIGV ? saldoPendiente / factorIGV : saldoPendiente;
+        const igv = incluyeIGV ? saldoPendiente - subtotal : 0;
+
+        // Preparar detalles del comprobante
+        const detallesComprobante = orden.componentes.length > 0
+          ? orden.componentes.map((comp: any) => {
+              const costoAccion = Number(comp.costoAccion || 0);
+              const costoRepuestos = Number(comp.costoRepuestos || 0);
+              const totalItem = costoAccion + costoRepuestos;
+              const valorUnit = incluyeIGV ? totalItem / factorIGV : totalItem;
+              return {
+                descripcion: `${comp.componente?.nombre || 'Componente'} - ${comp.tipoAccion}`,
+                cantidad: new Prisma.Decimal(1),
+                valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
+                precioUnitario: new Prisma.Decimal(totalItem.toFixed(2)),
+                valorVenta: new Prisma.Decimal(valorUnit.toFixed(2)),
+                igv: new Prisma.Decimal((totalItem - valorUnit).toFixed(2)),
+                subtotal: new Prisma.Decimal(valorUnit.toFixed(2)),
+                total: new Prisma.Decimal(totalItem.toFixed(2)),
+              };
+            })
+          : [{
+              descripcion: orden.servicio?.nombre || `Servicio - ${orden.tipoServicio}`,
+              cantidad: new Prisma.Decimal(1),
+              valorUnitario: new Prisma.Decimal(subtotal.toFixed(2)),
+              precioUnitario: new Prisma.Decimal(saldoPendiente.toFixed(2)),
+              valorVenta: new Prisma.Decimal(subtotal.toFixed(2)),
+              igv: new Prisma.Decimal(igv.toFixed(2)),
+              subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
+              total: new Prisma.Decimal(saldoPendiente.toFixed(2)),
+            }];
+
+        const comprobante = await tx.comprobanteElectronico.create({
+          data: {
+            empresaId,
+            clienteId: orden.clienteId,
+            clienteEmpresaId: orden.clienteEmpresaId,
+            tipoComprobante: tipoComprobante as any,
+            serie,
+            correlativo: correlativo.padStart(8, '0'),
+            codigoGenerado,
+            tipoDocumento: dto.tipoDocumentoCliente || (tipoComprobante === 'FACTURA' ? '6' : '1'),
+            numeroDocumento: documentoCliente,
+            nombreCliente,
+            direccionCliente,
+            emailCliente,
+            moneda: 'PEN',
+            gravada: new Prisma.Decimal(subtotal.toFixed(2)),
+            igv: new Prisma.Decimal(igv.toFixed(2)),
+            totalIgv: new Prisma.Decimal(igv.toFixed(2)),
+            total: new Prisma.Decimal(saldoPendiente.toFixed(2)),
+            estado: 'REGISTRADO' as any,
+            detalles: {
+              create: detallesComprobante,
+            },
+          },
+        });
+
+        comprobanteId = comprobante.id;
+
+        // Registrar pago del comprobante
+        const montoPago = dto.condicionPago === 'CREDITO'
+          ? 0
+          : Math.min(dto.montoRecibido || saldoPendiente, saldoPendiente);
+
+        await tx.pagoComprobante.create({
+          data: {
+            comprobanteId: comprobante.id,
+            metodoPago: dto.metodoPago || 'EFECTIVO',
+            monto: new Prisma.Decimal(montoPago.toFixed(2)),
+            referencia: dto.referenciaPago || null,
+            estado: dto.condicionPago === 'CREDITO' ? 'PENDIENTE' : 'COMPLETADO',
+          },
+        });
+
+        console.log(`Comprobante ${codigoGenerado} generado para orden ${orden.codigo}`);
+      }
+
+      // Actualizar orden: vincular comprobante y cambiar estado a ENTREGADO
+      const updatedOrden = await tx.ordenServicio.update({
+        where: { id: ordenId },
+        data: {
+          comprobanteId,
+          estado: EstadoOrdenServicio.ENTREGADO,
+          notas: dto.observaciones
+            ? `${orden.notas ? orden.notas + '\n' : ''}[Cobro] ${dto.observaciones}`
+            : orden.notas,
+        },
+        include: ORDEN_SERVICIO_DETAIL_INCLUDE,
+      });
+
+      // Registrar en historial
+      await tx.historialOrdenServicio.create({
+        data: {
+          ordenServicioId: ordenId,
+          estadoAnterior: orden.estado,
+          estadoNuevo: EstadoOrdenServicio.ENTREGADO,
+          notas: `Orden cobrada. Método: ${dto.metodoPago || 'EFECTIVO'}. Comprobante: ${tipoComprobante}`,
+          creadoPor: usuarioId,
+        },
+      });
+
+      // Notificar al cliente
+      if (orden.clienteId) {
+        try {
+          const clientePersona = await tx.empresaPersona.findFirst({
+            where: { id: orden.clienteId },
+            select: { personaId: true },
+          });
+          const usuario = clientePersona
+            ? await tx.usuario.findFirst({ where: { personaId: clientePersona.personaId }, select: { id: true } })
+            : null;
+          if (usuario) {
+            await this.notificacionService.enviarAUsuario(
+              usuario.id,
+              'Servicio completado',
+              `Tu orden ${orden.codigo} ha sido cobrada y entregada.`,
+              {
+                tipo: TipoNotificacion.ORDEN_SERVICIO,
+                empresaId,
+                data: { ordenId: orden.id },
+              },
+            );
+          }
+        } catch {
+          // No fallar el cobro si la notificación falla
+        }
+      }
+
+      return {
+        orden: updatedOrden,
+        comprobante: comprobanteId ? { id: comprobanteId } : null,
+        resumen: {
+          costoTotal,
+          adelanto,
+          descuento,
+          saldoPendiente,
+          montoPagado: dto.montoRecibido || saldoPendiente,
+          vuelto: Math.max(0, (dto.montoRecibido || saldoPendiente) - saldoPendiente),
+        },
+      };
+    });
   }
 }

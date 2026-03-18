@@ -185,12 +185,6 @@ model ConfiguracionCodigos {
   ventaSeparador        String   @default("-")
   ventaLongitud         Int      @default(8)
   ventaIncluirSede      Boolean  @default(true)
-  facturaCodigo         String   @default("FAC")
-  boletaCodigo          String   @default("BOL")
-  notaCreditoCodigo     String   @default("NCR")
-  notaDebitoCodigo      String   @default("NDB")
-  documentoSeparador    String   @default("-")
-  documentoLongitud     Int      @default(8)
   ultimoProducto        Int      @default(0)
   ultimoServicio        Int      @default(0)
   ultimaVariante        Int      @default(0)
@@ -248,10 +242,6 @@ model ConfiguracionCodigos {
   citaSeparador           String   @default("-")
   citaLongitud            Int      @default(5)
   ultimaCita              Int      @default(0)
-  ultimoFactura         Int      @default(0)
-  ultimaBoleta          Int      @default(0)
-  ultimaNotaCredito     Int      @default(0)
-  ultimaNotaDebito      Int      @default(0)
   creadoEn              DateTime @default(now())
   actualizadoEn         DateTime @updatedAt
   empresa               Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -416,6 +406,7 @@ model PersonalizacionEmpresa {
   webConfig            Json?
   bannerPrincipalUrl   String?
   bannerPrincipalTexto String?
+  banners              Json?    // [{url, texto, link, orden}]
   bannerColor          String?  @default("#000000")
   colorPrimario        String?  @default("#007bff")
   colorSecundario      String?  @default("#6c757d")

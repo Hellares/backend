@@ -42,4 +42,24 @@ export class CreateVentaDesdeCotizacionDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'Tipo de comprobante', example: 'BOLETA' })
+  @IsOptional()
+  @IsString()
+  tipoComprobante?: string;
+
+  @ApiPropertyOptional({ description: 'Tipo de documento del cliente', example: 'DNI' })
+  @IsOptional()
+  @IsString()
+  tipoDocumentoCliente?: string;
+
+  @ApiPropertyOptional({ description: 'Condicion de pago', example: 'CONTADO' })
+  @IsOptional()
+  @IsString()
+  condicionPago?: string;
+
+  @ApiPropertyOptional({ description: 'Referencia del pago' })
+  @IsOptional()
+  @IsString()
+  referenciaPago?: string;
 }

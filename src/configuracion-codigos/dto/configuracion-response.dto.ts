@@ -122,9 +122,6 @@ export class ConfiguracionResponseDto {
   @ApiProperty({ description: 'Configuración de códigos de inventarios', type: ConfigSeccionDto })
   inventarios: ConfigSeccionDto;
 
-  @ApiProperty({ description: 'Configuración de códigos de documentos', type: ConfigDocumentosDto })
-  documentos: ConfigDocumentosDto;
-
   @ApiProperty({ description: 'Restricciones de modificación', type: RestriccionesDto })
   restricciones: RestriccionesDto;
 

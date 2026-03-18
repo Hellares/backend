@@ -502,6 +502,7 @@ export class MarketplaceService {
           select: {
             bannerPrincipalUrl: true,
             bannerPrincipalTexto: true,
+            banners: true,
             colorPrimario: true,
           },
           take: 1,

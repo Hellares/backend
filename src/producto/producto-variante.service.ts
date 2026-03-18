@@ -53,6 +53,7 @@ export class ProductoVarianteService {
           precioOferta: true,
           enOferta: true,
           precioConfigurado: true,
+          precioIncluyeIgv: true,
           sede: {
             select: {
               id: true,
@@ -481,6 +482,7 @@ export class ProductoVarianteService {
         precioOferta: stock.precioOferta ? Number(stock.precioOferta) : undefined,
         enOferta: stock.enOferta ?? false,
         precioConfigurado: stock.precioConfigurado ?? false,
+        precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
       }));
     }
 

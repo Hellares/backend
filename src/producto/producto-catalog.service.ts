@@ -205,6 +205,7 @@ export class ProductoCatalogService {
         fechaInicioOferta: stock.fechaInicioOferta,
         fechaFinOferta: stock.fechaFinOferta,
         precioConfigurado: stock.precioConfigurado ?? false,
+        precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
       }));
     } else if (producto.tieneVariantes && producto.variantes?.length > 0) {
       // Calcular stock total desde stocksPorSede de las variantes
@@ -354,6 +355,7 @@ export class ProductoCatalogService {
             fechaInicioOferta: stock.fechaInicioOferta,
             fechaFinOferta: stock.fechaFinOferta,
             precioConfigurado: stock.precioConfigurado ?? false,
+            precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
           }));
         }
 
@@ -647,6 +649,7 @@ export class ProductoCatalogService {
             fechaInicioOferta: true,
             fechaFinOferta: true,
             precioConfigurado: true,
+            precioIncluyeIgv: true,
             sede: {
               select: {
                 id: true,
@@ -694,6 +697,7 @@ export class ProductoCatalogService {
           fechaInicioOferta: true,
           fechaFinOferta: true,
           precioConfigurado: true,
+          precioIncluyeIgv: true,
           sede: {
             select: {
               id: true,

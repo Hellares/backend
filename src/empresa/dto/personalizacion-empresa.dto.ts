@@ -26,6 +26,13 @@ export class PersonalizacionEmpresaDto {
   bannerPrincipalTexto?: string;
 
   @ApiPropertyOptional({
+    description: 'Lista de banners para el carousel',
+    example: [{ url: 'https://example.com/banner1.jpg', texto: 'Promoción', link: '', orden: 0 }],
+  })
+  @IsOptional()
+  banners?: any;
+
+  @ApiPropertyOptional({
     description: 'Color del banner en formato hexadecimal',
     example: '#000000',
   })

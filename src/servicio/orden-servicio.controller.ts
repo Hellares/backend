@@ -34,6 +34,7 @@ import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
 import { TransitionEstadoDto } from './dto/transition-estado.dto';
 import { QueryOrdenServicioDto } from './dto/query-orden-servicio.dto';
 import { CreateServicioComponenteDto } from './dto/create-servicio-componente.dto';
+import { CobrarOrdenDto } from './dto/cobrar-orden.dto';
 
 @ApiTags('Órdenes de Servicio')
 @Controller('ordenes-servicio')
@@ -272,5 +273,20 @@ export class OrdenServicioController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.servicioComponenteService.remove(empresaId, componenteId);
+  }
+
+  @Post(':id/cobrar')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Cobrar una orden de servicio y generar comprobante' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @ApiResponse({ status: 200, description: 'Orden cobrada exitosamente' })
+  cobrarOrden(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Body() dto: CobrarOrdenDto,
+    @CurrentUser() user: any,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.ordenServicioService.cobrarOrden(empresaId, id, dto, user.id);
   }
 }
