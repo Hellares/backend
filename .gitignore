@@ -7,6 +7,9 @@
 firebase-service-account.json
 *firebase-adminsdk*
 
+# Stack env (production secrets - NEVER commit)
+stack.env
+
 # Logs
 logs
 *.log
