@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { CrearStockDto } from './dto/crear-stock.dto';
 import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { ActualizarPreciosSedeDto } from './dto/actualizar-precios-sede.dto';
@@ -26,6 +27,7 @@ export class ProductoStockService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly cacheService: CacheService,
     private readonly promocionService: PromocionService,
   ) {}
 
@@ -148,7 +150,7 @@ export class ProductoStockService {
     }
 
     // Crear stock y movimiento inicial en transacción
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Crear registro de stock (incluyendo precios si se proporcionan)
       const stock = await tx.productoStock.create({
         data: {
@@ -201,6 +203,11 @@ export class ProductoStockService {
 
       return stock;
     });
+
+    // Invalidar cache de productos después de crear stock
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -214,7 +221,7 @@ export class ProductoStockService {
     dto: AjustarStockDto,
     usuarioId: string,
   ) {
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Bloquear la fila con FOR UPDATE para prevenir lecturas concurrentes
       const [stockLocked] = await tx.$queryRaw<
         Array<{ id: string; stockActual: number; sedeId: string; productoId: string | null; varianteId: string | null }>
@@ -295,6 +302,11 @@ export class ProductoStockService {
 
       return stockActualizado;
     });
+
+    // Invalidar cache de productos después de ajustar stock
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -590,7 +602,7 @@ export class ProductoStockService {
     }
 
     // Actualizar y registrar en historial en transacción
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Si se está actualizando el precio, marcar como configurado
       if (dto.precio !== undefined && dto.precio !== null) {
         updateData.precioConfigurado = true;
@@ -681,6 +693,11 @@ export class ProductoStockService {
 
       return stockActualizado;
     });
+
+    // Invalidar cache de productos después de actualizar precios
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -1192,7 +1209,7 @@ export class ProductoStockService {
     );
 
     // Actualizar en transacción
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const actualizados = [];
 
       for (const stock of stocks) {
@@ -1308,6 +1325,11 @@ export class ProductoStockService {
         ajuste,
       };
     });
+
+    // Invalidar cache de productos después de actualizar precios masivamente
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -1574,6 +1596,20 @@ export class ProductoStockService {
       }
     } catch (error: any) {
       this.logger.error(`[Ofertas] Error desactivando ofertas: ${error.message}`);
+    }
+  }
+
+  /**
+   * Invalidar cache de productos y estadísticas de la empresa
+   */
+  private async invalidateProductCache(empresaId: string): Promise<void> {
+    try {
+      const statsKey = this.cacheService.getEmpresaStatsKey(empresaId);
+      await this.cacheService.invalidate(statsKey);
+      await this.cacheService.invalidateProductosLists(empresaId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Error al invalidar cache: ${errorMessage}`);
     }
   }
 }

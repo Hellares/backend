@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
@@ -24,6 +25,7 @@ export class VentaService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly cacheService: CacheService,
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     loggerService: AppLoggerService,
   ) {
@@ -188,7 +190,7 @@ export class VentaService {
       cotizacionId,
     });
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Validar cotización
       const cotizacion = await tx.cotizacion.findFirst({
         where: { id: cotizacionId, empresaId },
@@ -459,6 +461,11 @@ export class VentaService {
       );
       return venta;
     });
+
+    // Invalidar cache de productos después de descontar stock
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -614,7 +621,7 @@ export class VentaService {
   async confirmar(id: string, empresaId: string, usuarioId: string) {
     this.logger.info('Confirmando venta', { id, empresaId });
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
         where: { id, empresaId },
         include: { detalles: true },
@@ -721,6 +728,11 @@ export class VentaService {
       this.logger.log(`Venta confirmada: ${venta.codigo}`);
       return updatedVenta;
     });
+
+    // Invalidar cache de productos después de descontar stock
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -810,7 +822,7 @@ export class VentaService {
   async anular(id: string, empresaId: string, usuarioId: string) {
     this.logger.info('Anulando venta', { id, empresaId });
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
         where: { id, empresaId },
         include: { detalles: true },
@@ -893,6 +905,11 @@ export class VentaService {
       this.logger.log(`Venta anulada: ${venta.codigo}`);
       return updatedVenta;
     });
+
+    // Invalidar cache de productos después de restaurar stock
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -961,6 +978,20 @@ export class VentaService {
       total: Math.round(total * 100) / 100,
       orden: index,
     };
+  }
+
+  /**
+   * Invalidar cache de productos y estadísticas de la empresa
+   */
+  private async invalidateProductCache(empresaId: string): Promise<void> {
+    try {
+      const statsKey = this.cacheService.getEmpresaStatsKey(empresaId);
+      await this.cacheService.invalidate(statsKey);
+      await this.cacheService.invalidateProductosLists(empresaId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Error al invalidar cache: ${errorMessage}`);
+    }
   }
 
   private buildUpdateData(dto: UpdateVentaDto) {

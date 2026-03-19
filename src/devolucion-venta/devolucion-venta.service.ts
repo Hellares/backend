@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateDevolucionVentaDto } from './dto/create-devolucion-venta.dto';
 import { QueryDevolucionVentaDto } from './dto/query-devolucion-venta.dto';
@@ -20,6 +21,7 @@ export class DevolucionVentaService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly cacheService: CacheService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -182,7 +184,7 @@ export class DevolucionVentaService {
   }
 
   async procesar(id: string, empresaId: string, userId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const devolucion = await tx.devolucion.findFirst({
         where: { id, empresaId },
         include: { items: true },
@@ -276,6 +278,11 @@ export class DevolucionVentaService {
         },
       });
     });
+
+    // Invalidar cache de productos después de modificar stock por devolución
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   async rechazar(id: string, empresaId: string, userId: string, motivo?: string) {
@@ -316,5 +323,19 @@ export class DevolucionVentaService {
       where: { id },
       data: { estado: EstadoDevolucion.CANCELADA },
     });
+  }
+
+  /**
+   * Invalidar cache de productos y estadísticas de la empresa
+   */
+  private async invalidateProductCache(empresaId: string): Promise<void> {
+    try {
+      const statsKey = this.cacheService.getEmpresaStatsKey(empresaId);
+      await this.cacheService.invalidate(statsKey);
+      await this.cacheService.invalidateProductosLists(empresaId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Error al invalidar cache: ${errorMessage}`);
+    }
   }
 }

@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CacheService } from '../../redis/cache.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../../configuracion-codigos/configuracion-codigos.service';
 import { createCursorPaginatedResponse } from '../../common/utils/pagination.util';
@@ -30,6 +31,7 @@ export class CompraService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly cacheService: CacheService,
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     private readonly ordenCompraService: OrdenCompraService,
     loggerService: AppLoggerService,
@@ -270,7 +272,7 @@ export class CompraService {
   async confirmar(id: string, empresaId: string, usuarioId: string) {
     this.logger.info('Confirmando compra', { id, empresaId });
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Validar compra
       const compra = await tx.compra.findFirst({
         where: { id, empresaId },
@@ -486,6 +488,11 @@ export class CompraService {
       this.logger.log(`Compra confirmada: ${compra.codigo}`);
       return compraConfirmada;
     });
+
+    // Invalidar cache de productos después de incrementar stock
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -495,7 +502,7 @@ export class CompraService {
   async anular(id: string, empresaId: string, usuarioId: string) {
     this.logger.info('Anulando compra', { id, empresaId });
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const compra = await tx.compra.findFirst({
         where: { id, empresaId },
         include: {
@@ -661,6 +668,11 @@ export class CompraService {
       this.logger.log(`Compra anulada: ${compra.codigo}`);
       return compraAnulada;
     });
+
+    // Invalidar cache de productos después de revertir stock
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -675,7 +687,7 @@ export class CompraService {
   ) {
     this.logger.info('Distribuyendo compra a sedes', { id, empresaId });
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Validar compra es CONFIRMADA
       const compra = await tx.compra.findFirst({
         where: { id, empresaId },
@@ -982,6 +994,11 @@ export class CompraService {
       this.logger.log(`Compra distribuida: ${compra.codigo}`);
       return compraActualizada;
     });
+
+    // Invalidar cache de productos después de distribuir stock entre sedes
+    await this.invalidateProductCache(empresaId);
+
+    return result;
   }
 
   /**
@@ -1208,6 +1225,20 @@ export class CompraService {
   /**
    * Calcular montos de un detalle
    */
+  /**
+   * Invalidar cache de productos y estadísticas de la empresa
+   */
+  private async invalidateProductCache(empresaId: string): Promise<void> {
+    try {
+      const statsKey = this.cacheService.getEmpresaStatsKey(empresaId);
+      await this.cacheService.invalidate(statsKey);
+      await this.cacheService.invalidateProductosLists(empresaId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Error al invalidar cache: ${errorMessage}`);
+    }
+  }
+
   private calcularDetalle(dto: CreateCompraDetalleDto, index: number) {
     const cantidad = dto.cantidad;
     const precioUnitario = dto.precioUnitario;
