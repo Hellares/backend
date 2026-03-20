@@ -11,6 +11,7 @@ import {
   HttpCode,
   HttpStatus,
   Res,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
@@ -200,6 +201,27 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Refresh token inválido o expirado' })
   async refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
     return this.authService.refreshToken(refreshTokenDto);
+  }
+
+  /**
+   * Validar sesión activa
+   */
+  @Get('validate-session')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Validar si la sesión actual está activa' })
+  @ApiResponse({ status: 200, description: 'Sesión válida' })
+  @ApiResponse({ status: 401, description: 'Sesión inválida o expirada' })
+  async validateSession(@CurrentUser() user: any) {
+    if (!user.sessionId) {
+      throw new UnauthorizedException('Sesión inválida');
+    }
+    const isValid = await this.authService.validateSession(user.sessionId);
+    if (!isValid) {
+      throw new UnauthorizedException('Sesión revocada o expirada');
+    }
+    return { valid: true };
   }
 
   /**

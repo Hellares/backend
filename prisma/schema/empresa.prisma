@@ -35,6 +35,10 @@ model Empresa {
   ordenMarketplace     Int?
   vistasMarketplace    Int     @default(0)
 
+  // Configuración de envío marketplace
+  envioGratisDesde     Decimal?  @db.Decimal(10, 2)  // Envío gratis si subtotal >= este monto
+  permiteRetiroTienda  Boolean   @default(false)
+
   // SEO y Metadata
   metaTitle       String?
   metaDescription String?
@@ -153,6 +157,8 @@ model Empresa {
   mensajesServicio    MensajeServicio[]
   preguntasProducto   PreguntaProducto[]
   opinionesProducto   OpinionProducto[]
+  carritoItems        CarritoItem[]           @relation("CarritoEmpresa")
+  pedidosMarketplace  PedidoMarketplace[]     @relation("PedidosEmpresa")
 
   @@index([subdominio])
   @@index([isActive])
@@ -242,6 +248,10 @@ model ConfiguracionCodigos {
   citaSeparador           String   @default("-")
   citaLongitud            Int      @default(5)
   ultimaCita              Int      @default(0)
+  pedidoMarketplaceCodigo     String   @default("PED")
+  pedidoMarketplaceSeparador  String   @default("-")
+  pedidoMarketplaceLongitud   Int      @default(5)
+  ultimoPedidoMarketplace     Int      @default(0)
   creadoEn              DateTime @default(now())
   actualizadoEn         DateTime @updatedAt
   empresa               Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -338,6 +348,9 @@ model Sede {
 
   // Relaciones para módulo de citas
   citas Cita[]
+
+  // Relaciones para pedidos marketplace (retiro en tienda)
+  pedidosRetiro PedidoMarketplace[]
 
   // Relaciones futuras (descomentar cuando se implementen)
   // ventas      Venta[]

@@ -119,6 +119,8 @@ model Usuario {
   opinionesProducto         OpinionProducto[]
   favoritosProducto         FavoritoProducto[] @relation("FavoritosProducto")
   productosVistos           ProductoVisto[]    @relation("ProductosVistos")
+  carritoItems              CarritoItem[]           @relation("CarritoUsuario")
+  pedidosMarketplace        PedidoMarketplace[]     @relation("PedidosComprador")
 
   @@index([email])
   @@index([telefono])

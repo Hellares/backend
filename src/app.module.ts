@@ -34,6 +34,8 @@ import { CitaModule } from './cita/cita.module';
 import { NotificacionModule } from './notificacion/notificacion.module';
 import { PromocionModule } from './promocion/promocion.module';
 import { DireccionPersonaModule } from './direccion-persona/direccion-persona.module';
+import { PortalClienteUnificadoModule } from './portal-cliente-unificado/portal-cliente-unificado.module';
+import { PedidoMarketplaceModule } from './pedido-marketplace/pedido-marketplace.module';
 import { VentaModule } from './venta/venta.module';
 import { DevolucionVentaModule } from './devolucion-venta/devolucion-venta.module';
 import { LoggerModule } from './common/logger/logger.module';
@@ -85,6 +87,8 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     NotificacionModule,
     PromocionModule,
     DireccionPersonaModule,
+    PortalClienteUnificadoModule,
+    PedidoMarketplaceModule,
   ],
   controllers: [AppController],
   providers: [

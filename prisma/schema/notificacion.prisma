@@ -9,6 +9,7 @@ enum TipoNotificacion {
   AVISO_MANTENIMIENTO
   MENSAJE
   SISTEMA
+  PEDIDO_MARKETPLACE
 }
 
 model DispositivoNotificacion {

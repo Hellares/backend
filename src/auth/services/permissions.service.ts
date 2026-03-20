@@ -26,192 +26,100 @@ export class PermissionsService {
     const isVendedor = roles.includes(Rol.VENDEDOR);
     const isTecnico = roles.includes(Rol.TECNICO);
     const isContador = roles.includes(Rol.CONTADOR);
+    const isLectura = roles.includes(Rol.LECTURA);
+    const isOperador = roles.includes(Rol.OPERADOR);
+
+    // Helpers de nivel — simplifican la asignación y evitan errores al agregar roles
+    const isAdmin = isSuperAdmin || isEmpresaAdmin;
+    const isAnyAdmin = isAdmin || isSedeAdmin;
+    const isOperativo = isVendedor || isCajero || isTecnico || isOperador;
+    const isViewer = isLectura; // solo lectura, nunca MANAGE
 
     return {
       // ==================== USUARIOS ====================
-      // Ver usuarios: Administradores y contadores
       canViewUsers:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
-
-      // Gestión de usuarios: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManageUsers: isSuperAdmin || isEmpresaAdmin,
+        isAnyAdmin || isContador || isViewer,
+      canManageUsers: isAdmin,
 
       // ==================== PRODUCTOS ====================
-      // Ver productos: Todos los roles que trabajan con productos
       canViewProducts:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor ||
-        isCajero ||
-        isTecnico,
-
-      // Gestionar productos: Solo administradores
-      canManageProducts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+        isAnyAdmin || isOperativo || isContador || isViewer,
+      canManageProducts: isAnyAdmin,
 
       // ==================== SERVICIOS ====================
-      // Ver servicios: Todos los roles que trabajan con servicios
       canViewServices:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isTecnico ||
-        isCajero,
-
-      // Gestionar servicios: Admins y TECNICO
+        isAnyAdmin || isTecnico || isCajero || isVendedor || isContador || isViewer,
       canManageServices:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
+        isAnyAdmin || isTecnico,
 
       // ==================== CLIENTES ====================
-      // Ver clientes: Todos los roles que interactúan con clientes
       canViewClients:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor ||
-        isCajero ||
-        isTecnico,
-
-      // Gestionar clientes: Admins, VENDEDOR y CAJERO
+        isAnyAdmin || isOperativo || isContador || isViewer,
       canManageClients:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor ||
-        isCajero,
+        isAnyAdmin || isVendedor || isCajero || isOperador,
 
       // ==================== SEDES ====================
-      // Gestión de sedes: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManageSedes: isSuperAdmin || isEmpresaAdmin,
+      canManageSedes: isAdmin,
 
       // ==================== REPORTES ====================
-      // Ver reportes: Todos excepto roles muy básicos
       canViewReports:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isContador ||
-        isCajero,
+        isAnyAdmin || isContador || isCajero || isViewer,
 
       // ==================== FACTURAS ====================
-      // Gestión de comprobantes/facturas: Admins, CAJERO, CONTADOR
       canManageInvoices:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isCajero ||
-        isContador,
+        isAnyAdmin || isCajero || isContador,
 
       // ==================== ÓRDENES DE SERVICIO ====================
-      // Gestión de órdenes de servicio: Admins, SEDE_ADMIN, TECNICO
       canManageOrders:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
+        isAnyAdmin || isTecnico,
 
       // ==================== ESTADÍSTICAS ====================
-      // Ver estadísticas: Admins y CONTADOR
       canViewStatistics:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
+        isAnyAdmin || isContador || isViewer,
 
       // ==================== CONFIGURACIÓN ====================
-      // Gestión de configuración: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManageSettings: isSuperAdmin || isEmpresaAdmin,
-
-      // Gestión de métodos de pago: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canManagePaymentMethods: isSuperAdmin || isEmpresaAdmin,
-
-      // Cambiar plan de suscripción: Solo SUPER_ADMIN y EMPRESA_ADMIN
-      canChangePlan: isSuperAdmin || isEmpresaAdmin,
+      canManageSettings: isAdmin,
+      canManagePaymentMethods: isAdmin,
+      canChangePlan: isAdmin,
 
       // ==================== DESCUENTOS ====================
-      // Ver políticas de descuento: Administradores
-      canViewDiscounts: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
-
-      // Gestionar políticas de descuento: Solo administradores de empresa
-      canManageDiscounts: isSuperAdmin || isEmpresaAdmin,
-
-      // Asignar usuarios y productos a políticas de descuento: Administradores de empresa
-      canAssignDiscounts: isSuperAdmin || isEmpresaAdmin,
+      canViewDiscounts: isAnyAdmin || isContador || isViewer,
+      canManageDiscounts: isAdmin,
+      canAssignDiscounts: isAdmin,
 
       // ==================== COTIZACIONES ====================
-      // Ver cotizaciones: Administradores, vendedores, cajeros y contadores
       canViewCotizaciones:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor ||
-        isCajero ||
-        isContador,
-
-      // Gestionar cotizaciones: Administradores y vendedores
+        isAnyAdmin || isVendedor || isCajero || isContador || isViewer,
       canManageCotizaciones:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor,
+        isAnyAdmin || isVendedor,
 
       // ==================== VENTAS ====================
-      // Ver ventas: Administradores, vendedores, cajeros y contadores
       canViewVentas:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor ||
-        isCajero ||
-        isContador,
-
-      // Gestionar ventas: Administradores, vendedores y cajeros
+        isAnyAdmin || isVendedor || isCajero || isContador || isViewer,
       canManageVentas:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor ||
-        isCajero,
+        isAnyAdmin || isVendedor || isCajero,
 
       // ==================== DEVOLUCIONES ====================
-      // Ver devoluciones: Administradores, vendedores, cajeros y contadores
       canViewDevoluciones:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isVendedor ||
-        isCajero ||
-        isContador,
-
-      // Gestionar devoluciones: Administradores
-      canManageDevoluciones:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+        isAnyAdmin || isVendedor || isCajero || isContador || isViewer,
+      canManageDevoluciones: isAnyAdmin,
 
       // ==================== PROVEEDORES ====================
-      // Ver proveedores: Administradores y contador
       canViewProveedores:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
-
-      // Gestionar proveedores: Solo administradores
-      canManageProveedores: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
+        isAnyAdmin || isContador || isOperador || isViewer,
+      canManageProveedores: isAnyAdmin,
 
       // ==================== COMPRAS ====================
-      // Ver compras: Administradores y contador
       canViewCompras:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isContador,
-
-      // Gestionar compras: Administradores
-      canManageCompras: isSuperAdmin || isEmpresaAdmin || isSedeAdmin,
-
-      // Aprobar órdenes de compra: Solo administradores de empresa
-      canApproveOrdenesCompra: isSuperAdmin || isEmpresaAdmin,
+        isAnyAdmin || isContador || isOperador || isViewer,
+      canManageCompras: isAnyAdmin,
+      canApproveOrdenesCompra: isAdmin,
 
       // ==================== REPORTES DE INCIDENCIA ====================
-      // Ver reportes de incidencia: Administradores, SEDE_ADMIN, CONTADOR, TECNICO
       canViewReportesIncidencia:
-        isSuperAdmin ||
-        isEmpresaAdmin ||
-        isSedeAdmin ||
-        isContador ||
-        isTecnico,
-
-      // Gestionar reportes de incidencia: Administradores, SEDE_ADMIN, TECNICO
+        isAnyAdmin || isContador || isTecnico || isViewer,
       canManageReportesIncidencia:
-        isSuperAdmin || isEmpresaAdmin || isSedeAdmin || isTecnico,
+        isAnyAdmin || isTecnico,
     };
   }
 

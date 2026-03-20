@@ -49,6 +49,9 @@ model ProductoStock {
   precioConfigurado Boolean @default(false) // true cuando se ha establecido al menos el precio de venta
   precioIncluyeIgv  Boolean @default(false) // true cuando el precio de venta ya incluye IGV
 
+  // Envío gratis (promoción por producto)
+  envioGratis Boolean @default(false)
+
   // Auditoría
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

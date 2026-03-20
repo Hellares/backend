@@ -106,6 +106,9 @@ export class ConsultasExternasService {
     // Buscar primero en la base de datos interna
     const personaInterna = await this.prisma.persona.findUnique({
       where: { dni },
+      include: {
+        usuario: { select: { id: true } },
+      },
     });
 
     if (personaInterna) {
@@ -141,6 +144,7 @@ export class ConsultasExternasService {
         origen: 'INTERNO',
         existeEnSistema: true,
         personaId: personaInterna.id,
+        tieneUsuario: !!personaInterna.usuario,
       };
     }
 

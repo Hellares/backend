@@ -97,6 +97,8 @@ model Producto {
   opiniones   OpinionProducto[]
   favoritos   FavoritoProducto[] @relation("FavoritosProducto")
   vistas      ProductoVisto[]    @relation("ProductosVistos")
+  carritoItems              CarritoItem[]                @relation("CarritoProducto")
+  pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoProducto")
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
@@ -270,6 +272,8 @@ model ProductoVariante {
   ordenCompraDetalles OrdenCompraDetalle[]
   compraDetalles      CompraDetalle[]
   lotes               Lote[]
+  carritoItems              CarritoItem[]                @relation("CarritoVariante")
+  pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoVariante")
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
@@ -519,6 +523,7 @@ enum EntidadTipo {
   INVENTARIO // Inventario físico
   INVENTARIO_ITEM // Item individual del inventario
   VENTA
+  PEDIDO_MARKETPLACE
 }
 
 enum TipoPrecioCombo {

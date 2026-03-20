@@ -48,4 +48,7 @@ export class ConsultaDniResponseDto {
 
   @ApiPropertyOptional()
   personaId?: string;
+
+  @ApiPropertyOptional({ description: 'Indica si la persona ya tiene un usuario vinculado' })
+  tieneUsuario?: boolean;
 }

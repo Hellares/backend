@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
+import { Rol } from '@prisma/client';
 import { EmailService } from '../email/email.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { AuditLoggerService } from '../common/logger/audit-logger.service';
@@ -460,8 +461,7 @@ export class AuthService {
           ...tokens,
         };
       } else {
-        // Usuario tiene empresas → Ofrecer opciones (Marketplace o Management)
-        // Agrupar roles por empresa
+        // Usuario tiene empresas → Agrupar roles por empresa
         const empresasMap = new Map();
 
         empresasUsuario.forEach((rel) => {
@@ -480,22 +480,46 @@ export class AuthService {
           empresasMap.get(empresaId).roles.push(rel.rol);
         });
 
-        const availableCompanies = Array.from(empresasMap.values());
-
-        this.logger.info('User requires mode selection', {
-          userId: usuario.id,
-          credencial,
-          companiesCount: availableCompanies.length,
-        });
+        // Filtrar: solo empresas donde tiene roles de gestión (no-CLIENTE)
+        const managementCompanies = Array.from(empresasMap.values()).filter(
+          (company: any) => company.roles.some((r: string) => r !== Rol.CLIENTE),
+        );
 
         // Limpiar intentos fallidos
         await this.securityService.clearFailedAttempts(credencial, 'login');
 
-        // Generar tokens sin contexto de tenant (el usuario seleccionará después via switch-tenant)
+        // Actualizar último login
+        await this.prisma.usuario.update({
+          where: { id: usuario.id },
+          data: { lastLoginAt: new Date() },
+        });
+
+        // Generar tokens sin contexto de tenant
         const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
 
         // Log de auditoría
         this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', true);
+
+        // Si solo tiene roles CLIENTE → Marketplace directo
+        if (managementCompanies.length === 0) {
+          this.logger.info('User has only CLIENTE roles, logging in to Marketplace mode', {
+            userId: usuario.id,
+            credencial,
+          });
+
+          return {
+            user: this.buildUserResponse(usuario),
+            mode: 'marketplace',
+            ...tokens,
+          };
+        }
+
+        // Tiene empresas de gestión → Ofrecer opciones
+        this.logger.info('User requires mode selection', {
+          userId: usuario.id,
+          credencial,
+          managementCompanies: managementCompanies.length,
+        });
 
         return {
           requiresSelection: true,
@@ -511,7 +535,7 @@ export class AuthService {
               type: 'management',
               label: 'Gestionar Empresas',
               description: 'Acceder al panel de gestión de tus empresas',
-              availableCompanies,
+              availableCompanies: managementCompanies,
             },
           ],
           ...tokens,
@@ -661,14 +685,52 @@ export class AuthService {
         platform: 'Unknown'
       } : undefined;
 
-      // Mantener el contexto del tenant de la sesión original
+      // Re-consultar roles actuales desde la BD para mantener permisos sincronizados
+      let tenantRole = session?.tenantRole;
+      let tenantRoles = session?.tenantRoles;
+
+      if (session?.tenantId) {
+        const currentRoles = await this.prisma.empresaUsuarioRol.findMany({
+          where: {
+            usuarioId: usuario.id,
+            empresaId: session.tenantId,
+            isActive: true,
+            deletedAt: null,
+          },
+          select: { rol: true },
+        });
+
+        if (currentRoles.length === 0) {
+          // Usuario ya no tiene acceso a esta empresa — forzar logout
+          throw new UnauthorizedException('Ya no tienes acceso a esta empresa. Por favor, inicia sesión nuevamente.');
+        }
+
+        const freshRoles = currentRoles.map(r => r.rol);
+        tenantRoles = freshRoles;
+
+        // Si el rol activo fue removido, usar el primero disponible
+        if (tenantRole && !freshRoles.includes(tenantRole as any)) {
+          tenantRole = freshRoles[0];
+        }
+
+        // Actualizar session en Redis con roles frescos
+        if (payload.sessionId) {
+          await this.sessionService.updateSessionTenant(payload.sessionId, {
+            tenantId: session.tenantId,
+            tenantRole,
+            tenantName: session.tenantName,
+            tenantRoles,
+          });
+        }
+      }
+
       return this.generateTokens(
         usuario,
         session?.tenantId,
-        session?.tenantRole,
+        tenantRole,
         session?.tenantName,
         clientInfo,
-        session?.tenantRoles
+        tenantRoles
       );
     } catch (error: any) {
       // Verificar si el refresh token ya fue usado (prevenir replay attacks)
@@ -1360,8 +1422,7 @@ export class AuthService {
             ...tokens,
           };
         } else {
-          // Usuario tiene empresas → Ofrecer opciones (Marketplace o Management)
-          // Agrupar roles por empresa
+          // Usuario tiene empresas → Agrupar roles por empresa
           const empresasMap = new Map();
 
           empresasUsuario.forEach((rel) => {
@@ -1380,15 +1441,44 @@ export class AuthService {
             empresasMap.get(empresaId).roles.push(rel.rol);
           });
 
-          const availableCompanies = Array.from(empresasMap.values());
+          // Filtrar: solo empresas donde tiene roles de gestión (no-CLIENTE)
+          const managementCompanies = Array.from(empresasMap.values()).filter(
+            (company: any) => company.roles.some((r: string) => r !== Rol.CLIENTE),
+          );
 
+          // Actualizar último login
+          await this.prisma.usuario.update({
+            where: { id: usuario.id },
+            data: { lastLoginAt: new Date() },
+          });
+
+          // Generar tokens sin contexto de tenant
+          const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+
+          // Log de auditoría
+          this.auditLogger.logUserLogin(usuario.id, email, clientInfo?.ip || 'unknown', true);
+
+          // Si solo tiene roles CLIENTE → Marketplace directo
+          if (managementCompanies.length === 0) {
+            this.logger.info('User has only CLIENTE roles, logging in to Marketplace mode (Google)', {
+              userId: usuario.id,
+              email,
+            });
+
+            return {
+              user: this.buildUserResponse(usuario, { photoUrl }),
+              mode: 'marketplace',
+              ...tokens,
+            };
+          }
+
+          // Tiene empresas de gestión → Ofrecer opciones
           this.logger.info('User requires mode selection (Google login)', {
             userId: usuario.id,
             email,
-            companiesCount: availableCompanies.length,
+            managementCompanies: managementCompanies.length,
           });
 
-          // Retornar opciones de modo SIN generar tokens
           return {
             requiresSelection: true,
             message: '¿Qué deseas hacer?',
@@ -1403,9 +1493,10 @@ export class AuthService {
                 type: 'management',
                 label: 'Gestionar Empresas',
                 description: 'Acceder al panel de gestión de tus empresas',
-                availableCompanies,
+                availableCompanies: managementCompanies,
               },
             ],
+            ...tokens,
           };
         }
       }
