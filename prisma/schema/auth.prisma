@@ -103,6 +103,7 @@ model Usuario {
 
   // Relaciones para ventas
   ventasVendedor Venta[] @relation("VentaVendedor")
+  ventasCajero   Venta[] @relation("VentaCajero")
 
   // Relaciones para módulo de citas
   citasTecnico Cita[] @relation("CitasTecnico")

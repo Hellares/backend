@@ -27,6 +27,7 @@ model Venta {
   clienteId        String?
   clienteEmpresaId String?
   vendedorId       String
+  cajeroId         String? // Usuario que procesó el cobro (POS)
   cotizacionId     String? // Cotización origen (si se creó desde una)
 
   // Identificación
@@ -74,6 +75,7 @@ model Venta {
   cliente        EmpresaPersona? @relation(fields: [clienteId], references: [id])
   clienteEmpresa ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
   vendedor       Usuario         @relation("VentaVendedor", fields: [vendedorId], references: [id])
+  cajero         Usuario?        @relation("VentaCajero", fields: [cajeroId], references: [id])
   cotizacion     Cotizacion?     @relation("VentaCotizacion", fields: [cotizacionId], references: [id])
   cotizacionesOrigen Cotizacion[] @relation("CotizacionVenta") // Back-relation for cotizacion.ventaId
   detalles       VentaDetalle[]
@@ -85,6 +87,7 @@ model Venta {
   @@index([empresaId])
   @@index([sedeId])
   @@index([vendedorId])
+  @@index([cajeroId])
   @@index([clienteId])
   @@index([clienteEmpresaId])
   @@index([cotizacionId])
@@ -140,9 +143,14 @@ model PagoVenta {
   id         String     @id @default(cuid())
   ventaId    String
   metodoPago MetodoPagoVenta
-  monto      Decimal    @db.Decimal(10, 2)
+  monto      Decimal    @db.Decimal(10, 2) // Monto en soles (siempre PEN)
   referencia String? // Número de operación, voucher, etc.
   fechaPago  DateTime   @default(now())
+
+  // Pago en moneda extranjera
+  monedaOriginal  String?  // PEN o USD (null = PEN)
+  montoOriginal   Decimal? @db.Decimal(10, 2) // Monto en moneda original
+  tipoCambio      Decimal? @db.Decimal(10, 4) // Tipo de cambio usado
 
   creadoEn DateTime @default(now())
 

@@ -11,7 +11,7 @@ import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
 import { UpdateEstadoCotizacionDto } from './dto/update-estado-cotizacion.dto';
 import { CreateCotizacionDetalleDto } from './dto/create-cotizacion-detalle.dto';
-import { EstadoCotizacion, Prisma, TipoNotificacion } from '@prisma/client';
+import { EstadoCotizacion, Prisma, Rol, TipoNotificacion } from '@prisma/client';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 
@@ -152,9 +152,16 @@ export class CotizacionService {
       fechaHasta?: string;
       clienteId?: string;
       search?: string;
+      userId?: string;
+      userRole?: string;
     },
   ) {
     const where: Prisma.CotizacionWhereInput = { empresaId };
+
+    // Vendedor solo ve sus propias cotizaciones
+    if (filtros?.userRole === Rol.VENDEDOR && filtros?.userId) {
+      where.vendedorId = filtros.userId;
+    }
 
     if (filtros?.sedeId) where.sedeId = filtros.sedeId;
     if (filtros?.estado) where.estado = filtros.estado;
@@ -646,14 +653,19 @@ export class CotizacionService {
   }
 
   /**
-   * Cola POS: cotizaciones aprobadas listas para cobro
+   * Cola POS: cotizaciones pendientes y aprobadas listas para cobro
    */
-  async getColaPOS(empresaId: string, sedeId?: string) {
+  async getColaPOS(empresaId: string, sedeId?: string, userId?: string, userRole?: string) {
     const where: any = {
       empresaId,
-      estado: EstadoCotizacion.APROBADA,
+      estado: { in: [EstadoCotizacion.PENDIENTE, EstadoCotizacion.APROBADA] },
     };
     if (sedeId) where.sedeId = sedeId;
+
+    // Vendedor solo ve sus propias cotizaciones en la cola
+    if (userRole === Rol.VENDEDOR && userId) {
+      where.vendedorId = userId;
+    }
 
     const cotizaciones = await this.prisma.cotizacion.findMany({
       where,
@@ -679,6 +691,7 @@ export class CotizacionService {
     return cotizaciones.map((c) => ({
       id: c.id,
       codigo: c.codigo,
+      estado: c.estado,
       nombreCliente: c.nombreCliente ||
         (c.cliente?.persona ? `${c.cliente.persona.nombres} ${c.cliente.persona.apellidos}` : 'Sin cliente'),
       vendedor: c.vendedor?.persona
@@ -697,6 +710,81 @@ export class CotizacionService {
       })),
       creadoEn: c.creadoEn,
     }));
+  }
+
+  /**
+   * Validar stock disponible para cada item de una cotización
+   */
+  async validarStockCotizacion(id: string, empresaId: string) {
+    const cotizacion = await this.prisma.cotizacion.findFirst({
+      where: { id, empresaId },
+      include: {
+        detalles: {
+          include: {
+            producto: { select: { id: true, nombre: true } },
+            variante: { select: { id: true, nombre: true } },
+          },
+        },
+      },
+    });
+
+    if (!cotizacion) {
+      throw new NotFoundException('Cotizacion no encontrada');
+    }
+
+    const resultado = [];
+
+    for (const detalle of cotizacion.detalles) {
+      // Servicios no tienen stock
+      if (!detalle.productoId && !detalle.varianteId) {
+        resultado.push({
+          detalleId: detalle.id,
+          descripcion: detalle.descripcion,
+          cantidad: Number(detalle.cantidad),
+          stockDisponible: null,
+          sinStock: false,
+          esServicio: true,
+        });
+        continue;
+      }
+
+      const productoStock = await this.prisma.productoStock.findFirst({
+        where: {
+          sedeId: cotizacion.sedeId,
+          productoId: detalle.productoId ?? null,
+          varianteId: detalle.varianteId ?? null,
+        },
+      });
+
+      const cantidad = Number(detalle.cantidad);
+      let stockDisponible = 0;
+
+      if (productoStock) {
+        stockDisponible =
+          productoStock.stockActual -
+          productoStock.stockReservado -
+          productoStock.stockReservadoVenta -
+          productoStock.stockReservadoCombo -
+          productoStock.stockDanado -
+          productoStock.stockEnGarantia;
+      }
+
+      resultado.push({
+        detalleId: detalle.id,
+        descripcion: detalle.descripcion,
+        productoNombre: detalle.producto?.nombre || detalle.variante?.nombre,
+        cantidad,
+        stockDisponible: Math.max(0, stockDisponible),
+        sinStock: cantidad > stockDisponible,
+        esServicio: false,
+      });
+    }
+
+    return {
+      cotizacionId: id,
+      todosConStock: resultado.every((r) => !r.sinStock),
+      items: resultado,
+    };
   }
 
   /**

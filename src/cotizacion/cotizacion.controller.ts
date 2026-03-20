@@ -23,6 +23,7 @@ import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CotizacionService } from './cotizacion.service';
 import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
@@ -55,6 +56,8 @@ export class CotizacionController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findAll(
     @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('tenantRole') userRole: string,
     @Query('sedeId') sedeId?: string,
     @Query('estado') estado?: EstadoCotizacion,
     @Query('fechaDesde') fechaDesde?: string,
@@ -69,6 +72,8 @@ export class CotizacionController {
       fechaHasta,
       clienteId,
       search,
+      userId,
+      userRole,
     });
   }
 
@@ -78,9 +83,11 @@ export class CotizacionController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async colaPOS(
     @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('tenantRole') userRole: string,
     @Query('sedeId') sedeId?: string,
   ) {
-    return this.cotizacionService.getColaPOS(empresaId, sedeId);
+    return this.cotizacionService.getColaPOS(empresaId, sedeId, userId, userRole);
   }
 
   @Get(':id')
@@ -141,6 +148,17 @@ export class CotizacionController {
       empresaId,
       detalles,
     );
+  }
+
+  @Get(':id/validar-stock')
+  @RequiresPermission(Permission.VIEW_COTIZACIONES)
+  @ApiOperation({ summary: 'Validar stock disponible de items de cotizacion' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async validarStock(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.cotizacionService.validarStockCotizacion(id, empresaId);
   }
 
   @Delete(':id')

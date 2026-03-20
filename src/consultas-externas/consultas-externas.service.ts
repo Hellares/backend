@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { ConsultaDniResponseDto } from './dto/consulta-dni-response.dto';
 import { ConsultaRucResponseDto } from './dto/consulta-ruc-response.dto';
+import { TipoCambioResponseDto } from './dto/tipo-cambio-response.dto';
 
 @Injectable()
 export class ConsultasExternasService {
@@ -207,6 +208,65 @@ export class ConsultasExternasService {
         }
       },
       this.CACHE_TTL,
+    );
+  }
+
+  async consultarTipoCambio(): Promise<TipoCambioResponseDto> {
+    if (!this.apiToken) {
+      throw new ServiceUnavailableException('El servicio de tipo de cambio no está configurado.');
+    }
+
+    // Cache por 4 horas (el tipo de cambio se actualiza 1 vez al día)
+    const cacheKey = 'consulta:tipo-cambio';
+
+    return this.cache.getOrSet<TipoCambioResponseDto>(
+      cacheKey,
+      async () => {
+        this.logger.info('Consultando tipo de cambio en API externa');
+
+        try {
+          const hoy = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+          const response = await fetch(`${this.apiUrl}/tipocambio/info/dia?fecha=${hoy}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${this.apiToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (!response.ok) {
+            const errorBody = await response.text();
+            this.logger.warn('Error en consulta tipo de cambio', { status: response.status, body: errorBody });
+            throw new BadRequestException('No se pudo obtener el tipo de cambio del día.');
+          }
+
+          const body = await response.json();
+
+          this.logger.debug('Respuesta API tipo de cambio', { body: JSON.stringify(body) });
+
+          if (!body.data) {
+            this.logger.warn('Respuesta inválida de tipo de cambio', { body });
+            throw new BadRequestException('No se pudo obtener el tipo de cambio del día.');
+          }
+
+          const result: TipoCambioResponseDto = {
+            fecha: body.data.fecha,
+            compra: body.data.compra,
+            venta: body.data.venta,
+          };
+
+          this.logger.info('Tipo de cambio obtenido', { fecha: result.fecha, compra: result.compra, venta: result.venta });
+
+          return result;
+        } catch (error) {
+          if (error instanceof BadRequestException) {
+            throw error;
+          }
+          this.logger.error('Error al consultar tipo de cambio', error.stack);
+          throw new ServiceUnavailableException('No se pudo conectar con el servicio de tipo de cambio.');
+        }
+      },
+      14400, // 4 horas
     );
   }
 }

@@ -518,6 +518,7 @@ enum EntidadTipo {
   REPORTE_INCIDENCIA_ITEM // Item individual del reporte
   INVENTARIO // Inventario físico
   INVENTARIO_ITEM // Item individual del inventario
+  VENTA
 }
 
 enum TipoPrecioCombo {

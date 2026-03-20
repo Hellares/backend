@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "PagoVenta" ADD COLUMN IF NOT EXISTS "monedaOriginal" TEXT;
+ALTER TABLE "PagoVenta" ADD COLUMN IF NOT EXISTS "montoOriginal" DECIMAL(10,2);
+ALTER TABLE "PagoVenta" ADD COLUMN IF NOT EXISTS "tipoCambio" DECIMAL(10,4);

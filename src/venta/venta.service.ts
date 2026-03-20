@@ -17,6 +17,7 @@ import {
   EstadoCotizacion,
   TipoMovimientoStock,
   Prisma,
+  Rol,
 } from '@prisma/client';
 
 @Injectable()
@@ -57,6 +58,12 @@ export class VentaService {
         },
       },
       vendedor: {
+        select: {
+          id: true,
+          persona: { select: { nombres: true, apellidos: true } },
+        },
+      },
+      cajero: {
         select: {
           id: true,
           persona: { select: { nombres: true, apellidos: true } },
@@ -184,13 +191,15 @@ export class VentaService {
     empresaId: string,
     cotizacionId: string,
     dto: CreateVentaDesdeCotizacionDto,
+    cajeroId?: string,
   ) {
     this.logger.info('Creando venta desde cotizacion', {
       empresaId,
       cotizacionId,
     });
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(
+      async (tx) => {
       // 1. Validar cotización
       const cotizacion = await tx.cotizacion.findFirst({
         where: { id: cotizacionId, empresaId },
@@ -203,10 +212,21 @@ export class VentaService {
         throw new NotFoundException('Cotizacion no encontrada');
       }
 
-      if (cotizacion.estado !== EstadoCotizacion.APROBADA) {
+      if (
+        cotizacion.estado !== EstadoCotizacion.APROBADA &&
+        cotizacion.estado !== EstadoCotizacion.PENDIENTE
+      ) {
         throw new BadRequestException(
-          'La cotizacion debe estar en estado APROBADA para convertirla a venta',
+          'La cotizacion debe estar en estado PENDIENTE o APROBADA para convertirla a venta',
         );
+      }
+
+      // 1b. Si está en PENDIENTE, aprobar automáticamente dentro de la transacción
+      if (cotizacion.estado === EstadoCotizacion.PENDIENTE) {
+        await tx.cotizacion.update({
+          where: { id: cotizacion.id },
+          data: { estado: EstadoCotizacion.APROBADA },
+        });
       }
 
       // 2. Protección contra duplicados
@@ -224,7 +244,103 @@ export class VentaService {
           tx,
         );
 
-      const totalVenta = Number(cotizacion.total);
+      // 3b. Filtrar detalles excluidos y ajustar cantidades
+      const excluirIds = new Set(dto.excluirDetalleIds ?? []);
+      const ajustes = dto.ajustarCantidades ?? {};
+      const hayModificaciones = excluirIds.size > 0 || Object.keys(ajustes).length > 0;
+
+      // Filtrar excluidos y aplicar ajustes de cantidad
+      const detallesVenta = cotizacion.detalles
+        .filter((d) => !excluirIds.has(d.id))
+        .map((d) => {
+          if (ajustes[d.id] !== undefined) {
+            const nuevaCantidad = ajustes[d.id];
+            const precioUnit = Number(d.precioUnitario);
+            const descUnit = Number(d.descuento) / Number(d.cantidad);
+            const nuevoDescuento = descUnit * nuevaCantidad;
+            const nuevoSubtotal = (precioUnit * nuevaCantidad) - nuevoDescuento;
+            const porcentajeIGV = Number(d.porcentajeIGV) / 100;
+            const nuevoIgv = Math.round(nuevoSubtotal * porcentajeIGV * 100) / 100;
+            const nuevoTotal = nuevoSubtotal + nuevoIgv;
+            return {
+              ...d,
+              cantidad: new Prisma.Decimal(nuevaCantidad),
+              descuento: new Prisma.Decimal(nuevoDescuento.toFixed(2)),
+              subtotal: new Prisma.Decimal(nuevoSubtotal.toFixed(2)),
+              igv: new Prisma.Decimal(nuevoIgv.toFixed(2)),
+              total: new Prisma.Decimal(nuevoTotal.toFixed(2)),
+            };
+          }
+          return d;
+        });
+
+      if (detallesVenta.length === 0) {
+        throw new BadRequestException(
+          'No quedan items para crear la venta',
+        );
+      }
+
+      // Recalcular totales si hubo modificaciones
+      let subtotalVenta: number;
+      let descuentoVenta: number;
+      let impuestosVenta: number;
+      let totalVenta: number;
+
+      // 3c. Procesar items adicionales agregados por el cajero
+      const itemsAdicionales = (dto.itemsAdicionales ?? []).map((item) => {
+        const cantidad = item.cantidad;
+        const precioUnitario = item.precioUnitario;
+        const descuento = item.descuento ?? 0;
+        const porcentajeIGV = item.porcentajeIGV ?? 18;
+        const subtotal = (cantidad * precioUnitario) - descuento;
+        const igv = Math.round(subtotal * (porcentajeIGV / 100) * 100) / 100;
+        const total = subtotal + igv;
+        return {
+          productoId: item.productoId || null,
+          varianteId: item.varianteId || null,
+          servicioId: item.servicioId || null,
+          descripcion: item.descripcion,
+          cantidad: new Prisma.Decimal(cantidad),
+          precioUnitario: new Prisma.Decimal(precioUnitario),
+          descuento: new Prisma.Decimal(descuento),
+          porcentajeIGV: new Prisma.Decimal(porcentajeIGV),
+          igv: new Prisma.Decimal(igv.toFixed(2)),
+          subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
+          total: new Prisma.Decimal(total.toFixed(2)),
+          orden: 0,
+          // Guardar valores numéricos para stock
+          _cantidad: cantidad,
+          _subtotal: subtotal,
+          _descuento: descuento,
+          _igv: igv,
+          _total: total,
+        };
+      });
+
+      const hayItems = hayModificaciones || itemsAdicionales.length > 0;
+
+      if (hayItems) {
+        const cotSubtotal = detallesVenta.reduce((sum, d) => sum + Number(d.subtotal || 0), 0);
+        const cotDescuento = detallesVenta.reduce((sum, d) => sum + Number(d.descuento || 0), 0);
+        const cotImpuestos = detallesVenta.reduce((sum, d) => sum + Number(d.igv || 0), 0);
+        const cotTotal = detallesVenta.reduce((sum, d) => sum + Number(d.total || 0), 0);
+
+        const addSubtotal = itemsAdicionales.reduce((sum, i) => sum + i._subtotal, 0);
+        const addDescuento = itemsAdicionales.reduce((sum, i) => sum + i._descuento, 0);
+        const addImpuestos = itemsAdicionales.reduce((sum, i) => sum + i._igv, 0);
+        const addTotal = itemsAdicionales.reduce((sum, i) => sum + i._total, 0);
+
+        subtotalVenta = cotSubtotal + addSubtotal;
+        descuentoVenta = cotDescuento + addDescuento;
+        impuestosVenta = cotImpuestos + addImpuestos;
+        totalVenta = cotTotal + addTotal;
+      } else {
+        subtotalVenta = Number(cotizacion.subtotal);
+        descuentoVenta = Number(cotizacion.descuento);
+        impuestosVenta = Number(cotizacion.impuestos);
+        totalVenta = Number(cotizacion.total);
+      }
+
       const montoCambio =
         dto.montoRecibido && dto.montoRecibido > totalVenta
           ? Math.round((dto.montoRecibido - totalVenta) * 100) / 100
@@ -242,6 +358,7 @@ export class VentaService {
           clienteId: cotizacion.clienteId,
           clienteEmpresaId: cotizacion.clienteEmpresaId,
           vendedorId: cotizacion.vendedorId,
+          cajeroId: cajeroId || null,
           cotizacionId: cotizacion.id,
           codigo: codigoVenta,
           nombreCliente: cotizacion.nombreCliente,
@@ -251,10 +368,10 @@ export class VentaService {
           direccionCliente: cotizacion.direccionCliente,
           moneda: cotizacion.moneda,
           tipoCambio: cotizacion.tipoCambio,
-          subtotal: cotizacion.subtotal,
-          descuento: cotizacion.descuento,
-          impuestos: cotizacion.impuestos,
-          total: cotizacion.total,
+          subtotal: new Prisma.Decimal(subtotalVenta.toFixed(2)),
+          descuento: new Prisma.Decimal(descuentoVenta.toFixed(2)),
+          impuestos: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+          total: new Prisma.Decimal(totalVenta.toFixed(2)),
           metodoPago: dto.metodoPago,
           montoRecibido: dto.montoRecibido,
           montoCambio,
@@ -267,27 +384,44 @@ export class VentaService {
           // Venta POS: CONFIRMADA (con stock descontado) o PAGADA_COMPLETA
           estado: estaPagada ? EstadoVenta.PAGADA_COMPLETA : EstadoVenta.CONFIRMADA,
           detalles: {
-            create: cotizacion.detalles.map((d) => ({
-              productoId: d.productoId,
-              varianteId: d.varianteId,
-              servicioId: d.servicioId,
-              descripcion: d.descripcion,
-              cantidad: d.cantidad,
-              precioUnitario: d.precioUnitario,
-              descuento: d.descuento,
-              porcentajeIGV: d.porcentajeIGV,
-              igv: d.igv,
-              subtotal: d.subtotal,
-              total: d.total,
-              orden: d.orden,
-            })),
+            create: [
+              ...detallesVenta.map((d) => ({
+                productoId: d.productoId,
+                varianteId: d.varianteId,
+                servicioId: d.servicioId,
+                descripcion: d.descripcion,
+                cantidad: d.cantidad,
+                precioUnitario: d.precioUnitario,
+                descuento: d.descuento,
+                porcentajeIGV: d.porcentajeIGV,
+                igv: d.igv,
+                subtotal: d.subtotal,
+                total: d.total,
+                orden: d.orden,
+              })),
+              ...itemsAdicionales.map((d, i) => ({
+                productoId: d.productoId,
+                varianteId: d.varianteId,
+                servicioId: d.servicioId,
+                descripcion: d.descripcion,
+                cantidad: d.cantidad,
+                precioUnitario: d.precioUnitario,
+                descuento: d.descuento,
+                porcentajeIGV: d.porcentajeIGV,
+                igv: d.igv,
+                subtotal: d.subtotal,
+                total: d.total,
+                orden: detallesVenta.length + i,
+              })),
+            ],
           },
         },
         include: this.getInclude(),
       });
 
       // 5. Descontar stock de productos (venta POS = confirmación inmediata)
-      for (const detalle of cotizacion.detalles) {
+      const todosLosDetalles = [...detallesVenta, ...itemsAdicionales];
+      for (const detalle of todosLosDetalles) {
         if (!detalle.productoId && !detalle.varianteId) {
           continue; // Servicios no afectan stock
         }
@@ -305,16 +439,40 @@ export class VentaService {
           continue;
         }
 
-        // Lock para concurrencia
+        // Lock para concurrencia — lectura con todos los campos de reserva
         const [stockLocked] = await tx.$queryRaw<
-          Array<{ id: string; stockActual: number }>
-        >`SELECT id, "stockActual" FROM "ProductoStock" WHERE id = ${productoStock.id} FOR UPDATE`;
+          Array<{
+            id: string;
+            stockActual: number;
+            stockReservado: number;
+            stockReservadoVenta: number;
+            stockReservadoCombo: number;
+            stockDanado: number;
+            stockEnGarantia: number;
+          }>
+        >`SELECT id, "stockActual", "stockReservado", "stockReservadoVenta",
+                "stockReservadoCombo", "stockDanado", "stockEnGarantia"
+         FROM "ProductoStock" WHERE id = ${productoStock.id} FOR UPDATE`;
 
         if (!stockLocked) continue;
 
         const cantidad = Number(detalle.cantidad);
         const stockAnterior = stockLocked.stockActual;
-        const nuevoStock = Math.max(0, stockAnterior - cantidad);
+        const stockDisponible =
+          stockAnterior -
+          stockLocked.stockReservado -
+          stockLocked.stockReservadoVenta -
+          stockLocked.stockReservadoCombo -
+          stockLocked.stockDanado -
+          stockLocked.stockEnGarantia;
+
+        if (cantidad > stockDisponible) {
+          throw new BadRequestException(
+            `Stock insuficiente para "${detalle.descripcion}". Disponible: ${stockDisponible}, Requerido: ${cantidad}`,
+          );
+        }
+
+        const nuevoStock = stockAnterior - cantidad;
 
         await tx.productoStock.update({
           where: { id: productoStock.id },
@@ -339,8 +497,23 @@ export class VentaService {
         });
       }
 
-      // 6. Registrar pago
-      if (dto.montoRecibido && dto.montoRecibido > 0 && !esCredito) {
+      // 6. Registrar pagos (múltiples o único legacy)
+      if (dto.pagos && dto.pagos.length > 0 && !esCredito) {
+        for (const pago of dto.pagos) {
+          await tx.pagoVenta.create({
+            data: {
+              ventaId: venta.id,
+              metodoPago: pago.metodoPago as any,
+              monto: pago.monto,
+              referencia: pago.referencia || null,
+              monedaOriginal: (pago as any).monedaOriginal || null,
+              montoOriginal: (pago as any).montoOriginal || null,
+              tipoCambio: (pago as any).tipoCambio || null,
+            },
+          });
+        }
+      } else if (dto.montoRecibido && dto.montoRecibido > 0 && !esCredito) {
+        // Fallback: pago único (compatibilidad)
         await tx.pagoVenta.create({
           data: {
             ventaId: venta.id,
@@ -359,26 +532,39 @@ export class VentaService {
         where: { empresaId },
       });
 
-      // Sede = punto de emisión (series y correlativos)
-      const sede = await tx.sede.findFirst({ where: { id: cotizacion.sedeId } });
+      // Sede = punto de emisión (series y correlativos) — FOR UPDATE para concurrencia
+      const [sedeLocked] = await tx.$queryRaw<
+        Array<{
+          id: string;
+          serieFactura: string;
+          serieBoleta: string;
+          ultimoNumeroFactura: number;
+          ultimoNumeroBoleta: number;
+        }>
+      >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
+        FROM "Sede" WHERE id = ${cotizacion.sedeId} FOR UPDATE`;
 
-      if (!sede) {
+      if (!sedeLocked) {
         this.logger.warn(`Sede ${cotizacion.sedeId} no encontrada, comprobante no generado`);
       }
 
-      if (sede) {
+      if (sedeLocked) {
         const serie = tipoComprobante === 'FACTURA'
-          ? sede.serieFactura
-          : sede.serieBoleta;
+          ? sedeLocked.serieFactura
+          : sedeLocked.serieBoleta;
 
-        let correlativo: string;
-        if (tipoComprobante === 'FACTURA') {
-          correlativo = String(sede.ultimoNumeroFactura + 1);
-          await tx.sede.update({ where: { id: sede.id }, data: { ultimoNumeroFactura: sede.ultimoNumeroFactura + 1 } });
-        } else {
-          correlativo = String(sede.ultimoNumeroBoleta + 1);
-          await tx.sede.update({ where: { id: sede.id }, data: { ultimoNumeroBoleta: sede.ultimoNumeroBoleta + 1 } });
-        }
+        const nuevoCorrelativo = tipoComprobante === 'FACTURA'
+          ? sedeLocked.ultimoNumeroFactura + 1
+          : sedeLocked.ultimoNumeroBoleta + 1;
+
+        const correlativo = String(nuevoCorrelativo);
+
+        await tx.sede.update({
+          where: { id: sedeLocked.id },
+          data: tipoComprobante === 'FACTURA'
+            ? { ultimoNumeroFactura: nuevoCorrelativo }
+            : { ultimoNumeroBoleta: nuevoCorrelativo },
+        });
 
         const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
@@ -398,14 +584,14 @@ export class VentaService {
             direccionCliente: cotizacion.direccionCliente,
             emailCliente: cotizacion.emailCliente,
             moneda: cotizacion.moneda || 'PEN',
-            // subtotal e impuestos ya vienen correctos de la cotización
-            gravada: cotizacion.subtotal || new Prisma.Decimal(0),
-            igv: cotizacion.impuestos || new Prisma.Decimal(0),
-            totalIgv: cotizacion.impuestos || new Prisma.Decimal(0),
-            total: cotizacion.total || new Prisma.Decimal(0),
+            // Usar totales recalculados (pueden diferir si se excluyeron ítems)
+            gravada: new Prisma.Decimal(subtotalVenta.toFixed(2)),
+            igv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+            totalIgv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+            total: new Prisma.Decimal(totalVenta.toFixed(2)),
             estado: 'REGISTRADO' as any,
             detalles: {
-              create: cotizacion.detalles.map((d) => {
+              create: detallesVenta.map((d) => {
                 // Usar subtotal e IGV ya calculados por item (respetan precioIncluyeIgv)
                 const subtotalItem = Number(d.subtotal || 0);
                 const igvItem = Number(d.igv || 0);
@@ -460,7 +646,9 @@ export class VentaService {
         `Venta ${venta.codigo} creada desde cotizacion ${cotizacion.codigo}`,
       );
       return venta;
-    });
+    },
+    { timeout: 30000 }, // 30s para operaciones con múltiples locks de stock
+    );
 
     // Invalidar cache de productos después de descontar stock
     await this.invalidateProductCache(empresaId);
@@ -480,9 +668,20 @@ export class VentaService {
       fechaHasta?: string;
       clienteId?: string;
       search?: string;
+      userId?: string;
+      userRole?: string;
     },
   ) {
     const where: Prisma.VentaWhereInput = { empresaId };
+
+    // Vendedor solo ve ventas originadas de sus cotizaciones
+    if (filtros?.userRole === Rol.VENDEDOR && filtros?.userId) {
+      where.vendedorId = filtros.userId;
+    }
+    // Cajero solo ve ventas que procesó
+    if (filtros?.userRole === Rol.CAJERO && filtros?.userId) {
+      where.cajeroId = filtros.userId;
+    }
 
     if (filtros?.sedeId) where.sedeId = filtros.sedeId;
     if (filtros?.estado) where.estado = filtros.estado;

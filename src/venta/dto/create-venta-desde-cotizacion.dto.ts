@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsEnum,
   IsDateString,
+  IsArray,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -58,8 +59,44 @@ export class CreateVentaDesdeCotizacionDto {
   @IsString()
   condicionPago?: string;
 
-  @ApiPropertyOptional({ description: 'Referencia del pago' })
+  @ApiPropertyOptional({ description: 'Referencia del pago (pago unico, legacy)' })
   @IsOptional()
   @IsString()
   referenciaPago?: string;
+
+  @ApiPropertyOptional({ description: 'Pagos multiples' })
+  @IsOptional()
+  @IsArray()
+  pagos?: Array<{
+    metodoPago: string;
+    monto: number;
+    referencia?: string;
+    monedaOriginal?: string;
+    montoOriginal?: number;
+    tipoCambio?: number;
+  }>;
+
+  @ApiPropertyOptional({ description: 'IDs de detalles a excluir (sin stock)' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  excluirDetalleIds?: string[];
+
+  @ApiPropertyOptional({ description: 'Ajustes de cantidad por detalleId (stock parcial)', example: { 'detalleId1': 10 } })
+  @IsOptional()
+  ajustarCantidades?: Record<string, number>;
+
+  @ApiPropertyOptional({ description: 'Items adicionales agregados por el cajero' })
+  @IsOptional()
+  @IsArray()
+  itemsAdicionales?: Array<{
+    descripcion: string;
+    cantidad: number;
+    precioUnitario: number;
+    descuento?: number;
+    porcentajeIGV?: number;
+    productoId?: string;
+    varianteId?: string;
+    servicioId?: string;
+  }>;
 }

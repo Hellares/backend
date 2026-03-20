@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/guards';
 import { ConsultasExternasService } from './consultas-externas.service';
 import { ConsultaDniResponseDto } from './dto/consulta-dni-response.dto';
 import { ConsultaRucResponseDto } from './dto/consulta-ruc-response.dto';
+import { TipoCambioResponseDto } from './dto/tipo-cambio-response.dto';
 
 @ApiTags('Consultas Externas')
 @Controller('consultas')
@@ -30,5 +31,13 @@ export class ConsultasExternasController {
   @ApiResponse({ status: 503, description: 'Servicio de consulta no disponible' })
   async consultarDni(@Param('dni') dni: string): Promise<ConsultaDniResponseDto> {
     return this.consultasService.consultarDni(dni);
+  }
+
+  @Get('tipo-cambio')
+  @ApiOperation({ summary: 'Obtener tipo de cambio del dia (USD/PEN)' })
+  @ApiResponse({ status: 200, description: 'Tipo de cambio', type: TipoCambioResponseDto })
+  @ApiResponse({ status: 503, description: 'Servicio no disponible' })
+  async consultarTipoCambio(): Promise<TipoCambioResponseDto> {
+    return this.consultasService.consultarTipoCambio();
   }
 }

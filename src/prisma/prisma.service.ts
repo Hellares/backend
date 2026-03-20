@@ -11,7 +11,17 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   private pool: Pool;
 
   constructor() {
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      // Mantener conexiones vivas y evitar cold starts
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
+      // Pool sizing
+      min: 5,               // Mantener mínimo 5 conexiones siempre activas
+      max: 20,              // Máximo 20 conexiones
+      idleTimeoutMillis: 60000,       // Cerrar idle después de 60s (no antes)
+      connectionTimeoutMillis: 10000, // Timeout de conexión 10s
+    });
     const adapter = new PrismaPg(pool);
 
     super({
@@ -56,12 +66,29 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       await this.$connect();
       this.logger.log('✅ Database connected successfully');
 
-      // Warm up connection pool con una query simple
-      await this.$queryRaw`SELECT 1`;
-      this.logger.log('✅ Connection pool warmed up');
+      // Warm up: abrir múltiples conexiones y cargar tablas críticas en buffer cache
+      await Promise.all([
+        this.$queryRaw`SELECT 1`,
+        this.$queryRaw`SELECT 1`,
+        this.$queryRaw`SELECT 1`,
+        this.$queryRaw`SELECT 1`,
+        this.$queryRaw`SELECT 1`,
+      ]);
+      // Calentar buffer cache de PostgreSQL con tablas más consultadas
+      await Promise.all([
+        this.$queryRaw`SELECT id FROM "Cotizacion" LIMIT 1`,
+        this.$queryRaw`SELECT id FROM "Usuario" LIMIT 1`,
+        this.$queryRaw`SELECT id FROM "ProductoStock" LIMIT 1`,
+        this.$queryRaw`SELECT id FROM "Sede" LIMIT 1`,
+        this.$queryRaw`SELECT id FROM "Venta" LIMIT 1`,
+      ]).catch(() => {}); // Ignorar si las tablas no existen aún
+      this.logger.log('✅ Connection pool warmed up (5 connections)');
 
       // Iniciar monitoreo de pool cada 5 minutos
       this.startPoolMonitoring();
+
+      // Heartbeat cada 30s para mantener conexiones vivas
+      this.startHeartbeat();
     } catch (error) {
       this.logger.error('❌ Failed to connect to database', error);
       throw error;
@@ -120,6 +147,19 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         this.logger.debug('Pool monitoring: metrics not available');
       }
     }, 300000); // Cada 5 minutos
+  }
+
+  /**
+   * Heartbeat para mantener conexiones del pool activas
+   */
+  private startHeartbeat() {
+    setInterval(async () => {
+      try {
+        await this.pool.query('SELECT 1');
+      } catch (error) {
+        this.logger.warn('⚠️ Heartbeat failed, pool may need reconnection');
+      }
+    }, 30000); // Cada 30 segundos
   }
 
   /**

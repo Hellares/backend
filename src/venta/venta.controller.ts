@@ -50,17 +50,19 @@ export class VentaController {
 
   @Post('desde-cotizacion/:cotizacionId')
   @RequiresPermission(Permission.MANAGE_VENTAS)
-  @ApiOperation({ summary: 'Crear venta desde cotizacion aprobada' })
+  @ApiOperation({ summary: 'Crear venta desde cotizacion pendiente o aprobada' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async crearDesdeCotizacion(
     @Headers('x-tenant-id') empresaId: string,
     @Param('cotizacionId') cotizacionId: string,
     @Body() dto: CreateVentaDesdeCotizacionDto,
+    @CurrentUser('id') cajeroId: string,
   ) {
     return this.ventaService.crearDesdeCotizacion(
       empresaId,
       cotizacionId,
       dto,
+      cajeroId,
     );
   }
 
@@ -70,6 +72,8 @@ export class VentaController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async findAll(
     @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('tenantRole') userRole: string,
     @Query('sedeId') sedeId?: string,
     @Query('estado') estado?: EstadoVenta,
     @Query('fechaDesde') fechaDesde?: string,
@@ -84,6 +88,8 @@ export class VentaController {
       fechaHasta,
       clienteId,
       search,
+      userId,
+      userRole,
     });
   }
 
