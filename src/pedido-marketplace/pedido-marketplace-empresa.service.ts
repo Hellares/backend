@@ -12,12 +12,14 @@ import {
 } from '@prisma/client';
 import { ValidarPagoDto, CambiarEstadoPedidoDto } from './dto/empresa-pedido.dto';
 import { ConfiguracionEnvioDto } from './dto/configuracion-envio.dto';
+import { CajaService } from '../caja/caja.service';
 
 @Injectable()
 export class PedidoMarketplaceEmpresaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificacionService: NotificacionService,
+    private readonly cajaService: CajaService,
   ) {}
 
   /**
@@ -147,6 +149,29 @@ export class PedidoMarketplaceEmpresaService {
             guardar: true,
           },
         );
+      } catch (_) {}
+
+      // Registrar ingreso en caja activa
+      try {
+        // Buscar primera sede de la empresa para el movimiento
+        const sede = await this.prisma.sede.findFirst({
+          where: { empresaId, isActive: true },
+        });
+        if (sede) {
+          await this.cajaService.registrarMovimientoSiHayCaja(
+            empresaId,
+            sede.id,
+            usuarioId,
+            {
+              tipo: 'INGRESO',
+              categoria: 'PEDIDO_MARKETPLACE',
+              metodoPago: pedido.metodoPago ?? 'TRANSFERENCIA',
+              monto: Number(pedido.total),
+              descripcion: `Pedido marketplace ${pedido.codigo}`,
+              pedidoMarketplaceId: pedido.id,
+            },
+          );
+        }
       } catch (_) {}
 
       return { message: 'Pago aprobado exitosamente' };

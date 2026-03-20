@@ -57,6 +57,7 @@ model Cotizacion {
   venta          Venta?          @relation("CotizacionVenta", fields: [ventaId], references: [id])
   ventasOrigen   Venta[]         @relation("VentaCotizacion") // Back-relation: ventas created from this cotizacion
   detalles CotizacionDetalle[]
+  solicitudOrigen SolicitudCotizacion[] @relation("SolicitudCotizacionRespuesta")
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

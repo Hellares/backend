@@ -404,6 +404,7 @@ model Devolucion {
   proveedor   Proveedor?        @relation(fields: [proveedorId], references: [id])
   items       DevolucionItem[]
   movimientos MovimientoStock[]
+  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaDevolucion")
 
   @@index([empresaId, sedeId, estado])
   @@index([codigo])

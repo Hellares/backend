@@ -50,6 +50,10 @@ export enum Permission {
   MANAGE_COMPRAS = 'canManageCompras',                   // Crear, editar, eliminar compras
   APPROVE_ORDENES_COMPRA = 'canApproveOrdenesCompra',    // Aprobar órdenes de compra
 
+  // Caja
+  VIEW_CAJA = 'canViewCaja',
+  MANAGE_CAJA = 'canManageCaja',
+
   // Otros permisos
   MANAGE_SEDES = 'canManageSedes',
   VIEW_REPORTS = 'canViewReports',

@@ -195,4 +195,16 @@ export class EmpresaPermissionsDto {
     example: true,
   })
   canManageReportesIncidencia: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver el estado de la caja',
+    example: true,
+  })
+  canViewCaja: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar caja (abrir, cerrar, registrar movimientos)',
+    example: true,
+  })
+  canManageCaja: boolean;
 }

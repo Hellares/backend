@@ -147,8 +147,9 @@ export class VentaController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @Body() dto: ProcesarPagoDto,
+    @CurrentUser('id') usuarioId: string,
   ) {
-    return this.ventaService.procesarPago(id, empresaId, dto);
+    return this.ventaService.procesarPago(id, empresaId, dto, usuarioId);
   }
 
   @Post(':id/anular')

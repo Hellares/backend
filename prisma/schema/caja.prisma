@@ -1,0 +1,114 @@
+// =========================================
+// MODULO DE CAJA (CASH REGISTER)
+// =========================================
+
+enum EstadoCaja {
+  ABIERTA
+  CERRADA
+}
+
+enum TipoMovimientoCaja {
+  INGRESO
+  EGRESO
+}
+
+enum CategoriaMovimientoCaja {
+  VENTA
+  PEDIDO_MARKETPLACE
+  COMPRA
+  DEVOLUCION
+  ADELANTO_SERVICIO
+  OTRO_INGRESO
+  PAGO_PROVEEDOR
+  GASTO_OPERATIVO
+  OTRO_EGRESO
+}
+
+/// Caja (apertura/cierre de caja registradora)
+model Caja {
+  id                    String     @id @default(cuid())
+  empresaId             String
+  sedeId                String
+  usuarioId             String
+  codigo                String
+  montoApertura         Decimal    @db.Decimal(10, 2)
+  fechaApertura         DateTime   @default(now())
+  fechaCierre           DateTime?
+  cerradoPorId          String?
+  estado                EstadoCaja @default(ABIERTA)
+  observacionesApertura String?
+  observacionesCierre   String?
+
+  // Auditoria
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa     Empresa  @relation(fields: [empresaId], references: [id])
+  sede        Sede     @relation(fields: [sedeId], references: [id])
+  usuario     Usuario  @relation("CajaUsuario", fields: [usuarioId], references: [id])
+  cerradoPor  Usuario? @relation("CajaCerradoPor", fields: [cerradoPorId], references: [id])
+  movimientos MovimientoCaja[]
+  cierre      CierreCaja?
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId, sedeId, estado])
+  @@index([empresaId, usuarioId, estado])
+}
+
+/// Movimiento de caja (ingreso o egreso)
+model MovimientoCaja {
+  id                    String                  @id @default(cuid())
+  cajaId                String
+  empresaId             String
+  tipo                  TipoMovimientoCaja
+  categoria             CategoriaMovimientoCaja
+  metodoPago            MetodoPagoVenta
+  monto                 Decimal                 @db.Decimal(10, 2)
+  descripcion           String?
+
+  // Referencias opcionales a entidades origen
+  ventaId               String?
+  pedidoMarketplaceId   String?
+  compraId              String?
+  devolucionId          String?
+
+  esManual              Boolean                 @default(true)
+  registradoPorId       String
+  fechaMovimiento       DateTime                @default(now())
+
+  // Auditoria
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  caja                Caja                @relation(fields: [cajaId], references: [id])
+  empresa             Empresa             @relation(fields: [empresaId], references: [id])
+  venta               Venta?              @relation("MovimientoCajaVenta", fields: [ventaId], references: [id])
+  pedidoMarketplace   PedidoMarketplace?  @relation("MovimientoCajaPedido", fields: [pedidoMarketplaceId], references: [id])
+  compra              Compra?             @relation("MovimientoCajaCompra", fields: [compraId], references: [id])
+  devolucion          Devolucion?         @relation("MovimientoCajaDevolucion", fields: [devolucionId], references: [id])
+  registradoPor       Usuario             @relation("MovimientoCajaRegistradoPor", fields: [registradoPorId], references: [id])
+
+  @@index([cajaId])
+  @@index([cajaId, tipo])
+  @@index([cajaId, metodoPago])
+}
+
+/// Cierre de caja (resumen al cerrar)
+model CierreCaja {
+  id                    String  @id @default(cuid())
+  cajaId                String  @unique
+  totalIngresos         Decimal @db.Decimal(10, 2)
+  totalEgresos          Decimal @db.Decimal(10, 2)
+  totalEsperado         Decimal @db.Decimal(10, 2)
+  totalConteoFisico     Decimal @db.Decimal(10, 2)
+  diferencia            Decimal @db.Decimal(10, 2)
+  detallePorMetodoPago  Json
+  observaciones         String?
+
+  // Auditoria
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  caja Caja @relation(fields: [cajaId], references: [id])
+}

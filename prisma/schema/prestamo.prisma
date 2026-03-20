@@ -1,0 +1,64 @@
+// =========================================
+// MÓDULO DE PRÉSTAMOS
+// =========================================
+
+enum EstadoPrestamo {
+  ACTIVO
+  PAGADO
+  VENCIDO
+  CANCELADO
+}
+
+enum TipoPrestamo {
+  BANCARIO
+  PERSONAL
+  PROVEEDOR
+  OTRO
+}
+
+model Prestamo {
+  id          String  @id @default(cuid())
+  empresaId   String
+
+  tipo            TipoPrestamo
+  estado          EstadoPrestamo @default(ACTIVO)
+  entidadPrestamo String         // Nombre del banco, persona o proveedor
+  descripcion     String?
+
+  montoOriginal     Decimal  @db.Decimal(12, 2)
+  tasaInteres       Decimal? @db.Decimal(5, 2)  // Porcentaje anual
+  moneda            String   @default("PEN")
+  cantidadCuotas    Int?
+  montoCuota        Decimal? @db.Decimal(12, 2)
+
+  fechaDesembolso   DateTime
+  fechaVencimiento  DateTime?
+
+  totalPagado       Decimal  @default(0) @db.Decimal(12, 2)
+  saldoPendiente    Decimal  @db.Decimal(12, 2)
+
+  observaciones     String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa  Empresa       @relation(fields: [empresaId], references: [id])
+  pagos    PagoPrestamo[]
+
+  @@index([empresaId])
+  @@index([empresaId, estado])
+}
+
+model PagoPrestamo {
+  id          String          @id @default(cuid())
+  prestamoId  String
+  metodoPago  MetodoPagoVenta
+  monto       Decimal         @db.Decimal(12, 2)
+  referencia  String?
+  fechaPago   DateTime        @default(now())
+  creadoEn    DateTime        @default(now())
+
+  prestamo Prestamo @relation(fields: [prestamoId], references: [id], onDelete: Cascade)
+
+  @@index([prestamoId])
+}

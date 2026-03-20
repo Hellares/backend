@@ -39,6 +39,9 @@ model Empresa {
   envioGratisDesde     Decimal?  @db.Decimal(10, 2)  // Envío gratis si subtotal >= este monto
   permiteRetiroTienda  Boolean   @default(false)
 
+  // Configuración de caja
+  requiereCajaParaVender  Boolean  @default(false)  // Si true, no se pueden procesar ventas sin caja abierta
+
   // SEO y Metadata
   metaTitle       String?
   metaDescription String?
@@ -157,8 +160,18 @@ model Empresa {
   mensajesServicio    MensajeServicio[]
   preguntasProducto   PreguntaProducto[]
   opinionesProducto   OpinionProducto[]
-  carritoItems        CarritoItem[]           @relation("CarritoEmpresa")
-  pedidosMarketplace  PedidoMarketplace[]     @relation("PedidosEmpresa")
+  carritoItems              CarritoItem[]           @relation("CarritoEmpresa")
+  pedidosMarketplace        PedidoMarketplace[]     @relation("PedidosEmpresa")
+  solicitudesCotizacion     SolicitudCotizacion[]   @relation("SolicitudesEmpresa")
+
+  // Relaciones para módulo de caja
+  cajas            Caja[]
+  movimientosCaja  MovimientoCaja[]
+  cuentasBancarias EmpresaBanco[]
+  prestamos          Prestamo[]
+  categoriasGasto    CategoriaGasto[]
+  metasFinancieras   MetaFinanciera[]
+  tiposCambio        TipoCambio[]
 
   @@index([subdominio])
   @@index([isActive])
@@ -252,6 +265,15 @@ model ConfiguracionCodigos {
   pedidoMarketplaceSeparador  String   @default("-")
   pedidoMarketplaceLongitud   Int      @default(5)
   ultimoPedidoMarketplace     Int      @default(0)
+  solicitudCotizacionCodigo     String   @default("SOL")
+  solicitudCotizacionSeparador  String   @default("-")
+  solicitudCotizacionLongitud   Int      @default(5)
+  ultimaSolicitudCotizacion     Int      @default(0)
+  cajaCodigo                    String   @default("CAJA")
+  cajaSeparador                 String   @default("-")
+  cajaLongitud                  Int      @default(5)
+  cajaIncluirSede               Boolean  @default(true)
+  ultimaCaja                    Int      @default(0)
   creadoEn              DateTime @default(now())
   actualizadoEn         DateTime @updatedAt
   empresa               Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -352,9 +374,8 @@ model Sede {
   // Relaciones para pedidos marketplace (retiro en tienda)
   pedidosRetiro PedidoMarketplace[]
 
-  // Relaciones futuras (descomentar cuando se implementen)
-  // ventas      Venta[]
-  // cajas       Caja[]
+  // Relaciones para módulo de caja
+  cajas Caja[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

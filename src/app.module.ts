@@ -36,8 +36,19 @@ import { PromocionModule } from './promocion/promocion.module';
 import { DireccionPersonaModule } from './direccion-persona/direccion-persona.module';
 import { PortalClienteUnificadoModule } from './portal-cliente-unificado/portal-cliente-unificado.module';
 import { PedidoMarketplaceModule } from './pedido-marketplace/pedido-marketplace.module';
+import { SolicitudCotizacionModule } from './solicitud-cotizacion/solicitud-cotizacion.module';
 import { VentaModule } from './venta/venta.module';
 import { DevolucionVentaModule } from './devolucion-venta/devolucion-venta.module';
+import { CajaModule } from './caja/caja.module';
+import { CuentasPorCobrarModule } from './cuentas-por-cobrar/cuentas-por-cobrar.module';
+import { CuentasPorPagarModule } from './cuentas-por-pagar/cuentas-por-pagar.module';
+import { EmpresaBancoModule } from './empresa-banco/empresa-banco.module';
+import { ResumenFinancieroModule } from './resumen-financiero/resumen-financiero.module';
+import { PrestamoModule } from './prestamo/prestamo.module';
+import { LibroContableModule } from './libro-contable/libro-contable.module';
+import { FlujoProyectadoModule } from './flujo-proyectado/flujo-proyectado.module';
+import { CategoriaGastoModule } from './categoria-gasto/categoria-gasto.module';
+import { MetaFinancieraModule } from './meta-financiera/meta-financiera.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -89,6 +100,17 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     DireccionPersonaModule,
     PortalClienteUnificadoModule,
     PedidoMarketplaceModule,
+    SolicitudCotizacionModule,
+    CajaModule,
+    CuentasPorCobrarModule,
+    CuentasPorPagarModule,
+    EmpresaBancoModule,
+    ResumenFinancieroModule,
+    PrestamoModule,
+    LibroContableModule,
+    FlujoProyectadoModule,
+    CategoriaGastoModule,
+    MetaFinancieraModule,
   ],
   controllers: [AppController],
   providers: [

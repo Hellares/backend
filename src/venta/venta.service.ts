@@ -2,7 +2,10 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
+import { CajaService } from '../caja/caja.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -28,6 +31,7 @@ export class VentaService {
     private readonly prisma: PrismaService,
     private readonly cacheService: CacheService,
     private readonly configuracionCodigos: ConfiguracionCodigosService,
+    @Inject(forwardRef(() => CajaService)) private readonly cajaService: CajaService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -941,8 +945,28 @@ export class VentaService {
     id: string,
     empresaId: string,
     dto: ProcesarPagoDto,
+    usuarioId?: string,
   ) {
     this.logger.info('Procesando pago', { id, empresaId });
+
+    // Verificar si la empresa requiere caja abierta para vender
+    if (usuarioId) {
+      const empresa = await this.prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: { requiereCajaParaVender: true },
+      });
+
+      if (empresa?.requiereCajaParaVender) {
+        const cajaActiva = await this.prisma.caja.findFirst({
+          where: { empresaId, usuarioId, estado: 'ABIERTA' },
+        });
+        if (!cajaActiva) {
+          throw new BadRequestException(
+            'Debe abrir una caja antes de procesar pagos. Vaya a Caja → Abrir Caja.',
+          );
+        }
+      }
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
@@ -1007,6 +1031,26 @@ export class VentaService {
         },
         include: this.getInclude(),
       });
+
+      // Registrar movimiento en caja activa (si hay)
+      if (usuarioId) {
+        try {
+          await this.cajaService.registrarMovimientoSiHayCaja(
+            empresaId,
+            venta.sedeId,
+            usuarioId,
+            {
+              tipo: 'INGRESO',
+              categoria: 'VENTA',
+              metodoPago: dto.metodoPago,
+              monto: dto.monto,
+              descripcion: `Pago venta ${venta.codigo}`,
+              ventaId: venta.id,
+            },
+            tx,
+          );
+        } catch (_) {} // No bloquear la venta si falla el registro en caja
+      }
 
       this.logger.log(
         `Pago registrado en venta ${venta.codigo}: ${dto.monto} (${dto.metodoPago})`,
@@ -1100,6 +1144,27 @@ export class VentaService {
         data: { estado: EstadoVenta.ANULADA },
         include: this.getInclude(),
       });
+
+      // Registrar EGRESO en caja si la venta tenía pagos
+      const montoRecibido = Number(venta.montoRecibido ?? 0);
+      if (montoRecibido > 0) {
+        try {
+          await this.cajaService.registrarMovimientoSiHayCaja(
+            empresaId,
+            venta.sedeId,
+            usuarioId,
+            {
+              tipo: 'EGRESO',
+              categoria: 'DEVOLUCION',
+              metodoPago: venta.metodoPago ?? 'EFECTIVO',
+              monto: montoRecibido,
+              descripcion: `Anulación venta ${venta.codigo}`,
+              ventaId: venta.id,
+            },
+            tx,
+          );
+        } catch (_) {}
+      }
 
       this.logger.log(`Venta anulada: ${venta.codigo}`);
       return updatedVenta;

@@ -99,6 +99,7 @@ model Producto {
   vistas      ProductoVisto[]    @relation("ProductosVistos")
   carritoItems              CarritoItem[]                @relation("CarritoProducto")
   pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoProducto")
+  solicitudCotizacionItems  SolicitudCotizacionItem[]    @relation("SolicitudProducto")
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
@@ -274,6 +275,7 @@ model ProductoVariante {
   lotes               Lote[]
   carritoItems              CarritoItem[]                @relation("CarritoVariante")
   pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoVariante")
+  solicitudCotizacionItems  SolicitudCotizacionItem[]    @relation("SolicitudVariante")
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])

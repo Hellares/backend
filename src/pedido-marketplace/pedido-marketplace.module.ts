@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { StorageModule } from '../storage/storage.module';
+import { CajaModule } from '../caja/caja.module';
 import { CarritoController } from './carrito.controller';
 import { CarritoService } from './carrito.service';
 import { PedidoMarketplaceController } from './pedido-marketplace.controller';
@@ -19,6 +20,7 @@ import { PedidoMarketplaceTasksService } from './pedido-marketplace-tasks.servic
     ConfiguracionCodigosModule,
     NotificacionModule,
     StorageModule,
+    CajaModule,
   ],
   controllers: [
     CarritoController,

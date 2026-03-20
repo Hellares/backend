@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { VentaController } from './venta.controller';
 import { VentaService } from './venta.service';
 import { VentaAnalyticsController } from './analytics/venta-analytics.controller';
@@ -7,6 +7,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { LoggerModule } from '../common/logger/logger.module';
 import { AuthModule } from '../auth/auth.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
+import { CajaModule } from '../caja/caja.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuraci
     LoggerModule,
     AuthModule,
     ConfiguracionCodigosModule,
+    forwardRef(() => CajaModule),
   ],
   controllers: [VentaController, VentaAnalyticsController],
   providers: [VentaService, VentaAnalyticsService],

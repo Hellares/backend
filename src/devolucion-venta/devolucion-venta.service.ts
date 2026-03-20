@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CajaService } from '../caja/caja.service';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateDevolucionVentaDto } from './dto/create-devolucion-venta.dto';
@@ -22,6 +23,7 @@ export class DevolucionVentaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cacheService: CacheService,
+    private readonly cajaService: CajaService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -258,6 +260,43 @@ export class DevolucionVentaService {
             await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, item.accion);
             break;
         }
+      }
+
+      // Registrar EGRESO en caja — calcular monto desde items de la venta original
+      let montoDevolucion = 0;
+      if (devolucion.ventaId) {
+        const ventaOriginal = await tx.venta.findUnique({
+          where: { id: devolucion.ventaId },
+          include: { detalles: true },
+        });
+        if (ventaOriginal) {
+          for (const item of devolucion.items) {
+            const detalleVenta = ventaOriginal.detalles.find(
+              (d) => d.productoId === item.productoId && d.varianteId === item.varianteId,
+            );
+            if (detalleVenta) {
+              montoDevolucion += Number(detalleVenta.precioUnitario) * item.cantidad;
+            }
+          }
+        }
+      }
+      if (montoDevolucion > 0) {
+        try {
+          await this.cajaService.registrarMovimientoSiHayCaja(
+            empresaId,
+            devolucion.sedeId,
+            userId,
+            {
+              tipo: 'EGRESO',
+              categoria: 'DEVOLUCION',
+              metodoPago: 'EFECTIVO',
+              monto: montoDevolucion,
+              descripcion: `Devolución ${devolucion.codigo}`,
+              devolucionId: devolucion.id,
+            },
+            tx,
+          );
+        } catch (_) {}
       }
 
       return tx.devolucion.update({

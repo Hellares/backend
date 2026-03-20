@@ -1,0 +1,78 @@
+// =========================================
+// MÓDULO DE SOLICITUDES DE COTIZACIÓN
+// Cliente solicita cotización desde el marketplace
+// =========================================
+
+enum EstadoSolicitudCotizacion {
+  PENDIENTE
+  EN_REVISION
+  COTIZADA
+  RECHAZADA
+  CANCELADA
+  VENCIDA
+}
+
+model SolicitudCotizacion {
+  id              String  @id @default(cuid())
+  codigo          String
+  solicitanteId   String
+  empresaId       String
+
+  // Datos del solicitante (snapshot)
+  nombreSolicitante   String
+  emailSolicitante    String?
+  telefonoSolicitante String?
+
+  // Estado
+  estado          EstadoSolicitudCotizacion @default(PENDIENTE)
+
+  // Contenido
+  observaciones       String?   // Notas del cliente
+  respuestaVendedor   String?   // Notas del vendedor al responder/rechazar
+
+  // Vínculo con la cotización formal (cuando el vendedor responde)
+  cotizacionId    String?
+
+  // Auditoría
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  solicitante Usuario     @relation("SolicitudesCotizacion", fields: [solicitanteId], references: [id])
+  empresa     Empresa     @relation("SolicitudesEmpresa", fields: [empresaId], references: [id])
+  cotizacion  Cotizacion? @relation("SolicitudCotizacionRespuesta", fields: [cotizacionId], references: [id])
+  items       SolicitudCotizacionItem[]
+
+  @@unique([empresaId, codigo])
+  @@index([solicitanteId])
+  @@index([empresaId])
+  @@index([estado])
+  @@index([creadoEn])
+  @@index([empresaId, estado])
+  @@index([estado, creadoEn])  // Cron: vencimiento
+}
+
+model SolicitudCotizacionItem {
+  id            String  @id @default(cuid())
+  solicitudId   String
+  productoId    String?
+  varianteId    String?
+
+  // Siempre presente (nombre del producto o texto libre)
+  descripcion   String
+  cantidad      Int     @default(1)
+  imagenUrl     String? // Snapshot del catálogo
+  esManual      Boolean @default(false) // true = escrito por cliente
+
+  // Notas específicas del item
+  notasItem     String? // Ej: "lo quiero en color negro"
+
+  creadoEn      DateTime @default(now())
+
+  // Relaciones
+  solicitud     SolicitudCotizacion  @relation(fields: [solicitudId], references: [id], onDelete: Cascade)
+  producto      Producto?            @relation("SolicitudProducto", fields: [productoId], references: [id])
+  variante      ProductoVariante?    @relation("SolicitudVariante", fields: [varianteId], references: [id])
+
+  @@index([solicitudId])
+}

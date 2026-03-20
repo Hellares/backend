@@ -198,6 +198,8 @@ model Compra {
   lotes        Lote[]
   movimientos  MovimientoStock[]
   devoluciones Devolucion[]
+  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaCompra")
+  pagos           PagoCompra[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId, estado])
@@ -315,4 +317,22 @@ model Lote {
   @@index([sedeId])
   @@index([compraId])
   @@index([proveedorId])
+}
+
+/// Pagos realizados a proveedores por compras
+model PagoCompra {
+  id          String          @id @default(cuid())
+  compraId    String
+  metodoPago  MetodoPagoVenta
+  monto       Decimal         @db.Decimal(10, 2)
+  referencia  String?         // Número de operación, voucher
+  bancoDestino String?        // Nombre del banco del proveedor
+  cuentaDestino String?       // Número de cuenta destino
+  fechaPago   DateTime        @default(now())
+  creadoEn    DateTime        @default(now())
+
+  compra Compra @relation(fields: [compraId], references: [id], onDelete: Cascade)
+
+  @@index([compraId])
+  @@index([fechaPago])
 }

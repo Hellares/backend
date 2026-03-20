@@ -82,6 +82,7 @@ model Venta {
   pagos          PagoVenta[]
   movimientos    MovimientoStock[]
   devoluciones   Devolucion[]
+  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaVenta")
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

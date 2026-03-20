@@ -95,6 +95,7 @@ model PedidoMarketplace {
   comprador  Usuario  @relation("PedidosComprador", fields: [compradorId], references: [id])
   empresa    Empresa  @relation("PedidosEmpresa", fields: [empresaId], references: [id])
   detalles   PedidoMarketplaceDetalle[]
+  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaPedido")
 
   @@unique([empresaId, codigo])
   @@index([compradorId])

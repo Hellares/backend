@@ -439,4 +439,85 @@ export class ProveedorService {
       orderBy: { fechaEvaluacion: 'desc' },
     });
   }
+
+  // ─── CUENTAS BANCARIAS ───
+
+  async listarBancos(proveedorId: string, empresaId: string) {
+    await this.findOne(proveedorId, empresaId);
+    return this.prisma.proveedorBanco.findMany({
+      where: { proveedorId },
+      orderBy: [{ esPrincipal: 'desc' }, { creadoEn: 'asc' }],
+    });
+  }
+
+  async crearBanco(proveedorId: string, empresaId: string, data: any) {
+    await this.findOne(proveedorId, empresaId);
+
+    if (data.esPrincipal) {
+      await this.prisma.proveedorBanco.updateMany({
+        where: { proveedorId, esPrincipal: true },
+        data: { esPrincipal: false },
+      });
+    }
+
+    return this.prisma.proveedorBanco.create({
+      data: {
+        proveedorId,
+        nombreBanco: data.nombreBanco,
+        tipoCuenta: data.tipoCuenta,
+        numeroCuenta: data.numeroCuenta,
+        cci: data.cci,
+        swift: data.swift,
+        moneda: data.moneda ?? 'PEN',
+        esPrincipal: data.esPrincipal ?? false,
+      },
+    });
+  }
+
+  async actualizarBanco(bancoId: string, proveedorId: string, empresaId: string, data: any) {
+    await this.findOne(proveedorId, empresaId);
+
+    const banco = await this.prisma.proveedorBanco.findFirst({
+      where: { id: bancoId, proveedorId },
+    });
+    if (!banco) throw new NotFoundException('Cuenta bancaria no encontrada');
+
+    if (data.esPrincipal) {
+      await this.prisma.proveedorBanco.updateMany({
+        where: { proveedorId, esPrincipal: true, id: { not: bancoId } },
+        data: { esPrincipal: false },
+      });
+    }
+
+    return this.prisma.proveedorBanco.update({
+      where: { id: bancoId },
+      data,
+    });
+  }
+
+  async eliminarBanco(bancoId: string, proveedorId: string, empresaId: string) {
+    await this.findOne(proveedorId, empresaId);
+
+    const banco = await this.prisma.proveedorBanco.findFirst({
+      where: { id: bancoId, proveedorId },
+    });
+    if (!banco) throw new NotFoundException('Cuenta bancaria no encontrada');
+
+    await this.prisma.proveedorBanco.delete({ where: { id: bancoId } });
+    return { message: 'Cuenta eliminada' };
+  }
+
+  async marcarBancoPrincipal(bancoId: string, proveedorId: string, empresaId: string) {
+    await this.findOne(proveedorId, empresaId);
+
+    await this.prisma.proveedorBanco.updateMany({
+      where: { proveedorId, esPrincipal: true },
+      data: { esPrincipal: false },
+    });
+
+    return this.prisma.proveedorBanco.update({
+      where: { id: bancoId },
+      data: { esPrincipal: true },
+    });
+  }
 }

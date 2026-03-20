@@ -1,0 +1,67 @@
+// =========================================
+// CATEGORÍAS DE GASTOS Y METAS FINANCIERAS
+// =========================================
+
+enum TipoCategoriaGasto {
+  INGRESO
+  EGRESO
+}
+
+model CategoriaGasto {
+  id        String  @id @default(cuid())
+  empresaId String
+  nombre    String
+  tipo      TipoCategoriaGasto
+  icono     String? // Nombre del icono Material
+  color     String? // Hex color
+  isActive  Boolean @default(true)
+  creadoEn  DateTime @default(now())
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, nombre, tipo])
+  @@index([empresaId, tipo])
+}
+
+enum TipoMetaFinanciera {
+  VENTAS
+  INGRESOS
+  AHORRO
+  REDUCCION_GASTOS
+}
+
+model MetaFinanciera {
+  id          String  @id @default(cuid())
+  empresaId   String
+  tipo        TipoMetaFinanciera
+  nombre      String
+  montoMeta   Decimal @db.Decimal(12, 2)
+  moneda      String  @default("PEN")
+  fechaInicio DateTime
+  fechaFin    DateTime
+  isActive    Boolean @default(true)
+  creadoEn    DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@index([empresaId, tipo, isActive])
+}
+
+// Tipo de cambio (registro manual o de API)
+model TipoCambio {
+  id        String  @id @default(cuid())
+  empresaId String
+  monedaOrigen  String // USD
+  monedaDestino String // PEN
+  tasaCompra    Decimal @db.Decimal(10, 4)
+  tasaVenta     Decimal @db.Decimal(10, 4)
+  fecha         DateTime @default(now())
+  fuente        String? // MANUAL, SUNAT, API
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, fecha])
+  @@index([empresaId, monedaOrigen, monedaDestino])
+}

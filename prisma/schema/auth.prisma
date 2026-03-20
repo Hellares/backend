@@ -119,8 +119,14 @@ model Usuario {
   opinionesProducto         OpinionProducto[]
   favoritosProducto         FavoritoProducto[] @relation("FavoritosProducto")
   productosVistos           ProductoVisto[]    @relation("ProductosVistos")
-  carritoItems              CarritoItem[]           @relation("CarritoUsuario")
-  pedidosMarketplace        PedidoMarketplace[]     @relation("PedidosComprador")
+  carritoItems              CarritoItem[]                @relation("CarritoUsuario")
+  pedidosMarketplace        PedidoMarketplace[]          @relation("PedidosComprador")
+  solicitudesCotizacion     SolicitudCotizacion[]        @relation("SolicitudesCotizacion")
+
+  // Relaciones para módulo de caja
+  cajasAbiertas                  Caja[]             @relation("CajaUsuario")
+  cajasCerradas                  Caja[]             @relation("CajaCerradoPor")
+  movimientosCajaRegistrados     MovimientoCaja[]   @relation("MovimientoCajaRegistradoPor")
 
   @@index([email])
   @@index([telefono])

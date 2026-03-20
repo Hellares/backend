@@ -120,6 +120,12 @@ export class PermissionsService {
         isAnyAdmin || isContador || isTecnico || isViewer,
       canManageReportesIncidencia:
         isAnyAdmin || isTecnico,
+
+      // ==================== CAJA ====================
+      canViewCaja:
+        isAnyAdmin || isCajero || isContador,
+      canManageCaja:
+        isAnyAdmin || isCajero,
     };
   }
 
@@ -173,6 +179,8 @@ export class PermissionsService {
       'canApproveOrdenesCompra',
       'canViewReportesIncidencia',
       'canManageReportesIncidencia',
+      'canViewCaja',
+      'canManageCaja',
     ];
   }
 }

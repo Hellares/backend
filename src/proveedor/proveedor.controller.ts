@@ -280,4 +280,62 @@ export class ProveedorController {
   async getEvaluaciones(@Param('empresaId') empresaId: string, @Param('id') id: string) {
     return this.proveedorService.getEvaluaciones(id, empresaId);
   }
+
+  // ─── CUENTAS BANCARIAS DEL PROVEEDOR ───
+
+  @Get(':id/bancos')
+  @RequiresPermission(Permission.VIEW_PROVEEDORES)
+  @ApiOperation({ summary: 'Listar cuentas bancarias del proveedor' })
+  async listarBancos(
+    @Param('empresaId') empresaId: string,
+    @Param('id') proveedorId: string,
+  ) {
+    return this.proveedorService.listarBancos(proveedorId, empresaId);
+  }
+
+  @Post(':id/bancos')
+  @RequiresPermission(Permission.MANAGE_PROVEEDORES)
+  @ApiOperation({ summary: 'Agregar cuenta bancaria al proveedor' })
+  async crearBanco(
+    @Param('empresaId') empresaId: string,
+    @Param('id') proveedorId: string,
+    @Body() body: any,
+  ) {
+    return this.proveedorService.crearBanco(proveedorId, empresaId, body);
+  }
+
+  @Put(':id/bancos/:bancoId')
+  @RequiresPermission(Permission.MANAGE_PROVEEDORES)
+  @ApiOperation({ summary: 'Actualizar cuenta bancaria' })
+  async actualizarBanco(
+    @Param('empresaId') empresaId: string,
+    @Param('id') proveedorId: string,
+    @Param('bancoId') bancoId: string,
+    @Body() body: any,
+  ) {
+    return this.proveedorService.actualizarBanco(bancoId, proveedorId, empresaId, body);
+  }
+
+  @Delete(':id/bancos/:bancoId')
+  @RequiresPermission(Permission.MANAGE_PROVEEDORES)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Eliminar cuenta bancaria' })
+  async eliminarBanco(
+    @Param('empresaId') empresaId: string,
+    @Param('id') proveedorId: string,
+    @Param('bancoId') bancoId: string,
+  ) {
+    return this.proveedorService.eliminarBanco(bancoId, proveedorId, empresaId);
+  }
+
+  @Post(':id/bancos/:bancoId/principal')
+  @RequiresPermission(Permission.MANAGE_PROVEEDORES)
+  @ApiOperation({ summary: 'Marcar cuenta bancaria como principal' })
+  async marcarBancoPrincipal(
+    @Param('empresaId') empresaId: string,
+    @Param('id') proveedorId: string,
+    @Param('bancoId') bancoId: string,
+  ) {
+    return this.proveedorService.marcarBancoPrincipal(bancoId, proveedorId, empresaId);
+  }
 }
