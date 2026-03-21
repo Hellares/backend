@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
@@ -16,6 +17,8 @@ import { CajaService } from '../caja/caja.service';
 
 @Injectable()
 export class PedidoMarketplaceEmpresaService {
+  private readonly logger = new Logger(PedidoMarketplaceEmpresaService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificacionService: NotificacionService,
@@ -172,7 +175,9 @@ export class PedidoMarketplaceEmpresaService {
             },
           );
         }
-      } catch (_) {}
+      } catch (e) {
+        this.logger.warn(`Error registrando movimiento caja para pedido ${pedido.codigo}: ${e?.message ?? e}`);
+      }
 
       return { message: 'Pago aprobado exitosamente' };
     } else {

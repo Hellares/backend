@@ -47,8 +47,10 @@ import { ResumenFinancieroModule } from './resumen-financiero/resumen-financiero
 import { PrestamoModule } from './prestamo/prestamo.module';
 import { LibroContableModule } from './libro-contable/libro-contable.module';
 import { FlujoProyectadoModule } from './flujo-proyectado/flujo-proyectado.module';
+import { CajaChicaModule } from './caja-chica/caja-chica.module';
 import { CategoriaGastoModule } from './categoria-gasto/categoria-gasto.module';
 import { MetaFinancieraModule } from './meta-financiera/meta-financiera.module';
+import { ReportesFinancierosModule } from './reportes-financieros/reportes-financieros.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -102,6 +104,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     PedidoMarketplaceModule,
     SolicitudCotizacionModule,
     CajaModule,
+    CajaChicaModule,
     CuentasPorCobrarModule,
     CuentasPorPagarModule,
     EmpresaBancoModule,
@@ -111,6 +114,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     FlujoProyectadoModule,
     CategoriaGastoModule,
     MetaFinancieraModule,
+    ReportesFinancierosModule,
   ],
   controllers: [AppController],
   providers: [

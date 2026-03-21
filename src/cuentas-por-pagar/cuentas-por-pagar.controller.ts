@@ -16,7 +16,8 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CuentasPorPagarService } from './cuentas-por-pagar.service';
-import { MetodoPagoVenta } from '@prisma/client';
+import { QueryCuentasPagarDto } from './dto/query-cuentas-pagar.dto';
+import { RegistrarPagoCuentaPagarDto } from './dto/registrar-pago.dto';
 
 @ApiTags('Cuentas por Pagar')
 @Controller('cuentas-por-pagar')
@@ -31,11 +32,9 @@ export class CuentasPorPagarController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async listar(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('estado') estado?: 'PENDIENTE' | 'VENCIDA' | 'PAGADA',
-    @Query('proveedorId') proveedorId?: string,
-    @Query('search') search?: string,
+    @Query() query: QueryCuentasPagarDto,
   ) {
-    return this.service.listar(empresaId, { estado, proveedorId, search });
+    return this.service.listar(empresaId, query);
   }
 
   @Get('resumen')
@@ -54,13 +53,7 @@ export class CuentasPorPagarController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('compraId') compraId: string,
     @CurrentUser('id') usuarioId: string,
-    @Body() body: {
-      metodoPago: MetodoPagoVenta;
-      monto: number;
-      referencia?: string;
-      bancoDestino?: string;
-      cuentaDestino?: string;
-    },
+    @Body() body: RegistrarPagoCuentaPagarDto,
   ) {
     return this.service.registrarPago(empresaId, compraId, usuarioId, body);
   }

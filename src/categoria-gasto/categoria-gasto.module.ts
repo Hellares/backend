@@ -8,5 +8,6 @@ import { CategoriaGastoService } from './categoria-gasto.service';
   imports: [PrismaModule, AuthModule],
   controllers: [CategoriaGastoController],
   providers: [CategoriaGastoService],
+  exports: [CategoriaGastoService],
 })
 export class CategoriaGastoModule {}

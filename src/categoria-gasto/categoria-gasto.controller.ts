@@ -17,6 +17,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { CategoriaGastoService } from './categoria-gasto.service';
+import { CrearCategoriaGastoDto, ActualizarCategoriaGastoDto } from './dto/categoria-gasto.dto';
 
 @ApiTags('Categorias de Gasto')
 @Controller('categorias-gasto')
@@ -42,7 +43,7 @@ export class CategoriaGastoController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async crear(
     @Headers('x-tenant-id') empresaId: string,
-    @Body() body: { nombre: string; tipo: string; icono?: string; color?: string },
+    @Body() body: CrearCategoriaGastoDto,
   ) {
     return this.service.crear(empresaId, body);
   }
@@ -54,7 +55,7 @@ export class CategoriaGastoController {
   async actualizar(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
-    @Body() body: { nombre?: string; tipo?: string; icono?: string; color?: string },
+    @Body() body: ActualizarCategoriaGastoDto,
   ) {
     return this.service.actualizar(empresaId, id, body);
   }

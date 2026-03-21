@@ -13,6 +13,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { CuentasPorCobrarService } from './cuentas-por-cobrar.service';
+import { QueryCuentasCobrarDto } from './dto/query-cuentas-cobrar.dto';
 
 @ApiTags('Cuentas por Cobrar')
 @Controller('cuentas-por-cobrar')
@@ -27,12 +28,9 @@ export class CuentasPorCobrarController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async listar(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('estado') estado?: 'PENDIENTE' | 'VENCIDA' | 'PAGADA',
-    @Query('clienteId') clienteId?: string,
-    @Query('sedeId') sedeId?: string,
-    @Query('search') search?: string,
+    @Query() query: QueryCuentasCobrarDto,
   ) {
-    return this.service.listar(empresaId, { estado, clienteId, sedeId, search });
+    return this.service.listar(empresaId, query);
   }
 
   @Get('resumen')

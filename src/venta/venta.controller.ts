@@ -25,8 +25,10 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VentaService } from './venta.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CreateVentaDesdeCotizacionDto } from './dto/create-venta-desde-cotizacion.dto';
+import { CrearYCobrarVentaDto } from './dto/crear-y-cobrar-venta.dto';
 import { UpdateVentaDto } from './dto/update-venta.dto';
 import { ProcesarPagoDto } from './dto/procesar-pago.dto';
+import { AnularVentaDto } from './dto/anular-venta.dto';
 import { EstadoVenta } from '@prisma/client';
 
 @ApiTags('Ventas')
@@ -46,6 +48,19 @@ export class VentaController {
     @Body() dto: CreateVentaDto,
   ) {
     return this.ventaService.create(empresaId, dto);
+  }
+
+  @Post('cobrar')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Crear y cobrar venta POS en un solo paso' })
+  @ApiResponse({ status: 201, description: 'Venta creada y cobrada exitosamente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async crearYCobrar(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CrearYCobrarVentaDto,
+    @CurrentUser('id') cajeroId: string,
+  ) {
+    return this.ventaService.crearYCobrar(empresaId, dto, cajeroId);
   }
 
   @Post('desde-cotizacion/:cotizacionId')
@@ -104,6 +119,17 @@ export class VentaController {
     return this.ventaService.getResumen(empresaId, sedeId);
   }
 
+  @Get('buscar')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Buscar venta por codigo de venta o comprobante' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async buscarPorCodigo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('codigo') codigo: string,
+  ) {
+    return this.ventaService.buscarPorCodigo(empresaId, codigo);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Obtener venta por ID' })
@@ -160,7 +186,8 @@ export class VentaController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @CurrentUser('id') usuarioId: string,
+    @Body() dto: AnularVentaDto,
   ) {
-    return this.ventaService.anular(id, empresaId, usuarioId);
+    return this.ventaService.anular(id, empresaId, usuarioId, dto);
   }
 }

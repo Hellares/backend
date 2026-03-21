@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CajaService } from '../caja/caja.service';
 import { EstadoPrestamo, MetodoPagoVenta } from '@prisma/client';
 
 @Injectable()
 export class PrestamoService {
+  private readonly logger = new Logger(PrestamoService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cajaService: CajaService,
@@ -77,7 +79,9 @@ export class PrestamoService {
           monto: data.monto, descripcion: `Pago préstamo - ${prestamo.entidadPrestamo}`,
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      this.logger.warn(`Error registrando egreso caja para préstamo ${prestamo.entidadPrestamo}: ${e?.message ?? e}`);
+    }
 
     return { message: 'Pago registrado', saldoPendiente: nuevoSaldo };
   }

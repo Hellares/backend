@@ -91,6 +91,15 @@ export class CuentasPorCobrarTasksService {
         );
       }
 
+      // Actualizar cuotas vencidas
+      await this.prisma.cuotaVenta.updateMany({
+        where: {
+          estado: { in: ['PENDIENTE', 'PAGADA_PARCIAL'] },
+          fechaVencimiento: { lt: now },
+        },
+        data: { estado: 'VENCIDA' },
+      });
+
       if (porEmpresa.size > 0) {
         this.logger.info(`Alertas de cobranza enviadas a ${porEmpresa.size} empresas`);
       }

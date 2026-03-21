@@ -25,7 +25,7 @@ export class LibroContableService {
     const [ventas, compras, movimientosCaja, pagosPrestamo] = await Promise.all([
       this._getVentas(empresaId, fechaInicio, fechaFin),
       this._getCompras(empresaId, fechaInicio, fechaFin),
-      this._getMovimientosManuales(empresaId, fechaInicio, fechaFin),
+      this._getMovimientosCaja(empresaId, fechaInicio, fechaFin),
       this._getPagosPrestamo(empresaId, fechaInicio, fechaFin),
     ]);
 
@@ -134,7 +134,13 @@ export class LibroContableService {
     }));
   }
 
-  private async _getMovimientosManuales(
+  /**
+   * Obtiene movimientos de caja que NO son VENTA ni COMPRA (esos ya se cuentan
+   * directamente desde sus tablas respectivas para evitar doble conteo).
+   * Incluye: devoluciones, pedidos marketplace, pagos proveedor, gastos operativos,
+   * adelantos de servicio, otros ingresos/egresos, y movimientos manuales.
+   */
+  private async _getMovimientosCaja(
     empresaId: string,
     desde: Date,
     hasta: Date,
@@ -143,7 +149,8 @@ export class LibroContableService {
       where: {
         empresaId,
         fechaMovimiento: { gte: desde, lte: hasta },
-        esManual: true,
+        // Excluir VENTA y COMPRA para evitar doble conteo con _getVentas/_getCompras
+        categoria: { notIn: ['VENTA', 'COMPRA'] },
       },
       select: {
         id: true,
@@ -152,6 +159,7 @@ export class LibroContableService {
         monto: true,
         descripcion: true,
         fechaMovimiento: true,
+        esManual: true,
       },
       orderBy: { fechaMovimiento: 'asc' },
     });
@@ -160,7 +168,7 @@ export class LibroContableService {
       fecha: m.fechaMovimiento,
       tipo: m.tipo as 'INGRESO' | 'EGRESO',
       categoria: `CAJA_${m.categoria}`,
-      descripcion: m.descripcion ?? `Movimiento manual - ${m.categoria}`,
+      descripcion: m.descripcion ?? `${m.esManual ? 'Manual' : 'Automático'} - ${m.categoria}`,
       monto: Number(m.monto),
       referencia: m.id,
       saldoAcumulado: 0,

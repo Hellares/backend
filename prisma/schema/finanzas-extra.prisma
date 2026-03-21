@@ -19,6 +19,10 @@ model CategoriaGasto {
 
   empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
+  // Relaciones inversas
+  movimientosCaja  MovimientoCaja[]
+  gastosCajaChica  GastoCajaChica[]
+
   @@unique([empresaId, nombre, tipo])
   @@index([empresaId, tipo])
 }

@@ -26,6 +26,7 @@ import { CajaService } from './caja.service';
 import { AbrirCajaDto } from './dto/abrir-caja.dto';
 import { CerrarCajaDto } from './dto/cerrar-caja.dto';
 import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
+import { AnularMovimientoDto } from './dto/anular-movimiento.dto';
 
 @ApiTags('Caja')
 @Controller('caja')
@@ -71,6 +72,20 @@ export class CajaController {
     return this.cajaService.crearMovimiento(empresaId, cajaId, usuarioId, dto);
   }
 
+  @Post(':cajaId/movimiento/:movimientoId/anular')
+  @RequiresPermission(Permission.MANAGE_CAJA)
+  @ApiOperation({ summary: 'Anular un movimiento manual de caja' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async anularMovimiento(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('cajaId') cajaId: string,
+    @Param('movimientoId') movimientoId: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() dto: AnularMovimientoDto,
+  ) {
+    return this.cajaService.anularMovimiento(empresaId, cajaId, movimientoId, usuarioId, dto);
+  }
+
   @Get(':id/movimientos')
   @RequiresPermission(Permission.VIEW_CAJA)
   @ApiOperation({ summary: 'Listar movimientos de una caja' })
@@ -106,6 +121,17 @@ export class CajaController {
     @Query('fechaHasta') fechaHasta?: string,
   ) {
     return this.cajaService.getHistorial(empresaId, sedeId, fechaDesde, fechaHasta);
+  }
+
+  @Get('monitor')
+  @RequiresPermission(Permission.VIEW_CAJA)
+  @ApiOperation({ summary: 'Monitor de cajas abiertas en tiempo real' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getMonitor(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return this.cajaService.getMonitor(empresaId, sedeId);
   }
 
   @Get(':id/resumen')

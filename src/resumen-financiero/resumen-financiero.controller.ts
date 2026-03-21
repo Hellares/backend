@@ -6,6 +6,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { ResumenFinancieroService } from './resumen-financiero.service';
+import { QueryResumenFinancieroDto } from './dto/query-resumen.dto';
 
 @ApiTags('Resumen Financiero')
 @Controller('resumen-financiero')
@@ -20,10 +21,9 @@ export class ResumenFinancieroController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async getResumen(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('fechaDesde') fechaDesde?: string,
-    @Query('fechaHasta') fechaHasta?: string,
+    @Query() query: QueryResumenFinancieroDto,
   ) {
-    return this.service.getResumen(empresaId, { fechaDesde, fechaHasta });
+    return this.service.getResumen(empresaId, query);
   }
 
   @Get('grafico-diario')
@@ -32,9 +32,8 @@ export class ResumenFinancieroController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async getGraficoDiario(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('fechaDesde') fechaDesde?: string,
-    @Query('fechaHasta') fechaHasta?: string,
+    @Query() query: QueryResumenFinancieroDto,
   ) {
-    return this.service.getGraficoDiario(empresaId, fechaDesde, fechaHasta);
+    return this.service.getGraficoDiario(empresaId, query.fechaDesde, query.fechaHasta);
   }
 }

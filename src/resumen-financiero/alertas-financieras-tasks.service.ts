@@ -31,6 +31,10 @@ export class AlertasFinancierasTasksService {
           this._verificarCuotasPrestamo(empresa.id, empresa.nombre),
           this._verificarMetasPorVencer(empresa.id, empresa.nombre),
           this._verificarCuentasPorCobrarVencidas(empresa.id, empresa.nombre),
+          this._verificarCajasConDiscrepancia(empresa.id, empresa.nombre),
+          this._verificarCajasAbiertasSinActividad(empresa.id, empresa.nombre),
+          this._verificarCajasChicasFondoBajo(empresa.id, empresa.nombre),
+          this._verificarLotesProximosVencer(empresa.id, empresa.nombre),
         ]);
       }
 
@@ -205,6 +209,206 @@ export class AlertasFinancierasTasksService {
       }
     } catch (error: any) {
       this.logger.error(`Error verificando cuentas por cobrar [${empresaNombre}]: ${error?.message}`);
+    }
+  }
+
+  /**
+   * Alerta: cajas cerradas con discrepancia significativa (> S/ 5)
+   */
+  private async _verificarCajasConDiscrepancia(empresaId: string, empresaNombre: string) {
+    try {
+      const ayer = new Date();
+      ayer.setDate(ayer.getDate() - 1);
+      ayer.setHours(0, 0, 0, 0);
+      const hoy = new Date();
+      hoy.setHours(0, 0, 0, 0);
+
+      const cierres = await this.prisma.cierreCaja.findMany({
+        where: {
+          caja: { empresaId },
+          creadoEn: { gte: ayer, lt: hoy },
+        },
+        select: {
+          diferencia: true,
+          caja: {
+            select: { codigo: true, sede: { select: { nombre: true } } },
+          },
+        },
+      });
+
+      const conDiscrepancia = cierres.filter(
+        (c) => Math.abs(Number(c.diferencia ?? 0)) > 5,
+      );
+
+      if (conDiscrepancia.length > 0) {
+        const admins = await this._getAdminsContadores(empresaId);
+        if (admins.length > 0) {
+          const detalles = conDiscrepancia
+            .map(
+              (c) =>
+                `- Caja ${c.caja.codigo} (${c.caja.sede?.nombre ?? 'Sin sede'}): discrepancia S/ ${Number(c.diferencia).toFixed(2)}`,
+            )
+            .join('\n');
+
+          await this.notificacionService.enviarAUsuarios(
+            admins,
+            'Alerta: Discrepancias en cierre de caja',
+            `Se detectaron ${conDiscrepancia.length} caja(s) con discrepancias significativas en el cierre de ayer:\n${detalles}`,
+            { tipo: 'SISTEMA', empresaId },
+          );
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Error verificando discrepancias caja [${empresaNombre}]: ${error?.message}`);
+    }
+  }
+
+  /**
+   * Alerta: cajas abiertas por más de 24 horas sin movimientos
+   */
+  private async _verificarCajasAbiertasSinActividad(empresaId: string, empresaNombre: string) {
+    try {
+      const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const cajasAbiertas = await this.prisma.caja.findMany({
+        where: {
+          empresaId,
+          estado: 'ABIERTA',
+          fechaApertura: { lt: hace24h },
+        },
+        include: {
+          sede: { select: { nombre: true } },
+          movimientos: {
+            where: { fechaMovimiento: { gte: hace24h } },
+            select: { id: true },
+            take: 1,
+          },
+        },
+      });
+
+      const sinActividad = cajasAbiertas.filter((c) => c.movimientos.length === 0);
+
+      if (sinActividad.length > 0) {
+        const admins = await this._getAdminsContadores(empresaId);
+        if (admins.length > 0) {
+          const detalles = sinActividad
+            .map(
+              (c) =>
+                `- Caja ${c.codigo} (${c.sede?.nombre ?? 'Sin sede'}) - Abierta desde ${c.fechaApertura.toLocaleDateString('es-PE')}`,
+            )
+            .join('\n');
+
+          await this.notificacionService.enviarAUsuarios(
+            admins,
+            'Alerta: Cajas abiertas sin actividad',
+            `Hay ${sinActividad.length} caja(s) abiertas por mas de 24h sin movimientos recientes:\n${detalles}`,
+            { tipo: 'SISTEMA', empresaId },
+          );
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Error verificando cajas sin actividad [${empresaNombre}]: ${error?.message}`);
+    }
+  }
+
+  /**
+   * Alerta: cajas chicas con fondo por debajo del umbral configurado
+   */
+  private async _verificarCajasChicasFondoBajo(empresaId: string, empresaNombre: string) {
+    try {
+      const cajasChicas = await this.prisma.cajaChica.findMany({
+        where: {
+          empresaId,
+          estado: 'ACTIVA',
+          umbralAlerta: { gt: 0 },
+        },
+        select: {
+          nombre: true,
+          saldoActual: true,
+          umbralAlerta: true,
+          fondoFijo: true,
+          sede: { select: { nombre: true } },
+        },
+      });
+
+      const conFondoBajo = cajasChicas.filter(
+        (c) => Number(c.saldoActual) <= Number(c.umbralAlerta),
+      );
+
+      if (conFondoBajo.length > 0) {
+        const admins = await this._getAdminsContadores(empresaId);
+        if (admins.length > 0) {
+          const detalles = conFondoBajo
+            .map(
+              (c) =>
+                `- ${c.nombre} (${c.sede?.nombre ?? 'Sin sede'}): saldo S/ ${Number(c.saldoActual).toFixed(2)} / fondo S/ ${Number(c.fondoFijo).toFixed(2)} (umbral: S/ ${Number(c.umbralAlerta).toFixed(2)})`,
+            )
+            .join('\n');
+
+          await this.notificacionService.enviarAUsuarios(
+            admins,
+            'Alerta: Cajas chicas con fondo bajo',
+            `Hay ${conFondoBajo.length} caja(s) chica(s) con saldo por debajo del umbral de alerta:\n${detalles}`,
+            { tipo: 'SISTEMA', empresaId },
+          );
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Error verificando cajas chicas fondo bajo [${empresaNombre}]: ${error?.message}`);
+    }
+  }
+
+  /**
+   * Alerta: lotes proximos a vencer (30 dias) + marcar vencidos automaticamente
+   */
+  private async _verificarLotesProximosVencer(empresaId: string, empresaNombre: string) {
+    try {
+      const now = new Date();
+      const en30Dias = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+      // Auto-marcar lotes vencidos
+      await this.prisma.lote.updateMany({
+        where: {
+          empresaId,
+          estado: 'ACTIVO',
+          fechaVencimiento: { lt: now },
+        },
+        data: { estado: 'VENCIDO' },
+      });
+
+      // Buscar lotes por vencer en 30 dias
+      const lotesProximos = await this.prisma.lote.findMany({
+        where: {
+          empresaId,
+          estado: 'ACTIVO',
+          fechaVencimiento: { gte: now, lte: en30Dias },
+          cantidadActual: { gt: 0 },
+        },
+        select: {
+          codigo: true,
+          fechaVencimiento: true,
+          cantidadActual: true,
+          producto: { select: { nombre: true } },
+        },
+      });
+
+      if (lotesProximos.length > 0) {
+        const admins = await this._getAdminsContadores(empresaId);
+        if (admins.length > 0) {
+          const detalles = lotesProximos
+            .map((l) => `- ${l.producto?.nombre ?? 'Producto'} (Lote ${l.codigo}): ${l.cantidadActual} und. vence ${l.fechaVencimiento?.toLocaleDateString('es-PE')}`)
+            .join('\n');
+
+          await this.notificacionService.enviarAUsuarios(
+            admins,
+            'Alerta: Lotes proximos a vencer',
+            `Hay ${lotesProximos.length} lote(s) que vencen en los proximos 30 dias:\n${detalles}`,
+            { tipo: 'SISTEMA', empresaId },
+          );
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Error verificando lotes [${empresaNombre}]: ${error?.message}`);
     }
   }
 

@@ -12,7 +12,7 @@ export class ResumenFinancieroService {
     const fechaDesde = periodo?.fechaDesde ? new Date(periodo.fechaDesde) : this._inicioMes();
     const fechaHasta = periodo?.fechaHasta ? new Date(periodo.fechaHasta) : new Date();
 
-    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, prestamos] = await Promise.all([
+    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, prestamos, otrosMovimientos] = await Promise.all([
       this._resumenVentas(empresaId, fechaDesde, fechaHasta),
       this._resumenCompras(empresaId, fechaDesde, fechaHasta),
       this._resumenPedidosMarketplace(empresaId, fechaDesde, fechaHasta),
@@ -21,10 +21,11 @@ export class ResumenFinancieroService {
       this._resumenCaja(empresaId),
       this._resumenBancos(empresaId),
       this._resumenPrestamos(empresaId),
+      this._resumenOtrosMovimientos(empresaId, fechaDesde, fechaHasta),
     ]);
 
-    const totalIngresos = ventas.totalCobrado + pedidosMarketplace.totalValidado;
-    const totalEgresos = compras.totalPagado + prestamos.totalPagadoPeriodo;
+    const totalIngresos = ventas.totalCobrado + pedidosMarketplace.totalValidado + otrosMovimientos.totalOtrosIngresos;
+    const totalEgresos = compras.totalPagado + prestamos.totalPagadoPeriodo + otrosMovimientos.totalOtrosEgresos;
     const flujoNeto = totalIngresos - totalEgresos;
 
     return {
@@ -42,6 +43,7 @@ export class ResumenFinancieroService {
       caja,
       bancos,
       prestamos,
+      otrosMovimientos,
     };
   }
 
@@ -291,6 +293,40 @@ export class ResumenFinancieroService {
       totalPagado: Math.round(totalPagado * 100) / 100,
       totalPagadoPeriodo: Math.round(totalPagadoPeriodo * 100) / 100,
       porcentajePagado: totalOriginal > 0 ? Math.round((totalPagado / totalOriginal) * 100) : 0,
+    };
+  }
+
+  /**
+   * Resumen de movimientos de caja que no son ventas/compras/préstamos
+   * (gastos operativos, otros ingresos, adelantos de servicio, devoluciones, etc.)
+   */
+  private async _resumenOtrosMovimientos(empresaId: string, desde: Date, hasta: Date) {
+    const movimientos = await this.prisma.movimientoCaja.findMany({
+      where: {
+        empresaId,
+        fechaMovimiento: { gte: desde, lte: hasta },
+        // Solo categorías que NO se cuentan en otras secciones del resumen
+        categoria: { in: ['OTRO_INGRESO', 'GASTO_OPERATIVO', 'ADELANTO_SERVICIO', 'OTRO_EGRESO', 'DEVOLUCION'] },
+      },
+      select: { tipo: true, categoria: true, monto: true },
+    });
+
+    let totalOtrosIngresos = 0;
+    let totalOtrosEgresos = 0;
+    const porCategoria: Record<string, number> = {};
+
+    for (const m of movimientos) {
+      const monto = Number(m.monto);
+      if (m.tipo === 'INGRESO') totalOtrosIngresos += monto;
+      else totalOtrosEgresos += monto;
+
+      porCategoria[m.categoria] = (porCategoria[m.categoria] ?? 0) + monto;
+    }
+
+    return {
+      totalOtrosIngresos: Math.round(totalOtrosIngresos * 100) / 100,
+      totalOtrosEgresos: Math.round(totalOtrosEgresos * 100) / 100,
+      porCategoria,
     };
   }
 

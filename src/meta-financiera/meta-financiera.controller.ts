@@ -14,6 +14,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { MetaFinancieraService } from './meta-financiera.service';
+import { CrearMetaFinancieraDto } from './dto/meta-financiera.dto';
 
 @ApiTags('Metas Financieras')
 @Controller('metas-financieras')
@@ -44,15 +45,7 @@ export class MetaFinancieraController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async crear(
     @Headers('x-tenant-id') empresaId: string,
-    @Body()
-    body: {
-      tipo: string;
-      nombre: string;
-      montoMeta: number;
-      moneda?: string;
-      fechaInicio: string;
-      fechaFin: string;
-    },
+    @Body() body: CrearMetaFinancieraDto,
   ) {
     return this.service.crear(empresaId, body);
   }

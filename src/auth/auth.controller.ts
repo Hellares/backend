@@ -8,20 +8,21 @@ import {
   Param,
   UseGuards,
   Request,
+  Headers,
   HttpCode,
   HttpStatus,
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { Roles } from './decorators/roles.decorator';
-import { JwtAuthGuard, LocalAuthGuard, RolesGuard } from './guards';
+import { JwtAuthGuard, LocalAuthGuard, RolesGuard, TenantAuthGuard } from './guards';
 import {
   RegisterDto,
   LoginDto,
@@ -37,6 +38,7 @@ import { GoogleAuthDto } from './dto/google-auth.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
 import { LinkAccountDto } from './dto/link-account.dto';
+import { AutorizarOperacionDto } from './dto/autorizar-operacion.dto';
 
 @ApiTags('Autenticación')
 @Controller('auth')
@@ -566,5 +568,22 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Email inválido' })
   async checkAuthMethods(@Body() checkAuthMethodsDto: CheckAuthMethodsDto) {
     return this.authService.checkAuthMethods(checkAuthMethodsDto.email);
+  }
+
+  /**
+   * Autorizar operación privilegiada (anulación, etc.)
+   */
+  @Post('autorizar-operacion')
+  @UseGuards(JwtAuthGuard, TenantAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Autorizar operacion privilegiada (anulacion, etc.)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async autorizarOperacion(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') solicitanteId: string,
+    @Body() dto: AutorizarOperacionDto,
+  ) {
+    return this.authService.autorizarOperacion(empresaId, solicitanteId, dto);
   }
 }

@@ -1,0 +1,98 @@
+// =========================================
+// MODULO DE CAJA CHICA (PETTY CASH)
+// =========================================
+
+enum EstadoCajaChica {
+  ACTIVA
+  INACTIVA
+}
+
+enum EstadoRendicion {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+/// Caja Chica (fondo fijo para gastos menores)
+model CajaChica {
+  id              String          @id @default(cuid())
+  empresaId       String
+  sedeId          String
+  nombre          String
+  fondoFijo       Decimal         @db.Decimal(10, 2)
+  saldoActual     Decimal         @db.Decimal(10, 2)
+  umbralAlerta    Decimal         @db.Decimal(10, 2) @default(0)
+  estado          EstadoCajaChica @default(ACTIVA)
+  responsableId   String
+
+  // Auditoria
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa      Empresa          @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  sede         Sede             @relation(fields: [sedeId], references: [id])
+  responsable  Usuario          @relation("CajaChicaResponsable", fields: [responsableId], references: [id])
+  gastos       GastoCajaChica[]
+  rendiciones  RendicionCajaChica[]
+
+  @@unique([empresaId, sedeId, nombre])
+  @@index([empresaId, estado])
+  @@index([empresaId, sedeId])
+}
+
+/// Gasto registrado en caja chica
+model GastoCajaChica {
+  id                String   @id @default(cuid())
+  cajaChicaId       String
+  empresaId         String
+  monto             Decimal  @db.Decimal(10, 2)
+  descripcion       String
+  categoriaGastoId  String
+  comprobanteUrl    String?
+  rendicionId       String?
+  registradoPorId   String
+  fechaGasto        DateTime @default(now())
+
+  // Auditoria
+  creadoEn DateTime @default(now())
+
+  // Relaciones
+  cajaChica      CajaChica           @relation(fields: [cajaChicaId], references: [id])
+  empresa        Empresa             @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  categoriaGasto CategoriaGasto      @relation(fields: [categoriaGastoId], references: [id])
+  rendicion      RendicionCajaChica? @relation(fields: [rendicionId], references: [id])
+  registradoPor  Usuario             @relation("GastoCajaChicaRegistradoPor", fields: [registradoPorId], references: [id])
+
+  @@index([cajaChicaId])
+  @@index([cajaChicaId, rendicionId])
+  @@index([empresaId])
+}
+
+/// Rendicion de caja chica (agrupacion de gastos para aprobacion)
+model RendicionCajaChica {
+  id              String         @id @default(cuid())
+  cajaChicaId     String
+  empresaId       String
+  codigo          String
+  totalGastado    Decimal        @db.Decimal(10, 2)
+  estado          EstadoRendicion @default(PENDIENTE)
+  observaciones   String?
+  aprobadoPorId   String?
+  movimientoCajaId String?
+
+  // Auditoria
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  cajaChica      CajaChica        @relation(fields: [cajaChicaId], references: [id])
+  empresa        Empresa          @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  aprobadoPor    Usuario?         @relation("RendicionAprobadaPor", fields: [aprobadoPorId], references: [id])
+  movimientoCaja MovimientoCaja?  @relation(fields: [movimientoCajaId], references: [id])
+  gastos         GastoCajaChica[]
+
+  @@unique([empresaId, codigo])
+  @@index([cajaChicaId, estado])
+  @@index([empresaId])
+}

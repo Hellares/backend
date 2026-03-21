@@ -438,15 +438,32 @@ export class ProductoCatalogService {
       deletedAt: null,
     };
 
-    // Búsqueda por texto
+    // Búsqueda por texto — optimizada:
+    // 1. Códigos exactos (barcode, sku, codigoEmpresa): búsqueda exacta case-insensitive (usa índice)
+    // 2. Nombre/descripción: ILIKE con texto (substring search)
     if (filters.search) {
-      where.OR = [
-        { nombre: { contains: filters.search, mode: 'insensitive' } },
-        { descripcion: { contains: filters.search, mode: 'insensitive' } },
-        { codigoEmpresa: { contains: filters.search, mode: 'insensitive' } },
-        { sku: { contains: filters.search, mode: 'insensitive' } },
-        { codigoBarras: { contains: filters.search, mode: 'insensitive' } },
-      ];
+      const search = filters.search.trim();
+
+      // Si parece un código (sin espacios, menos de 50 chars), priorizar búsqueda exacta
+      const esCodigoExacto = !search.includes(' ') && search.length < 50;
+
+      if (esCodigoExacto) {
+        where.OR = [
+          { codigoBarras: { equals: search, mode: 'insensitive' } },
+          { sku: { equals: search, mode: 'insensitive' } },
+          { codigoEmpresa: { equals: search, mode: 'insensitive' } },
+          { nombre: { contains: search, mode: 'insensitive' } },
+          // Buscar también en variantes por código de barras
+          { variantes: { some: { codigoBarras: { equals: search, mode: 'insensitive' } } } },
+          { variantes: { some: { sku: { equals: search, mode: 'insensitive' } } } },
+        ];
+      } else {
+        where.OR = [
+          { nombre: { contains: search, mode: 'insensitive' } },
+          { descripcion: { contains: search, mode: 'insensitive' } },
+          { codigoEmpresa: { contains: search, mode: 'insensitive' } },
+        ];
+      }
     }
 
     // Filtros específicos
@@ -466,13 +483,15 @@ export class ProductoCatalogService {
       const productosConStockEnSede = await this.prisma.$queryRaw<Array<{ productoId: string }>>`
         SELECT DISTINCT ps."productoId"
         FROM "ProductoStock" ps
-        WHERE ps."sedeId" = ${filters.sedeId}
+        WHERE ps."empresaId" = ${empresaId}
+        AND ps."sedeId" = ${filters.sedeId}
         AND ps."productoId" IS NOT NULL
         UNION
         SELECT DISTINCT pv."productoId"
         FROM "ProductoStock" ps
         INNER JOIN "ProductoVariante" pv ON ps."varianteId" = pv.id
-        WHERE ps."sedeId" = ${filters.sedeId}
+        WHERE ps."empresaId" = ${empresaId}
+        AND ps."sedeId" = ${filters.sedeId}
         AND ps."varianteId" IS NOT NULL
       `;
 
@@ -499,7 +518,8 @@ export class ProductoCatalogService {
       const productosConStockBajo = await this.prisma.$queryRaw<Array<{ productoId: string }>>`
         SELECT DISTINCT ps."productoId"
         FROM "ProductoStock" ps
-        WHERE ps."stockMinimo" IS NOT NULL
+        WHERE ps."empresaId" = ${empresaId}
+        AND ps."stockMinimo" IS NOT NULL
         AND ps."stockActual" <= ps."stockMinimo"
         AND ps."productoId" IS NOT NULL
       `;

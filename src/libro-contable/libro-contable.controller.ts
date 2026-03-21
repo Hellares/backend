@@ -6,6 +6,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { LibroContableService } from './libro-contable.service';
+import { QueryLibroContableDto } from './dto/query-libro.dto';
 
 @ApiTags('Libro Contable')
 @Controller('libro-contable')
@@ -22,9 +23,8 @@ export class LibroContableController {
   @ApiQuery({ name: 'anio', type: Number, example: 2026 })
   async getLibro(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('mes', ParseIntPipe) mes: number,
-    @Query('anio', ParseIntPipe) anio: number,
+    @Query() query: QueryLibroContableDto,
   ) {
-    return this.service.getLibro(empresaId, mes, anio);
+    return this.service.getLibro(empresaId, query.mes, query.anio);
   }
 }

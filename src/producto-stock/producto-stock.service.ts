@@ -369,17 +369,63 @@ export class ProductoStockService {
   }
 
   /**
-   * Obtiene el historial de movimientos de un producto stock
+   * Kardex: historial de movimientos de stock para un producto
    */
   async getHistorialMovimientos(
     productoStockId: string,
-    limit: number = 50,
+    filtros?: {
+      limit?: number;
+      tipo?: string;
+      fechaDesde?: string;
+      fechaHasta?: string;
+    },
   ) {
-    return await this.prisma.movimientoStock.findMany({
-      where: { productoStockId },
+    const limit = filtros?.limit ?? 100;
+
+    const where: any = { productoStockId };
+
+    if (filtros?.tipo) {
+      where.tipo = filtros.tipo;
+    }
+
+    if (filtros?.fechaDesde || filtros?.fechaHasta) {
+      where.creadoEn = {};
+      if (filtros?.fechaDesde) {
+        where.creadoEn.gte = new Date(filtros.fechaDesde);
+      }
+      if (filtros?.fechaHasta) {
+        where.creadoEn.lte = new Date(filtros.fechaHasta);
+      }
+    }
+
+    const movimientos = await this.prisma.movimientoStock.findMany({
+      where,
       orderBy: { creadoEn: 'desc' },
       take: limit,
+      include: {
+        venta: { select: { id: true, codigo: true } },
+        compra: { select: { id: true, codigo: true } },
+        transferencia: { select: { id: true, codigo: true } },
+        devolucion: { select: { id: true, codigo: true } },
+      },
     });
+
+    // Calculate totals
+    const resumen = await this.prisma.movimientoStock.groupBy({
+      by: ['tipo'],
+      where: { productoStockId },
+      _sum: { cantidad: true },
+      _count: { id: true },
+    });
+
+    return {
+      movimientos,
+      resumen: resumen.map((r) => ({
+        tipo: r.tipo,
+        totalCantidad: r._sum.cantidad ?? 0,
+        totalMovimientos: r._count.id,
+      })),
+    };
   }
 
   /**
@@ -1597,6 +1643,371 @@ export class ProductoStockService {
     } catch (error: any) {
       this.logger.error(`[Ofertas] Error desactivando ofertas: ${error.message}`);
     }
+  }
+
+  /**
+   * Obtener ubicaciones distintas de una sede
+   */
+  async getUbicaciones(empresaId: string, sedeId: string) {
+    const result = await this.prisma.$queryRaw<Array<{ ubicacion: string }>>`
+      SELECT DISTINCT "ubicacion"
+      FROM "ProductoStock"
+      WHERE "empresaId" = ${empresaId}
+      AND "sedeId" = ${sedeId}
+      AND "ubicacion" IS NOT NULL
+      AND "ubicacion" != ''
+      ORDER BY "ubicacion"
+    `;
+    return result.map((r) => r.ubicacion);
+  }
+
+  /**
+   * Obtener stock filtrado por ubicación
+   */
+  async getStockPorUbicacion(empresaId: string, sedeId: string, ubicacion: string) {
+    return this.prisma.productoStock.findMany({
+      where: { empresaId, sedeId, ubicacion },
+      include: {
+        producto: { select: { id: true, nombre: true, codigoEmpresa: true, codigoBarras: true } },
+        variante: { select: { id: true, nombre: true, sku: true } },
+        sede: { select: { id: true, nombre: true } },
+      },
+      orderBy: { producto: { nombre: 'asc' } },
+    });
+  }
+
+  /**
+   * Exportar Kardex a Excel
+   */
+  async exportKardex(
+    productoStockId: string,
+    filtros: { tipo?: string; fechaDesde?: string; fechaHasta?: string },
+    res: any,
+  ) {
+    const data = await this.getHistorialMovimientos(productoStockId, {
+      limit: 10000,
+      ...filtros,
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Kardex');
+
+    // Header style
+    const headerStyle: {
+      font: Partial<ExcelJS.Font>;
+      fill: ExcelJS.FillPattern;
+      alignment: Partial<ExcelJS.Alignment>;
+    } = {
+      font: { bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } },
+      alignment: { horizontal: 'center' },
+    };
+
+    sheet.columns = [
+      { header: 'Fecha', key: 'fecha', width: 18 },
+      { header: 'Tipo Movimiento', key: 'tipo', width: 30 },
+      { header: 'Documento', key: 'documento', width: 20 },
+      { header: 'Cant. Anterior', key: 'anterior', width: 15 },
+      { header: 'Cantidad', key: 'cantidad', width: 12 },
+      { header: 'Cant. Nueva', key: 'nueva', width: 15 },
+      { header: 'Motivo', key: 'motivo', width: 30 },
+    ];
+
+    // Apply header style
+    sheet.getRow(1).eachCell((cell) => {
+      cell.font = headerStyle.font;
+      cell.fill = headerStyle.fill;
+      cell.alignment = headerStyle.alignment;
+    });
+
+    for (const mov of data.movimientos) {
+      const doc = mov.venta?.codigo || mov.compra?.codigo || mov.transferencia?.codigo || mov.devolucion?.codigo || mov.numeroDocumento || '';
+      sheet.addRow({
+        fecha: mov.creadoEn ? new Date(mov.creadoEn).toLocaleString('es-PE') : '',
+        tipo: mov.tipo.replace(/_/g, ' '),
+        documento: doc,
+        anterior: mov.cantidadAnterior,
+        cantidad: mov.cantidad,
+        nueva: mov.cantidadNueva,
+        motivo: mov.motivo || '',
+      });
+    }
+
+    // Resumen sheet
+    const resumenSheet = workbook.addWorksheet('Resumen');
+    resumenSheet.columns = [
+      { header: 'Tipo Movimiento', key: 'tipo', width: 30 },
+      { header: 'Total Cantidad', key: 'totalCantidad', width: 15 },
+      { header: 'Total Movimientos', key: 'totalMovimientos', width: 18 },
+    ];
+    resumenSheet.getRow(1).eachCell((cell) => {
+      cell.font = headerStyle.font;
+      cell.fill = headerStyle.fill;
+      cell.alignment = headerStyle.alignment;
+    });
+
+    for (const r of data.resumen) {
+      resumenSheet.addRow({
+        tipo: r.tipo.replace(/_/g, ' '),
+        totalCantidad: r.totalCantidad,
+        totalMovimientos: r.totalMovimientos,
+      });
+    }
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=kardex_${productoStockId}.xlsx`,
+    });
+
+    await workbook.xlsx.write(res);
+    res.end();
+  }
+
+  /**
+   * Actualizar stock minimo/maximo en bulk
+   */
+  async actualizarStockMinMaxBulk(
+    empresaId: string,
+    sedeId: string,
+    items: Array<{ productoStockId: string; stockMinimo?: number; stockMaximo?: number }>,
+  ) {
+    return this.prisma.$transaction(
+      items.map((item) =>
+        this.prisma.productoStock.update({
+          where: { id: item.productoStockId },
+          data: {
+            ...(item.stockMinimo !== undefined && { stockMinimo: item.stockMinimo }),
+            ...(item.stockMaximo !== undefined && { stockMaximo: item.stockMaximo }),
+          },
+        }),
+      ),
+    );
+  }
+
+  /**
+   * Resumen de mermas y perdidas
+   */
+  async getResumenMermas(
+    empresaId: string,
+    sedeId?: string,
+    fechaDesde?: string,
+    fechaHasta?: string,
+  ) {
+    const where: any = {
+      empresaId,
+      tipo: { in: ['AJUSTE_MERMA', 'AJUSTE_PERDIDA', 'SALIDA_BAJA', 'SALIDA_DONACION', 'SALIDA_ROBO'] },
+    };
+
+    if (sedeId) where.sedeId = sedeId;
+    if (fechaDesde) where.creadoEn = { ...where.creadoEn, gte: new Date(fechaDesde) };
+    if (fechaHasta) where.creadoEn = { ...where.creadoEn, lte: new Date(fechaHasta) };
+
+    const resumen = await this.prisma.movimientoStock.groupBy({
+      by: ['tipo'],
+      where,
+      _sum: { cantidad: true },
+      _count: { id: true },
+    });
+
+    const movimientos = await this.prisma.movimientoStock.findMany({
+      where,
+      orderBy: { creadoEn: 'desc' },
+      take: 50,
+      include: {
+        productoStock: {
+          select: {
+            producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+          },
+        },
+      },
+    });
+
+    return {
+      resumen: resumen.map((r) => ({
+        tipo: r.tipo,
+        totalCantidad: Math.abs(Number(r._sum.cantidad ?? 0)),
+        totalMovimientos: r._count.id,
+      })),
+      movimientos,
+    };
+  }
+
+  /**
+   * Valorizacion del inventario
+   */
+  async getValorizacionInventario(empresaId: string, sedeId?: string) {
+    const whereBase = sedeId ? `AND ps."sedeId" = '${sedeId}'` : '';
+
+    // By sede
+    const porSede = await this.prisma.$queryRaw<Array<{
+      sedeId: string;
+      sedeNombre: string;
+      valorTotal: number;
+      stockTotal: number;
+      totalProductos: number;
+    }>>`
+      SELECT ps."sedeId", s.nombre as "sedeNombre",
+             COALESCE(SUM(ps."stockActual" * COALESCE(ps."precioCosto", 0)), 0)::float as "valorTotal",
+             COALESCE(SUM(ps."stockActual"), 0)::int as "stockTotal",
+             COUNT(*)::int as "totalProductos"
+      FROM "ProductoStock" ps
+      JOIN "Sede" s ON s.id = ps."sedeId"
+      WHERE ps."empresaId" = ${empresaId} ${Prisma.raw(whereBase)}
+      AND ps."stockActual" > 0
+      GROUP BY ps."sedeId", s.nombre
+      ORDER BY "valorTotal" DESC
+    `;
+
+    // Top 10 most valuable
+    const topProductos = await this.prisma.$queryRaw<Array<{
+      productoNombre: string;
+      codigoProducto: string;
+      stockActual: number;
+      precioCosto: number;
+      valorTotal: number;
+      sedeNombre: string;
+    }>>`
+      SELECT p.nombre as "productoNombre", p."codigoEmpresa" as "codigoProducto",
+             ps."stockActual"::int, COALESCE(ps."precioCosto", 0)::float as "precioCosto",
+             (ps."stockActual" * COALESCE(ps."precioCosto", 0))::float as "valorTotal",
+             s.nombre as "sedeNombre"
+      FROM "ProductoStock" ps
+      JOIN "Producto" p ON p.id = ps."productoId"
+      JOIN "Sede" s ON s.id = ps."sedeId"
+      WHERE ps."empresaId" = ${empresaId} ${Prisma.raw(whereBase)}
+      AND ps."stockActual" > 0
+      AND ps."precioCosto" > 0
+      ORDER BY "valorTotal" DESC
+      LIMIT 10
+    `;
+
+    const valorGlobal = porSede.reduce((sum, s) => sum + (s.valorTotal || 0), 0);
+    const stockGlobal = porSede.reduce((sum, s) => sum + (s.stockTotal || 0), 0);
+
+    return {
+      valorGlobal: Math.round(valorGlobal * 100) / 100,
+      stockGlobal,
+      totalSedes: porSede.length,
+      porSede,
+      topProductos,
+    };
+  }
+
+  /**
+   * Sugerencias de reorden (productos bajo stock minimo)
+   */
+  async getSugerenciasReorden(empresaId: string, sedeId?: string) {
+    const where: any = {
+      empresaId,
+      stockMinimo: { not: null },
+    };
+    if (sedeId) where.sedeId = sedeId;
+
+    const productos = await this.prisma.productoStock.findMany({
+      where,
+      include: {
+        producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+        variante: { select: { id: true, nombre: true, sku: true } },
+        sede: { select: { id: true, nombre: true } },
+      },
+    });
+
+    // Filter only those below minimum
+    const bajosMinimo = productos.filter((ps) => ps.stockActual <= (ps.stockMinimo ?? 0));
+
+    return bajosMinimo.map((ps) => {
+      const stockMinimo = ps.stockMinimo ?? 0;
+      const stockMaximo = ps.stockMaximo ?? stockMinimo * 2;
+      const cantidadSugerida = Math.max(stockMaximo - ps.stockActual, 0);
+
+      return {
+        productoStockId: ps.id,
+        productoId: ps.productoId,
+        varianteId: ps.varianteId,
+        productoNombre: ps.producto?.nombre ?? ps.variante?.nombre ?? 'Producto',
+        codigoProducto: ps.producto?.codigoEmpresa ?? ps.variante?.sku ?? '',
+        sedeNombre: ps.sede?.nombre ?? '',
+        stockActual: ps.stockActual,
+        stockMinimo,
+        stockMaximo,
+        cantidadSugerida,
+        precioCosto: ps.precioCosto ? Number(ps.precioCosto) : null,
+        valorEstimado: cantidadSugerida * (ps.precioCosto ? Number(ps.precioCosto) : 0),
+      };
+    }).sort((a, b) => {
+      // Most urgent first (lowest stock relative to minimum)
+      const urgA = a.stockActual / (a.stockMinimo || 1);
+      const urgB = b.stockActual / (b.stockMinimo || 1);
+      return urgA - urgB;
+    });
+  }
+
+  /**
+   * Reporte de rotacion de productos
+   */
+  async getReporteRotacion(empresaId: string, sedeId?: string, dias: number = 90) {
+    const fechaDesde = new Date();
+    fechaDesde.setDate(fechaDesde.getDate() - dias);
+
+    const whereBase = sedeId ? `AND ps."sedeId" = '${sedeId}'` : '';
+
+    const result = await this.prisma.$queryRaw<Array<{
+      productoStockId: string;
+      productoNombre: string;
+      codigoProducto: string;
+      sedeNombre: string;
+      stockActual: number;
+      unidadesVendidas: number;
+      totalMovimientos: number;
+    }>>`
+      SELECT ps.id as "productoStockId",
+             p.nombre as "productoNombre",
+             p."codigoEmpresa" as "codigoProducto",
+             s.nombre as "sedeNombre",
+             ps."stockActual"::int,
+             COALESCE(ventas."unidadesVendidas", 0)::int as "unidadesVendidas",
+             COALESCE(ventas."totalMovimientos", 0)::int as "totalMovimientos"
+      FROM "ProductoStock" ps
+      JOIN "Producto" p ON p.id = ps."productoId"
+      JOIN "Sede" s ON s.id = ps."sedeId"
+      LEFT JOIN (
+        SELECT ms."productoStockId",
+               SUM(ABS(ms.cantidad))::int as "unidadesVendidas",
+               COUNT(*)::int as "totalMovimientos"
+        FROM "MovimientoStock" ms
+        WHERE ms.tipo = 'SALIDA_VENTA'
+        AND ms."creadoEn" >= ${fechaDesde}
+        GROUP BY ms."productoStockId"
+      ) ventas ON ventas."productoStockId" = ps.id
+      WHERE ps."empresaId" = ${empresaId} ${Prisma.raw(whereBase)}
+      AND ps."stockActual" > 0
+      ORDER BY "unidadesVendidas" DESC
+    `;
+
+    // Classify
+    const total = result.length;
+    const altaRotacion = result.filter((r) => r.unidadesVendidas >= 50);
+    const mediaRotacion = result.filter((r) => r.unidadesVendidas >= 10 && r.unidadesVendidas < 50);
+    const bajaRotacion = result.filter((r) => r.unidadesVendidas >= 1 && r.unidadesVendidas < 10);
+    const sinMovimiento = result.filter((r) => r.unidadesVendidas === 0);
+
+    return {
+      periodo: dias,
+      totalProductos: total,
+      resumen: {
+        altaRotacion: altaRotacion.length,
+        mediaRotacion: mediaRotacion.length,
+        bajaRotacion: bajaRotacion.length,
+        sinMovimiento: sinMovimiento.length,
+      },
+      productos: result.map((r) => ({
+        ...r,
+        clasificacion: r.unidadesVendidas >= 50 ? 'ALTA'
+          : r.unidadesVendidas >= 10 ? 'MEDIA'
+          : r.unidadesVendidas >= 1 ? 'BAJA'
+          : 'SIN_MOVIMIENTO',
+      })),
+    };
   }
 
   /**

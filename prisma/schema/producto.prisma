@@ -73,7 +73,8 @@ model Producto {
   itemsTransferencia TransferenciaStockItem[]
 
   // Relaciones para devoluciones
-  devolucionItems DevolucionItem[]
+  devolucionItems        DevolucionItem[]   @relation("DevolucionProducto")
+  devolucionesReemplazo  DevolucionItem[]   @relation("DevolucionProductoReemplazo")
 
   // Relaciones para módulo de proveedores
   proveedorProductos ProveedorProducto[]
@@ -258,7 +259,8 @@ model ProductoVariante {
   itemsTransferencia TransferenciaStockItem[]
 
   // Relaciones para devoluciones
-  devolucionItems DevolucionItem[]
+  devolucionItems        DevolucionItem[]   @relation("DevolucionVariante")
+  devolucionesReemplazo  DevolucionItem[]   @relation("DevolucionVarianteReemplazo")
 
   // Relaciones para módulo de proveedores
   proveedorProductos ProveedorProducto[]

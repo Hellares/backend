@@ -167,6 +167,11 @@ model Empresa {
   // Relaciones para módulo de caja
   cajas            Caja[]
   movimientosCaja  MovimientoCaja[]
+
+  // Relaciones para módulo de caja chica
+  cajasChicas          CajaChica[]
+  gastosCajaChica      GastoCajaChica[]
+  rendicionesCajaChica RendicionCajaChica[]
   cuentasBancarias EmpresaBanco[]
   prestamos          Prestamo[]
   categoriasGasto    CategoriaGasto[]
@@ -274,6 +279,10 @@ model ConfiguracionCodigos {
   cajaLongitud                  Int      @default(5)
   cajaIncluirSede               Boolean  @default(true)
   ultimaCaja                    Int      @default(0)
+  rendicionCodigo               String   @default("REND")
+  rendicionSeparador            String   @default("-")
+  rendicionLongitud             Int      @default(5)
+  ultimaRendicion               Int      @default(0)
   creadoEn              DateTime @default(now())
   actualizadoEn         DateTime @updatedAt
   empresa               Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -376,6 +385,9 @@ model Sede {
 
   // Relaciones para módulo de caja
   cajas Caja[]
+
+  // Relaciones para módulo de caja chica
+  cajasChicas CajaChica[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

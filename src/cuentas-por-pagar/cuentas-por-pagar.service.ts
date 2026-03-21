@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
@@ -9,6 +10,8 @@ import { Prisma, MetodoPagoVenta } from '@prisma/client';
 
 @Injectable()
 export class CuentasPorPagarService {
+  private readonly logger = new Logger(CuentasPorPagarService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cajaService: CajaService,
@@ -184,7 +187,9 @@ export class CuentasPorPagarService {
           compraId,
         },
       );
-    } catch (_) {}
+    } catch (e) {
+      this.logger.warn(`Error registrando egreso caja para pago proveedor ${compra.codigo}: ${e?.message ?? e}`);
+    }
 
     return pago;
   }

@@ -24,4 +24,9 @@ export class ProcesarPagoDto {
   @IsOptional()
   @IsString()
   referencia?: string;
+
+  @ApiPropertyOptional({ description: 'ID de cuota especifica a pagar' })
+  @IsOptional()
+  @IsString()
+  cuotaVentaId?: string;
 }

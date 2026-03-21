@@ -13,6 +13,7 @@ import {
   EstadoDevolucion,
   TipoDevolucion,
   TipoMovimientoStock,
+  TipoReembolso,
   Prisma,
 } from '@prisma/client';
 
@@ -81,6 +82,7 @@ export class DevolucionVentaService {
           clienteId: venta.clienteId,
           motivo: dto.motivo,
           observaciones: dto.observaciones,
+          tipoReembolso: (dto.tipoReembolso as TipoReembolso) || TipoReembolso.EFECTIVO,
           creadoPor: userId,
           items: {
             create: dto.items.map((item) => ({
@@ -92,6 +94,8 @@ export class DevolucionVentaService {
               estadoProducto: item.estadoProducto,
               accion: item.accion,
               observaciones: item.observaciones,
+              productoReemplazoId: item.productoReemplazoId || null,
+              varianteReemplazoId: item.varianteReemplazoId || null,
             })),
           },
         },
@@ -100,12 +104,54 @@ export class DevolucionVentaService {
             include: {
               producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
               variante: { select: { id: true, nombre: true, sku: true } },
+              productoReemplazo: { select: { id: true, nombre: true, codigoEmpresa: true } },
+              varianteReemplazo: { select: { id: true, nombre: true, sku: true } },
             },
           },
           venta: { select: { id: true, codigo: true, nombreCliente: true } },
           sede: { select: { id: true, nombre: true } },
         },
       });
+
+      // Calculate prices for CAMBIO_PRODUCTO items
+      const createdItems = await tx.devolucionItem.findMany({
+        where: { devolucionId: devolucion.id },
+      });
+      for (const item of createdItems) {
+        if (item.accion === 'CAMBIO_PRODUCTO' && item.productoReemplazoId) {
+          // Look up original price from venta detalles
+          const detalleVenta = venta.detalles.find(
+            (d) =>
+              d.productoId === item.productoId &&
+              (d.varianteId || null) === (item.varianteId || null),
+          );
+          const precioOriginal = detalleVenta ? Number(detalleVenta.precioUnitario) : 0;
+
+          // Look up replacement price from ProductoStock (precio de venta en la sede)
+          const reemplazoStock = await tx.productoStock.findFirst({
+            where: {
+              sedeId: dto.sedeId,
+              productoId: item.productoReemplazoId,
+              varianteId: item.varianteReemplazoId ?? null,
+            },
+          });
+
+          const precioReemplazo = reemplazoStock?.precio
+            ? Number(reemplazoStock.precio)
+            : 0;
+
+          const diferenciaPrecio = precioReemplazo - precioOriginal;
+
+          await tx.devolucionItem.update({
+            where: { id: item.id },
+            data: {
+              precioOriginal,
+              precioReemplazo,
+              diferenciaPrecio,
+            },
+          });
+        }
+      }
 
       this.logger.log(`Devolucion ${codigo} creada para venta ${venta.codigo}`);
       return devolucion;
@@ -149,6 +195,8 @@ export class DevolucionVentaService {
           include: {
             producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
             variante: { select: { id: true, nombre: true, sku: true } },
+            productoReemplazo: { select: { id: true, nombre: true, codigoEmpresa: true } },
+            varianteReemplazo: { select: { id: true, nombre: true, sku: true } },
           },
         },
         venta: { select: { id: true, codigo: true, nombreCliente: true } },
@@ -256,47 +304,155 @@ export class DevolucionVentaService {
           case 'DAR_DE_BAJA':
             await createMov(TipoMovimientoStock.SALIDA_BAJA, 'Dado de baja');
             break;
+          case 'CAMBIO_PRODUCTO': {
+            // 1. Restock original product (BUENO) or mark as damaged
+            if (item.estadoProducto === 'BUENO') {
+              await tx.productoStock.update({
+                where: { id: productoStock.id },
+                data: { stockActual: { increment: cantidad } },
+              });
+              await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Reingreso por cambio de producto');
+            } else {
+              await tx.productoStock.update({
+                where: { id: productoStock.id },
+                data: { stockDanado: { increment: cantidad } },
+              });
+              await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Marcado como danado por cambio de producto');
+            }
+
+            // 2. Deduct replacement product from stock
+            if (item.productoReemplazoId) {
+              const reemplazoStock = await tx.productoStock.findFirst({
+                where: {
+                  sedeId: devolucion.sedeId,
+                  productoId: item.productoReemplazoId,
+                  varianteId: item.varianteReemplazoId ?? null,
+                },
+              });
+
+              if (reemplazoStock) {
+                const stockAnteriorReemplazo = reemplazoStock.stockActual;
+                await tx.productoStock.update({
+                  where: { id: reemplazoStock.id },
+                  data: { stockActual: { decrement: cantidad } },
+                });
+                await tx.movimientoStock.create({
+                  data: {
+                    sedeId: devolucion.sedeId,
+                    empresaId,
+                    productoStockId: reemplazoStock.id,
+                    tipo: TipoMovimientoStock.SALIDA_VENTA,
+                    tipoDocumento: 'DEVOLUCION',
+                    numeroDocumento: devolucion.codigo,
+                    cantidadAnterior: stockAnteriorReemplazo,
+                    cantidad,
+                    cantidadNueva: stockAnteriorReemplazo - cantidad,
+                    motivo: `Devolucion ${devolucion.codigo} - Entrega producto reemplazo`,
+                    devolucionId: devolucion.id,
+                    usuarioId: userId,
+                  },
+                });
+              }
+            }
+            break;
+          }
           default:
             await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, item.accion);
             break;
         }
       }
 
-      // Registrar EGRESO en caja — calcular monto desde items de la venta original
-      let montoDevolucion = 0;
-      if (devolucion.ventaId) {
-        const ventaOriginal = await tx.venta.findUnique({
-          where: { id: devolucion.ventaId },
-          include: { detalles: true },
-        });
-        if (ventaOriginal) {
-          for (const item of devolucion.items) {
-            const detalleVenta = ventaOriginal.detalles.find(
-              (d) => d.productoId === item.productoId && d.varianteId === item.varianteId,
-            );
-            if (detalleVenta) {
-              montoDevolucion += Number(detalleVenta.precioUnitario) * item.cantidad;
+      // Registrar movimiento en caja según tipoReembolso
+      if (devolucion.tipoReembolso === 'EFECTIVO') {
+        // Calcular monto desde items de la venta original — devolucion en efectivo
+        let montoDevolucion = 0;
+        if (devolucion.ventaId) {
+          const ventaOriginal = await tx.venta.findUnique({
+            where: { id: devolucion.ventaId },
+            include: { detalles: true },
+          });
+          if (ventaOriginal) {
+            for (const item of devolucion.items) {
+              const detalleVenta = ventaOriginal.detalles.find(
+                (d) => d.productoId === item.productoId && d.varianteId === item.varianteId,
+              );
+              if (detalleVenta) {
+                montoDevolucion += Number(detalleVenta.precioUnitario) * item.cantidad;
+              }
             }
           }
         }
-      }
-      if (montoDevolucion > 0) {
-        try {
-          await this.cajaService.registrarMovimientoSiHayCaja(
-            empresaId,
-            devolucion.sedeId,
-            userId,
-            {
-              tipo: 'EGRESO',
-              categoria: 'DEVOLUCION',
-              metodoPago: 'EFECTIVO',
-              monto: montoDevolucion,
-              descripcion: `Devolución ${devolucion.codigo}`,
-              devolucionId: devolucion.id,
-            },
-            tx,
-          );
-        } catch (_) {}
+        if (montoDevolucion > 0) {
+          try {
+            await this.cajaService.registrarMovimientoSiHayCaja(
+              empresaId,
+              devolucion.sedeId,
+              userId,
+              {
+                tipo: 'EGRESO',
+                categoria: 'DEVOLUCION',
+                metodoPago: 'EFECTIVO',
+                monto: montoDevolucion,
+                descripcion: `Devolución ${devolucion.codigo}`,
+                devolucionId: devolucion.id,
+              },
+              tx,
+            );
+          } catch (e) {
+            this.logger.warn(`Error registrando egreso caja para devolución ${devolucion.codigo}: ${e?.message ?? e}`);
+          }
+        }
+      } else if (devolucion.tipoReembolso === 'CAMBIO_PRODUCTO') {
+        // Calculate net difference from all CAMBIO items
+        let diferenciaNeta = 0;
+        for (const item of devolucion.items) {
+          if (item.accion === 'CAMBIO_PRODUCTO' && item.diferenciaPrecio !== null) {
+            diferenciaNeta += Number(item.diferenciaPrecio) * item.cantidad;
+          }
+        }
+
+        if (diferenciaNeta > 0) {
+          // Customer pays difference (replacement is more expensive) — INGRESO
+          try {
+            await this.cajaService.registrarMovimientoSiHayCaja(
+              empresaId,
+              devolucion.sedeId,
+              userId,
+              {
+                tipo: 'INGRESO',
+                categoria: 'DEVOLUCION',
+                metodoPago: 'EFECTIVO',
+                monto: diferenciaNeta,
+                descripcion: `Diferencia cambio producto - Devolución ${devolucion.codigo}`,
+                devolucionId: devolucion.id,
+              },
+              tx,
+            );
+          } catch (e) {
+            this.logger.warn(`Error registrando ingreso caja para devolución ${devolucion.codigo}: ${e?.message ?? e}`);
+          }
+        } else if (diferenciaNeta < 0) {
+          // Refund difference (replacement is cheaper) — EGRESO
+          try {
+            await this.cajaService.registrarMovimientoSiHayCaja(
+              empresaId,
+              devolucion.sedeId,
+              userId,
+              {
+                tipo: 'EGRESO',
+                categoria: 'DEVOLUCION',
+                metodoPago: 'EFECTIVO',
+                monto: Math.abs(diferenciaNeta),
+                descripcion: `Diferencia cambio producto - Devolución ${devolucion.codigo}`,
+                devolucionId: devolucion.id,
+              },
+              tx,
+            );
+          } catch (e) {
+            this.logger.warn(`Error registrando egreso caja para devolución ${devolucion.codigo}: ${e?.message ?? e}`);
+          }
+        }
+        // If diferenciaNeta === 0, no caja movement needed
       }
 
       return tx.devolucion.update({
@@ -311,6 +467,8 @@ export class DevolucionVentaService {
             include: {
               producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
               variante: { select: { id: true, nombre: true, sku: true } },
+              productoReemplazo: { select: { id: true, nombre: true, codigoEmpresa: true } },
+              varianteReemplazo: { select: { id: true, nombre: true, sku: true } },
             },
           },
           movimientos: true,

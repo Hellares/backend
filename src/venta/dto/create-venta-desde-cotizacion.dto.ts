@@ -34,6 +34,12 @@ export class CreateVentaDesdeCotizacionDto {
   @Type(() => Number)
   plazoCredito?: number;
 
+  @ApiPropertyOptional({ description: 'Numero de cuotas para credito' })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  numeroCuotas?: number;
+
   @ApiPropertyOptional({ description: 'Fecha de vencimiento del pago' })
   @IsOptional()
   @IsDateString()

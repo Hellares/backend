@@ -23,6 +23,8 @@ import {
   QueryHistorialPreciosDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
+import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { ProductoComboService } from '../producto/producto-combo.service';
@@ -36,6 +38,53 @@ export class ProductoStockController {
     private readonly stockService: ProductoStockService,
     private readonly comboService: ProductoComboService,
   ) {}
+
+  @Get('reportes/mermas')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Resumen de mermas y perdidas' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getResumenMermas(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
+  ) {
+    return this.stockService.getResumenMermas(empresaId, sedeId, fechaDesde, fechaHasta);
+  }
+
+  @Get('reportes/valorizacion')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Valorizacion del inventario' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getValorizacionInventario(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return this.stockService.getValorizacionInventario(empresaId, sedeId);
+  }
+
+  @Get('reportes/sugerencias-reorden')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Sugerencias de reorden (productos bajo stock minimo)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getSugerenciasReorden(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return this.stockService.getSugerenciasReorden(empresaId, sedeId);
+  }
+
+  @Get('reportes/rotacion')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Reporte de rotacion de productos' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getReporteRotacion(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+    @Query('dias') dias?: string,
+  ) {
+    return this.stockService.getReporteRotacion(empresaId, sedeId, dias ? parseInt(dias) : 90);
+  }
 
   @Post()
   @ApiOperation({
@@ -103,6 +152,41 @@ export class ProductoStockController {
     return await this.stockService.getStockPorSede(sedeId, undefined, varianteId);
   }
 
+  @Get('sede/:sedeId/ubicaciones')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Obtener ubicaciones de una sede' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getUbicaciones(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('sedeId') sedeId: string,
+  ) {
+    return this.stockService.getUbicaciones(empresaId, sedeId);
+  }
+
+  @Patch('sede/:sedeId/stock-minmax-bulk')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Actualizar stock minimo/maximo en bulk' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async actualizarStockMinMaxBulk(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('sedeId') sedeId: string,
+    @Body() body: { items: Array<{ productoStockId: string; stockMinimo?: number; stockMaximo?: number }> },
+  ) {
+    return this.stockService.actualizarStockMinMaxBulk(empresaId, sedeId, body.items);
+  }
+
+  @Get('sede/:sedeId/por-ubicacion')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Stock filtrado por ubicacion' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getStockPorUbicacion(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('sedeId') sedeId: string,
+    @Query('ubicacion') ubicacion: string,
+  ) {
+    return this.stockService.getStockPorUbicacion(empresaId, sedeId, ubicacion);
+  }
+
   @Put(':id/ajustar')
   @ApiOperation({
     summary: 'Ajustar stock',
@@ -122,19 +206,37 @@ export class ProductoStockController {
     return await this.stockService.ajustarStock(id, empresaId, dto, user.sub);
   }
 
+  @Get(':id/movimientos/export')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Exportar Kardex a Excel' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async exportKardex(
+    @Param('id') id: string,
+    @Query('tipo') tipo?: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
+    @Res() res?: Response,
+  ) {
+    return this.stockService.exportKardex(id, { tipo, fechaDesde, fechaHasta }, res);
+  }
+
   @Get(':id/movimientos')
-  @ApiOperation({
-    summary: 'Historial de movimientos',
-    description: 'Obtiene el historial de movimientos de stock',
-  })
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Kardex: historial de movimientos de stock' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
   async getHistorialMovimientos(
     @Param('id') id: string,
-    @Query('limit') limit?: number,
+    @Query('limit') limit?: string,
+    @Query('tipo') tipo?: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
   ) {
-    return await this.stockService.getHistorialMovimientos(
-      id,
-      limit ? +limit : 50,
-    );
+    return this.stockService.getHistorialMovimientos(id, {
+      limit: limit ? parseInt(limit) : undefined,
+      tipo,
+      fechaDesde,
+      fechaHasta,
+    });
   }
 
   @Get('producto/:productoId/todas-sedes')

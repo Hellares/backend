@@ -128,6 +128,17 @@ model Usuario {
   cajasCerradas                  Caja[]             @relation("CajaCerradoPor")
   movimientosCajaRegistrados     MovimientoCaja[]   @relation("MovimientoCajaRegistradoPor")
 
+  // Relaciones para módulo de caja chica
+  cajasChicaResponsable          CajaChica[]            @relation("CajaChicaResponsable")
+  gastosCajaChicaRegistrados     GastoCajaChica[]       @relation("GastoCajaChicaRegistradoPor")
+  rendicionesAprobadas           RendicionCajaChica[]   @relation("RendicionAprobadaPor")
+
+  // Relaciones para anulaciones
+  movimientosCajaAnulados        MovimientoCaja[]       @relation("MovimientoCajaAnuladoPor")
+  movimientosCajaAutorizados     MovimientoCaja[]       @relation("MovimientoCajaAutorizadoPor")
+  ventasAnuladas                 Venta[]                @relation("VentaAnuladaPor")
+  ventasAutorizadasAnulacion     Venta[]                @relation("VentaAutorizadaAnulacion")
+
   @@index([email])
   @@index([telefono])
   @@index([personaId])

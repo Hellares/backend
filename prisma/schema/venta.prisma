@@ -59,11 +59,19 @@ model Venta {
   // Crédito
   esCredito             Boolean   @default(false)
   plazoCredito          Int? // Días de crédito
+  numeroCuotas          Int? // Número de cuotas
+  montoCreditoInicial   Decimal?  @db.Decimal(10, 2) // Monto de la porción crédito (ventas mixtas)
   fechaVencimientoPago  DateTime?
 
   // Fechas
   fechaVenta    DateTime  @default(now())
   observaciones String?
+
+  // Anulacion
+  motivoAnulacion   String?
+  anuladoPorId      String?
+  autorizadoPorId   String?
+  fechaAnulacion    DateTime?
 
   // Auditoría
   creadoEn      DateTime @default(now())
@@ -76,10 +84,13 @@ model Venta {
   clienteEmpresa ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
   vendedor       Usuario         @relation("VentaVendedor", fields: [vendedorId], references: [id])
   cajero         Usuario?        @relation("VentaCajero", fields: [cajeroId], references: [id])
+  anuladoPor     Usuario?        @relation("VentaAnuladaPor", fields: [anuladoPorId], references: [id])
+  autorizadoPorAnulacion Usuario? @relation("VentaAutorizadaAnulacion", fields: [autorizadoPorId], references: [id])
   cotizacion     Cotizacion?     @relation("VentaCotizacion", fields: [cotizacionId], references: [id])
   cotizacionesOrigen Cotizacion[] @relation("CotizacionVenta") // Back-relation for cotizacion.ventaId
   detalles       VentaDetalle[]
   pagos          PagoVenta[]
+  cuotas         CuotaVenta[]
   movimientos    MovimientoStock[]
   devoluciones   Devolucion[]
   movimientosCaja MovimientoCaja[] @relation("MovimientoCajaVenta")
@@ -141,12 +152,13 @@ model VentaDetalle {
 
 /// Registro de pagos de una venta (soporta pagos parciales/múltiples)
 model PagoVenta {
-  id         String     @id @default(cuid())
-  ventaId    String
-  metodoPago MetodoPagoVenta
-  monto      Decimal    @db.Decimal(10, 2) // Monto en soles (siempre PEN)
-  referencia String? // Número de operación, voucher, etc.
-  fechaPago  DateTime   @default(now())
+  id             String     @id @default(cuid())
+  ventaId        String
+  cuotaVentaId   String?    // Cuota específica a la que aplica este pago
+  metodoPago     MetodoPagoVenta
+  monto          Decimal    @db.Decimal(10, 2) // Monto en soles (siempre PEN)
+  referencia     String? // Número de operación, voucher, etc.
+  fechaPago      DateTime   @default(now())
 
   // Pago en moneda extranjera
   monedaOriginal  String?  // PEN o USD (null = PEN)
@@ -156,8 +168,51 @@ model PagoVenta {
   creadoEn DateTime @default(now())
 
   // Relaciones
-  venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  venta      Venta       @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  cuotaVenta CuotaVenta? @relation(fields: [cuotaVentaId], references: [id])
 
   @@index([ventaId])
   @@index([fechaPago])
+  @@index([cuotaVentaId])
+}
+
+// =========================================
+// CUOTAS DE VENTA (CRÉDITO)
+// =========================================
+
+enum EstadoCuota {
+  PENDIENTE
+  PAGADA_PARCIAL
+  PAGADA
+  VENCIDA
+}
+
+/// Cuota individual de una venta a crédito
+model CuotaVenta {
+  id              String       @id @default(cuid())
+  ventaId         String
+  numero          Int          // 1, 2, 3...
+
+  monto           Decimal      @db.Decimal(10, 2)
+  montoPagado     Decimal      @default(0) @db.Decimal(10, 2)
+  saldoPendiente  Decimal      @db.Decimal(10, 2)
+
+  fechaVencimiento DateTime
+  estado           EstadoCuota @default(PENDIENTE)
+
+  // Preparado para mora futura
+  montoMora       Decimal?     @db.Decimal(10, 2)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  venta  Venta       @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  pagos  PagoVenta[]
+
+  @@unique([ventaId, numero])
+  @@index([ventaId])
+  @@index([estado])
+  @@index([fechaVencimiento])
+  @@index([ventaId, estado])
 }

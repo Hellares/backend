@@ -22,6 +22,7 @@ enum CategoriaMovimientoCaja {
   PAGO_PROVEEDOR
   GASTO_OPERATIVO
   OTRO_EGRESO
+  REPOSICION_CAJA_CHICA
 }
 
 /// Caja (apertura/cierre de caja registradora)
@@ -67,6 +68,9 @@ model MovimientoCaja {
   monto                 Decimal                 @db.Decimal(10, 2)
   descripcion           String?
 
+  // Categoria de gasto personalizada (opcional)
+  categoriaGastoId      String?
+
   // Referencias opcionales a entidades origen
   ventaId               String?
   pedidoMarketplaceId   String?
@@ -77,19 +81,34 @@ model MovimientoCaja {
   registradoPorId       String
   fechaMovimiento       DateTime                @default(now())
 
+  // Anulacion
+  anulado                    Boolean   @default(false)
+  motivoAnulacion            String?
+  anuladoPorId               String?
+  autorizadoPorId            String?
+  fechaAnulacion             DateTime?
+  movimientoContrapartidaId  String?   @unique
+
   // Auditoria
   creadoEn DateTime @default(now())
 
   // Relaciones
   caja                Caja                @relation(fields: [cajaId], references: [id])
   empresa             Empresa             @relation(fields: [empresaId], references: [id])
+  categoriaGasto      CategoriaGasto?     @relation(fields: [categoriaGastoId], references: [id])
   venta               Venta?              @relation("MovimientoCajaVenta", fields: [ventaId], references: [id])
   pedidoMarketplace   PedidoMarketplace?  @relation("MovimientoCajaPedido", fields: [pedidoMarketplaceId], references: [id])
   compra              Compra?             @relation("MovimientoCajaCompra", fields: [compraId], references: [id])
   devolucion          Devolucion?         @relation("MovimientoCajaDevolucion", fields: [devolucionId], references: [id])
   registradoPor       Usuario             @relation("MovimientoCajaRegistradoPor", fields: [registradoPorId], references: [id])
+  anuladoPor          Usuario?            @relation("MovimientoCajaAnuladoPor", fields: [anuladoPorId], references: [id])
+  autorizadoPor       Usuario?            @relation("MovimientoCajaAutorizadoPor", fields: [autorizadoPorId], references: [id])
+  movimientoContrapartida MovimientoCaja? @relation("MovimientoContrapartida", fields: [movimientoContrapartidaId], references: [id])
+  contrapartidaDe     MovimientoCaja?     @relation("MovimientoContrapartida")
+  rendicionesCajaChica RendicionCajaChica[]
 
   @@index([cajaId])
+  @@index([anulado])
   @@index([cajaId, tipo])
   @@index([cajaId, metodoPago])
 }

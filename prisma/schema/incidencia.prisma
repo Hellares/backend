@@ -385,6 +385,7 @@ model Devolucion {
   // Detalles
   motivo        String? // Motivo general de la devolución
   observaciones String? // Observaciones adicionales
+  tipoReembolso TipoReembolso @default(EFECTIVO)
 
   // Auditoría
   creadoPor     String
@@ -433,15 +434,24 @@ model DevolucionItem {
   observaciones String? // Observaciones específicas del item
   imagenes      String[] // URLs de fotos del producto (evidencia)
 
+  // Cambio de producto (cuando accion = CAMBIO_PRODUCTO)
+  productoReemplazoId   String?
+  varianteReemplazoId   String?
+  precioOriginal        Decimal?  @db.Decimal(10, 2)
+  precioReemplazo       Decimal?  @db.Decimal(10, 2)
+  diferenciaPrecio      Decimal?  @db.Decimal(10, 2)
+
   // Auditoría
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  devolucion Devolucion        @relation(fields: [devolucionId], references: [id], onDelete: Cascade)
-  empresa    Empresa           @relation(fields: [empresaId], references: [id])
-  producto   Producto?         @relation(fields: [productoId], references: [id])
-  variante   ProductoVariante? @relation(fields: [varianteId], references: [id])
+  devolucion        Devolucion        @relation(fields: [devolucionId], references: [id], onDelete: Cascade)
+  empresa           Empresa           @relation(fields: [empresaId], references: [id])
+  producto          Producto?         @relation("DevolucionProducto", fields: [productoId], references: [id])
+  variante          ProductoVariante? @relation("DevolucionVariante", fields: [varianteId], references: [id])
+  productoReemplazo  Producto?         @relation("DevolucionProductoReemplazo", fields: [productoReemplazoId], references: [id])
+  varianteReemplazo  ProductoVariante? @relation("DevolucionVarianteReemplazo", fields: [varianteReemplazoId], references: [id])
 
   @@index([devolucionId])
   @@index([empresaId])
@@ -496,4 +506,9 @@ enum AccionDevolucion {
   DAR_DE_BAJA // Descarte definitivo (reduce stockActual)
   DEVOLVER_PROVEEDOR // Se devolverá al proveedor
   CAMBIO_PRODUCTO // Se cambia por otro (gestiona venta + devolución)
+}
+
+enum TipoReembolso {
+  EFECTIVO        // Devolucion de dinero al cliente
+  CAMBIO_PRODUCTO // Cambio por otro producto
 }

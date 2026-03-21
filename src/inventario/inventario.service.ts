@@ -242,9 +242,10 @@ export class InventarioService {
         items: {
           include: {
             productoStock: {
-              include: {
-                producto: true,
-                variante: true,
+              select: {
+                id: true,
+                producto: { select: { id: true, nombre: true, codigoEmpresa: true, codigoBarras: true } },
+                variante: { select: { id: true, nombre: true, sku: true, codigoBarras: true } },
               },
             },
             contadoPor: {

@@ -12,6 +12,7 @@ import { AppLoggerService } from '../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CreateVentaDesdeCotizacionDto } from './dto/create-venta-desde-cotizacion.dto';
+import { CrearYCobrarVentaDto } from './dto/crear-y-cobrar-venta.dto';
 import { UpdateVentaDto } from './dto/update-venta.dto';
 import { ProcesarPagoDto } from './dto/procesar-pago.dto';
 import { CreateVentaDetalleDto } from './dto/create-venta-detalle.dto';
@@ -54,6 +55,12 @@ export class VentaService {
         orderBy: { orden: 'asc' as const },
       },
       pagos: { orderBy: { fechaPago: 'desc' as const } },
+      cuotas: {
+        orderBy: { numero: 'asc' as const },
+        include: {
+          pagos: { select: { id: true, monto: true, metodoPago: true, fechaPago: true } },
+        },
+      },
       sede: { select: { id: true, nombre: true } },
       cliente: {
         select: {
@@ -186,6 +193,347 @@ export class VentaService {
       this.logger.log(`Venta creada: ${venta.codigo}`);
       return venta;
     });
+  }
+
+  /**
+   * Crear y cobrar venta en un solo paso (POS directo)
+   * Crea la venta, descuenta stock, registra pago(s), genera comprobante y registra movimiento en caja.
+   */
+  async crearYCobrar(
+    empresaId: string,
+    dto: CrearYCobrarVentaDto,
+    cajeroId: string,
+  ) {
+    this.logger.info('Creando y cobrando venta POS', { empresaId, sede: dto.sedeId });
+
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        // 1. Generar código
+        const { codigoVenta } =
+          await this.configuracionCodigos.generarCodigoVenta(
+            empresaId,
+            dto.sedeId,
+            tx,
+          );
+
+        // 2. Calcular detalles
+        const detallesCalculados = dto.detalles.map((d, index) =>
+          this.calcularDetalle(d, index),
+        );
+
+        const subtotalVenta = detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0);
+        const descuentoVenta = detallesCalculados.reduce((sum, d) => sum + d.descuento, 0);
+        const impuestosVenta = detallesCalculados.reduce((sum, d) => sum + d.igv, 0);
+        const totalVenta = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
+
+        const esCredito = dto.esCredito ?? false;
+        // For hybrid sales: calculate immediate payment total from pagos array
+        const montoPagadoInmediato = esCredito && dto.pagos && dto.pagos.length > 0
+          ? dto.pagos.reduce((s, p) => s + p.monto, 0)
+          : (dto.montoRecibido ?? 0);
+        const montoRecibido = dto.montoRecibido ?? montoPagadoInmediato;
+        const estaPagada = !esCredito && montoRecibido >= totalVenta;
+        const montoCredito = esCredito
+          ? Math.round((totalVenta - montoPagadoInmediato) * 100) / 100
+          : 0;
+
+        const montoCambio =
+          montoRecibido > totalVenta
+            ? Math.round((montoRecibido - totalVenta) * 100) / 100
+            : 0;
+
+        // 3. Crear venta con estado final
+        const venta = await tx.venta.create({
+          data: {
+            empresaId,
+            sedeId: dto.sedeId,
+            clienteId: dto.clienteId,
+            clienteEmpresaId: dto.clienteEmpresaId,
+            vendedorId: dto.vendedorId,
+            cajeroId,
+            codigo: codigoVenta,
+            nombreCliente: dto.nombreCliente,
+            documentoCliente: dto.documentoCliente,
+            emailCliente: dto.emailCliente,
+            telefonoCliente: dto.telefonoCliente,
+            direccionCliente: dto.direccionCliente,
+            moneda: dto.moneda ?? 'PEN',
+            tipoCambio: dto.tipoCambio,
+            subtotal: subtotalVenta,
+            descuento: descuentoVenta,
+            impuestos: impuestosVenta,
+            total: totalVenta,
+            metodoPago: dto.metodoPago,
+            montoRecibido: montoRecibido || null,
+            montoCambio: montoCambio || null,
+            esCredito,
+            plazoCredito: dto.plazoCredito,
+            numeroCuotas: dto.numeroCuotas ?? null,
+            montoCreditoInicial: montoCredito > 0 ? montoCredito : null,
+            fechaVencimientoPago: dto.fechaVencimientoPago
+              ? new Date(dto.fechaVencimientoPago)
+              : null,
+            observaciones: dto.observaciones,
+            estado: estaPagada
+              ? EstadoVenta.PAGADA_COMPLETA
+              : EstadoVenta.CONFIRMADA,
+            detalles: {
+              create: detallesCalculados.map((d) => ({
+                productoId: d.productoId,
+                varianteId: d.varianteId,
+                servicioId: d.servicioId,
+                comboId: d.comboId,
+                descripcion: d.descripcion,
+                cantidad: d.cantidad,
+                precioUnitario: d.precioUnitario,
+                descuento: d.descuento,
+                porcentajeIGV: d.porcentajeIGV,
+                igv: d.igv,
+                subtotal: d.subtotal,
+                total: d.total,
+                orden: d.orden,
+              })),
+            },
+          },
+          include: this.getInclude(),
+        });
+
+        // 4. Descontar stock
+        for (const detalle of detallesCalculados) {
+          if (!detalle.productoId && !detalle.varianteId) continue;
+
+          const productoStock = await tx.productoStock.findFirst({
+            where: {
+              sedeId: dto.sedeId,
+              productoId: detalle.productoId ?? null,
+              varianteId: detalle.varianteId ?? null,
+            },
+          });
+
+          if (!productoStock) {
+            this.logger.warn(`No existe stock para "${detalle.descripcion}" en sede ${dto.sedeId}`);
+            continue;
+          }
+
+          const [stockLocked] = await tx.$queryRaw<
+            Array<{
+              id: string;
+              stockActual: number;
+              stockReservado: number;
+              stockReservadoVenta: number;
+              stockReservadoCombo: number;
+              stockDanado: number;
+              stockEnGarantia: number;
+            }>
+          >`SELECT id, "stockActual", "stockReservado", "stockReservadoVenta",
+                  "stockReservadoCombo", "stockDanado", "stockEnGarantia"
+           FROM "ProductoStock" WHERE id = ${productoStock.id} FOR UPDATE`;
+
+          if (!stockLocked) continue;
+
+          const cantidad = Number(detalle.cantidad);
+          const stockAnterior = stockLocked.stockActual;
+          const stockDisponible =
+            stockAnterior -
+            stockLocked.stockReservado -
+            stockLocked.stockReservadoVenta -
+            stockLocked.stockReservadoCombo -
+            stockLocked.stockDanado -
+            stockLocked.stockEnGarantia;
+
+          if (cantidad > stockDisponible) {
+            throw new BadRequestException(
+              `Stock insuficiente para "${detalle.descripcion}". Disponible: ${stockDisponible}, Requerido: ${cantidad}`,
+            );
+          }
+
+          const nuevoStock = stockAnterior - cantidad;
+
+          await tx.productoStock.update({
+            where: { id: productoStock.id },
+            data: { stockActual: nuevoStock },
+          });
+
+          await tx.movimientoStock.create({
+            data: {
+              sedeId: dto.sedeId,
+              empresaId,
+              productoStockId: productoStock.id,
+              tipo: TipoMovimientoStock.SALIDA_VENTA,
+              tipoDocumento: 'VENTA',
+              numeroDocumento: codigoVenta,
+              cantidadAnterior: stockAnterior,
+              cantidad: -cantidad,
+              cantidadNueva: nuevoStock,
+              motivo: `Venta POS ${codigoVenta} - ${detalle.descripcion}`,
+              ventaId: venta.id,
+              usuarioId: cajeroId,
+            },
+          });
+        }
+
+        // 5. Registrar pagos (incluye pagos inmediatos en ventas mixtas)
+        if (dto.pagos && dto.pagos.length > 0) {
+          for (const pago of dto.pagos) {
+            await tx.pagoVenta.create({
+              data: {
+                ventaId: venta.id,
+                metodoPago: pago.metodoPago as any,
+                monto: pago.monto,
+                referencia: pago.referencia || null,
+                monedaOriginal: pago.monedaOriginal || null,
+                montoOriginal: pago.montoOriginal || null,
+                tipoCambio: pago.tipoCambio || null,
+              },
+            });
+          }
+        } else if (montoPagadoInmediato > 0) {
+          await tx.pagoVenta.create({
+            data: {
+              ventaId: venta.id,
+              metodoPago: dto.metodoPago || 'EFECTIVO',
+              monto: Math.min(montoRecibido, totalVenta),
+              referencia: dto.referenciaPago || null,
+            },
+          });
+        }
+
+        // 5b. Generar cuotas si es venta a crédito con cuotas
+        if (esCredito && dto.numeroCuotas && dto.numeroCuotas > 0 && montoCredito > 0) {
+          const cuotasData = this.generarCuotas(
+            venta.id,
+            montoCredito,
+            dto.numeroCuotas,
+            dto.plazoCredito ?? 30,
+          );
+          await tx.cuotaVenta.createMany({ data: cuotasData });
+        }
+
+        // 6. Generar comprobante electrónico (solo BOLETA/FACTURA, no TICKET)
+        const tipoComprobante = dto.tipoComprobante || 'TICKET';
+
+        if (tipoComprobante !== 'TICKET') {
+        const [sedeLocked] = await tx.$queryRaw<
+          Array<{
+            id: string;
+            serieFactura: string;
+            serieBoleta: string;
+            ultimoNumeroFactura: number;
+            ultimoNumeroBoleta: number;
+          }>
+        >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
+          FROM "Sede" WHERE id = ${dto.sedeId} FOR UPDATE`;
+
+        if (sedeLocked) {
+          const serie = tipoComprobante === 'FACTURA'
+            ? sedeLocked.serieFactura
+            : sedeLocked.serieBoleta;
+
+          const nuevoCorrelativo = tipoComprobante === 'FACTURA'
+            ? sedeLocked.ultimoNumeroFactura + 1
+            : sedeLocked.ultimoNumeroBoleta + 1;
+
+          const correlativo = String(nuevoCorrelativo);
+
+          await tx.sede.update({
+            where: { id: sedeLocked.id },
+            data: tipoComprobante === 'FACTURA'
+              ? { ultimoNumeroFactura: nuevoCorrelativo }
+              : { ultimoNumeroBoleta: nuevoCorrelativo },
+          });
+
+          const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
+
+          const comprobante = await tx.comprobanteElectronico.create({
+            data: {
+              empresaId,
+              clienteId: dto.clienteId,
+              clienteEmpresaId: dto.clienteEmpresaId,
+              tipoComprobante: tipoComprobante as any,
+              serie,
+              correlativo: correlativo.padStart(8, '0'),
+              codigoGenerado,
+              tipoDocumento: dto.tipoDocumentoCliente || (tipoComprobante === 'FACTURA' ? '6' : '1'),
+              numeroDocumento: dto.documentoCliente,
+              nombreCliente: dto.nombreCliente || 'CLIENTE VARIOS',
+              direccionCliente: dto.direccionCliente,
+              emailCliente: dto.emailCliente,
+              moneda: dto.moneda || 'PEN',
+              gravada: new Prisma.Decimal(subtotalVenta.toFixed(2)),
+              igv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+              totalIgv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+              total: new Prisma.Decimal(totalVenta.toFixed(2)),
+              estado: 'REGISTRADO' as any,
+              detalles: {
+                create: detallesCalculados.map((d) => {
+                  const subtotalItem = d.subtotal;
+                  const igvItem = d.igv;
+                  const totalItem = d.total;
+                  const cant = d.cantidad || 1;
+                  const valorUnit = cant > 0 ? subtotalItem / cant : 0;
+                  const precioUnit = cant > 0 ? totalItem / cant : 0;
+                  return {
+                    descripcion: d.descripcion,
+                    cantidad: d.cantidad,
+                    valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
+                    precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
+                    valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
+                    igv: new Prisma.Decimal(igvItem.toFixed(2)),
+                    subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
+                    total: new Prisma.Decimal(totalItem.toFixed(2)),
+                    ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
+                  };
+                }),
+              },
+            },
+          });
+
+          const montoPago = esCredito ? 0 : Math.min(montoRecibido || totalVenta, totalVenta);
+
+          await tx.pagoComprobante.create({
+            data: {
+              comprobanteId: comprobante.id,
+              metodoPago: dto.metodoPago || 'EFECTIVO',
+              monto: new Prisma.Decimal(montoPago.toFixed(2)),
+              referencia: dto.referenciaPago || null,
+              estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
+            },
+          });
+
+          this.logger.log(`Comprobante ${codigoGenerado} generado para venta POS ${venta.codigo}`);
+        }
+        } // fin if tipoComprobante !== 'TICKET'
+
+        // 7. Registrar movimiento en caja (incluye pagos inmediatos en ventas mixtas)
+        if (montoPagadoInmediato > 0) {
+          try {
+            await this.cajaService.registrarMovimientoSiHayCaja(
+              empresaId,
+              dto.sedeId,
+              cajeroId,
+              {
+                tipo: 'INGRESO' as any,
+                categoria: 'VENTA' as any,
+                metodoPago: dto.metodoPago || ('EFECTIVO' as any),
+                monto: Math.min(montoPagadoInmediato, totalVenta),
+                descripcion: `Venta POS ${codigoVenta}`,
+                ventaId: venta.id,
+              },
+              tx,
+            );
+          } catch (e: any) {
+            this.logger.warn(`Error registrando movimiento caja para venta POS ${codigoVenta}: ${e?.message ?? e}`);
+          }
+        }
+
+        this.logger.log(`Venta POS creada y cobrada: ${venta.codigo}`);
+        return venta;
+      },
+      { timeout: 30000 },
+    );
+
+    await this.invalidateProductCache(empresaId);
+    return result;
   }
 
   /**
@@ -736,6 +1084,67 @@ export class VentaService {
   }
 
   /**
+   * Buscar venta por codigo de venta o codigo de comprobante
+   */
+  async buscarPorCodigo(empresaId: string, codigo: string) {
+    if (!codigo || codigo.trim().length < 3) {
+      throw new BadRequestException('Ingresa al menos 3 caracteres');
+    }
+
+    const query = codigo.trim();
+
+    // Buscar por codigo de venta
+    const venta = await this.prisma.venta.findFirst({
+      where: {
+        empresaId,
+        codigo: { contains: query, mode: 'insensitive' },
+        estado: { not: EstadoVenta.ANULADA },
+      },
+      include: this.getInclude(),
+    });
+
+    if (venta) return venta;
+
+    // Buscar por codigo de comprobante
+    const comprobante = await this.prisma.comprobanteElectronico.findFirst({
+      where: {
+        empresaId,
+        codigoGenerado: { contains: query, mode: 'insensitive' },
+      },
+      select: {
+        total: true,
+        clienteId: true,
+        clienteEmpresaId: true,
+        fechaEmision: true,
+      },
+    });
+
+    if (comprobante) {
+      // Buscar venta que coincida con los datos del comprobante
+      const fechaEmision = comprobante.fechaEmision;
+      const startOfDay = new Date(fechaEmision);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(fechaEmision);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const ventaMatch = await this.prisma.venta.findFirst({
+        where: {
+          empresaId,
+          total: comprobante.total,
+          estado: { not: EstadoVenta.ANULADA },
+          ...(comprobante.clienteId && { clienteId: comprobante.clienteId }),
+          fechaVenta: { gte: startOfDay, lte: endOfDay },
+        },
+        include: this.getInclude(),
+      });
+
+      return ventaMatch;
+    }
+
+    return null;
+  }
+
+  /**
    * Actualizar venta (solo BORRADOR)
    */
   async update(id: string, empresaId: string, dto: UpdateVentaDto) {
@@ -991,7 +1400,7 @@ export class VentaService {
       }
 
       // Crear pago
-      await tx.pagoVenta.create({
+      const pago = await tx.pagoVenta.create({
         data: {
           ventaId: id,
           metodoPago: dto.metodoPago,
@@ -999,6 +1408,42 @@ export class VentaService {
           referencia: dto.referencia,
         },
       });
+
+      // Asignar pago a cuotas (auto-cascada)
+      const ventaCuotas = await tx.cuotaVenta.findMany({
+        where: { ventaId: id, estado: { in: ['PENDIENTE', 'PAGADA_PARCIAL', 'VENCIDA'] } },
+        orderBy: { numero: 'asc' },
+      });
+
+      if (ventaCuotas.length > 0) {
+        let remaining = dto.monto;
+        for (const cuota of ventaCuotas) {
+          if (remaining <= 0) break;
+          const saldo = Number(cuota.saldoPendiente);
+          const aplicar = Math.min(remaining, saldo);
+          const nuevoMontoPagado = Number(cuota.montoPagado) + aplicar;
+          const nuevoSaldo = Math.round((Number(cuota.monto) - nuevoMontoPagado) * 100) / 100;
+
+          await tx.cuotaVenta.update({
+            where: { id: cuota.id },
+            data: {
+              montoPagado: nuevoMontoPagado,
+              saldoPendiente: Math.max(nuevoSaldo, 0),
+              estado: nuevoSaldo <= 0 ? 'PAGADA' : 'PAGADA_PARCIAL',
+            },
+          });
+
+          // Link payment to first cuota affected
+          if (remaining === dto.monto) {
+            await tx.pagoVenta.update({
+              where: { id: pago.id },
+              data: { cuotaVentaId: cuota.id },
+            });
+          }
+
+          remaining = Math.round((remaining - aplicar) * 100) / 100;
+        }
+      }
 
       // Calcular total pagado
       const pagosExistentes = venta.pagos.reduce(
@@ -1049,7 +1494,9 @@ export class VentaService {
             },
             tx,
           );
-        } catch (_) {} // No bloquear la venta si falla el registro en caja
+        } catch (e) {
+          this.logger.warn(`Error registrando movimiento caja para venta ${venta.codigo}: ${e?.message ?? e}`);
+        }
       }
 
       this.logger.log(
@@ -1062,7 +1509,7 @@ export class VentaService {
   /**
    * Anular venta → reversar stock
    */
-  async anular(id: string, empresaId: string, usuarioId: string) {
+  async anular(id: string, empresaId: string, usuarioId: string, dto?: { autorizadoPorId: string; motivo: string }) {
     this.logger.info('Anulando venta', { id, empresaId });
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -1141,7 +1588,15 @@ export class VentaService {
 
       const updatedVenta = await tx.venta.update({
         where: { id },
-        data: { estado: EstadoVenta.ANULADA },
+        data: {
+          estado: EstadoVenta.ANULADA,
+          ...(dto && {
+            motivoAnulacion: dto.motivo,
+            anuladoPorId: usuarioId,
+            autorizadoPorId: dto.autorizadoPorId,
+            fechaAnulacion: new Date(),
+          }),
+        },
         include: this.getInclude(),
       });
 
@@ -1163,7 +1618,9 @@ export class VentaService {
             },
             tx,
           );
-        } catch (_) {}
+        } catch (e) {
+          this.logger.warn(`Error registrando egreso caja por anulación ${venta.codigo}: ${e?.message ?? e}`);
+        }
       }
 
       this.logger.log(`Venta anulada: ${venta.codigo}`);
@@ -1215,6 +1672,39 @@ export class VentaService {
   // =====================================================
   // HELPERS PRIVADOS
   // =====================================================
+
+  /**
+   * Genera las cuotas para una venta a crédito
+   */
+  private generarCuotas(
+    ventaId: string,
+    montoCredito: number,
+    numeroCuotas: number,
+    plazoDias: number,
+    fechaBase: Date = new Date(),
+  ) {
+    const intervaloDias = Math.floor(plazoDias / numeroCuotas);
+    const montoCuota = Math.floor((montoCredito / numeroCuotas) * 100) / 100;
+    const resto = Math.round((montoCredito - montoCuota * numeroCuotas) * 100) / 100;
+
+    return Array.from({ length: numeroCuotas }, (_, i) => {
+      const numero = i + 1;
+      const esUltima = numero === numeroCuotas;
+      const monto = esUltima ? montoCuota + resto : montoCuota;
+      const fechaVencimiento = new Date(fechaBase);
+      fechaVencimiento.setDate(fechaVencimiento.getDate() + intervaloDias * numero);
+
+      return {
+        ventaId,
+        numero,
+        monto,
+        montoPagado: 0,
+        saldoPendiente: monto,
+        fechaVencimiento,
+        estado: 'PENDIENTE' as const,
+      };
+    });
+  }
 
   private calcularDetalle(dto: CreateVentaDetalleDto, index: number) {
     const cantidad = dto.cantidad;

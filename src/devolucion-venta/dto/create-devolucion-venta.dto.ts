@@ -49,6 +49,16 @@ export class CreateDevolucionItemDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'ID del producto de reemplazo' })
+  @IsOptional()
+  @IsString()
+  productoReemplazoId?: string;
+
+  @ApiPropertyOptional({ description: 'ID de la variante de reemplazo' })
+  @IsOptional()
+  @IsString()
+  varianteReemplazoId?: string;
 }
 
 export class CreateDevolucionVentaDto {
@@ -71,6 +81,11 @@ export class CreateDevolucionVentaDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'Tipo de reembolso', enum: ['EFECTIVO', 'CAMBIO_PRODUCTO'] })
+  @IsOptional()
+  @IsString()
+  tipoReembolso?: string;
 
   @ApiProperty({ description: 'Items a devolver', type: [CreateDevolucionItemDto] })
   @IsArray()

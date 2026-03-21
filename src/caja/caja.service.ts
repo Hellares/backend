@@ -100,7 +100,7 @@ export class CajaService {
     // Calcular totales rápidos
     const totales = await this.prisma.movimientoCaja.groupBy({
       by: ['tipo'],
-      where: { cajaId: caja.id },
+      where: { cajaId: caja.id, anulado: false },
       _sum: { monto: true },
     });
 
@@ -146,6 +146,7 @@ export class CajaService {
         metodoPago: dto.metodoPago,
         monto: dto.monto,
         descripcion: dto.descripcion,
+        categoriaGastoId: dto.categoriaGastoId,
         esManual: true,
         registradoPorId: usuarioId,
       },
@@ -256,6 +257,7 @@ export class CajaService {
         pedidoMarketplace: { select: { id: true, codigo: true } },
         compra: { select: { id: true, codigo: true } },
         devolucion: { select: { id: true, codigo: true } },
+        categoriaGasto: { select: { id: true, nombre: true, tipo: true, icono: true, color: true } },
         registradoPor: {
           select: {
             id: true,
@@ -288,7 +290,7 @@ export class CajaService {
     // Calcular totales por método de pago y tipo
     const movimientos = await this.prisma.movimientoCaja.groupBy({
       by: ['metodoPago', 'tipo'],
-      where: { cajaId },
+      where: { cajaId, anulado: false },
       _sum: { monto: true },
     });
 
@@ -403,14 +405,14 @@ export class CajaService {
 
     const resumenPorMetodo = await this.prisma.movimientoCaja.groupBy({
       by: ['metodoPago', 'tipo'],
-      where: { cajaId },
+      where: { cajaId, anulado: false },
       _sum: { monto: true },
       _count: { id: true },
     });
 
     const resumenPorCategoria = await this.prisma.movimientoCaja.groupBy({
       by: ['categoria', 'tipo'],
-      where: { cajaId },
+      where: { cajaId, anulado: false },
       _sum: { monto: true },
       _count: { id: true },
     });
@@ -493,6 +495,165 @@ export class CajaService {
     });
 
     return cajas;
+  }
+
+  /**
+   * Monitor de cajas: todas las cajas abiertas de la empresa con totales en vivo
+   */
+  async getMonitor(empresaId: string, sedeId?: string) {
+    const where: Prisma.CajaWhereInput = {
+      empresaId,
+      estado: EstadoCaja.ABIERTA,
+    };
+
+    if (sedeId) {
+      where.sedeId = sedeId;
+    }
+
+    const cajasAbiertas = await this.prisma.caja.findMany({
+      where,
+      orderBy: { fechaApertura: 'desc' },
+      include: {
+        sede: { select: { id: true, nombre: true, codigo: true } },
+        usuario: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        _count: {
+          select: { movimientos: true },
+        },
+      },
+    });
+
+    // Calcular totales para cada caja en paralelo
+    const cajasConTotales = await Promise.all(
+      cajasAbiertas.map(async (caja) => {
+        const totales = await this.prisma.movimientoCaja.groupBy({
+          by: ['tipo'],
+          where: { cajaId: caja.id, anulado: false },
+          _sum: { monto: true },
+        });
+
+        const totalIngresos = Number(
+          totales.find((t) => t.tipo === TipoMovimientoCaja.INGRESO)?._sum.monto ?? 0,
+        );
+        const totalEgresos = Number(
+          totales.find((t) => t.tipo === TipoMovimientoCaja.EGRESO)?._sum.monto ?? 0,
+        );
+
+        // Último movimiento
+        const ultimoMovimiento = await this.prisma.movimientoCaja.findFirst({
+          where: { cajaId: caja.id },
+          orderBy: { fechaMovimiento: 'desc' },
+          select: {
+            tipo: true,
+            categoria: true,
+            monto: true,
+            descripcion: true,
+            fechaMovimiento: true,
+          },
+        });
+
+        return {
+          ...caja,
+          totalIngresos,
+          totalEgresos,
+          saldoActual: Number(caja.montoApertura) + totalIngresos - totalEgresos,
+          ultimoMovimiento,
+        };
+      }),
+    );
+
+    // Resumen general
+    const totalCajasAbiertas = cajasConTotales.length;
+    const totalIngresosGlobal = cajasConTotales.reduce((s, c) => s + c.totalIngresos, 0);
+    const totalEgresosGlobal = cajasConTotales.reduce((s, c) => s + c.totalEgresos, 0);
+    const totalSaldoGlobal = cajasConTotales.reduce((s, c) => s + c.saldoActual, 0);
+
+    return {
+      resumen: {
+        totalCajasAbiertas,
+        totalIngresos: Math.round(totalIngresosGlobal * 100) / 100,
+        totalEgresos: Math.round(totalEgresosGlobal * 100) / 100,
+        totalSaldo: Math.round(totalSaldoGlobal * 100) / 100,
+      },
+      cajas: cajasConTotales,
+    };
+  }
+
+  /**
+   * Anular un movimiento manual de caja
+   * Crea un movimiento inverso (contrapartida) y marca el original como anulado
+   */
+  async anularMovimiento(
+    empresaId: string,
+    cajaId: string,
+    movimientoId: string,
+    usuarioId: string,
+    dto: { autorizadoPorId: string; motivo: string },
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const movimiento = await tx.movimientoCaja.findFirst({
+        where: { id: movimientoId, cajaId, empresaId },
+      });
+
+      if (!movimiento) {
+        throw new NotFoundException('Movimiento no encontrado');
+      }
+
+      if (movimiento.anulado) {
+        throw new BadRequestException('Este movimiento ya fue anulado');
+      }
+
+      if (!movimiento.esManual) {
+        throw new BadRequestException('Solo se pueden anular movimientos manuales. Los movimientos automaticos se anulan desde su entidad origen (venta, devolucion, etc.)');
+      }
+
+      // Verificar que la caja esté abierta
+      const caja = await tx.caja.findFirst({
+        where: { id: cajaId, empresaId, estado: 'ABIERTA' },
+      });
+
+      if (!caja) {
+        throw new BadRequestException('La caja debe estar abierta para anular movimientos');
+      }
+
+      // Crear movimiento inverso (contrapartida)
+      const tipoInverso = movimiento.tipo === 'INGRESO' ? 'EGRESO' : 'INGRESO';
+
+      const contrapartida = await tx.movimientoCaja.create({
+        data: {
+          cajaId,
+          empresaId,
+          tipo: tipoInverso as any,
+          categoria: movimiento.categoria,
+          metodoPago: movimiento.metodoPago,
+          monto: movimiento.monto,
+          descripcion: `[ANULACION] ${movimiento.descripcion ?? movimiento.categoria} - Motivo: ${dto.motivo}`,
+          categoriaGastoId: movimiento.categoriaGastoId,
+          esManual: false,
+          registradoPorId: usuarioId,
+          anulado: true,
+        },
+      });
+
+      // Marcar original como anulado
+      await tx.movimientoCaja.update({
+        where: { id: movimientoId },
+        data: {
+          anulado: true,
+          motivoAnulacion: dto.motivo,
+          anuladoPorId: usuarioId,
+          autorizadoPorId: dto.autorizadoPorId,
+          fechaAnulacion: new Date(),
+          movimientoContrapartidaId: contrapartida.id,
+        },
+      });
+
+      return { movimientoAnulado: movimiento, contrapartida };
+    });
   }
 
   // ─── Configuración ───

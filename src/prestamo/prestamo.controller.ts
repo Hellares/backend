@@ -8,6 +8,7 @@ import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { PrestamoService } from './prestamo.service';
 import { EstadoPrestamo } from '@prisma/client';
+import { CrearPrestamoDto, RegistrarPagoPrestamoDto } from './dto/crear-prestamo.dto';
 
 @ApiTags('Préstamos')
 @Controller('prestamos')
@@ -36,7 +37,7 @@ export class PrestamoController {
   @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiOperation({ summary: 'Registrar préstamo' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
-  async crear(@Headers('x-tenant-id') empresaId: string, @Body() body: any) {
+  async crear(@Headers('x-tenant-id') empresaId: string, @Body() body: CrearPrestamoDto) {
     return this.service.crear(empresaId, body);
   }
 
@@ -48,7 +49,7 @@ export class PrestamoController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @CurrentUser('id') usuarioId: string,
-    @Body() body: any,
+    @Body() body: RegistrarPagoPrestamoDto,
   ) {
     return this.service.registrarPago(empresaId, id, usuarioId, body);
   }

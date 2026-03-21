@@ -8,5 +8,6 @@ import { LibroContableService } from './libro-contable.service';
   imports: [PrismaModule, AuthModule],
   controllers: [LibroContableController],
   providers: [LibroContableService],
+  exports: [LibroContableService],
 })
 export class LibroContableModule {}

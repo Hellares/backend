@@ -6,6 +6,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { FlujoProyectadoService } from './flujo-proyectado.service';
+import { QueryFlujoProyectadoDto } from './dto/query-flujo.dto';
 
 @ApiTags('Flujo Proyectado')
 @Controller('flujo-proyectado')
@@ -21,9 +22,8 @@ export class FlujoProyectadoController {
   @ApiQuery({ name: 'meses', type: Number, required: false, example: 3 })
   async getProyeccion(
     @Headers('x-tenant-id') empresaId: string,
-    @Query('meses') meses?: string,
+    @Query() query: QueryFlujoProyectadoDto,
   ) {
-    const mesesNum = meses ? parseInt(meses, 10) : 3;
-    return this.service.getProyeccion(empresaId, mesesNum);
+    return this.service.getProyeccion(empresaId, query.meses ?? 3);
   }
 }

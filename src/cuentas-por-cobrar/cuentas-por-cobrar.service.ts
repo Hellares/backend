@@ -37,6 +37,13 @@ export class CuentasPorCobrarService {
       where,
       include: {
         pagos: { select: { id: true, monto: true, metodoPago: true, fechaPago: true } },
+        cuotas: {
+          orderBy: { numero: 'asc' },
+          select: {
+            id: true, numero: true, monto: true, montoPagado: true,
+            saldoPendiente: true, fechaVencimiento: true, estado: true,
+          },
+        },
         sede: { select: { id: true, nombre: true } },
         cliente: {
           select: {
@@ -54,11 +61,15 @@ export class CuentasPorCobrarService {
       const totalVenta = Number(v.total);
       const totalPagado = v.pagos.reduce((sum, p) => sum + Number(p.monto), 0);
       const saldoPendiente = Math.round((totalVenta - totalPagado) * 100) / 100;
-      const estaVencida = v.fechaVencimientoPago ? v.fechaVencimientoPago < now : false;
+      const proximaCuota = v.cuotas?.find((c: any) =>
+        c.estado === 'PENDIENTE' || c.estado === 'PAGADA_PARCIAL' || c.estado === 'VENCIDA'
+      );
+      const fechaVencimientoEfectiva = proximaCuota?.fechaVencimiento ?? v.fechaVencimientoPago;
+      const estaVencida = fechaVencimientoEfectiva ? fechaVencimientoEfectiva < now : false;
       const estaPagada = saldoPendiente <= 0;
 
-      const diasVencimiento = v.fechaVencimientoPago
-        ? Math.ceil((v.fechaVencimientoPago.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      const diasVencimiento = fechaVencimientoEfectiva
+        ? Math.ceil((fechaVencimientoEfectiva.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
         : null;
 
       return {
@@ -74,10 +85,30 @@ export class CuentasPorCobrarService {
         saldoPendiente,
         plazoCredito: v.plazoCredito,
         fechaVenta: v.fechaVenta,
-        fechaVencimiento: v.fechaVencimientoPago,
+        fechaVencimiento: fechaVencimientoEfectiva,
         diasVencimiento,
         estado: estaPagada ? 'PAGADA' : estaVencida ? 'VENCIDA' : 'PENDIENTE',
         pagos: v.pagos,
+        numeroCuotas: v.numeroCuotas,
+        cuotas: v.cuotas?.map(c => ({
+          ...c,
+          monto: Number(c.monto),
+          montoPagado: Number(c.montoPagado),
+          saldoPendiente: Number(c.saldoPendiente),
+        })),
+        proximaCuota: (() => {
+          const proxima = v.cuotas?.find((c: any) =>
+            c.estado === 'PENDIENTE' || c.estado === 'PAGADA_PARCIAL' || c.estado === 'VENCIDA'
+          );
+          return proxima ? {
+            id: proxima.id,
+            numero: proxima.numero,
+            monto: Number(proxima.monto),
+            saldoPendiente: Number(proxima.saldoPendiente),
+            fechaVencimiento: proxima.fechaVencimiento,
+            estado: proxima.estado,
+          } : null;
+        })(),
       };
     });
 

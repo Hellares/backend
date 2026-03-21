@@ -9,6 +9,11 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { EmpresaBancoService } from './empresa-banco.service';
+import {
+  CrearEmpresaBancoDto,
+  ActualizarEmpresaBancoDto,
+  ActualizarSaldoDto,
+} from './dto/crear-empresa-banco.dto';
 
 @ApiTags('Cuentas Bancarias Empresa')
 @Controller('empresa-banco')
@@ -31,7 +36,7 @@ export class EmpresaBancoController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async crear(
     @Headers('x-tenant-id') empresaId: string,
-    @Body() body: any,
+    @Body() body: CrearEmpresaBancoDto,
   ) {
     return this.service.crear(empresaId, body);
   }
@@ -43,7 +48,7 @@ export class EmpresaBancoController {
   async actualizar(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: ActualizarEmpresaBancoDto,
   ) {
     return this.service.actualizar(empresaId, id, body);
   }
@@ -77,7 +82,7 @@ export class EmpresaBancoController {
   async actualizarSaldo(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
-    @Body() body: { saldo: number },
+    @Body() body: ActualizarSaldoDto,
   ) {
     return this.service.actualizarSaldo(empresaId, id, body.saldo);
   }

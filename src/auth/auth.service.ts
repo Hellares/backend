@@ -27,6 +27,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AutorizarOperacionDto } from './dto/autorizar-operacion.dto';
 import { JwtPayload, RefreshTokenPayload } from './interfaces/jwt-payload.interface';
 
 @Injectable()
@@ -2179,6 +2180,72 @@ export class AuthService {
       message: 'Cuentas vinculadas exitosamente. Ahora puedes usar Google y DNI para acceder.',
       user: this.buildUserResponse(updatedTargetUser),
       ...tokens,
+    };
+  }
+
+  /**
+   * Autorizar operación privilegiada (anulación, etc.)
+   * Un admin/gerente valida con su DNI+contraseña para autorizar la operación
+   */
+  async autorizarOperacion(empresaId: string, solicitanteId: string, dto: AutorizarOperacionDto) {
+    // 1. Find persona by DNI
+    const persona = await this.prisma.persona.findFirst({
+      where: { dni: dto.dni },
+      include: { usuario: true },
+    });
+
+    if (!persona || !persona.usuario) {
+      throw new UnauthorizedException('DNI no encontrado');
+    }
+
+    const usuario = persona.usuario;
+
+    // 2. Validate password
+    if (!usuario.passwordHash) {
+      throw new UnauthorizedException('El usuario no tiene contraseña configurada');
+    }
+
+    const passwordValid = await bcrypt.compare(dto.password, usuario.passwordHash);
+    if (!passwordValid) {
+      throw new UnauthorizedException('Contraseña incorrecta');
+    }
+
+    // 3. Validate user belongs to this empresa with admin role
+    const empresaRol = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        usuarioId: usuario.id,
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+        rol: { in: ['SUPER_ADMIN', 'EMPRESA_ADMIN'] },
+      },
+    });
+
+    // Also check sede roles
+    let tienePermisoSede = false;
+    if (!empresaRol) {
+      const sedeRol = await this.prisma.usuarioSedeRol.findFirst({
+        where: {
+          usuarioId: usuario.id,
+          sede: { empresaId },
+          rol: { in: ['GERENTE_SEDE', 'ADMINISTRADOR', 'SUPERVISOR'] },
+          isActive: true,
+        },
+      });
+      tienePermisoSede = !!sedeRol;
+    }
+
+    if (!empresaRol && !tienePermisoSede) {
+      throw new UnauthorizedException('El usuario no tiene permisos de administrador para autorizar esta operacion');
+    }
+
+    // 4. Log the authorization
+    this.logger.log(`Operacion autorizada: ${dto.operacion} por ${persona.nombres} ${persona.apellidos} (DNI: ${dto.dni}), solicitado por userId: ${solicitanteId}`);
+
+    return {
+      authorized: true,
+      autorizadoPorId: usuario.id,
+      autorizadoPorNombre: `${persona.nombres} ${persona.apellidos}`.trim(),
     };
   }
 

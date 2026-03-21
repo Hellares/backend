@@ -28,4 +28,9 @@ export class CrearMovimientoDto {
   @IsOptional()
   @IsString()
   descripcion?: string;
+
+  @ApiProperty({ required: false, description: 'ID de categoría de gasto personalizada' })
+  @IsOptional()
+  @IsString()
+  categoriaGastoId?: string;
 }
