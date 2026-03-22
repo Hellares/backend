@@ -47,7 +47,7 @@ model ProductoStock {
 
   // Estado de configuración de precio (útil para filtros y dashboards)
   precioConfigurado Boolean @default(false) // true cuando se ha establecido al menos el precio de venta
-  precioIncluyeIgv  Boolean @default(false) // true cuando el precio de venta ya incluye IGV
+  precioIncluyeIgv  Boolean @default(true) // true cuando el precio de venta ya incluye IGV
 
   // Envío gratis (promoción por producto)
   envioGratis Boolean @default(false)

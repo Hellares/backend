@@ -43,6 +43,15 @@ export class SolicitudCotizacionClienteController {
     return this.service.misSolicitudes(usuarioId);
   }
 
+  @Get('items-previos/:empresaId')
+  @ApiOperation({ summary: 'Obtener items de la última solicitud para pre-llenar' })
+  async getItemsPrevios(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('empresaId') empresaId: string,
+  ) {
+    return this.service.getItemsPrevios(usuarioId, empresaId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de una solicitud' })
   async detalle(

@@ -347,6 +347,210 @@ export class VentaAnalyticsService {
     };
   }
 
+  async getDashboardVendedor(empresaId: string, vendedorId: string, sedeId?: string) {
+    this.logger.log(`Obteniendo dashboard del vendedor ${vendedorId}`);
+
+    const now = new Date();
+    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const manana = new Date(hoy); manana.setDate(manana.getDate() + 1);
+
+    // Start of week (Monday)
+    const inicioSemana = new Date(hoy);
+    const day = inicioSemana.getDay();
+    const diff = inicioSemana.getDate() - day + (day === 0 ? -6 : 1);
+    inicioSemana.setDate(diff);
+
+    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+
+    const baseWhere: any = { empresaId, vendedorId, estado: { not: 'ANULADA' as const } };
+    if (sedeId) baseWhere.sedeId = sedeId;
+
+    // Get vendedor info
+    const vendedor = await this.prisma.usuario.findUnique({
+      where: { id: vendedorId },
+      select: { id: true, email: true, persona: { select: { nombres: true, apellidos: true } } },
+    });
+
+    const nombreVendedor = vendedor
+      ? `${vendedor.persona?.nombres ?? ''} ${vendedor.persona?.apellidos ?? ''}`.trim()
+      : 'Vendedor';
+
+    // Parallel queries for sales
+    const [
+      ventasHoyCant, ventasSemanaCant, ventasMesCant,
+    ] = await Promise.all([
+      this.prisma.venta.count({ where: { ...baseWhere, fechaVenta: { gte: hoy, lt: manana } } }),
+      this.prisma.venta.count({ where: { ...baseWhere, fechaVenta: { gte: inicioSemana } } }),
+      this.prisma.venta.count({ where: { ...baseWhere, fechaVenta: { gte: inicioMes } } }),
+    ]);
+
+    // Montos with aggregate
+    const [montoHoyAgg, montoSemanaAgg, montoMesAgg] = await Promise.all([
+      this.prisma.venta.aggregate({ where: { ...baseWhere, fechaVenta: { gte: hoy, lt: manana } }, _sum: { total: true } }),
+      this.prisma.venta.aggregate({ where: { ...baseWhere, fechaVenta: { gte: inicioSemana } }, _sum: { total: true } }),
+      this.prisma.venta.aggregate({ where: { ...baseWhere, fechaVenta: { gte: inicioMes } }, _sum: { total: true } }),
+    ]);
+
+    const montoHoy = Number(montoHoyAgg._sum.total ?? 0);
+    const montoSemana = Number(montoSemanaAgg._sum.total ?? 0);
+    const montoMes = Number(montoMesAgg._sum.total ?? 0);
+    const ticketPromedio = ventasMesCant > 0 ? Math.round((montoMes / ventasMesCant) * 100) / 100 : 0;
+
+    // Cotizaciones
+    const cotizBaseWhere: any = { empresaId, vendedorId };
+    if (sedeId) cotizBaseWhere.sedeId = sedeId;
+
+    const [cotizacionesTotal, cotizacionesConvertidas] = await Promise.all([
+      this.prisma.cotizacion.count({ where: { ...cotizBaseWhere, creadoEn: { gte: inicioMes } } }),
+      this.prisma.cotizacion.count({ where: { ...cotizBaseWhere, estado: 'CONVERTIDA', creadoEn: { gte: inicioMes } } }),
+    ]);
+    const tasaConversion = cotizacionesTotal > 0 ? Math.round((cotizacionesConvertidas / cotizacionesTotal) * 10000) / 100 : 0;
+
+    // Creditos pendientes (override estado from baseWhere)
+    const creditosVentas = await this.prisma.venta.findMany({
+      where: { empresaId, vendedorId, esCredito: true, estado: { in: ['CONFIRMADA', 'PAGADA_PARCIAL'] }, ...(sedeId && { sedeId }) },
+      include: { pagos: { select: { monto: true } } },
+    });
+
+    let totalPendiente = 0, cantidadPendientes = 0, totalVencido = 0, cantidadVencidos = 0;
+    for (const v of creditosVentas) {
+      const pagado = v.pagos.reduce((s, p) => s + Number(p.monto), 0);
+      const saldo = Number(v.total) - pagado;
+      if (saldo > 0) {
+        totalPendiente += saldo;
+        cantidadPendientes++;
+        if (v.fechaVencimientoPago && v.fechaVencimientoPago < now) {
+          totalVencido += saldo;
+          cantidadVencidos++;
+        }
+      }
+    }
+
+    // Metodos de pago del mes
+    const pagosDelMes = await this.prisma.pagoVenta.findMany({
+      where: { venta: { ...baseWhere, fechaVenta: { gte: inicioMes } } },
+      select: { metodoPago: true, monto: true },
+    });
+
+    const metodosPago: Record<string, number> = {};
+    for (const p of pagosDelMes) {
+      metodosPago[p.metodoPago] = (metodosPago[p.metodoPago] ?? 0) + Number(p.monto);
+    }
+
+    // Ventas por día (últimos 7 días)
+    const hace7Dias = new Date(hoy);
+    hace7Dias.setDate(hace7Dias.getDate() - 6);
+
+    const ventasPorDiaRaw = await this.prisma.$queryRaw<any[]>`
+      SELECT DATE(v."fechaVenta") as fecha,
+             COUNT(*)::int as cantidad,
+             COALESCE(SUM(v.total), 0)::float as monto
+      FROM "Venta" v
+      WHERE v."empresaId" = ${empresaId}
+      AND v."vendedorId" = ${vendedorId}
+      AND v."estado" != 'ANULADA'
+      AND v."fechaVenta" >= ${hace7Dias}
+      ${sedeId ? Prisma.sql`AND v."sedeId" = ${sedeId}` : Prisma.empty}
+      GROUP BY DATE(v."fechaVenta")
+      ORDER BY fecha ASC
+    `;
+
+    // Top 5 productos del mes
+    const topProductosRaw = await this.prisma.$queryRaw<any[]>`
+      SELECT p.nombre, SUM(vd.cantidad)::int as cantidad, SUM(vd.total)::float as monto
+      FROM "VentaDetalle" vd
+      JOIN "Venta" v ON v.id = vd."ventaId"
+      LEFT JOIN "Producto" p ON p.id = vd."productoId"
+      WHERE v."empresaId" = ${empresaId}
+      AND v."vendedorId" = ${vendedorId}
+      AND v."estado" != 'ANULADA'
+      AND v."fechaVenta" >= ${inicioMes}
+      ${sedeId ? Prisma.sql`AND v."sedeId" = ${sedeId}` : Prisma.empty}
+      GROUP BY p.nombre
+      ORDER BY monto DESC
+      LIMIT 5
+    `;
+
+    // Top 5 clientes del mes
+    const topClientesRaw = await this.prisma.$queryRaw<any[]>`
+      SELECT v."nombreCliente" as nombre,
+             COUNT(*)::int as "cantidadCompras",
+             SUM(v.total)::float as "montoTotal"
+      FROM "Venta" v
+      WHERE v."empresaId" = ${empresaId}
+      AND v."vendedorId" = ${vendedorId}
+      AND v."estado" != 'ANULADA'
+      AND v."fechaVenta" >= ${inicioMes}
+      ${sedeId ? Prisma.sql`AND v."sedeId" = ${sedeId}` : Prisma.empty}
+      GROUP BY v."nombreCliente"
+      ORDER BY "montoTotal" DESC
+      LIMIT 5
+    `;
+
+    // Ranking del mes
+    const rankingRaw = await this.prisma.$queryRaw<any[]>`
+      SELECT v."vendedorId",
+             CONCAT(p.nombres, ' ', p.apellidos) as nombre,
+             COUNT(*)::int as "cantidadVentas",
+             COALESCE(SUM(v.total), 0)::float as "montoTotal"
+      FROM "Venta" v
+      JOIN "Usuario" u ON u.id = v."vendedorId"
+      JOIN "Persona" p ON p.id = u."personaId"
+      WHERE v."empresaId" = ${empresaId}
+      AND v."estado" != 'ANULADA'
+      AND v."fechaVenta" >= ${inicioMes}
+      ${sedeId ? Prisma.sql`AND v."sedeId" = ${sedeId}` : Prisma.empty}
+      GROUP BY v."vendedorId", p.nombres, p.apellidos
+      ORDER BY "montoTotal" DESC
+    `;
+
+    const posicion = rankingRaw.findIndex((r: any) => r.vendedorId === vendedorId) + 1;
+    const montoLider = rankingRaw.length > 0 ? rankingRaw[0].montoTotal : 0;
+
+    return {
+      vendedor: { id: vendedorId, nombre: nombreVendedor, email: vendedor?.email },
+      resumen: {
+        ventasHoy: { cantidad: ventasHoyCant, monto: Math.round(montoHoy * 100) / 100 },
+        ventasSemana: { cantidad: ventasSemanaCant, monto: Math.round(montoSemana * 100) / 100 },
+        ventasMes: { cantidad: ventasMesCant, monto: Math.round(montoMes * 100) / 100 },
+        ticketPromedio,
+        cotizacionesTotal,
+        cotizacionesConvertidas,
+        tasaConversion,
+      },
+      creditos: {
+        totalPendiente: Math.round(totalPendiente * 100) / 100,
+        cantidadPendientes,
+        totalVencido: Math.round(totalVencido * 100) / 100,
+        cantidadVencidos,
+      },
+      metodosPago: Object.fromEntries(
+        Object.entries(metodosPago).map(([k, v]) => [k, Math.round(v * 100) / 100])
+      ),
+      ventasPorDia: ventasPorDiaRaw.map(r => ({
+        fecha: r.fecha,
+        cantidad: r.cantidad,
+        monto: Math.round(r.monto * 100) / 100,
+      })),
+      topProductos: topProductosRaw.map(r => ({
+        nombre: r.nombre ?? 'Sin nombre',
+        cantidad: r.cantidad,
+        monto: Math.round(r.monto * 100) / 100,
+      })),
+      topClientes: topClientesRaw.map(r => ({
+        nombre: r.nombre ?? 'Sin nombre',
+        cantidadCompras: r.cantidadCompras,
+        montoTotal: Math.round(r.montoTotal * 100) / 100,
+      })),
+      ranking: {
+        posicion: posicion > 0 ? posicion : rankingRaw.length + 1,
+        totalVendedores: rankingRaw.length,
+        montoVendedor: Math.round(montoMes * 100) / 100,
+        montoLider: Math.round(montoLider * 100) / 100,
+      },
+    };
+  }
+
   async getAlertasVentas(empresaId: string, sedeId?: string) {
     this.logger.log('Obteniendo alertas de ventas');
 

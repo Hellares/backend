@@ -135,10 +135,24 @@ export class LibroContableService {
   }
 
   /**
+   * Etiquetas legibles para categorías de movimientos de caja
+   */
+  private static readonly CATEGORIA_LABELS: Record<string, string> = {
+    DEPOSITO_AGENTE: 'Depósito Agente Bancario',
+    RETIRO_AGENTE: 'Retiro Agente Bancario',
+    COMISION_AGENTE: 'Comisión Agente Bancario',
+    GASTO_OPERATIVO: 'Gasto Operativo',
+    ADELANTO_SERVICIO: 'Adelanto de Servicio',
+    OTRO_INGRESO: 'Otro Ingreso',
+    OTRO_EGRESO: 'Otro Egreso',
+    DEVOLUCION: 'Devolución',
+  };
+
+  /**
    * Obtiene movimientos de caja que NO son VENTA ni COMPRA (esos ya se cuentan
    * directamente desde sus tablas respectivas para evitar doble conteo).
    * Incluye: devoluciones, pedidos marketplace, pagos proveedor, gastos operativos,
-   * adelantos de servicio, otros ingresos/egresos, y movimientos manuales.
+   * adelantos de servicio, otros ingresos/egresos, movimientos manuales y agente bancario.
    */
   private async _getMovimientosCaja(
     empresaId: string,
@@ -164,15 +178,18 @@ export class LibroContableService {
       orderBy: { fechaMovimiento: 'asc' },
     });
 
-    return movimientos.map((m) => ({
-      fecha: m.fechaMovimiento,
-      tipo: m.tipo as 'INGRESO' | 'EGRESO',
-      categoria: `CAJA_${m.categoria}`,
-      descripcion: m.descripcion ?? `${m.esManual ? 'Manual' : 'Automático'} - ${m.categoria}`,
-      monto: Number(m.monto),
-      referencia: m.id,
-      saldoAcumulado: 0,
-    }));
+    return movimientos.map((m) => {
+      const label = LibroContableService.CATEGORIA_LABELS[m.categoria] ?? m.categoria;
+      return {
+        fecha: m.fechaMovimiento,
+        tipo: m.tipo as 'INGRESO' | 'EGRESO',
+        categoria: `CAJA_${m.categoria}`,
+        descripcion: m.descripcion ?? `${m.esManual ? 'Manual' : 'Automático'} - ${label}`,
+        monto: Number(m.monto),
+        referencia: m.id,
+        saldoAcumulado: 0,
+      };
+    });
   }
 
   private async _getPagosPrestamo(

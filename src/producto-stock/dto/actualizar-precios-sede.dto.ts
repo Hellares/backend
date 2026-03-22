@@ -6,6 +6,8 @@ import {
   IsDateString,
   IsString,
   IsEnum,
+  IsInt,
+  Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -107,4 +109,26 @@ export class ActualizarPreciosSedeDto {
   @IsOptional()
   @IsString()
   razon?: string;
+
+  @ApiPropertyOptional({
+    description: 'Ubicación física en el almacén',
+    example: 'ZONA-A - Zona A Principal',
+  })
+  @IsOptional()
+  @IsString()
+  ubicacion?: string;
+
+  @ApiPropertyOptional({ description: 'Stock mínimo', example: 5 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  stockMinimo?: number;
+
+  @ApiPropertyOptional({ description: 'Stock máximo', example: 100 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  stockMaximo?: number;
 }

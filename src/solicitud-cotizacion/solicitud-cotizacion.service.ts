@@ -33,6 +33,10 @@ export class SolicitudCotizacionService {
 
     const codigo = await this._generarCodigo(dto.empresaId);
 
+    // Calculate 7 days from now
+    const fechaVencimiento = new Date();
+    fechaVencimiento.setDate(fechaVencimiento.getDate() + 7);
+
     const solicitud = await this.prisma.solicitudCotizacion.create({
       data: {
         codigo,
@@ -42,6 +46,7 @@ export class SolicitudCotizacionService {
         emailSolicitante: comprador.email,
         telefonoSolicitante: comprador.persona.telefono,
         observaciones: dto.observaciones,
+        fechaVencimiento,
         items: {
           create: dto.items.map((item) => ({
             productoId: item.productoId ?? null,
@@ -250,6 +255,35 @@ export class SolicitudCotizacionService {
     } catch (_) {}
 
     return { message: 'Solicitud marcada como cotizada' };
+  }
+
+  // ─── PRE-POPULATE ───
+
+  async getItemsPrevios(usuarioId: string, empresaId: string) {
+    // Get the most recent completed solicitud for this user+empresa
+    const ultimaSolicitud = await this.prisma.solicitudCotizacion.findFirst({
+      where: {
+        solicitanteId: usuarioId,
+        empresaId,
+        estado: { in: ['COTIZADA', 'VENCIDA', 'CANCELADA', 'RECHAZADA'] },
+      },
+      include: {
+        items: {
+          select: {
+            productoId: true,
+            varianteId: true,
+            descripcion: true,
+            cantidad: true,
+            imagenUrl: true,
+            esManual: true,
+            notasItem: true,
+          },
+        },
+      },
+      orderBy: { creadoEn: 'desc' },
+    });
+
+    return ultimaSolicitud?.items ?? [];
   }
 
   // ─── HELPERS ───

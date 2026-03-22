@@ -35,6 +35,7 @@ export class AlertasFinancierasTasksService {
           this._verificarCajasAbiertasSinActividad(empresa.id, empresa.nombre),
           this._verificarCajasChicasFondoBajo(empresa.id, empresa.nombre),
           this._verificarLotesProximosVencer(empresa.id, empresa.nombre),
+          this._verificarAgentesBancariosFondoBajo(empresa.id, empresa.nombre),
         ]);
       }
 
@@ -409,6 +410,49 @@ export class AlertasFinancierasTasksService {
       }
     } catch (error: any) {
       this.logger.error(`Error verificando lotes [${empresaNombre}]: ${error?.message}`);
+    }
+  }
+
+  /**
+   * Alerta: agentes bancarios con fondo bajo (saldoActual < 20% de fondoAsignado)
+   */
+  private async _verificarAgentesBancariosFondoBajo(empresaId: string, empresaNombre: string) {
+    try {
+      const agentes = await this.prisma.agenteBancario.findMany({
+        where: { empresaId, estado: 'ACTIVO' },
+        select: {
+          id: true,
+          banco: true,
+          fondoAsignado: true,
+          saldoActual: true,
+          sede: { select: { nombre: true } },
+        },
+      });
+
+      const agentesAlerta = agentes.filter(
+        (a) => Number(a.saldoActual) < Number(a.fondoAsignado) * 0.2,
+      );
+
+      if (agentesAlerta.length > 0) {
+        const admins = await this._getAdminsContadores(empresaId);
+        if (admins.length > 0) {
+          const detalles = agentesAlerta
+            .map(
+              (a) =>
+                `- ${a.banco} (${a.sede?.nombre ?? 'Sin sede'}): saldo S/ ${Number(a.saldoActual).toFixed(2)} / fondo S/ ${Number(a.fondoAsignado).toFixed(2)}`,
+            )
+            .join('\n');
+
+          await this.notificacionService.enviarAUsuarios(
+            admins,
+            'Alerta: Agentes bancarios con fondo bajo',
+            `Hay ${agentesAlerta.length} agente(s) bancario(s) con saldo por debajo del 20% de su fondo asignado:\n${detalles}`,
+            { tipo: 'SISTEMA', empresaId },
+          );
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Error verificando agentes bancarios fondo bajo [${empresaNombre}]: ${error?.message}`);
     }
   }
 

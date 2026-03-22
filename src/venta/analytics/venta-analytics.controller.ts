@@ -11,6 +11,8 @@ import { TenantAuthGuard } from '../../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { RequiresPermission } from '../../auth/decorators/requires-permission.decorator';
 import { Permission } from '../../auth/enums/permission.enum';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { JwtPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { VentaAnalyticsService } from './venta-analytics.service';
 import { VentaAnalyticsQueryDto } from './dto/venta-analytics.dto';
 
@@ -22,6 +24,22 @@ export class VentaAnalyticsController {
   constructor(
     private readonly ventaAnalyticsService: VentaAnalyticsService,
   ) {}
+
+  @Get('dashboard-vendedor')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Dashboard personalizado del vendedor' })
+  @ApiResponse({ status: 200, description: 'Dashboard del vendedor obtenido exitosamente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getDashboardVendedor(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('vendedorId') vendedorId?: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    // Si no se pasa vendedorId, usar el del usuario logueado
+    const targetVendedorId = vendedorId || user.sub;
+    return this.ventaAnalyticsService.getDashboardVendedor(empresaId, targetVendedorId, sedeId);
+  }
 
   @Get('resumen')
   @RequiresPermission(Permission.VIEW_VENTAS)

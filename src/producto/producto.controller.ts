@@ -375,6 +375,32 @@ export class ProductoController {
   }
 
   // =========================================
+  // ENDPOINTS DE CÓDIGO DE BARRAS (ANTES DE :id)
+  // =========================================
+
+  @Get('sin-codigo-barras')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Listar productos sin código de barras' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getProductosSinBarcode(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return this.productoService.getProductosSinBarcode(empresaId, sedeId);
+  }
+
+  @Post('generar-codigos-barras')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Generar códigos de barras para productos' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async generarCodigosBarras(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: { productoIds: string[]; formato?: 'INTERNO' | 'EAN13' },
+  ) {
+    return this.productoService.generarCodigosBarras(empresaId, dto.productoIds, dto.formato);
+  }
+
+  // =========================================
   // ENDPOINTS DINÁMICOS CON :id
   // =========================================
 

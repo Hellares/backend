@@ -103,6 +103,12 @@ export class CrearYCobrarVentaDto {
   @Type(() => Number)
   numeroCuotas?: number;
 
+  @ApiPropertyOptional({ description: 'Porcentaje de interes para credito' })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  porcentajeInteres?: number;
+
   @ApiPropertyOptional({ description: 'Fecha de vencimiento del pago' })
   @IsOptional()
   @IsDateString()

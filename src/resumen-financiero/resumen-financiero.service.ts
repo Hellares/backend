@@ -12,7 +12,7 @@ export class ResumenFinancieroService {
     const fechaDesde = periodo?.fechaDesde ? new Date(periodo.fechaDesde) : this._inicioMes();
     const fechaHasta = periodo?.fechaHasta ? new Date(periodo.fechaHasta) : new Date();
 
-    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, prestamos, otrosMovimientos] = await Promise.all([
+    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, prestamos, otrosMovimientos, agentes] = await Promise.all([
       this._resumenVentas(empresaId, fechaDesde, fechaHasta),
       this._resumenCompras(empresaId, fechaDesde, fechaHasta),
       this._resumenPedidosMarketplace(empresaId, fechaDesde, fechaHasta),
@@ -22,6 +22,7 @@ export class ResumenFinancieroService {
       this._resumenBancos(empresaId),
       this._resumenPrestamos(empresaId),
       this._resumenOtrosMovimientos(empresaId, fechaDesde, fechaHasta),
+      this._resumenAgentes(empresaId, fechaDesde, fechaHasta),
     ]);
 
     const totalIngresos = ventas.totalCobrado + pedidosMarketplace.totalValidado + otrosMovimientos.totalOtrosIngresos;
@@ -44,6 +45,7 @@ export class ResumenFinancieroService {
       bancos,
       prestamos,
       otrosMovimientos,
+      agentes,
     };
   }
 
@@ -327,6 +329,31 @@ export class ResumenFinancieroService {
       totalOtrosIngresos: Math.round(totalOtrosIngresos * 100) / 100,
       totalOtrosEgresos: Math.round(totalOtrosEgresos * 100) / 100,
       porCategoria,
+    };
+  }
+
+  private async _resumenAgentes(empresaId: string, desde?: Date, hasta?: Date) {
+    const where: any = { empresaId, anulado: false };
+    if (desde || hasta) {
+      where.fechaOperacion = {};
+      if (desde) where.fechaOperacion.gte = desde;
+      if (hasta) where.fechaOperacion.lte = hasta;
+    }
+
+    const operaciones = await this.prisma.operacionAgente.findMany({
+      where,
+      select: { tipo: true, monto: true, comision: true },
+    });
+
+    const depositos = operaciones.filter((o) => o.tipo === 'DEPOSITO');
+    const retiros = operaciones.filter((o) => o.tipo === 'RETIRO');
+
+    return {
+      totalDepositos: Math.round(depositos.reduce((s, o) => s + Number(o.monto), 0) * 100) / 100,
+      totalRetiros: Math.round(retiros.reduce((s, o) => s + Number(o.monto), 0) * 100) / 100,
+      cantidadDepositos: depositos.length,
+      cantidadRetiros: retiros.length,
+      comisionesGanadas: Math.round(operaciones.reduce((s, o) => s + Number(o.comision), 0) * 100) / 100,
     };
   }
 

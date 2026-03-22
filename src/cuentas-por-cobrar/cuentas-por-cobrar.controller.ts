@@ -1,8 +1,10 @@
 import {
   Controller,
   Get,
+  Patch,
   Param,
   Query,
+  Body,
   UseGuards,
   Headers,
 } from '@nestjs/common';
@@ -14,6 +16,7 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { Permission } from '../auth/enums/permission.enum';
 import { CuentasPorCobrarService } from './cuentas-por-cobrar.service';
 import { QueryCuentasCobrarDto } from './dto/query-cuentas-cobrar.dto';
+import { UpdateConfiguracionMoraDto } from './dto/update-configuracion-mora.dto';
 
 @ApiTags('Cuentas por Cobrar')
 @Controller('cuentas-por-cobrar')
@@ -39,6 +42,25 @@ export class CuentasPorCobrarController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async resumen(@Headers('x-tenant-id') empresaId: string) {
     return this.service.getResumen(empresaId);
+  }
+
+  @Get('configuracion-mora')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Obtener configuración de mora' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getConfiguracionMora(@Headers('x-tenant-id') empresaId: string) {
+    return this.service.getConfiguracionMora(empresaId);
+  }
+
+  @Patch('configuracion-mora')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Actualizar configuración de mora' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async updateConfiguracionMora(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: UpdateConfiguracionMoraDto,
+  ) {
+    return this.service.updateConfiguracionMora(empresaId, dto);
   }
 
   @Get(':ventaId')

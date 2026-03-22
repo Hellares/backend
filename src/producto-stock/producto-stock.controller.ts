@@ -86,6 +86,54 @@ export class ProductoStockController {
     return this.stockService.getReporteRotacion(empresaId, sedeId, dias ? parseInt(dias) : 90);
   }
 
+  // =====================================================
+  // MONITOR DE PRODUCTOS
+  // =====================================================
+
+  @Get('monitor')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Monitor de estado de productos' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getMonitor(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return this.stockService.getMonitorProductos(empresaId, sedeId);
+  }
+
+  @Patch('bulk/marketplace')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Bulk activar/desactivar marketplace' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async bulkMarketplace(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: { productoIds: string[]; visible: boolean },
+  ) {
+    return this.stockService.bulkMarketplace(empresaId, dto.productoIds, dto.visible);
+  }
+
+  @Patch('bulk/ubicacion')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Bulk asignar ubicacion' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async bulkUbicacion(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: { productoStockIds: string[]; ubicacion: string },
+  ) {
+    return this.stockService.bulkUbicacion(empresaId, dto.productoStockIds, dto.ubicacion);
+  }
+
+  @Patch('bulk/precio-igv')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Bulk marcar precio incluye IGV' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async bulkPrecioIgv(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: { productoStockIds: string[]; precioIncluyeIgv: boolean },
+  ) {
+    return this.stockService.bulkPrecioIgv(empresaId, dto.productoStockIds, dto.precioIncluyeIgv);
+  }
+
   @Post()
   @ApiOperation({
     summary: 'Crear registro de stock',

@@ -61,6 +61,12 @@ model Venta {
   plazoCredito          Int? // Días de crédito
   numeroCuotas          Int? // Número de cuotas
   montoCreditoInicial   Decimal?  @db.Decimal(10, 2) // Monto de la porción crédito (ventas mixtas)
+
+  // Interés por crédito
+  porcentajeInteres     Decimal?  @db.Decimal(5, 2)  // % aplicado (null = 0%)
+  montoInteres          Decimal?  @db.Decimal(10, 2) // Monto calculado del interés
+  totalConInteres       Decimal?  @db.Decimal(10, 2) // montoCreditoInicial + montoInteres
+
   fechaVencimientoPago  DateTime?
 
   // Fechas
@@ -160,6 +166,11 @@ model PagoVenta {
   referencia     String? // Número de operación, voucher, etc.
   fechaPago      DateTime   @default(now())
 
+  // Desglose del pago (principal, interés, mora)
+  montoPrincipal  Decimal? @db.Decimal(10, 2) // Porción aplicada a principal
+  montoInteres    Decimal? @db.Decimal(10, 2) // Porción aplicada a interés
+  montoMora       Decimal? @db.Decimal(10, 2) // Porción aplicada a mora
+
   // Pago en moneda extranjera
   monedaOriginal  String?  // PEN o USD (null = PEN)
   montoOriginal   Decimal? @db.Decimal(10, 2) // Monto en moneda original
@@ -193,15 +204,26 @@ model CuotaVenta {
   ventaId         String
   numero          Int          // 1, 2, 3...
 
-  monto           Decimal      @db.Decimal(10, 2)
-  montoPagado     Decimal      @default(0) @db.Decimal(10, 2)
+  monto           Decimal      @db.Decimal(10, 2)  // Total cuota = montoPrincipal + montoInteres
+  montoPagado     Decimal      @default(0) @db.Decimal(10, 2) // Total pagado (principal + interés)
   saldoPendiente  Decimal      @db.Decimal(10, 2)
+
+  // Desglose principal / interés
+  montoPrincipal        Decimal  @default(0) @db.Decimal(10, 2) // Porción del capital
+  montoInteres          Decimal  @default(0) @db.Decimal(10, 2) // Porción del interés por crédito
+
+  // Tracking de pagos por componente
+  montoPagadoPrincipal  Decimal  @default(0) @db.Decimal(10, 2)
+  montoPagadoInteres    Decimal  @default(0) @db.Decimal(10, 2)
+  montoPagadoMora       Decimal  @default(0) @db.Decimal(10, 2)
 
   fechaVencimiento DateTime
   estado           EstadoCuota @default(PENDIENTE)
 
-  // Preparado para mora futura
-  montoMora       Decimal?     @db.Decimal(10, 2)
+  // Mora por vencimiento
+  montoMora           Decimal?     @db.Decimal(10, 2)
+  diasVencido         Int          @default(0)
+  fechaCalculoMora    DateTime?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

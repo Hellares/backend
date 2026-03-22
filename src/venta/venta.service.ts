@@ -400,13 +400,28 @@ export class VentaService {
 
         // 5b. Generar cuotas si es venta a crédito con cuotas
         if (esCredito && dto.numeroCuotas && dto.numeroCuotas > 0 && montoCredito > 0) {
+          const porcentajeInteres = dto.porcentajeInteres ?? 0;
           const cuotasData = this.generarCuotas(
             venta.id,
             montoCredito,
             dto.numeroCuotas,
             dto.plazoCredito ?? 30,
+            porcentajeInteres,
           );
           await tx.cuotaVenta.createMany({ data: cuotasData });
+
+          // Store interest snapshot on venta
+          if (porcentajeInteres > 0) {
+            const montoInteresTotal = Math.round(montoCredito * (porcentajeInteres / 100) * 100) / 100;
+            await tx.venta.update({
+              where: { id: venta.id },
+              data: {
+                porcentajeInteres,
+                montoInteres: montoInteresTotal,
+                totalConInteres: montoCredito + montoInteresTotal,
+              },
+            });
+          }
         }
 
         // 6. Generar comprobante electrónico (solo BOLETA/FACTURA, no TICKET)
@@ -1415,21 +1430,52 @@ export class VentaService {
         orderBy: { numero: 'asc' },
       });
 
+      // Track total breakdown
+      let totalMoraAplicada = 0;
+      let totalInteresAplicado = 0;
+      let totalPrincipalAplicado = 0;
+
       if (ventaCuotas.length > 0) {
         let remaining = dto.monto;
         for (const cuota of ventaCuotas) {
           if (remaining <= 0) break;
-          const saldo = Number(cuota.saldoPendiente);
-          const aplicar = Math.min(remaining, saldo);
-          const nuevoMontoPagado = Number(cuota.montoPagado) + aplicar;
+
+          const mora = Number(cuota.montoMora ?? 0);
+          const saldoInteres = Math.round((Number(cuota.montoInteres ?? 0) - Number(cuota.montoPagadoInteres ?? 0)) * 100) / 100;
+          const saldoPrincipal = Math.round((Number(cuota.montoPrincipal ?? 0) - Number(cuota.montoPagadoPrincipal ?? 0)) * 100) / 100;
+          const saldoTotal = mora + Math.max(saldoInteres, 0) + Math.max(saldoPrincipal, 0);
+          const aplicar = Math.min(remaining, saldoTotal);
+
+          // Priority: mora -> interes -> principal
+          const moraAplicada = Math.min(aplicar, mora);
+          let sobrante = aplicar - moraAplicada;
+          const interesAplicado = Math.min(sobrante, Math.max(saldoInteres, 0));
+          sobrante -= interesAplicado;
+          const principalAplicado = Math.min(sobrante, Math.max(saldoPrincipal, 0));
+
+          totalMoraAplicada += moraAplicada;
+          totalInteresAplicado += interesAplicado;
+          totalPrincipalAplicado += principalAplicado;
+
+          const nuevoMontoPagadoPrincipal = Number(cuota.montoPagadoPrincipal ?? 0) + principalAplicado;
+          const nuevoMontoPagadoInteres = Number(cuota.montoPagadoInteres ?? 0) + interesAplicado;
+          const nuevoMontoPagadoMora = Number(cuota.montoPagadoMora ?? 0) + moraAplicada;
+          const nuevoMontoPagado = nuevoMontoPagadoPrincipal + nuevoMontoPagadoInteres;
           const nuevoSaldo = Math.round((Number(cuota.monto) - nuevoMontoPagado) * 100) / 100;
+          const nuevaMora = Math.round((mora - moraAplicada) * 100) / 100;
+          const cuotaPagada = nuevoSaldo <= 0 && nuevaMora <= 0;
 
           await tx.cuotaVenta.update({
             where: { id: cuota.id },
             data: {
               montoPagado: nuevoMontoPagado,
+              montoPagadoPrincipal: nuevoMontoPagadoPrincipal,
+              montoPagadoInteres: nuevoMontoPagadoInteres,
+              montoPagadoMora: nuevoMontoPagadoMora,
               saldoPendiente: Math.max(nuevoSaldo, 0),
-              estado: nuevoSaldo <= 0 ? 'PAGADA' : 'PAGADA_PARCIAL',
+              estado: cuotaPagada ? 'PAGADA' : 'PAGADA_PARCIAL',
+              montoMora: cuotaPagada ? 0 : nuevaMora,
+              ...(cuotaPagada && { diasVencido: 0, fechaCalculoMora: null }),
             },
           });
 
@@ -1437,11 +1483,28 @@ export class VentaService {
           if (remaining === dto.monto) {
             await tx.pagoVenta.update({
               where: { id: pago.id },
-              data: { cuotaVentaId: cuota.id },
+              data: {
+                cuotaVentaId: cuota.id,
+                montoPrincipal: totalPrincipalAplicado,
+                montoInteres: totalInteresAplicado,
+                montoMora: totalMoraAplicada,
+              },
             });
           }
 
           remaining = Math.round((remaining - aplicar) * 100) / 100;
+        }
+
+        // Update pago breakdown (final totals, since loop may span multiple cuotas)
+        if (ventaCuotas.length > 0) {
+          await tx.pagoVenta.update({
+            where: { id: pago.id },
+            data: {
+              montoPrincipal: totalPrincipalAplicado,
+              montoInteres: totalInteresAplicado,
+              montoMora: totalMoraAplicada,
+            },
+          });
         }
       }
 
@@ -1452,18 +1515,19 @@ export class VentaService {
       );
       const totalPagado = pagosExistentes + dto.monto;
       const ventaTotal = Number(venta.total);
+      const targetTotal = venta.totalConInteres ? Number(venta.totalConInteres) : ventaTotal;
 
       // Determinar nuevo estado
       let nuevoEstado = venta.estado;
-      if (totalPagado >= ventaTotal) {
+      if (totalPagado >= targetTotal) {
         nuevoEstado = EstadoVenta.PAGADA_COMPLETA;
       } else if (totalPagado > 0) {
         nuevoEstado = EstadoVenta.PAGADA_PARCIAL;
       }
 
       const montoCambio =
-        totalPagado > ventaTotal
-          ? Math.round((totalPagado - ventaTotal) * 100) / 100
+        totalPagado > targetTotal
+          ? Math.round((totalPagado - targetTotal) * 100) / 100
           : 0;
 
       const updatedVenta = await tx.venta.update({
@@ -1491,6 +1555,11 @@ export class VentaService {
               monto: dto.monto,
               descripcion: `Pago venta ${venta.codigo}`,
               ventaId: venta.id,
+              metadata: totalMoraAplicada > 0 || totalInteresAplicado > 0 ? {
+                principal: totalPrincipalAplicado,
+                interes: totalInteresAplicado,
+                mora: totalMoraAplicada,
+              } : undefined,
             },
             tx,
           );
@@ -1681,16 +1750,27 @@ export class VentaService {
     montoCredito: number,
     numeroCuotas: number,
     plazoDias: number,
+    porcentajeInteres: number = 0,
     fechaBase: Date = new Date(),
   ) {
+    const montoInteresTotal = Math.round(montoCredito * (porcentajeInteres / 100) * 100) / 100;
+    const totalConInteres = montoCredito + montoInteresTotal;
+
     const intervaloDias = Math.floor(plazoDias / numeroCuotas);
-    const montoCuota = Math.floor((montoCredito / numeroCuotas) * 100) / 100;
-    const resto = Math.round((montoCredito - montoCuota * numeroCuotas) * 100) / 100;
+    const montoCuota = Math.floor((totalConInteres / numeroCuotas) * 100) / 100;
+    const resto = Math.round((totalConInteres - montoCuota * numeroCuotas) * 100) / 100;
+
+    // Distribute interest proportionally
+    const interesPorCuota = numeroCuotas > 0 ? Math.floor((montoInteresTotal / numeroCuotas) * 100) / 100 : 0;
+    const restoInteres = Math.round((montoInteresTotal - interesPorCuota * numeroCuotas) * 100) / 100;
 
     return Array.from({ length: numeroCuotas }, (_, i) => {
       const numero = i + 1;
       const esUltima = numero === numeroCuotas;
       const monto = esUltima ? montoCuota + resto : montoCuota;
+      const interesEstaCuota = esUltima ? interesPorCuota + restoInteres : interesPorCuota;
+      const principalEstaCuota = Math.round((monto - interesEstaCuota) * 100) / 100;
+
       const fechaVencimiento = new Date(fechaBase);
       fechaVencimiento.setDate(fechaVencimiento.getDate() + intervaloDias * numero);
 
@@ -1698,7 +1778,12 @@ export class VentaService {
         ventaId,
         numero,
         monto,
+        montoPrincipal: principalEstaCuota,
+        montoInteres: interesEstaCuota,
         montoPagado: 0,
+        montoPagadoPrincipal: 0,
+        montoPagadoInteres: 0,
+        montoPagadoMora: 0,
         saldoPendiente: monto,
         fechaVencimiento,
         estado: 'PENDIENTE' as const,

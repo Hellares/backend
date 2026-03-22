@@ -177,6 +177,9 @@ model Empresa {
   categoriasGasto    CategoriaGasto[]
   metasFinancieras   MetaFinanciera[]
   tiposCambio        TipoCambio[]
+  ubicacionesAlmacen UbicacionAlmacen[]
+  agentesBancarios   AgenteBancario[]
+  operacionesAgente  OperacionAgente[]
 
   @@index([subdominio])
   @@index([isActive])
@@ -389,6 +392,12 @@ model Sede {
   // Relaciones para módulo de caja chica
   cajasChicas CajaChica[]
 
+  // Ubicaciones de almacén
+  ubicacionesAlmacen UbicacionAlmacen[]
+
+  // Agentes bancarios
+  agentesBancarios AgenteBancario[]
+
   @@unique([empresaId, codigo])
   @@index([empresaId])
   @@index([codigo])
@@ -493,6 +502,17 @@ model ConfiguracionEmpresa {
   etiquetaNumeroSerie       String?  // "Número de serie", "Placa", "N° Chasis", etc.
   etiquetaCondicionEquipo   String?  // "Condición del equipo", "Estado del vehículo", etc.
   mostrarSeccionEquipo      Boolean  @default(true)  // Permite ocultar la sección completa
+
+  // Configuración de interés por crédito
+  interesHabilitado          Boolean  @default(false)
+  porcentajeInteresDefault   Decimal? @default(0) @db.Decimal(5, 2) // 5.00 = 5%
+  interesEsEditable          Boolean  @default(true) // Vendedor puede cambiar %
+
+  // Configuración de mora para cuotas vencidas
+  moraHabilitada            Boolean  @default(false)
+  porcentajeMoraDiario      Decimal? @default(0.05) @db.Decimal(5, 4) // 0.05% diario por defecto
+  moraMaximaPorcentaje      Decimal? @default(30.0) @db.Decimal(5, 2) // Tope máximo 30% del monto cuota
+  diasGraciaMora            Int      @default(0) // Días de gracia antes de aplicar mora
 
   creadoEn                  DateTime @default(now())
   actualizadoEn             DateTime @updatedAt

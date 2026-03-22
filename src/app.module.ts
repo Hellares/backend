@@ -51,6 +51,9 @@ import { CajaChicaModule } from './caja-chica/caja-chica.module';
 import { CategoriaGastoModule } from './categoria-gasto/categoria-gasto.module';
 import { MetaFinancieraModule } from './meta-financiera/meta-financiera.module';
 import { ReportesFinancierosModule } from './reportes-financieros/reportes-financieros.module';
+import { TipoCambioModule } from './tipo-cambio/tipo-cambio.module';
+import { UbicacionAlmacenModule } from './ubicacion-almacen/ubicacion-almacen.module';
+import { AgenteBancarioModule } from './agente-bancario/agente-bancario.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -115,6 +118,9 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     CategoriaGastoModule,
     MetaFinancieraModule,
     ReportesFinancierosModule,
+    TipoCambioModule,
+    UbicacionAlmacenModule,
+    AgenteBancarioModule,
   ],
   controllers: [AppController],
   providers: [

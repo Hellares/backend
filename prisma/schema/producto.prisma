@@ -19,7 +19,7 @@ model Producto {
   descuentoMaximo    Decimal? @db.Decimal(5, 2)
 
   // Campos para Marketplace
-  visibleMarketplace Boolean @default(true)
+  visibleMarketplace Boolean @default(false)
   destacado          Boolean @default(false)
   ordenMarketplace   Int?
 

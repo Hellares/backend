@@ -33,6 +33,9 @@ model SolicitudCotizacion {
   // Vínculo con la cotización formal (cuando el vendedor responde)
   cotizacionId    String?
 
+  // Vencimiento automático
+  fechaVencimiento DateTime? // Calculada al crear (creadoEn + 7 días)
+
   // Auditoría
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

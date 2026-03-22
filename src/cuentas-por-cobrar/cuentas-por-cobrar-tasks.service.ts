@@ -100,11 +100,73 @@ export class CuentasPorCobrarTasksService {
         data: { estado: 'VENCIDA' },
       });
 
+      // After marking cuotas as VENCIDA, calculate mora for all overdue cuotas
+      await this.calcularMoraTodasEmpresas(now);
+
       if (porEmpresa.size > 0) {
         this.logger.info(`Alertas de cobranza enviadas a ${porEmpresa.size} empresas`);
       }
     } catch (error) {
       this.logger.error(`Error en alertas de cobranza: ${error.message}`);
+    }
+  }
+
+  /**
+   * Calcular mora para todas las empresas que tienen mora habilitada
+   */
+  private async calcularMoraTodasEmpresas(now: Date) {
+    try {
+      // Get all empresas with mora enabled
+      const configuraciones = await this.prisma.configuracionEmpresa.findMany({
+        where: { moraHabilitada: true },
+        select: {
+          empresaId: true,
+          porcentajeMoraDiario: true,
+          moraMaximaPorcentaje: true,
+          diasGraciaMora: true,
+        },
+      });
+
+      for (const config of configuraciones) {
+        const porcentajeDiario = Number(config.porcentajeMoraDiario ?? 0.05);
+        const maxPorcentaje = Number(config.moraMaximaPorcentaje ?? 30);
+        const diasGracia = config.diasGraciaMora ?? 0;
+
+        // Get all VENCIDA cuotas for this empresa
+        const cuotasVencidas = await this.prisma.cuotaVenta.findMany({
+          where: {
+            estado: 'VENCIDA',
+            venta: { empresaId: config.empresaId, estado: { not: 'ANULADA' } },
+          },
+          include: { venta: { select: { empresaId: true } } },
+        });
+
+        for (const cuota of cuotasVencidas) {
+          const diasVencido = Math.floor(
+            (now.getTime() - cuota.fechaVencimiento.getTime()) / (1000 * 60 * 60 * 24),
+          );
+          const diasVencidoEfectivo = Math.max(diasVencido - diasGracia, 0);
+
+          if (diasVencidoEfectivo > 0) {
+            const montoCuota = Number(cuota.monto);
+            let montoMora = montoCuota * (porcentajeDiario / 100) * diasVencidoEfectivo;
+            const moraMaxima = montoCuota * (maxPorcentaje / 100);
+            montoMora = Math.min(montoMora, moraMaxima);
+            montoMora = Math.round(montoMora * 100) / 100;
+
+            await this.prisma.cuotaVenta.update({
+              where: { id: cuota.id },
+              data: {
+                montoMora,
+                diasVencido: diasVencidoEfectivo,
+                fechaCalculoMora: now,
+              },
+            });
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error calculando mora: ${error.message}`);
     }
   }
 }

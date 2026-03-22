@@ -23,6 +23,9 @@ enum CategoriaMovimientoCaja {
   GASTO_OPERATIVO
   OTRO_EGRESO
   REPOSICION_CAJA_CHICA
+  DEPOSITO_AGENTE
+  RETIRO_AGENTE
+  COMISION_AGENTE
 }
 
 /// Caja (apertura/cierre de caja registradora)
@@ -67,6 +70,7 @@ model MovimientoCaja {
   metodoPago            MetodoPagoVenta
   monto                 Decimal                 @db.Decimal(10, 2)
   descripcion           String?
+  metadata              Json?   // Desglose: { "principal": 100, "interes": 5, "mora": 2 }
 
   // Categoria de gasto personalizada (opcional)
   categoriaGastoId      String?
@@ -106,6 +110,7 @@ model MovimientoCaja {
   movimientoContrapartida MovimientoCaja? @relation("MovimientoContrapartida", fields: [movimientoContrapartidaId], references: [id])
   contrapartidaDe     MovimientoCaja?     @relation("MovimientoContrapartida")
   rendicionesCajaChica RendicionCajaChica[]
+  operacionesAgente    OperacionAgente[]
 
   @@index([cajaId])
   @@index([anulado])

@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { UpdateConfiguracionMoraDto } from './dto/update-configuracion-mora.dto';
 
 @Injectable()
 export class CuentasPorCobrarService {
@@ -42,6 +43,9 @@ export class CuentasPorCobrarService {
           select: {
             id: true, numero: true, monto: true, montoPagado: true,
             saldoPendiente: true, fechaVencimiento: true, estado: true,
+            montoMora: true, diasVencido: true,
+            montoInteres: true, montoPrincipal: true,
+            montoPagadoPrincipal: true, montoPagadoInteres: true, montoPagadoMora: true,
           },
         },
         sede: { select: { id: true, nombre: true } },
@@ -90,11 +94,18 @@ export class CuentasPorCobrarService {
         estado: estaPagada ? 'PAGADA' : estaVencida ? 'VENCIDA' : 'PENDIENTE',
         pagos: v.pagos,
         numeroCuotas: v.numeroCuotas,
+        totalMora: Math.round((v.cuotas?.reduce((sum, c) => sum + Number(c.montoMora ?? 0), 0) ?? 0) * 100) / 100,
         cuotas: v.cuotas?.map(c => ({
           ...c,
           monto: Number(c.monto),
           montoPagado: Number(c.montoPagado),
           saldoPendiente: Number(c.saldoPendiente),
+          montoMora: Number(c.montoMora ?? 0),
+          montoPrincipal: Number(c.montoPrincipal ?? 0),
+          montoInteres: Number(c.montoInteres ?? 0),
+          montoPagadoPrincipal: Number(c.montoPagadoPrincipal ?? 0),
+          montoPagadoInteres: Number(c.montoPagadoInteres ?? 0),
+          montoPagadoMora: Number(c.montoPagadoMora ?? 0),
         })),
         proximaCuota: (() => {
           const proxima = v.cuotas?.find((c: any) =>
@@ -130,9 +141,17 @@ export class CuentasPorCobrarService {
     const vencidas = cuentas.filter((c) => c.estado === 'VENCIDA');
     const pagadas = cuentas.filter((c) => c.estado === 'PAGADA');
 
+    const noPagadas = cuentas.filter((c) => c.estado !== 'PAGADA');
+    const totalMora = Math.round(noPagadas.reduce((s, c) => s + (c.totalMora ?? 0), 0) * 100) / 100;
+    const totalInteres = Math.round(
+      noPagadas.reduce((s, c) => s + (c.cuotas?.reduce((si, cu) => si + (cu.montoInteres ?? 0), 0) ?? 0), 0) * 100,
+    ) / 100;
+
     return {
       totalPendiente: Math.round(pendientes.reduce((s, c) => s + c.saldoPendiente, 0) * 100) / 100,
       totalVencido: Math.round(vencidas.reduce((s, c) => s + c.saldoPendiente, 0) * 100) / 100,
+      totalMora,
+      totalInteres,
       cantidadPendientes: pendientes.length,
       cantidadVencidas: vencidas.length,
       cantidadPagadas: pagadas.length,
@@ -154,6 +173,16 @@ export class CuentasPorCobrarService {
       where: { id: ventaId, empresaId, esCredito: true },
       include: {
         pagos: { orderBy: { fechaPago: 'desc' } },
+        cuotas: {
+          orderBy: { numero: 'asc' },
+          select: {
+            id: true, numero: true, monto: true, montoPagado: true,
+            saldoPendiente: true, fechaVencimiento: true, estado: true,
+            montoMora: true, diasVencido: true, fechaCalculoMora: true,
+            montoInteres: true, montoPrincipal: true,
+            montoPagadoPrincipal: true, montoPagadoInteres: true, montoPagadoMora: true,
+          },
+        },
         detalles: {
           select: {
             id: true,
@@ -175,6 +204,9 @@ export class CuentasPorCobrarService {
     if (!venta) return null;
 
     const totalPagado = venta.pagos.reduce((sum, p) => sum + Number(p.monto), 0);
+    const totalMora = Math.round(
+      (venta.cuotas?.reduce((sum, c) => sum + Number(c.montoMora ?? 0), 0) ?? 0) * 100,
+    ) / 100;
 
     return {
       ...venta,
@@ -182,6 +214,77 @@ export class CuentasPorCobrarService {
       subtotal: Number(venta.subtotal),
       totalPagado: Math.round(totalPagado * 100) / 100,
       saldoPendiente: Math.round((Number(venta.total) - totalPagado) * 100) / 100,
+      totalMora,
+      cuotas: venta.cuotas?.map(c => ({
+        ...c,
+        monto: Number(c.monto),
+        montoPagado: Number(c.montoPagado),
+        saldoPendiente: Number(c.saldoPendiente),
+        montoMora: Number(c.montoMora ?? 0),
+        montoPrincipal: Number(c.montoPrincipal ?? 0),
+        montoInteres: Number(c.montoInteres ?? 0),
+        montoPagadoPrincipal: Number(c.montoPagadoPrincipal ?? 0),
+        montoPagadoInteres: Number(c.montoPagadoInteres ?? 0),
+        montoPagadoMora: Number(c.montoPagadoMora ?? 0),
+      })),
+    };
+  }
+
+  /**
+   * Obtener configuración de mora de la empresa
+   */
+  async getConfiguracionMora(empresaId: string) {
+    const config = await this.prisma.configuracionEmpresa.findUnique({
+      where: { empresaId },
+      select: {
+        moraHabilitada: true,
+        porcentajeMoraDiario: true,
+        moraMaximaPorcentaje: true,
+        diasGraciaMora: true,
+      },
+    });
+
+    if (!config) throw new NotFoundException('Configuración de empresa no encontrada');
+
+    return {
+      moraHabilitada: config.moraHabilitada,
+      porcentajeMoraDiario: Number(config.porcentajeMoraDiario ?? 0.05),
+      moraMaximaPorcentaje: Number(config.moraMaximaPorcentaje ?? 30),
+      diasGraciaMora: config.diasGraciaMora ?? 0,
+    };
+  }
+
+  /**
+   * Actualizar configuración de mora de la empresa
+   */
+  async updateConfiguracionMora(empresaId: string, dto: UpdateConfiguracionMoraDto) {
+    const config = await this.prisma.configuracionEmpresa.findUnique({
+      where: { empresaId },
+    });
+
+    if (!config) throw new NotFoundException('Configuración de empresa no encontrada');
+
+    const updated = await this.prisma.configuracionEmpresa.update({
+      where: { empresaId },
+      data: {
+        ...(dto.moraHabilitada !== undefined && { moraHabilitada: dto.moraHabilitada }),
+        ...(dto.porcentajeMoraDiario !== undefined && { porcentajeMoraDiario: dto.porcentajeMoraDiario }),
+        ...(dto.moraMaximaPorcentaje !== undefined && { moraMaximaPorcentaje: dto.moraMaximaPorcentaje }),
+        ...(dto.diasGraciaMora !== undefined && { diasGraciaMora: dto.diasGraciaMora }),
+      },
+      select: {
+        moraHabilitada: true,
+        porcentajeMoraDiario: true,
+        moraMaximaPorcentaje: true,
+        diasGraciaMora: true,
+      },
+    });
+
+    return {
+      moraHabilitada: updated.moraHabilitada,
+      porcentajeMoraDiario: Number(updated.porcentajeMoraDiario ?? 0.05),
+      moraMaximaPorcentaje: Number(updated.moraMaximaPorcentaje ?? 30),
+      diasGraciaMora: updated.diasGraciaMora ?? 0,
     };
   }
 

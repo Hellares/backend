@@ -1507,6 +1507,13 @@ export class EmpresaService {
         ...(data.etiquetaNumeroSerie !== undefined && { etiquetaNumeroSerie: data.etiquetaNumeroSerie }),
         ...(data.etiquetaCondicionEquipo !== undefined && { etiquetaCondicionEquipo: data.etiquetaCondicionEquipo }),
         ...(data.mostrarSeccionEquipo !== undefined && { mostrarSeccionEquipo: data.mostrarSeccionEquipo }),
+        ...(data.interesHabilitado !== undefined && { interesHabilitado: data.interesHabilitado }),
+        ...(data.porcentajeInteresDefault !== undefined && { porcentajeInteresDefault: data.porcentajeInteresDefault }),
+        ...(data.interesEsEditable !== undefined && { interesEsEditable: data.interesEsEditable }),
+        ...(data.moraHabilitada !== undefined && { moraHabilitada: data.moraHabilitada }),
+        ...(data.porcentajeMoraDiario !== undefined && { porcentajeMoraDiario: data.porcentajeMoraDiario }),
+        ...(data.moraMaximaPorcentaje !== undefined && { moraMaximaPorcentaje: data.moraMaximaPorcentaje }),
+        ...(data.diasGraciaMora !== undefined && { diasGraciaMora: data.diasGraciaMora }),
       },
       create: {
         empresaId,

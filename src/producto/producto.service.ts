@@ -1160,4 +1160,134 @@ export class ProductoService {
 
     return precioNuevo;
   }
+
+  // =========================================
+  // MÉTODOS DE CÓDIGO DE BARRAS
+  // =========================================
+
+  async getProductosSinBarcode(empresaId: string, sedeId?: string) {
+    const where: any = {
+      empresaId,
+      isActive: true,
+      deletedAt: null,
+      OR: [{ codigoBarras: null }, { codigoBarras: '' }],
+    };
+
+    const productos = await this.prisma.producto.findMany({
+      where,
+      select: {
+        id: true,
+        nombre: true,
+        codigoEmpresa: true,
+        sku: true,
+        codigoBarras: true,
+        stocksPorSede: {
+          where: sedeId ? { sedeId } : {},
+          select: {
+            id: true,
+            stockActual: true,
+            precio: true,
+            sedeId: true,
+            sede: { select: { nombre: true } },
+          },
+          take: 1,
+        },
+      },
+      orderBy: { nombre: 'asc' },
+    });
+
+    return productos.map(p => ({
+      id: p.id,
+      productoId: p.id,
+      nombre: p.nombre,
+      codigoEmpresa: p.codigoEmpresa,
+      sku: p.sku,
+      codigoBarras: p.codigoBarras,
+      stockActual: p.stocksPorSede[0]?.stockActual ?? 0,
+      precio: p.stocksPorSede[0]?.precio ? Number(p.stocksPorSede[0].precio) : null,
+      sedeNombre: p.stocksPorSede[0]?.sede?.nombre ?? null,
+    }));
+  }
+
+  async generarCodigosBarras(empresaId: string, productoIds: string[], formato: 'INTERNO' | 'EAN13' = 'INTERNO') {
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: { subdominio: true },
+    });
+
+    const prefijo = (empresa?.subdominio ?? 'SYN').toUpperCase().substring(0, 3);
+    const resultados: Array<{ productoId: string; varianteId?: string; tipo: string; codigo: string; nombre: string }> = [];
+
+    for (const productoId of productoIds) {
+      const producto = await this.prisma.producto.findFirst({
+        where: { id: productoId, empresaId },
+        include: { variantes: { select: { id: true, nombre: true, codigoBarras: true, sku: true } } },
+      });
+      if (!producto) continue;
+
+      if (!producto.codigoBarras) {
+        const codigo = formato === 'EAN13'
+          ? this._generarEAN13(resultados.length + 1)
+          : await this._generarCodigoInterno(empresaId, prefijo);
+
+        await this.prisma.producto.update({
+          where: { id: productoId },
+          data: { codigoBarras: codigo },
+        });
+        resultados.push({ productoId, tipo: 'PRODUCTO', codigo, nombre: producto.nombre });
+      }
+
+      for (const variante of producto.variantes) {
+        if (!variante.codigoBarras) {
+          const codigo = formato === 'EAN13'
+            ? this._generarEAN13(resultados.length + 1)
+            : await this._generarCodigoInterno(empresaId, prefijo);
+
+          await this.prisma.productoVariante.update({
+            where: { id: variante.id },
+            data: { codigoBarras: codigo },
+          });
+          resultados.push({ productoId, varianteId: variante.id, tipo: 'VARIANTE', codigo, nombre: `${producto.nombre} - ${variante.nombre}` });
+        }
+      }
+    }
+
+    return { generados: resultados.length, resultados };
+  }
+
+  private async _generarCodigoInterno(empresaId: string, prefijo: string): Promise<string> {
+    const ultimo = await this.prisma.producto.findFirst({
+      where: { empresaId, codigoBarras: { startsWith: prefijo } },
+      orderBy: { codigoBarras: 'desc' },
+      select: { codigoBarras: true },
+    });
+
+    // Also check variantes
+    const ultimaVariante = await this.prisma.productoVariante.findFirst({
+      where: { producto: { empresaId }, codigoBarras: { startsWith: prefijo } },
+      orderBy: { codigoBarras: 'desc' },
+      select: { codigoBarras: true },
+    });
+
+    let secuencial = 1;
+    const codigos = [ultimo?.codigoBarras, ultimaVariante?.codigoBarras].filter(Boolean) as string[];
+    for (const cod of codigos) {
+      const match = cod.match(/(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1]);
+        if (num >= secuencial) secuencial = num + 1;
+      }
+    }
+
+    return `${prefijo}${secuencial.toString().padStart(7, '0')}`;
+  }
+
+  private _generarEAN13(seed: number): string {
+    // Generate a valid EAN-13 with check digit
+    const timestamp = Date.now().toString().slice(-8);
+    const base = (timestamp + seed.toString().padStart(4, '0')).substring(0, 12);
+    const digits = base.split('').map(Number);
+    const checksum = (10 - (digits.reduce((sum, d, i) => sum + d * (i % 2 === 0 ? 1 : 3), 0) % 10)) % 10;
+    return base + checksum;
+  }
 }

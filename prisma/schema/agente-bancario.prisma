@@ -1,0 +1,88 @@
+// =========================================
+// MÓDULO DE AGENTES BANCARIOS
+// Registro de operaciones como agente de banco (BCP, Interbank, BBVA, etc.)
+// =========================================
+
+enum TipoOperacionAgente {
+  DEPOSITO   // Cliente deposita → dinero ENTRA a tu caja
+  RETIRO     // Cliente retira → dinero SALE de tu caja
+}
+
+enum EstadoAgenteBancario {
+  ACTIVO
+  INACTIVO
+}
+
+model AgenteBancario {
+  id              String  @id @default(cuid())
+  empresaId       String
+  sedeId          String
+
+  banco           String    // BCP, Interbank, BBVA, Scotiabank, etc.
+  codigoAgente    String?   // Código asignado por el banco
+
+  fondoAsignado   Decimal   @db.Decimal(10, 2)  // Fondo inicial para retiros
+  saldoActual     Decimal   @db.Decimal(10, 2)  // Saldo actual del fondo
+
+  // Comisiones por operación
+  comisionDeposito  Decimal  @default(1.50) @db.Decimal(10, 2)
+  comisionRetiro    Decimal  @default(1.50) @db.Decimal(10, 2)
+
+  responsableId   String?
+  estado          EstadoAgenteBancario @default(ACTIVO)
+
+  creadoEn        DateTime @default(now())
+  actualizadoEn   DateTime @updatedAt
+
+  // Relaciones
+  empresa       Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  sede          Sede     @relation(fields: [sedeId], references: [id])
+  responsable   Usuario? @relation("AgenteResponsable", fields: [responsableId], references: [id])
+  operaciones   OperacionAgente[]
+
+  @@unique([empresaId, sedeId, banco])
+  @@index([empresaId])
+  @@index([empresaId, sedeId])
+  @@index([estado])
+}
+
+model OperacionAgente {
+  id                String  @id @default(cuid())
+  agenteBancarioId  String
+  empresaId         String
+
+  tipo              TipoOperacionAgente
+  monto             Decimal   @db.Decimal(10, 2)
+  comision          Decimal   @db.Decimal(10, 2)
+
+  // Datos del cliente
+  nombreCliente     String?
+  documentoCliente  String?
+  numeroOperacion   String?
+
+  // Registro
+  registradoPorId   String
+  observaciones     String?
+  fechaOperacion    DateTime  @default(now())
+
+  // Integración con caja
+  movimientoCajaId  String?
+
+  // Anulación
+  anulado           Boolean   @default(false)
+  motivoAnulacion   String?
+
+  creadoEn          DateTime @default(now())
+
+  // Relaciones
+  agenteBancario    AgenteBancario  @relation(fields: [agenteBancarioId], references: [id], onDelete: Cascade)
+  empresa           Empresa         @relation(fields: [empresaId], references: [id])
+  registradoPor     Usuario         @relation("OperacionAgenteRegistro", fields: [registradoPorId], references: [id])
+  movimientoCaja    MovimientoCaja? @relation(fields: [movimientoCajaId], references: [id])
+
+  @@index([agenteBancarioId])
+  @@index([empresaId])
+  @@index([fechaOperacion])
+  @@index([agenteBancarioId, fechaOperacion])
+  @@index([tipo])
+}

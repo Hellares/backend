@@ -72,6 +72,11 @@ export class CrearStockDto {
   @IsString()
   ubicacion?: string;
 
+  @ApiPropertyOptional({ description: 'Precio incluye IGV', default: true })
+  @IsOptional()
+  @IsBoolean()
+  precioIncluyeIgv?: boolean;
+
   // ==========================================
   // PRECIOS POR SEDE (opcionales)
   // Si no se especifican, se usarán los precios del producto/variante base

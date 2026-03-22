@@ -1,0 +1,44 @@
+// =========================================
+// GESTIÓN DE UBICACIONES DE ALMACÉN
+// =========================================
+
+enum TipoUbicacion {
+  ZONA
+  PASILLO
+  ESTANTE
+  NIVEL
+  BIN
+}
+
+model UbicacionAlmacen {
+  id        String  @id @default(cuid())
+  empresaId String
+  sedeId    String
+
+  codigo    String  // A-01-03 (Pasillo A, Estante 01, Nivel 03)
+  nombre    String  // "Pasillo A - Estante 1 - Nivel 3"
+  tipo      TipoUbicacion @default(ZONA)
+
+  // Jerarquía
+  parentId  String?
+
+  // Capacidad
+  capacidadMaxima Int?    // Máximo de productos que caben
+  descripcion     String?
+
+  isActive  Boolean  @default(true)
+  creadoEn  DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // Relaciones
+  empresa  Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  sede     Sede     @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  parent   UbicacionAlmacen?  @relation("UbicacionJerarquia", fields: [parentId], references: [id])
+  children UbicacionAlmacen[] @relation("UbicacionJerarquia")
+
+  @@unique([empresaId, sedeId, codigo])
+  @@index([empresaId, sedeId])
+  @@index([empresaId, sedeId, tipo])
+  @@index([parentId])
+  @@index([isActive])
+}

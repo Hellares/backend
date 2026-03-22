@@ -94,6 +94,48 @@ export class ConfiguracionEmpresaDto {
   @IsOptional()
   @IsBoolean()
   mostrarSeccionEquipo?: boolean;
+
+  // Interés por crédito
+  @ApiPropertyOptional({ description: 'Habilitar interés por crédito', default: false })
+  @IsOptional()
+  @IsBoolean()
+  interesHabilitado?: boolean;
+
+  @ApiPropertyOptional({ description: 'Porcentaje de interés por defecto', example: 5.0 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  porcentajeInteresDefault?: number;
+
+  @ApiPropertyOptional({ description: 'Vendedor puede cambiar el porcentaje', default: true })
+  @IsOptional()
+  @IsBoolean()
+  interesEsEditable?: boolean;
+
+  // Mora
+  @ApiPropertyOptional({ description: 'Habilitar mora por cuotas vencidas', default: false })
+  @IsOptional()
+  @IsBoolean()
+  moraHabilitada?: boolean;
+
+  @ApiPropertyOptional({ description: 'Porcentaje mora diario', example: 0.05 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  porcentajeMoraDiario?: number;
+
+  @ApiPropertyOptional({ description: 'Mora máxima como % del monto cuota', example: 30 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  moraMaximaPorcentaje?: number;
+
+  @ApiPropertyOptional({ description: 'Días de gracia antes de aplicar mora', example: 0 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  diasGraciaMora?: number;
 }
 
 export class ConfiguracionEmpresaResponseDto {

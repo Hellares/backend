@@ -175,6 +175,7 @@ export class ProductoStockService {
             : null,
           // Marcar como configurado si se proporciona precio
           precioConfigurado: !!dto.precio,
+          precioIncluyeIgv: dto.precioIncluyeIgv ?? true,
         },
         include: {
           producto: true,
@@ -638,6 +639,21 @@ export class ProductoStockService {
       updateData.fechaFinOferta = dto.fechaFinOferta
         ? new Date(dto.fechaFinOferta)
         : null;
+      hayActualizacion = true;
+    }
+
+    if (dto.ubicacion !== undefined) {
+      updateData.ubicacion = dto.ubicacion || null;
+      hayActualizacion = true;
+    }
+
+    if (dto.stockMinimo !== undefined) {
+      updateData.stockMinimo = dto.stockMinimo;
+      hayActualizacion = true;
+    }
+
+    if (dto.stockMaximo !== undefined) {
+      updateData.stockMaximo = dto.stockMaximo;
       hayActualizacion = true;
     }
 
@@ -2022,5 +2038,266 @@ export class ProductoStockService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Error al invalidar cache: ${errorMessage}`);
     }
+  }
+
+  // =====================================================
+  // MONITOR DE PRODUCTOS
+  // =====================================================
+
+  /**
+   * Monitor completo del estado de productos: estadísticas y alertas
+   */
+  async getMonitorProductos(empresaId: string, sedeId?: string) {
+    const baseWhere: any = { empresaId };
+    if (sedeId) baseWhere.sedeId = sedeId;
+
+    // 1. Conteos paralelos de ProductoStock
+    const [
+      totalProductoStock,
+      conStock,
+      sinStock,
+      conPrecio,
+      sinPrecio,
+      conPrecioCosto,
+      sinPrecioCosto,
+      conUbicacion,
+      sinUbicacion,
+      precioIncluyeIgv,
+      precioNoIncluyeIgv,
+      enOferta,
+    ] = await Promise.all([
+      this.prisma.productoStock.count({ where: baseWhere }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, stockActual: { gt: 0 } } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, stockActual: { lte: 0 } } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, precioConfigurado: true } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, precioConfigurado: false } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, precioCosto: { not: null } } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, OR: [{ precioCosto: null }, { precioCosto: 0 }] } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, ubicacion: { not: null }, NOT: { ubicacion: '' } } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, OR: [{ ubicacion: null }, { ubicacion: '' }] } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, precioIncluyeIgv: true } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, precioIncluyeIgv: false } }),
+      this.prisma.productoStock.count({ where: { ...baseWhere, enOferta: true } }),
+    ]);
+
+    // Bajo mínimo: raw SQL porque Prisma no puede comparar dos columnas
+    const bajoMinimoResult = await this.prisma.$queryRaw<[{ count: bigint }]>`
+      SELECT COUNT(*)::int as count FROM "ProductoStock"
+      WHERE "empresaId" = ${empresaId}
+      ${sedeId ? Prisma.sql`AND "sedeId" = ${sedeId}` : Prisma.empty}
+      AND "stockMinimo" IS NOT NULL
+      AND "stockActual" <= "stockMinimo"
+    `;
+    const bajoMinimo = Number(bajoMinimoResult[0]?.count ?? 0);
+
+    // 2. Conteos de Producto (no stock) para marketplace e imágenes
+    const productoBaseWhere: any = { empresaId, isActive: true, deletedAt: null };
+
+    const [totalProductos, visibleMarketplace, noVisibleMarketplace, conBarcode] = await Promise.all([
+      this.prisma.producto.count({ where: productoBaseWhere }),
+      this.prisma.producto.count({ where: { ...productoBaseWhere, visibleMarketplace: true } }),
+      this.prisma.producto.count({ where: { ...productoBaseWhere, visibleMarketplace: false } }),
+      this.prisma.producto.count({ where: { ...productoBaseWhere, codigoBarras: { not: null }, NOT: { codigoBarras: '' } } }),
+    ]);
+    const sinBarcode = totalProductos - conBarcode;
+
+    // Productos con imagen (raw SQL por relación polimórfica)
+    const conImagenResult = await this.prisma.$queryRaw<[{ count: bigint }]>`
+      SELECT COUNT(DISTINCT p.id)::int as count
+      FROM "Producto" p
+      WHERE p."empresaId" = ${empresaId} AND p."isActive" = true AND p."deletedAt" IS NULL
+      AND EXISTS (
+        SELECT 1 FROM "Archivo" a
+        WHERE a."entidadId" = p.id AND a."tipoArchivo" = 'IMAGEN' AND a."isActive" = true
+      )
+    `;
+    const conImagen = Number(conImagenResult[0]?.count ?? 0);
+    const sinImagen = totalProductos - conImagen;
+
+    // 3. Métricas compuestas
+    const listosParaVenta = await this.prisma.productoStock.count({
+      where: { ...baseWhere, precioConfigurado: true, stockActual: { gt: 0 } },
+    });
+
+    // % catálogo completo = tiene precio + stock > 0 + ubicación + imagen / total
+    const catalogoCompletoResult = await this.prisma.$queryRaw<[{ count: bigint }]>`
+      SELECT COUNT(DISTINCT ps.id)::int as count
+      FROM "ProductoStock" ps
+      JOIN "Producto" p ON p.id = ps."productoId"
+      WHERE ps."empresaId" = ${empresaId}
+      ${sedeId ? Prisma.sql`AND ps."sedeId" = ${sedeId}` : Prisma.empty}
+      AND ps."precioConfigurado" = true
+      AND ps."stockActual" > 0
+      AND ps."ubicacion" IS NOT NULL AND ps."ubicacion" != ''
+      AND EXISTS (SELECT 1 FROM "Archivo" a WHERE a."entidadId" = p.id AND a."tipoArchivo" = 'IMAGEN' AND a."isActive" = true)
+    `;
+    const catalogoCompleto = Number(catalogoCompletoResult[0]?.count ?? 0);
+    const porcentajeCatalogoCompleto = totalProductoStock > 0
+      ? Math.round((catalogoCompleto / totalProductoStock) * 10000) / 100
+      : 0;
+
+    // 4. Listas de alertas (max 20 cada una)
+    const includeProducto = {
+      producto: { select: { id: true, nombre: true, codigoEmpresa: true, visibleMarketplace: true } },
+      variante: { select: { id: true, nombre: true } },
+      sede: { select: { id: true, nombre: true } },
+    };
+
+    const mapAlerta = (ps: any) => ({
+      id: ps.id,
+      productoId: ps.producto?.id ?? ps.productoId,
+      nombre: ps.variante ? `${ps.producto?.nombre} - ${ps.variante.nombre}` : ps.producto?.nombre,
+      codigoEmpresa: ps.producto?.codigoEmpresa,
+      sedeNombre: ps.sede?.nombre,
+      stockActual: ps.stockActual,
+      precio: ps.precio ? Number(ps.precio) : null,
+      ubicacion: ps.ubicacion,
+    });
+
+    const [alertaSinPrecio, alertaSinCosto, alertaSinUbicacion, alertaStockCero, alertaPrecioSinIgv] = await Promise.all([
+      this.prisma.productoStock.findMany({ where: { ...baseWhere, precioConfigurado: false }, include: includeProducto, take: 20 }).then(r => r.map(mapAlerta)),
+      this.prisma.productoStock.findMany({ where: { ...baseWhere, OR: [{ precioCosto: null }] }, include: includeProducto, take: 20 }).then(r => r.map(mapAlerta)),
+      this.prisma.productoStock.findMany({ where: { ...baseWhere, OR: [{ ubicacion: null }, { ubicacion: '' }] }, include: includeProducto, take: 20 }).then(r => r.map(mapAlerta)),
+      this.prisma.productoStock.findMany({ where: { ...baseWhere, stockActual: { lte: 0 } }, include: includeProducto, take: 20 }).then(r => r.map(mapAlerta)),
+      this.prisma.productoStock.findMany({ where: { ...baseWhere, precioConfigurado: true, precioIncluyeIgv: false }, include: includeProducto, take: 20 }).then(r => r.map(mapAlerta)),
+    ]);
+
+    // Alertas bajo mínimo (raw SQL)
+    const alertaBajoMinimo = await this.prisma.$queryRaw<any[]>`
+      SELECT ps.id, ps."productoId", ps."stockActual", ps.precio::float, ps.ubicacion,
+             p.nombre, p."codigoEmpresa", s.nombre as "sedeNombre"
+      FROM "ProductoStock" ps
+      JOIN "Producto" p ON p.id = ps."productoId"
+      JOIN "Sede" s ON s.id = ps."sedeId"
+      WHERE ps."empresaId" = ${empresaId}
+      ${sedeId ? Prisma.sql`AND ps."sedeId" = ${sedeId}` : Prisma.empty}
+      AND ps."stockMinimo" IS NOT NULL
+      AND ps."stockActual" <= ps."stockMinimo"
+      LIMIT 20
+    `;
+
+    // Alertas sin imagen y marketplace sin imagen (con datos de stock)
+    const alertaSinImagen = await this.prisma.$queryRaw<any[]>`
+      SELECT p.id, p.id as "productoId", p.nombre, p."codigoEmpresa",
+             COALESCE(ps."stockActual", 0)::int as "stockActual",
+             ps.precio::float as precio,
+             ps.ubicacion,
+             s.nombre as "sedeNombre"
+      FROM "Producto" p
+      LEFT JOIN "ProductoStock" ps ON ps."productoId" = p.id AND ps."empresaId" = p."empresaId"
+        ${sedeId ? Prisma.sql`AND ps."sedeId" = ${sedeId}` : Prisma.empty}
+      LEFT JOIN "Sede" s ON s.id = ps."sedeId"
+      WHERE p."empresaId" = ${empresaId} AND p."isActive" = true AND p."deletedAt" IS NULL
+      AND NOT EXISTS (SELECT 1 FROM "Archivo" a WHERE a."entidadId" = p.id AND a."tipoArchivo" = 'IMAGEN' AND a."isActive" = true)
+      LIMIT 20
+    `;
+
+    const alertaSinBarcode = await this.prisma.$queryRaw<any[]>`
+      SELECT p.id, p.id as "productoId", p.nombre, p."codigoEmpresa",
+             COALESCE(ps."stockActual", 0)::int as "stockActual",
+             ps.precio::float as precio,
+             ps.ubicacion,
+             s.nombre as "sedeNombre"
+      FROM "Producto" p
+      LEFT JOIN "ProductoStock" ps ON ps."productoId" = p.id AND ps."empresaId" = p."empresaId"
+        ${sedeId ? Prisma.sql`AND ps."sedeId" = ${sedeId}` : Prisma.empty}
+      LEFT JOIN "Sede" s ON s.id = ps."sedeId"
+      WHERE p."empresaId" = ${empresaId} AND p."isActive" = true AND p."deletedAt" IS NULL
+      AND (p."codigoBarras" IS NULL OR p."codigoBarras" = '')
+      LIMIT 20
+    `;
+
+    const alertaMarketplaceSinImagen = await this.prisma.$queryRaw<any[]>`
+      SELECT p.id, p.id as "productoId", p.nombre, p."codigoEmpresa",
+             COALESCE(ps."stockActual", 0)::int as "stockActual",
+             ps.precio::float as precio,
+             ps.ubicacion,
+             s.nombre as "sedeNombre"
+      FROM "Producto" p
+      LEFT JOIN "ProductoStock" ps ON ps."productoId" = p.id AND ps."empresaId" = p."empresaId"
+        ${sedeId ? Prisma.sql`AND ps."sedeId" = ${sedeId}` : Prisma.empty}
+      LEFT JOIN "Sede" s ON s.id = ps."sedeId"
+      WHERE p."empresaId" = ${empresaId} AND p."isActive" = true AND p."deletedAt" IS NULL
+      AND p."visibleMarketplace" = true
+      AND NOT EXISTS (SELECT 1 FROM "Archivo" a WHERE a."entidadId" = p.id AND a."tipoArchivo" = 'IMAGEN' AND a."isActive" = true)
+      LIMIT 20
+    `;
+
+    // 5. Respuesta completa
+    return {
+      estadisticas: {
+        totalProductos,
+        productosActivos: totalProductos,
+        totalProductoStock,
+        conStock,
+        sinStock,
+        bajoMinimo,
+        conPrecio,
+        sinPrecio,
+        conPrecioCosto,
+        sinPrecioCosto,
+        conUbicacion,
+        sinUbicacion,
+        visibleMarketplace,
+        noVisibleMarketplace,
+        precioIncluyeIgv,
+        precioNoIncluyeIgv,
+        enOferta,
+        conImagen,
+        sinImagen,
+        conBarcode,
+        sinBarcode,
+        porcentajeCatalogoCompleto,
+        listosParaVenta,
+      },
+      alertas: {
+        sinPrecio: alertaSinPrecio,
+        sinPrecioCosto: alertaSinCosto,
+        sinUbicacion: alertaSinUbicacion,
+        sinImagen: alertaSinImagen,
+        stockCero: alertaStockCero,
+        bajoMinimo: alertaBajoMinimo,
+        marketplaceSinImagen: alertaMarketplaceSinImagen,
+        precioSinIgv: alertaPrecioSinIgv,
+        sinBarcode: alertaSinBarcode,
+      },
+    };
+  }
+
+  // =====================================================
+  // BULK OPERATIONS (Monitor de Productos)
+  // =====================================================
+
+  /**
+   * Bulk activar/desactivar marketplace para productos
+   */
+  async bulkMarketplace(empresaId: string, productoIds: string[], visible: boolean) {
+    const result = await this.prisma.producto.updateMany({
+      where: { id: { in: productoIds }, empresaId },
+      data: { visibleMarketplace: visible },
+    });
+    return { updated: result.count };
+  }
+
+  /**
+   * Bulk asignar ubicación a registros de stock
+   */
+  async bulkUbicacion(empresaId: string, productoStockIds: string[], ubicacion: string) {
+    const result = await this.prisma.productoStock.updateMany({
+      where: { id: { in: productoStockIds }, empresaId },
+      data: { ubicacion },
+    });
+    return { updated: result.count };
+  }
+
+  /**
+   * Bulk marcar precio incluye IGV
+   */
+  async bulkPrecioIgv(empresaId: string, productoStockIds: string[], precioIncluyeIgv: boolean) {
+    const result = await this.prisma.productoStock.updateMany({
+      where: { id: { in: productoStockIds }, empresaId },
+      data: { precioIncluyeIgv },
+    });
+    return { updated: result.count };
   }
 }
