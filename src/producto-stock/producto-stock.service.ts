@@ -2269,6 +2269,35 @@ export class ProductoStockService {
   // =====================================================
 
   /**
+   * Listar productos con estado marketplace
+   */
+  async getProductosMarketplaceEstado(empresaId: string) {
+    const productos = await this.prisma.producto.findMany({
+      where: { empresaId, isActive: true, deletedAt: null },
+      select: {
+        id: true,
+        nombre: true,
+        codigoEmpresa: true,
+        visibleMarketplace: true,
+        stocksPorSede: {
+          select: { stockActual: true, precio: true },
+          take: 1,
+        },
+      },
+      orderBy: [{ visibleMarketplace: 'desc' }, { nombre: 'asc' }],
+    });
+
+    return productos.map(p => ({
+      id: p.id,
+      nombre: p.nombre,
+      codigoEmpresa: p.codigoEmpresa,
+      visibleMarketplace: p.visibleMarketplace,
+      stockActual: p.stocksPorSede[0]?.stockActual ?? 0,
+      precio: p.stocksPorSede[0]?.precio ? Number(p.stocksPorSede[0].precio) : null,
+    }));
+  }
+
+  /**
    * Bulk activar/desactivar marketplace para productos
    */
   async bulkMarketplace(empresaId: string, productoIds: string[], visible: boolean) {

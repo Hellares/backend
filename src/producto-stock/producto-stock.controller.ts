@@ -101,6 +101,16 @@ export class ProductoStockController {
     return this.stockService.getMonitorProductos(empresaId, sedeId);
   }
 
+  @Get('marketplace-productos')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Listar productos con estado marketplace' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getProductosMarketplaceEstado(
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return this.stockService.getProductosMarketplaceEstado(empresaId);
+  }
+
   @Patch('bulk/marketplace')
   @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({ summary: 'Bulk activar/desactivar marketplace' })
