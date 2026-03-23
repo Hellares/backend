@@ -54,6 +54,7 @@ import { ReportesFinancierosModule } from './reportes-financieros/reportes-finan
 import { TipoCambioModule } from './tipo-cambio/tipo-cambio.module';
 import { UbicacionAlmacenModule } from './ubicacion-almacen/ubicacion-almacen.module';
 import { AgenteBancarioModule } from './agente-bancario/agente-bancario.module';
+import { RrhhModule } from './rrhh/rrhh.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -121,6 +122,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     TipoCambioModule,
     UbicacionAlmacenModule,
     AgenteBancarioModule,
+    RrhhModule,
   ],
   controllers: [AppController],
   providers: [

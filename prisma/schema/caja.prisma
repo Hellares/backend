@@ -26,6 +26,9 @@ enum CategoriaMovimientoCaja {
   DEPOSITO_AGENTE
   RETIRO_AGENTE
   COMISION_AGENTE
+  PAGO_PLANILLA
+  ADELANTO_EMPLEADO
+  BONIFICACION_EMPLEADO
 }
 
 /// Caja (apertura/cierre de caja registradora)
@@ -80,6 +83,8 @@ model MovimientoCaja {
   pedidoMarketplaceId   String?
   compraId              String?
   devolucionId          String?
+  boletaPagoId          String?
+  adelantoPagoId        String?
 
   esManual              Boolean                 @default(true)
   registradoPorId       String
@@ -109,6 +114,11 @@ model MovimientoCaja {
   autorizadoPor       Usuario?            @relation("MovimientoCajaAutorizadoPor", fields: [autorizadoPorId], references: [id])
   movimientoContrapartida MovimientoCaja? @relation("MovimientoContrapartida", fields: [movimientoContrapartidaId], references: [id])
   contrapartidaDe     MovimientoCaja?     @relation("MovimientoContrapartida")
+  boletaPago          BoletaPago?     @relation("MovimientoCajaBoletaPago", fields: [boletaPagoId], references: [id])
+  adelantoPago        AdelantoPago?   @relation("MovimientoCajaAdelanto", fields: [adelantoPagoId], references: [id])
+
+  @@index([boletaPagoId])
+  @@index([adelantoPagoId])
   rendicionesCajaChica RendicionCajaChica[]
   operacionesAgente    OperacionAgente[]
 

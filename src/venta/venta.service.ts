@@ -148,6 +148,7 @@ export class VentaService {
           clienteId: dto.clienteId,
           clienteEmpresaId: dto.clienteEmpresaId,
           vendedorId: dto.vendedorId,
+          canalVenta: dto.canalVenta ?? 'POS',
           codigo: codigoVenta,
           nombreCliente: dto.nombreCliente,
           documentoCliente: dto.documentoCliente,
@@ -204,7 +205,20 @@ export class VentaService {
     dto: CrearYCobrarVentaDto,
     cajeroId: string,
   ) {
-    this.logger.info('Creando y cobrando venta POS', { empresaId, sede: dto.sedeId });
+    const canalVenta = dto.canalVenta ?? 'POS';
+    this.logger.info('Creando y cobrando venta', { empresaId, sede: dto.sedeId, canal: canalVenta });
+
+    // Validar caja abierta según canal (POS y COTIZACION requieren caja, ONLINE no)
+    if (canalVenta !== 'ONLINE') {
+      const cajaActiva = await this.prisma.caja.findFirst({
+        where: { empresaId, sedeId: dto.sedeId, usuarioId: cajeroId, estado: 'ABIERTA' },
+      });
+      if (!cajaActiva) {
+        throw new BadRequestException(
+          'Debe abrir una caja antes de realizar ventas. Vaya a Caja → Abrir Caja.',
+        );
+      }
+    }
 
     const result = await this.prisma.$transaction(
       async (tx) => {
@@ -251,6 +265,7 @@ export class VentaService {
             clienteEmpresaId: dto.clienteEmpresaId,
             vendedorId: dto.vendedorId,
             cajeroId,
+            canalVenta,
             codigo: codigoVenta,
             nombreCliente: dto.nombreCliente,
             documentoCliente: dto.documentoCliente,
@@ -298,95 +313,131 @@ export class VentaService {
           include: this.getInclude(),
         });
 
-        // 4. Descontar stock
-        for (const detalle of detallesCalculados) {
-          if (!detalle.productoId && !detalle.varianteId) continue;
+        // 4. Descontar stock (optimizado: batch queries en vez de N loops)
+        const detallesConProducto = detallesCalculados.filter(
+          (d) => d.productoId || d.varianteId,
+        );
 
-          const productoStock = await tx.productoStock.findFirst({
+        if (detallesConProducto.length > 0) {
+          // 4a. Buscar todos los ProductoStock en un solo query
+          const stockRecords = await tx.productoStock.findMany({
             where: {
               sedeId: dto.sedeId,
-              productoId: detalle.productoId ?? null,
-              varianteId: detalle.varianteId ?? null,
+              OR: detallesConProducto.map((d) => ({
+                productoId: d.productoId ?? null,
+                varianteId: d.varianteId ?? null,
+              })),
             },
           });
 
-          if (!productoStock) {
-            this.logger.warn(`No existe stock para "${detalle.descripcion}" en sede ${dto.sedeId}`);
-            continue;
+          // Mapear stock por productoId+varianteId para lookup rápido
+          const stockMap = new Map<string, typeof stockRecords[0]>();
+          for (const s of stockRecords) {
+            const key = `${s.productoId || ''}_${s.varianteId || ''}`;
+            stockMap.set(key, s);
           }
 
-          const [stockLocked] = await tx.$queryRaw<
-            Array<{
-              id: string;
-              stockActual: number;
-              stockReservado: number;
-              stockReservadoVenta: number;
-              stockReservadoCombo: number;
-              stockDanado: number;
-              stockEnGarantia: number;
-            }>
-          >`SELECT id, "stockActual", "stockReservado", "stockReservadoVenta",
-                  "stockReservadoCombo", "stockDanado", "stockEnGarantia"
-           FROM "ProductoStock" WHERE id = ${productoStock.id} FOR UPDATE`;
+          // Recopilar IDs para lock batch
+          const stockIds = stockRecords.map((s) => s.id);
 
-          if (!stockLocked) continue;
-
-          const cantidad = Number(detalle.cantidad);
-          const stockAnterior = stockLocked.stockActual;
-          const stockDisponible =
-            stockAnterior -
-            stockLocked.stockReservado -
-            stockLocked.stockReservadoVenta -
-            stockLocked.stockReservadoCombo -
-            stockLocked.stockDanado -
-            stockLocked.stockEnGarantia;
-
-          if (cantidad > stockDisponible) {
-            throw new BadRequestException(
-              `Stock insuficiente para "${detalle.descripcion}". Disponible: ${stockDisponible}, Requerido: ${cantidad}`,
+          if (stockIds.length > 0) {
+            // 4b. Lock batch: un solo SELECT FOR UPDATE con todos los IDs
+            const lockedRows = await tx.$queryRawUnsafe<
+              Array<{
+                id: string;
+                stockActual: number;
+                stockReservado: number;
+                stockReservadoVenta: number;
+                stockReservadoCombo: number;
+                stockDanado: number;
+                stockEnGarantia: number;
+              }>
+            >(
+              `SELECT id, "stockActual", "stockReservado", "stockReservadoVenta",
+                      "stockReservadoCombo", "stockDanado", "stockEnGarantia"
+               FROM "ProductoStock" WHERE id = ANY($1) FOR UPDATE`,
+              stockIds,
             );
+
+            const lockedMap = new Map<string, typeof lockedRows[0]>();
+            for (const row of lockedRows) {
+              lockedMap.set(row.id, row);
+            }
+
+            // 4c. Validar stock y preparar updates + movimientos
+            const movimientosData: Array<any> = [];
+
+            for (const detalle of detallesConProducto) {
+              const key = `${detalle.productoId || ''}_${detalle.varianteId || ''}`;
+              const productoStock = stockMap.get(key);
+              if (!productoStock) {
+                this.logger.warn(`No existe stock para "${detalle.descripcion}" en sede ${dto.sedeId}`);
+                continue;
+              }
+
+              const locked = lockedMap.get(productoStock.id);
+              if (!locked) continue;
+
+              const cantidad = Number(detalle.cantidad);
+              const stockAnterior = locked.stockActual;
+              const stockDisponible =
+                stockAnterior -
+                locked.stockReservado -
+                locked.stockReservadoVenta -
+                locked.stockReservadoCombo -
+                locked.stockDanado -
+                locked.stockEnGarantia;
+
+              if (cantidad > stockDisponible) {
+                throw new BadRequestException(
+                  `Stock insuficiente para "${detalle.descripcion}". Disponible: ${stockDisponible}, Requerido: ${cantidad}`,
+                );
+              }
+
+              const nuevoStock = stockAnterior - cantidad;
+
+              // Update stock individual (necesario por atomicidad por row)
+              await tx.productoStock.update({
+                where: { id: productoStock.id },
+                data: { stockActual: nuevoStock },
+              });
+
+              movimientosData.push({
+                sedeId: dto.sedeId,
+                empresaId,
+                productoStockId: productoStock.id,
+                tipo: TipoMovimientoStock.SALIDA_VENTA,
+                tipoDocumento: 'VENTA',
+                numeroDocumento: codigoVenta,
+                cantidadAnterior: stockAnterior,
+                cantidad: -cantidad,
+                cantidadNueva: nuevoStock,
+                motivo: `Venta POS ${codigoVenta} - ${detalle.descripcion}`,
+                ventaId: venta.id,
+                usuarioId: cajeroId,
+              });
+            }
+
+            // 4d. Crear todos los movimientos de stock en batch
+            if (movimientosData.length > 0) {
+              await tx.movimientoStock.createMany({ data: movimientosData });
+            }
           }
-
-          const nuevoStock = stockAnterior - cantidad;
-
-          await tx.productoStock.update({
-            where: { id: productoStock.id },
-            data: { stockActual: nuevoStock },
-          });
-
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: dto.sedeId,
-              empresaId,
-              productoStockId: productoStock.id,
-              tipo: TipoMovimientoStock.SALIDA_VENTA,
-              tipoDocumento: 'VENTA',
-              numeroDocumento: codigoVenta,
-              cantidadAnterior: stockAnterior,
-              cantidad: -cantidad,
-              cantidadNueva: nuevoStock,
-              motivo: `Venta POS ${codigoVenta} - ${detalle.descripcion}`,
-              ventaId: venta.id,
-              usuarioId: cajeroId,
-            },
-          });
         }
 
-        // 5. Registrar pagos (incluye pagos inmediatos en ventas mixtas)
+        // 5. Registrar pagos (batch con createMany)
         if (dto.pagos && dto.pagos.length > 0) {
-          for (const pago of dto.pagos) {
-            await tx.pagoVenta.create({
-              data: {
-                ventaId: venta.id,
-                metodoPago: pago.metodoPago as any,
-                monto: pago.monto,
-                referencia: pago.referencia || null,
-                monedaOriginal: pago.monedaOriginal || null,
-                montoOriginal: pago.montoOriginal || null,
-                tipoCambio: pago.tipoCambio || null,
-              },
-            });
-          }
+          await tx.pagoVenta.createMany({
+            data: dto.pagos.map((pago) => ({
+              ventaId: venta.id,
+              metodoPago: pago.metodoPago as any,
+              monto: pago.monto,
+              referencia: pago.referencia || null,
+              monedaOriginal: pago.monedaOriginal || null,
+              montoOriginal: pago.montoOriginal || null,
+              tipoCambio: pago.tipoCambio || null,
+            })),
+          });
         } else if (montoPagadoInmediato > 0) {
           await tx.pagoVenta.create({
             data: {
@@ -544,7 +595,7 @@ export class VentaService {
         this.logger.log(`Venta POS creada y cobrada: ${venta.codigo}`);
         return venta;
       },
-      { timeout: 30000 },
+      { timeout: Math.max(30000, dto.detalles.length * 1000 + 15000) },
     );
 
     await this.invalidateProductCache(empresaId);
@@ -564,6 +615,18 @@ export class VentaService {
       empresaId,
       cotizacionId,
     });
+
+    // Cotización = atención presencial → requiere caja abierta del cajero
+    if (cajeroId) {
+      const cajaActiva = await this.prisma.caja.findFirst({
+        where: { empresaId, usuarioId: cajeroId, estado: 'ABIERTA' },
+      });
+      if (!cajaActiva) {
+        throw new BadRequestException(
+          'Debe abrir una caja antes de cobrar cotizaciones. Vaya a Caja → Abrir Caja.',
+        );
+      }
+    }
 
     const result = await this.prisma.$transaction(
       async (tx) => {
@@ -726,6 +789,7 @@ export class VentaService {
           clienteEmpresaId: cotizacion.clienteEmpresaId,
           vendedorId: cotizacion.vendedorId,
           cajeroId: cajeroId || null,
+          canalVenta: 'COTIZACION',
           cotizacionId: cotizacion.id,
           codigo: codigoVenta,
           nombreCliente: cotizacion.nombreCliente,
@@ -1008,6 +1072,34 @@ export class VentaService {
           ventaId: venta.id,
         },
       });
+
+      // 9. Registrar movimiento en caja (cotización = atención presencial)
+      const montoPagadoInmediato = !esCredito
+        ? (dto.pagos && dto.pagos.length > 0
+            ? dto.pagos.reduce((s, p) => s + p.monto, 0)
+            : (dto.montoRecibido ?? 0))
+        : (dto.montoRecibido ?? 0);
+
+      if (montoPagadoInmediato > 0 && cajeroId) {
+        try {
+          await this.cajaService.registrarMovimientoSiHayCaja(
+            empresaId,
+            cotizacion.sedeId,
+            cajeroId,
+            {
+              tipo: 'INGRESO' as any,
+              categoria: 'VENTA' as any,
+              metodoPago: dto.metodoPago || ('EFECTIVO' as any),
+              monto: Math.min(montoPagadoInmediato, totalVenta),
+              descripcion: `Venta ${codigoVenta} (cotización ${cotizacion.codigo})`,
+              ventaId: venta.id,
+            },
+            tx,
+          );
+        } catch (e: any) {
+          this.logger.warn(`Error registrando movimiento caja para venta ${codigoVenta}: ${e?.message ?? e}`);
+        }
+      }
 
       this.logger.log(
         `Venta ${venta.codigo} creada desde cotizacion ${cotizacion.codigo}`,
@@ -1373,15 +1465,15 @@ export class VentaService {
   ) {
     this.logger.info('Procesando pago', { id, empresaId });
 
-    // Verificar si la empresa requiere caja abierta para vender
-    if (usuarioId) {
-      const empresa = await this.prisma.empresa.findUnique({
-        where: { id: empresaId },
-        select: { requiereCajaParaVender: true },
+    return this.prisma.$transaction(async (tx) => {
+      const venta = await tx.venta.findFirst({
+        where: { id, empresaId },
+        include: { pagos: true },
       });
 
-      if (empresa?.requiereCajaParaVender) {
-        const cajaActiva = await this.prisma.caja.findFirst({
+      // Verificar caja según canal de la venta original (POS/COTIZACION requieren caja)
+      if (usuarioId && venta && venta.canalVenta !== 'ONLINE') {
+        const cajaActiva = await tx.caja.findFirst({
           where: { empresaId, usuarioId, estado: 'ABIERTA' },
         });
         if (!cajaActiva) {
@@ -1390,13 +1482,6 @@ export class VentaService {
           );
         }
       }
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      const venta = await tx.venta.findFirst({
-        where: { id, empresaId },
-        include: { pagos: true },
-      });
 
       if (!venta) {
         throw new NotFoundException('Venta no encontrada');
@@ -1796,11 +1881,24 @@ export class VentaService {
     const precioUnitario = dto.precioUnitario;
     const descuento = dto.descuento ?? 0;
     const porcentajeIGV = dto.porcentajeIGV ?? 18;
+    const incluyeIgv = dto.precioIncluyeIgv ?? false;
 
     const subtotalBruto = cantidad * precioUnitario;
-    const subtotal = subtotalBruto - descuento;
-    const igv = subtotal * (porcentajeIGV / 100);
-    const total = subtotal + igv;
+    let subtotal: number;
+    let igv: number;
+    let total: number;
+
+    if (incluyeIgv) {
+      // Precio ya incluye IGV → extraer base e IGV
+      total = subtotalBruto - descuento;
+      subtotal = total / (1 + porcentajeIGV / 100);
+      igv = total - subtotal;
+    } else {
+      // Precio sin IGV → sumar IGV
+      subtotal = subtotalBruto - descuento;
+      igv = subtotal * (porcentajeIGV / 100);
+      total = subtotal + igv;
+    }
 
     return {
       productoId: dto.productoId || null,

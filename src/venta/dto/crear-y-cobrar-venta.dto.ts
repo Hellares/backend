@@ -13,9 +13,13 @@ import {
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateVentaDetalleDto } from './create-venta-detalle.dto';
-import { MetodoPagoVenta } from '@prisma/client';
+import { MetodoPagoVenta, CanalVenta } from '@prisma/client';
 
 export class CrearYCobrarVentaDto {
+  @ApiPropertyOptional({ description: 'Canal de venta', enum: CanalVenta })
+  @IsOptional()
+  @IsEnum(CanalVenta)
+  canalVenta?: CanalVenta;
   @ApiProperty({ description: 'ID de la sede' })
   @IsString()
   @IsNotEmpty()

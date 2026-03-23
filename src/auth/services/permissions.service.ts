@@ -126,6 +126,25 @@ export class PermissionsService {
         isAnyAdmin || isCajero || isContador,
       canManageCaja:
         isAnyAdmin || isCajero,
+
+      // ==================== RRHH - EMPLEADOS ====================
+      canViewEmpleados:
+        isAnyAdmin || isContador || isViewer,
+      canManageEmpleados: isAdmin,
+
+      // ==================== RRHH - ASISTENCIA ====================
+      canViewAsistencia:
+        isAnyAdmin || isContador || isViewer,
+      canManageAsistencia: isAnyAdmin,
+
+      // ==================== RRHH - PLANILLA ====================
+      canViewPlanilla:
+        isAnyAdmin || isContador,
+      canManagePlanilla: isAdmin,
+
+      // ==================== RRHH - APROBACIONES ====================
+      canApproveIncidencias: isAnyAdmin,
+      canApprovePlanilla: isAdmin,
     };
   }
 
@@ -181,6 +200,14 @@ export class PermissionsService {
       'canManageReportesIncidencia',
       'canViewCaja',
       'canManageCaja',
+      'canViewEmpleados',
+      'canManageEmpleados',
+      'canViewAsistencia',
+      'canManageAsistencia',
+      'canViewPlanilla',
+      'canManagePlanilla',
+      'canApproveIncidencias',
+      'canApprovePlanilla',
     ];
   }
 }

@@ -63,4 +63,20 @@ export enum Permission {
   MANAGE_SETTINGS = 'canManageSettings',
   MANAGE_PAYMENT_METHODS = 'canManagePaymentMethods',
   CHANGE_PLAN = 'canChangePlan',
+
+  // RRHH - Empleados
+  VIEW_EMPLEADOS = 'canViewEmpleados',
+  MANAGE_EMPLEADOS = 'canManageEmpleados',
+
+  // RRHH - Asistencia
+  VIEW_ASISTENCIA = 'canViewAsistencia',
+  MANAGE_ASISTENCIA = 'canManageAsistencia',
+
+  // RRHH - Planilla
+  VIEW_PLANILLA = 'canViewPlanilla',
+  MANAGE_PLANILLA = 'canManagePlanilla',
+
+  // RRHH - Aprobaciones
+  APPROVE_INCIDENCIAS = 'canApproveIncidencias',
+  APPROVE_PLANILLA = 'canApprovePlanilla',
 }

@@ -59,4 +59,8 @@ export class CreateVentaDetalleDto {
   @Min(0)
   @Type(() => Number)
   porcentajeIGV?: number;
+
+  @ApiPropertyOptional({ description: 'Si true, el precioUnitario ya incluye IGV', example: true })
+  @IsOptional()
+  precioIncluyeIgv?: boolean;
 }

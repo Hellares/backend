@@ -181,6 +181,16 @@ model Empresa {
   agentesBancarios   AgenteBancario[]
   operacionesAgente  OperacionAgente[]
 
+  // Relaciones para módulo RRHH
+  turnos             Turno[]
+  horariosPlantilla  HorarioPlantilla[]
+  empleados          Empleado[]
+  asistencias        Asistencia[]
+  incidencias        Incidencia[]
+  periodosPlanilla   PeriodoPlanilla[]
+  boletasPago        BoletaPago[]
+  adelantosPago      AdelantoPago[]
+
   @@index([subdominio])
   @@index([isActive])
   @@index([ruc])
@@ -286,6 +296,10 @@ model ConfiguracionCodigos {
   rendicionSeparador            String   @default("-")
   rendicionLongitud             Int      @default(5)
   ultimaRendicion               Int      @default(0)
+  empleadoCodigo                String   @default("EMP")
+  empleadoSeparador             String   @default("-")
+  empleadoLongitud              Int      @default(5)
+  ultimoEmpleado                Int      @default(0)
   creadoEn              DateTime @default(now())
   actualizadoEn         DateTime @updatedAt
   empresa               Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -398,6 +412,11 @@ model Sede {
   // Agentes bancarios
   agentesBancarios AgenteBancario[]
 
+  // RRHH
+  empleados        Empleado[]
+  asistencias      Asistencia[]
+  periodosPlanilla PeriodoPlanilla[]
+
   @@unique([empresaId, codigo])
   @@index([empresaId])
   @@index([codigo])
@@ -507,6 +526,14 @@ model ConfiguracionEmpresa {
   interesHabilitado          Boolean  @default(false)
   porcentajeInteresDefault   Decimal? @default(0) @db.Decimal(5, 2) // 5.00 = 5%
   interesEsEditable          Boolean  @default(true) // Vendedor puede cambiar %
+
+  // Configuración de RRHH / Planilla
+  horasJornadaDefault       Float    @default(8.0)
+  horasExtraPorcentaje      Float    @default(25.0)   // % adicional por hora extra
+  dominicalPorcentaje       Float    @default(100.0)   // % adicional por trabajo dominical
+  feriadoPorcentaje         Float    @default(100.0)   // % adicional por trabajo en feriado
+  essaludPorcentaje         Float    @default(9.0)     // % aporte EsSalud empleador
+  periodoPlanillaTipo       String   @default("MENSUAL") // MENSUAL o QUINCENAL
 
   // Configuración de mora para cuotas vencidas
   moraHabilitada            Boolean  @default(false)

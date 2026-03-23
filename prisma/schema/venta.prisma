@@ -10,6 +10,12 @@ enum EstadoVenta {
   ANULADA
 }
 
+enum CanalVenta {
+  POS          // Punto de venta físico — requiere caja abierta
+  COTIZACION   // Desde cotización (atención presencial) — requiere caja abierta
+  ONLINE       // Tienda online / marketplace — no requiere caja
+}
+
 enum MetodoPagoVenta {
   EFECTIVO
   TARJETA
@@ -29,6 +35,7 @@ model Venta {
   vendedorId       String
   cajeroId         String? // Usuario que procesó el cobro (POS)
   cotizacionId     String? // Cotización origen (si se creó desde una)
+  canalVenta       CanalVenta @default(POS)
 
   // Identificación
   codigo String

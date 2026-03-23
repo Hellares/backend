@@ -1,0 +1,418 @@
+// =========================================
+// MODULO DE RECURSOS HUMANOS (RRHH)
+// =========================================
+
+enum DiaSemana {
+  LUNES
+  MARTES
+  MIERCOLES
+  JUEVES
+  VIERNES
+  SABADO
+  DOMINGO
+}
+
+enum TipoContrato {
+  PLANILLA
+  LOCADOR
+  RECIBO_HONORARIOS
+  PRACTICANTE
+}
+
+enum EstadoEmpleado {
+  ACTIVO
+  VACACIONES
+  LICENCIA
+  SUSPENDIDO
+  CESADO
+}
+
+enum TipoAsistencia {
+  NORMAL
+  FERIADO
+  DOMINICAL
+}
+
+enum EstadoAsistencia {
+  PRESENTE
+  TARDANZA
+  FALTA
+  JUSTIFICADO
+  VACACION
+  LICENCIA
+  FERIADO
+  DESCANSO
+}
+
+enum TipoIncidencia {
+  VACACION
+  LICENCIA_MEDICA
+  PERMISO
+  DESCANSO_MEDICO
+  LICENCIA_PATERNIDAD
+  LICENCIA_MATERNIDAD
+  OTRO
+}
+
+enum EstadoIncidencia {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+  CANCELADA
+}
+
+enum EstadoPeriodoPlanilla {
+  BORRADOR
+  CALCULADA
+  APROBADA
+  PAGADA
+  CERRADA
+}
+
+enum EstadoBoletaPago {
+  PENDIENTE_BOLETA
+  PAGADA_BOLETA
+  ANULADA_BOLETA
+}
+
+enum TipoDetalleBoleta {
+  INGRESO
+  DESCUENTO
+  APORTE_EMPLEADOR
+}
+
+enum ConceptoBoleta {
+  SALARIO_BASICO
+  HORAS_EXTRA
+  BONIFICACION
+  ASIGNACION_FAMILIAR
+  GRATIFICACION
+  COMISION
+  OTRO_INGRESO_BOLETA
+  AFP
+  ONP
+  ESSALUD_EMPLEADO
+  RENTA_5TA
+  TARDANZAS
+  FALTAS
+  ADELANTO_DESCUENTO
+  PRESTAMO_DESCUENTO
+  OTRO_DESCUENTO_BOLETA
+  ESSALUD_EMPLEADOR
+  SCTR
+  SENATI
+}
+
+enum EstadoAdelanto {
+  PENDIENTE_ADELANTO
+  APROBADO_ADELANTO
+  PAGADO_ADELANTO
+  DESCONTADO_ADELANTO
+  RECHAZADO_ADELANTO
+}
+
+// =========================================
+// TURNOS Y HORARIOS
+// =========================================
+
+/// Turno de trabajo (definición de horario)
+model Turno {
+  id                   String   @id @default(cuid())
+  empresaId            String
+  nombre               String
+  horaInicio           String   // Formato "HH:mm" (ej: "08:00")
+  horaFin              String   // Formato "HH:mm" (ej: "17:00")
+  duracionAlmuerzoMin  Int      @default(60)
+  horasEfectivas       Decimal  @db.Decimal(4, 2) // 8.00
+  color                String?  // Color para UI (ej: "#4CAF50")
+  isDefault            Boolean  @default(false)
+  isActive             Boolean  @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa              Empresa               @relation(fields: [empresaId], references: [id])
+  horarioPlantillaDias HorarioPlantillaDia[]
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([empresaId, isActive])
+}
+
+/// Plantilla de horario semanal reutilizable
+model HorarioPlantilla {
+  id          String  @id @default(cuid())
+  empresaId   String
+  nombre      String
+  descripcion String?
+  isActive    Boolean @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa   Empresa               @relation(fields: [empresaId], references: [id])
+  dias      HorarioPlantillaDia[]
+  empleados Empleado[]
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+  @@index([empresaId, isActive])
+}
+
+/// Día dentro de una plantilla de horario
+model HorarioPlantillaDia {
+  id                  String    @id @default(cuid())
+  horarioPlantillaId  String
+  diaSemana           DiaSemana
+  turnoId             String?
+  esDescanso          Boolean   @default(false)
+  horaInicioOverride  String?   // Override del turno para este día
+  horaFinOverride     String?
+
+  plantilla HorarioPlantilla @relation(fields: [horarioPlantillaId], references: [id], onDelete: Cascade)
+  turno     Turno?           @relation(fields: [turnoId], references: [id])
+
+  @@unique([horarioPlantillaId, diaSemana])
+  @@index([horarioPlantillaId])
+}
+
+// =========================================
+// EMPLEADOS
+// =========================================
+
+/// Registro laboral de un usuario (extiende Usuario con datos de RRHH)
+model Empleado {
+  id                  String         @id @default(cuid())
+  empresaId           String
+  sedeId              String
+  usuarioId           String
+  codigo              String         // Auto-generado: EMP-00001
+  cargo               String?
+  departamento        String?
+  fechaIngreso        DateTime
+  fechaCese           DateTime?
+  tipoContrato        TipoContrato   @default(PLANILLA)
+  salarioBase         Decimal        @db.Decimal(10, 2)
+  moneda              String         @default("PEN")
+  banco               String?
+  numeroCuenta        String?
+  cci                 String?
+  horarioPlantillaId  String?
+  estado              EstadoEmpleado @default(ACTIVO)
+  isActive            Boolean        @default(true)
+  deletedAt           DateTime?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa          Empresa           @relation(fields: [empresaId], references: [id])
+  sede             Sede              @relation(fields: [sedeId], references: [id])
+  usuario          Usuario           @relation("EmpleadoUsuario", fields: [usuarioId], references: [id])
+  horarioPlantilla HorarioPlantilla? @relation(fields: [horarioPlantillaId], references: [id])
+  asistencias      Asistencia[]
+  incidencias      Incidencia[]
+  boletasPago      BoletaPago[]
+  adelantos        AdelantoPago[]
+
+  @@unique([empresaId, usuarioId])
+  @@unique([empresaId, codigo])
+  @@index([empresaId, sedeId])
+  @@index([empresaId, estado])
+  @@index([empresaId, isActive])
+  @@index([empresaId, deletedAt])
+}
+
+// =========================================
+// ASISTENCIA
+// =========================================
+
+/// Registro de asistencia diaria de un empleado
+model Asistencia {
+  id                  String           @id @default(cuid())
+  empleadoId          String
+  empresaId           String
+  sedeId              String
+  fecha               DateTime         @db.Date
+  horaEntrada         DateTime?
+  horaSalida          DateTime?
+  horaAlmuerzoInicio  DateTime?
+  horaAlmuerzoFin     DateTime?
+  horasTrabajadas     Decimal?         @db.Decimal(5, 2)
+  horasExtra          Decimal?         @db.Decimal(5, 2)
+  tipoAsistencia      TipoAsistencia   @default(NORMAL)
+  estado              EstadoAsistencia
+  observaciones       String?
+  registradoPorId     String
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empleado      Empleado @relation(fields: [empleadoId], references: [id])
+  empresa       Empresa  @relation(fields: [empresaId], references: [id])
+  sede          Sede     @relation(fields: [sedeId], references: [id])
+  registradoPor Usuario  @relation("AsistenciaRegistradaPor", fields: [registradoPorId], references: [id])
+
+  @@unique([empleadoId, fecha])
+  @@index([empresaId, fecha])
+  @@index([empresaId, sedeId, fecha])
+  @@index([empleadoId])
+}
+
+// =========================================
+// INCIDENCIAS (Vacaciones, Licencias, Permisos)
+// =========================================
+
+/// Solicitud de vacaciones, licencia, permiso, etc.
+model Incidencia {
+  id                String           @id @default(cuid())
+  empleadoId        String
+  empresaId         String
+  tipo              TipoIncidencia
+  fechaInicio       DateTime         @db.Date
+  fechaFin          DateTime         @db.Date
+  diasTotal         Int
+  motivo            String?
+  documentoAdjunto  String?
+  estado            EstadoIncidencia @default(PENDIENTE)
+  aprobadoPorId     String?
+  fechaAprobacion   DateTime?
+  motivoRechazo     String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empleado    Empleado @relation(fields: [empleadoId], references: [id])
+  empresa     Empresa  @relation(fields: [empresaId], references: [id])
+  aprobadoPor Usuario? @relation("IncidenciaAprobadaPor", fields: [aprobadoPorId], references: [id])
+
+  @@index([empresaId, estado])
+  @@index([empleadoId])
+  @@index([empresaId, tipo])
+}
+
+// =========================================
+// PLANILLA Y BOLETAS DE PAGO
+// =========================================
+
+/// Periodo de planilla (mensual/quincenal)
+model PeriodoPlanilla {
+  id                String                @id @default(cuid())
+  empresaId         String
+  sedeId            String?               // null = todas las sedes
+  periodo           String                // "2026-03"
+  mes               Int
+  anio              Int
+  fechaInicio       DateTime              @db.Date
+  fechaFin          DateTime              @db.Date
+  estado            EstadoPeriodoPlanilla  @default(BORRADOR)
+  totalBruto        Decimal?              @db.Decimal(12, 2)
+  totalDescuentos   Decimal?              @db.Decimal(12, 2)
+  totalNeto         Decimal?              @db.Decimal(12, 2)
+  totalAportaciones Decimal?              @db.Decimal(12, 2)
+  calculadoPorId    String?
+  aprobadoPorId     String?
+  fechaAprobacion   DateTime?
+  observaciones     String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa      Empresa      @relation(fields: [empresaId], references: [id])
+  sede         Sede?        @relation(fields: [sedeId], references: [id])
+  calculadoPor Usuario?     @relation("PlanillaCalculadaPor", fields: [calculadoPorId], references: [id])
+  aprobadoPor  Usuario?     @relation("PlanillaAprobadaPor", fields: [aprobadoPorId], references: [id])
+  boletasPago  BoletaPago[]
+
+  @@unique([empresaId, periodo, sedeId])
+  @@index([empresaId, estado])
+  @@index([empresaId, anio, mes])
+}
+
+/// Boleta de pago individual (una por empleado por periodo)
+model BoletaPago {
+  id                String           @id @default(cuid())
+  periodoId         String
+  empleadoId        String
+  empresaId         String
+  diasTrabajados    Int
+  diasFalta         Int              @default(0)
+  diasTardanza      Int              @default(0)
+  horasExtra        Decimal          @default(0) @db.Decimal(5, 2)
+  salarioBase       Decimal          @db.Decimal(10, 2)
+  totalIngresos     Decimal          @db.Decimal(10, 2)
+  totalDescuentos   Decimal          @db.Decimal(10, 2)
+  totalAportaciones Decimal          @db.Decimal(10, 2)
+  totalNeto         Decimal          @db.Decimal(10, 2)
+  estado            EstadoBoletaPago @default(PENDIENTE_BOLETA)
+  fechaPago         DateTime?
+  metodoPago        MetodoPagoVenta?
+  movimientoCajaId  String?
+  pagadoPorId       String?
+  observaciones     String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  periodo         PeriodoPlanilla    @relation(fields: [periodoId], references: [id])
+  empleado        Empleado           @relation(fields: [empleadoId], references: [id])
+  empresa         Empresa            @relation(fields: [empresaId], references: [id])
+  pagadoPor       Usuario?           @relation("BoletaPagadaPor", fields: [pagadoPorId], references: [id])
+  movimientosCaja MovimientoCaja[]   @relation("MovimientoCajaBoletaPago")
+  detalles        DetalleBoletaPago[]
+  adelantosDescontados AdelantoPago[] @relation("AdelantoDescontadoEnBoleta")
+
+  @@unique([periodoId, empleadoId])
+  @@index([empresaId, estado])
+  @@index([periodoId])
+  @@index([empleadoId])
+}
+
+/// Línea de detalle de una boleta (ingreso, descuento o aporte)
+model DetalleBoletaPago {
+  id          String           @id @default(cuid())
+  boletaId    String
+  tipo        TipoDetalleBoleta
+  concepto    ConceptoBoleta
+  descripcion String?
+  monto       Decimal          @db.Decimal(10, 2)
+  porcentaje  Decimal?         @db.Decimal(5, 2)
+
+  boleta BoletaPago @relation(fields: [boletaId], references: [id], onDelete: Cascade)
+
+  @@index([boletaId])
+}
+
+// =========================================
+// ADELANTOS DE PAGO
+// =========================================
+
+/// Adelanto de sueldo solicitado por un empleado
+model AdelantoPago {
+  id                   String          @id @default(cuid())
+  empleadoId           String
+  empresaId            String
+  monto                Decimal         @db.Decimal(10, 2)
+  motivo               String?
+  fechaSolicitud       DateTime        @default(now())
+  estado               EstadoAdelanto  @default(PENDIENTE_ADELANTO)
+  aprobadoPorId        String?
+  fechaAprobacion      DateTime?
+  metodoPago           MetodoPagoVenta?
+  movimientoCajaId     String?
+  pagadoPorId          String?
+  descontadoEnBoletaId String?
+  motivoRechazo        String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empleado           Empleado       @relation(fields: [empleadoId], references: [id])
+  empresa            Empresa        @relation(fields: [empresaId], references: [id])
+  aprobadoPor        Usuario?       @relation("AdelantoAprobadoPor", fields: [aprobadoPorId], references: [id])
+  pagadoPor          Usuario?       @relation("AdelantoPagadoPor", fields: [pagadoPorId], references: [id])
+  descontadoEnBoleta BoletaPago?    @relation("AdelantoDescontadoEnBoleta", fields: [descontadoEnBoletaId], references: [id])
+  movimientosCaja    MovimientoCaja[] @relation("MovimientoCajaAdelanto")
+
+  @@index([empresaId, estado])
+  @@index([empleadoId])
+}

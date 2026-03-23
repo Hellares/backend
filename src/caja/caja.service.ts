@@ -171,6 +171,8 @@ export class CajaService {
       pedidoMarketplaceId?: string;
       compraId?: string;
       devolucionId?: string;
+      boletaPagoId?: string;
+      adelantoPagoId?: string;
       registradoPorId: string;
       metadata?: any;
     },
@@ -191,6 +193,8 @@ export class CajaService {
         pedidoMarketplaceId: data.pedidoMarketplaceId,
         compraId: data.compraId,
         devolucionId: data.devolucionId,
+        boletaPagoId: data.boletaPagoId,
+        adelantoPagoId: data.adelantoPagoId,
         esManual: false,
         registradoPorId: data.registradoPorId,
         metadata: data.metadata ?? undefined,
@@ -218,6 +222,8 @@ export class CajaService {
       pedidoMarketplaceId?: string;
       compraId?: string;
       devolucionId?: string;
+      boletaPagoId?: string;
+      adelantoPagoId?: string;
       metadata?: any;
     },
     tx?: Prisma.TransactionClient,

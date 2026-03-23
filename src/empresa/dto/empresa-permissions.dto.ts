@@ -207,4 +207,52 @@ export class EmpresaPermissionsDto {
     example: true,
   })
   canManageCaja: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver la lista de empleados',
+    example: true,
+  })
+  canViewEmpleados: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar empleados (crear, editar, cesar)',
+    example: true,
+  })
+  canManageEmpleados: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver registros de asistencia',
+    example: true,
+  })
+  canViewAsistencia: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar asistencia (registrar entrada/salida)',
+    example: true,
+  })
+  canManageAsistencia: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver planilla y boletas de pago',
+    example: true,
+  })
+  canViewPlanilla: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar planilla (calcular, pagar)',
+    example: true,
+  })
+  canManagePlanilla: boolean;
+
+  @ApiProperty({
+    description: 'Puede aprobar/rechazar incidencias (vacaciones, licencias)',
+    example: true,
+  })
+  canApproveIncidencias: boolean;
+
+  @ApiProperty({
+    description: 'Puede aprobar planilla para pago',
+    example: true,
+  })
+  canApprovePlanilla: boolean;
 }

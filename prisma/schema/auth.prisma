@@ -143,6 +143,16 @@ model Usuario {
   agentesResponsable             AgenteBancario[]       @relation("AgenteResponsable")
   operacionesAgenteRegistradas   OperacionAgente[]      @relation("OperacionAgenteRegistro")
 
+  // RRHH
+  empleadosRegistro              Empleado[]             @relation("EmpleadoUsuario")
+  asistenciasRegistradas         Asistencia[]           @relation("AsistenciaRegistradaPor")
+  incidenciasAprobadas           Incidencia[]           @relation("IncidenciaAprobadaPor")
+  planillasCalculadas            PeriodoPlanilla[]      @relation("PlanillaCalculadaPor")
+  planillasAprobadas             PeriodoPlanilla[]      @relation("PlanillaAprobadaPor")
+  boletasPagadas                 BoletaPago[]           @relation("BoletaPagadaPor")
+  adelantosAprobados             AdelantoPago[]         @relation("AdelantoAprobadoPor")
+  adelantosPagados               AdelantoPago[]         @relation("AdelantoPagadoPor")
+
   @@index([email])
   @@index([telefono])
   @@index([personaId])

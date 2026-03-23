@@ -9,7 +9,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { MetodoPagoVenta } from '@prisma/client';
+import { MetodoPagoVenta, CanalVenta } from '@prisma/client';
 
 export class CreateVentaDesdeCotizacionDto {
   @ApiPropertyOptional({ description: 'Metodo de pago principal', enum: MetodoPagoVenta })
