@@ -141,12 +141,13 @@ export class ProductoCatalogService {
   ): Promise<void> {
     const prisma = tx || this.prisma;
 
-    // Desasociar imágenes anteriores
+    // Desasociar imágenes anteriores (solo tipo IMAGEN, no tocar videos ni otros)
     await prisma.archivo.updateMany({
       where: {
         empresaId,
         entidadTipo: 'PRODUCTO',
         entidadId: productoId,
+        tipoArchivo: 'IMAGEN',
       },
       data: {
         entidadId: null,

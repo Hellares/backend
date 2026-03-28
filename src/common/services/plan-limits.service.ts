@@ -272,6 +272,47 @@ export class PlanLimitsService {
   /**
    * Obtiene información de límites y uso actual del plan
    */
+  /**
+   * Verifica si la empresa puede subir más archivos según su límite de almacenamiento
+   */
+  async checkStorageLimit(empresaId: string, newFileSizeBytes: number): Promise<void> {
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: {
+        planSuscripcion: {
+          select: {
+            limiteAlmacenamientoMB: true,
+            nombre: true,
+          },
+        },
+      },
+    });
+
+    if (!empresa || !empresa.planSuscripcion) {
+      throw new ForbiddenException('La empresa no tiene un plan de suscripción activo');
+    }
+
+    const limiteMB = empresa.planSuscripcion.limiteAlmacenamientoMB;
+    if (limiteMB === null || limiteMB === undefined) return;
+
+    const result = await this.prisma.archivo.aggregate({
+      where: { empresaId, isActive: true, deletedAt: null },
+      _sum: { tamanoBytes: true },
+    });
+
+    const usadoBytes = result._sum.tamanoBytes || 0;
+    const limiteBytes = limiteMB * 1024 * 1024;
+    const usadoMB = Math.round(Number(usadoBytes) / (1024 * 1024));
+
+    if (Number(usadoBytes) + newFileSizeBytes > limiteBytes) {
+      throw new ForbiddenException(
+        `Has alcanzado el límite de almacenamiento de ${limiteMB >= 1024 ? (limiteMB / 1024) + 'GB' : limiteMB + 'MB'} ` +
+        `para el plan ${empresa.planSuscripcion.nombre} (usado: ${usadoMB}MB). ` +
+        `Actualiza tu plan para subir más archivos.`,
+      );
+    }
+  }
+
   async getPlanLimitsInfo(empresaId: string) {
     const empresa = await this.prisma.empresa.findUnique({
       where: { id: empresaId },
@@ -285,6 +326,7 @@ export class PlanLimitsService {
             limiteSedes: true,
             limitePlantillasAtributos: true,
             limiteCotizaciones: true,
+            limiteAlmacenamientoMB: true,
           },
         },
       },
@@ -302,6 +344,7 @@ export class PlanLimitsService {
       sedesActuales,
       plantillasActuales,
       cotizacionesActuales,
+      storageResult,
     ] = await Promise.all([
       this.prisma.producto.count({
         where: { empresaId, deletedAt: null },
@@ -321,7 +364,15 @@ export class PlanLimitsService {
       this.prisma.cotizacion.count({
         where: { empresaId },
       }),
+      this.prisma.archivo.aggregate({
+        where: { empresaId, isActive: true, deletedAt: null },
+        _sum: { tamanoBytes: true },
+      }),
     ]);
+
+    const almacenamientoUsadoMB = Math.round(
+      Number(storageResult._sum.tamanoBytes || 0) / (1024 * 1024),
+    );
 
     return {
       plan: empresa.planSuscripcion.nombre,
@@ -374,6 +425,14 @@ export class PlanLimitsService {
             empresa.planSuscripcion.limiteCotizaciones !== null
               ? empresa.planSuscripcion.limiteCotizaciones -
                 cotizacionesActuales
+              : null,
+        },
+        almacenamiento: {
+          limiteMB: empresa.planSuscripcion.limiteAlmacenamientoMB,
+          actualMB: almacenamientoUsadoMB,
+          disponibleMB:
+            empresa.planSuscripcion.limiteAlmacenamientoMB !== null
+              ? empresa.planSuscripcion.limiteAlmacenamientoMB - almacenamientoUsadoMB
               : null,
         },
       },

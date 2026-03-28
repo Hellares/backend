@@ -12,7 +12,6 @@ import {
   UploadOptions,
   UploadResult,
 } from '../interfaces/storage-provider.interface';
-import sharp from 'sharp';
 
 @Injectable()
 export class ContaboProvider implements IStorageProvider {
@@ -46,37 +45,14 @@ export class ContaboProvider implements IStorageProvider {
   ): Promise<UploadResult> {
     try {
       const folder = options.folder || `${options.empresaId}/archivos`;
-      const key = `${folder}/${options.fileId}`;
+      const ext = this.getExtension(options.mimeType);
+      const key = `${folder}/${options.fileId}${ext}`;
 
-      // Detectar si es imagen para obtener dimensiones
-      let metadata: { width?: number; height?: number } = {};
-      let thumbnailUrl: string | undefined;
-
-      if (options.mimeType.startsWith('image/')) {
-        const imageMetadata = await sharp(file).metadata();
-        metadata = {
-          width: imageMetadata.width,
-          height: imageMetadata.height,
-        };
-
-        // Crear y subir thumbnail
-        const thumbnailBuffer = await sharp(file)
-          .resize(200, 200, { fit: 'cover' })
-          .toBuffer();
-
-        const thumbnailKey = `${folder}/thumbnails/${options.fileId}`;
-        await this.s3Client.send(
-          new PutObjectCommand({
-            Bucket: this.bucket,
-            Key: thumbnailKey,
-            Body: thumbnailBuffer,
-            ContentType: options.mimeType,
-            ACL: 'public-read',
-          }),
-        );
-
-        thumbnailUrl = `${this.publicUrl}/${thumbnailKey}`;
-      }
+      // Determinar cache según tipo
+      const isMedia = options.mimeType.startsWith('image/') || options.mimeType.startsWith('video/');
+      const cacheControl = isMedia
+        ? 'public, max-age=31536000, immutable' // 1 año para media (los fileId son únicos)
+        : 'public, max-age=86400'; // 1 día para documentos
 
       // Subir archivo principal
       const command = new PutObjectCommand({
@@ -84,7 +60,8 @@ export class ContaboProvider implements IStorageProvider {
         Key: key,
         Body: file,
         ContentType: options.mimeType,
-        ACL: 'public-read', // O 'private' según necesidad
+        ACL: 'public-read',
+        CacheControl: cacheControl,
       });
 
       await this.s3Client.send(command);
@@ -96,11 +73,8 @@ export class ContaboProvider implements IStorageProvider {
       return {
         url: `${this.publicUrl}/${key}`,
         proveedorId: key,
-        urlThumbnail: thumbnailUrl,
-        ancho: metadata.width,
-        alto: metadata.height,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error al subir archivo a Contabo: ${error.message}`);
       throw error;
     }
@@ -139,6 +113,21 @@ export class ContaboProvider implements IStorageProvider {
       );
       throw error;
     }
+  }
+
+  private getExtension(mimeType: string): string {
+    const map: Record<string, string> = {
+      'image/jpeg': '.jpg',
+      'image/png': '.png',
+      'image/gif': '.gif',
+      'image/webp': '.webp',
+      'video/mp4': '.mp4',
+      'video/quicktime': '.mov',
+      'video/webm': '.webm',
+      'video/mpeg': '.mpeg',
+      'application/pdf': '.pdf',
+    };
+    return map[mimeType] || '';
   }
 
   getUrl(proveedorId: string, transformations?: any): string {

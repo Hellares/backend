@@ -409,6 +409,8 @@ export class EmpresaService {
             fechaVencimiento: fechaFinPrueba,
             estadoSuscripcion: EstadoSuscripcion.ACTIVA,
             usuariosActuales: 1,
+            // Web gratuita por 2 meses
+            fechaFinWebGratuita: new Date(ahora.getTime() + 60 * 24 * 60 * 60 * 1000),
           },
           include: {
             planSuscripcion: true,
@@ -767,6 +769,10 @@ export class EmpresaService {
         limiteServicios: true,
         limiteUsuarios: true,
         limiteSedes: true,
+        limiteAlmacenamientoMB: true,
+        precioSemestral: true,
+        precioAnual: true,
+        tieneWebPermanente: true,
         tienePersonalizacion: true,
         tieneDominioPropio: true,
         tieneApi: true,
@@ -779,7 +785,7 @@ export class EmpresaService {
   /**
    * Cambiar plan de suscripción
    */
-  async cambiarPlan(empresaId: string, userId: string, planId: string): Promise<EmpresaResponse> {
+  async cambiarPlan(empresaId: string, userId: string, planId: string, periodo: string = 'MENSUAL'): Promise<EmpresaResponse> {
     // Verificar que el usuario sea administrador de la empresa
     const accesoEmpresa = await this.prisma.empresaUsuarioRol.findFirst({
       where: {
@@ -840,18 +846,31 @@ export class EmpresaService {
       );
     }
 
-    // Calcular nueva fecha de vencimiento según el periodo del plan
-    const nuevaFechaVencimiento = this.calcularFechaVencimiento(nuevoPlan.periodo);
+    // Calcular nueva fecha de vencimiento según el periodo de pago
+    const ahora = new Date();
+    let meses = 1;
+    if (periodo === 'SEMESTRAL') meses = 6;
+    else if (periodo === 'ANUAL') meses = 12;
+
+    const nuevaFechaVencimiento = new Date(ahora);
+    nuevaFechaVencimiento.setMonth(nuevaFechaVencimiento.getMonth() + meses);
+
+    // Si es plan de pago, quitar límite de web gratuita
+    const updateData: any = {
+      planSuscripcionId: planId,
+      fechaInicioSuscripcion: ahora,
+      fechaVencimiento: nuevaFechaVencimiento,
+      estadoSuscripcion: EstadoSuscripcion.ACTIVA,
+    };
+
+    if (nuevoPlan.tieneWebPermanente) {
+      updateData.fechaFinWebGratuita = null; // Ya no necesita trial
+    }
 
     // Actualizar el plan de la empresa
     const empresaActualizada = await this.prisma.empresa.update({
       where: { id: empresaId },
-      data: {
-        planSuscripcionId: planId,
-        fechaInicioSuscripcion: new Date(),
-        fechaVencimiento: nuevaFechaVencimiento,
-        estadoSuscripcion: EstadoSuscripcion.ACTIVA,
-      },
+      data: updateData,
       include: {
         planSuscripcion: true,
       },

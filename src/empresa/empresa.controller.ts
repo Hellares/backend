@@ -313,7 +313,7 @@ export class EmpresaController {
     @Body() cambiarPlanDto: CambiarPlanDto,
     @CurrentUser() user: any,
   ) {
-    return this.empresaService.cambiarPlan(id, user.sub, cambiarPlanDto.planId);
+    return this.empresaService.cambiarPlan(id, user.sub, cambiarPlanDto.planId, cambiarPlanDto.periodo);
   }
 
   /**

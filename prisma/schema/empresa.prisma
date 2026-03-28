@@ -27,6 +27,7 @@ model Empresa {
   fechaInicioSuscripcion DateTime?
   fechaVencimiento       DateTime?
   estadoSuscripcion      EstadoSuscripcion @default(ACTIVA)
+  fechaFinWebGratuita    DateTime? // Fecha en que expira la web gratuita (plan básico)
   usuariosActuales       Int               @default(0)
 
   // Campos para Marketplace
@@ -460,6 +461,10 @@ model PlanSuscripcion {
   limiteSedes               Int?
   limitePlantillasAtributos Int? // Límite de plantillas personalizadas
   limiteCotizaciones        Int? // Límite de cotizaciones
+  limiteAlmacenamientoMB    Int? // null = ilimitado, en megabytes
+  precioSemestral           Decimal?           @db.Decimal(10, 2)
+  precioAnual               Decimal?           @db.Decimal(10, 2)
+  tieneWebPermanente        Boolean            @default(false) // false = web solo trial 2 meses
   tienePersonalizacion      Boolean            @default(false)
   tieneDominioPropio        Boolean            @default(false)
   tieneApi                  Boolean            @default(false)

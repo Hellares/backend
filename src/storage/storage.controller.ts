@@ -69,7 +69,7 @@ export class StorageController {
   })
   @UseInterceptors(FileInterceptor('file'))
   async uploadArchivo(
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file: any,
     @Body() uploadDto: UploadArchivoDto,
     @CurrentUser() user: any,
   ) {
@@ -80,17 +80,18 @@ export class StorageController {
     const result = await this.storageService.uploadArchivo({
       empresaId: uploadDto.empresaId,
       file,
-      entidadTipo: uploadDto.entidadTipo,
-      entidadId: uploadDto.entidadId,
-      categoria: uploadDto.categoria,
+      entidadTipo: uploadDto.entidadTipo || undefined,
+      entidadId: uploadDto.entidadId || undefined,
+      categoria: uploadDto.categoria || undefined,
       orden: uploadDto.orden,
       subidoPor: user.sub,
     });
 
-    // Invalidar cache de productos si se subió archivo a un producto o variante
+    // Invalidar caches
     if (uploadDto.entidadTipo === 'PRODUCTO' || uploadDto.entidadTipo === 'PRODUCTO_VARIANTE') {
       await this.cache.invalidateProductosLists(uploadDto.empresaId);
     }
+    await this.cache.invalidateEmpresa(uploadDto.empresaId);
 
     return result;
   }
@@ -111,10 +112,11 @@ export class StorageController {
 
     const result = await this.storageService.deleteArchivo(archivoId, empresaId);
 
-    // Invalidar cache de productos si se eliminó archivo de un producto o variante
+    // Invalidar caches
     if (archivo?.entidadTipo === 'PRODUCTO' || archivo?.entidadTipo === 'PRODUCTO_VARIANTE') {
       await this.cache.invalidateProductosLists(empresaId);
     }
+    await this.cache.invalidateEmpresa(empresaId);
 
     return result;
   }
@@ -136,6 +138,36 @@ export class StorageController {
       entidadTipo,
       entidadId,
     );
+  }
+
+  @Get('galeria')
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
+  @ApiOperation({ summary: 'Listar todos los archivos de la empresa (galería multimedia)' })
+  async getGaleriaEmpresa(
+    @Query('empresaId') empresaId: string,
+    @Query('tipoArchivo') tipoArchivo?: string,
+    @Query('entidadTipo') entidadTipo?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('orderBy') orderBy?: string,
+  ) {
+    return await this.storageService.getGaleriaEmpresa({
+      empresaId,
+      tipoArchivo: tipoArchivo || undefined,
+      entidadTipo: entidadTipo || undefined,
+      page: parseInt(page || '1'),
+      limit: parseInt(limit || '50'),
+      orderBy: (orderBy as 'recientes' | 'antiguos' | 'mayor' | 'menor') || 'recientes',
+    });
+  }
+
+  @Get('galeria/stats')
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
+  @ApiOperation({ summary: 'Estadísticas de almacenamiento de la empresa' })
+  async getGaleriaStats(
+    @Query('empresaId') empresaId: string,
+  ) {
+    return await this.storageService.getGaleriaStats(empresaId);
   }
 
   @Post('migrate')

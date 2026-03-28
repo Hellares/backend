@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -323,6 +323,7 @@ export class MarketplaceService {
       enOferta: ofertaActiva,
       hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
       stockActual: stock?.stockActual ?? 0,
+      videoUrl: producto.videoUrl || null,
       imagenes: imagenes.map((i) => ({ id: i.id, url: i.url, thumbnail: i.urlThumbnail })),
       atributos: producto.atributosValores
         .filter((a) => a.atributo.mostrarEnMarketplace)
@@ -489,11 +490,13 @@ export class MarketplaceService {
         metaTitle: true,
         metaDescription: true,
         keywords: true,
+        fechaFinWebGratuita: true,
         planSuscripcion: {
           select: {
             id: true,
             nombre: true,
             descripcion: true,
+            tieneWebPermanente: true,
           },
         },
         creadoEn: true,
@@ -554,6 +557,17 @@ export class MarketplaceService {
 
     if (!empresa) {
       throw new NotFoundException('Empresa no encontrada o no disponible en el marketplace');
+    }
+
+    // Verificar disponibilidad de la página web
+    const tieneWebPermanente = empresa.planSuscripcion?.tieneWebPermanente ?? false;
+    if (!tieneWebPermanente) {
+      const fechaFin = empresa.fechaFinWebGratuita;
+      if (!fechaFin || new Date() > new Date(fechaFin)) {
+        throw new ForbiddenException(
+          'La página web de esta empresa no está disponible. El periodo de prueba ha finalizado.',
+        );
+      }
     }
 
     return empresa;
