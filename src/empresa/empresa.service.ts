@@ -1239,6 +1239,11 @@ export class EmpresaService {
       personalizacion = await this.prisma.personalizacionEmpresa.create({
         data: {
           empresaId,
+          colorPrimario: '#437EFF',
+          colorSecundario: '#06b6d4',
+          colorAcento: '#437EFF',
+          bannerColor: '#000000',
+          webConfig: { colorFondo1: '#06b6d4', colorFondo2: '#5b8fd4' },
           mostrarPrecios: true,
           mostrarContacto: true,
           mostrarRedesSociales: false,
