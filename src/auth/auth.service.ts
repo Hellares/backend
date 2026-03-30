@@ -781,6 +781,7 @@ export class AuthService {
       personaId: usuario.personaId,
       nombres: usuario.persona.nombres,
       apellidos: usuario.persona.apellidos,
+      rolGlobal: usuario.rolGlobal,
       tenantId,
       tenantRole,      // Rol principal/seleccionado
       tenantRoles,     // Todos los roles disponibles en esta empresa

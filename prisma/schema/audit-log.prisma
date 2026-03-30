@@ -1,0 +1,64 @@
+model AuditLog {
+  id          String        @id @default(cuid())
+  usuarioId   String?
+  usuarioEmail String?
+  empresaId   String?
+  empresaNombre String?
+  accion      AccionAudit
+  entidad     String        // Empresa, Usuario, Plan, Pago, etc.
+  entidadId   String?
+  detalle     String?       // Descripción legible de la acción
+  metadata    Json?         // Datos extra (cambios, valores anteriores, etc.)
+  ip          String?
+  userAgent   String?
+  creadoEn    DateTime      @default(now())
+
+  @@index([usuarioId])
+  @@index([empresaId])
+  @@index([accion])
+  @@index([entidad])
+  @@index([creadoEn])
+  @@index([usuarioId, creadoEn])
+  @@index([empresaId, creadoEn])
+}
+
+enum AccionAudit {
+  // Auth
+  LOGIN
+  LOGOUT
+  LOGIN_FALLIDO
+  CAMBIO_PASSWORD
+
+  // Empresas
+  EMPRESA_CREADA
+  EMPRESA_ACTUALIZADA
+  EMPRESA_SUSPENDIDA
+  EMPRESA_ACTIVADA
+
+  // Suscripciones
+  PLAN_CAMBIADO
+  SUSCRIPCION_EXTENDIDA
+  SUSCRIPCION_VENCIDA
+
+  // Pagos
+  PAGO_SOLICITADO
+  PAGO_COMPROBANTE_SUBIDO
+  PAGO_VALIDADO
+  PAGO_RECHAZADO
+  PAGO_ANULADO
+
+  // Usuarios
+  USUARIO_CREADO
+  USUARIO_BLOQUEADO
+  USUARIO_DESBLOQUEADO
+
+  // Notificaciones
+  NOTIFICACION_ENVIADA
+  BROADCAST_ENVIADO
+
+  // Config
+  CONFIG_ACTUALIZADA
+
+  // Admin
+  ADMIN_ACCION
+}

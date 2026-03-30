@@ -1,4 +1,4 @@
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../redis/cache.service';
@@ -64,6 +64,14 @@ export class TenantAuthGuard implements CanActivate {
     if (accessData.roles.length > 0 || accessData.isClient) {
       // Inyectar roles en el request para que PermissionsGuard los reutilice
       (request as any)._tenantRoles = accessData.roles;
+
+      // Verificar estado de suscripción (solo bloqueo duro para SUSPENDIDA)
+      if (empresa.estadoSuscripcion === 'SUSPENDIDA') {
+        throw new ForbiddenException(
+          'Esta empresa ha sido suspendida por el administrador. Contacte soporte para más información.',
+        );
+      }
+
       return true;
     }
 

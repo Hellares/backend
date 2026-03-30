@@ -43,6 +43,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         ...payload,
         id: payload.sub,
         userId: payload.sub,
+        rolGlobal: payload.rolGlobal,
         empresaId: session.tenantId || payload.tenantId,
         tenantId: session.tenantId || payload.tenantId,
         tenantRole: session.tenantRole || payload.tenantRole,
@@ -57,6 +58,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       ...payload,
       id: payload.sub,
       userId: payload.sub,
+      rolGlobal: payload.rolGlobal,
       empresaId: payload.tenantId,
       roles: payload.tenantRoles || [],
     };

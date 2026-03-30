@@ -32,6 +32,7 @@ export class CurrentEmpresaMiddleware implements NestMiddleware {
               id: true,
               subdominio: true,
               nombre: true,
+              estadoSuscripcion: true,
             },
           });
           return result;

@@ -182,6 +182,9 @@ model Empresa {
   agentesBancarios   AgenteBancario[]
   operacionesAgente  OperacionAgente[]
 
+  // Pagos de suscripción
+  pagosSuscripcion   PagoSuscripcion[]
+
   // Relaciones para módulo RRHH
   turnos             Turno[]
   horariosPlantilla  HorarioPlantilla[]
@@ -474,6 +477,7 @@ model PlanSuscripcion {
   creadoEn                  DateTime           @default(now())
   actualizadoEn             DateTime           @updatedAt
   empresas                  Empresa[]
+  pagosSuscripcion          PagoSuscripcion[]
 
   @@index([isActive])
   @@index([precio])

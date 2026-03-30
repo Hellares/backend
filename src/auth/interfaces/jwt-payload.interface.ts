@@ -7,6 +7,9 @@ export interface JwtPayload {
   nombres: string;    // Nombres del usuario
   apellidos: string;  // Apellidos del usuario
 
+  // Rol global del sistema
+  rolGlobal?: string;    // SUPER_ADMIN, etc.
+
   // Multi-tenant
   tenantId?: string;     // Empresa ID actual
   tenantRole?: Rol;      // Rol principal/seleccionado en esta sesión

@@ -528,6 +528,7 @@ enum EntidadTipo {
   INVENTARIO_ITEM // Item individual del inventario
   VENTA
   PEDIDO_MARKETPLACE
+  PAGO_SUSCRIPCION
 }
 
 enum TipoPrecioCombo {
