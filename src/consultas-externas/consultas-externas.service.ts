@@ -229,7 +229,8 @@ export class ConsultasExternasService {
         this.logger.info('Consultando tipo de cambio en API externa');
 
         try {
-          const hoy = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+          const { getTodayString } = require('../common/utils/date-utils');
+          const hoy = getTodayString();
           const response = await fetch(`${this.apiUrl}/tipocambio/info/dia?fecha=${hoy}`, {
             method: 'GET',
             headers: {

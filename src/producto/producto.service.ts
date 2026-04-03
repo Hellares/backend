@@ -425,24 +425,30 @@ export class ProductoService {
       // Convertir a DTO (delegar a CatalogService)
       const productoDto = this.catalogService.toResponseDto(producto, archivos);
 
-      // Si es un combo, usar el stock y precio pre-calculados del mapa
-      if (producto.esCombo && stockCombosMap.has(producto.id)) {
-        productoDto.stock = stockCombosMap.get(producto.id)!;
-      }
-      if (producto.esCombo && precioCombosMap.has(producto.id)) {
-        const precioCombo = precioCombosMap.get(producto.id)!;
-        productoDto.precio = precioCombo;
-        // Actualizar precio en stocksPorSede para que el tile lo lea correctamente
+      // Si es un combo, usar stock reservado y precio calculado
+      if (producto.esCombo) {
+        const stockCombo = stockCombosMap.get(producto.id) ?? 0;
+        const precioCombo = precioCombosMap.get(producto.id);
+        const reservaCombo = reservacionCombosMap.get(producto.id) ?? 0;
+
+        productoDto.stock = stockCombo;
+        productoDto.comboReservado = reservaCombo;
+
+        if (precioCombo != null) {
+          productoDto.precio = precioCombo;
+        }
+
+        // Actualizar stocksPorSede para que la UI lo lea correctamente
         if (productoDto.stocksPorSede && queryDto.sedeId) {
           const stockSede = productoDto.stocksPorSede.find((s: any) => s.sedeId === queryDto.sedeId);
           if (stockSede) {
-            stockSede.precio = precioCombo;
-            stockSede.precioConfigurado = true;
+            stockSede.cantidad = stockCombo;
+            if (precioCombo != null) {
+              stockSede.precio = precioCombo;
+              stockSede.precioConfigurado = true;
+            }
           }
         }
-      }
-      if (producto.esCombo && reservacionCombosMap.has(producto.id)) {
-        productoDto.comboReservado = reservacionCombosMap.get(producto.id)!;
       }
 
       return productoDto;
@@ -716,8 +722,11 @@ export class ProductoService {
       : productoExistente.tipoPrecioCombo;
 
     // Preparar datos para actualización
+    // Extraer atributosEstructurados que no es campo Prisma (se procesa aparte en la transacción)
+    const { atributosEstructurados, ...restProductoData } = productoData as any;
+
     const dataToUpdate: any = {
-      ...productoData,
+      ...restProductoData,
     };
 
     // Procesar videoUrl de forma especial si está presente
@@ -738,7 +747,7 @@ export class ProductoService {
     }
 
     try {
-      // 5-7. Transacción atómica para update + variantes + precios + imágenes
+      // 5-8. Transacción atómica para update + variantes + precios + imágenes + atributos
       const producto = await this.prisma.$transaction(async (tx) => {
         // 5. Actualizar producto
         const productoActualizado = await tx.producto.update({
@@ -793,8 +802,23 @@ export class ProductoService {
           await this.catalogService.actualizarImagenes(id, empresaId, imagenesIds, tx);
         }
 
+        // 8. Actualizar atributos estructurados (dentro de la transacción)
+        if (atributosEstructurados && atributosEstructurados.length > 0 && !productoActualizado.tieneVariantes && !productoActualizado.esCombo) {
+          // Eliminar atributos existentes del producto
+          await tx.productoAtributoValor.deleteMany({
+            where: { productoId: id },
+          });
+          // Crear los nuevos
+          await this.atributoService.createProductoAtributosFromStructured(
+            id,
+            empresaId,
+            atributosEstructurados,
+            tx,
+          );
+        }
+
         return productoActualizado;
-      });
+      }, { timeout: 15000 });
 
       this.logger.log(`Producto actualizado: ${id}`);
 

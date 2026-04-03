@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { Prisma, TipoPrecioCombo, TipoCambioPrecio, TipoCambioComboConfig } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -23,6 +24,7 @@ export class ProductoComboService {
   constructor(
     private prisma: PrismaService,
     private configCodigosService: ConfiguracionCodigosService,
+    private cacheService: CacheService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -700,6 +702,12 @@ export class ProductoComboService {
       const stockDisponible = this.calcularStockDisponibleFromComponentes(combo.componentesCombo);
       const componentesSinStock = this.getComponentesSinStockFromData(combo.componentesCombo);
 
+      // Obtener cantidad reservada (stock vendible del combo)
+      const reservacion = await this.prisma.comboReservacion.findUnique({
+        where: { comboId_sedeId: { comboId, sedeId } },
+      });
+      const stockReservado = reservacion?.cantidad ?? 0;
+
       // Calcular precios desde los componentes ya cargados
       const { precioCalculado, precioRegularTotal } = this.calcularPreciosFromComponentes(combo.componentesCombo);
 
@@ -733,8 +741,9 @@ export class ProductoComboService {
         descuentoPorcentaje,
         descuentoAplicado: precioRegularTotal - precioFinalConOferta,
         stockDisponible,
+        stockReservado,
         componentes,
-        tieneStockSuficiente: stockDisponible > 0,
+        tieneStockSuficiente: stockReservado > 0,
         componentesSinStock: componentesSinStock.length > 0 ? componentesSinStock : undefined,
         imagen: null,
         // Campos de oferta
@@ -778,7 +787,14 @@ export class ProductoComboService {
         take: 100, // Límite de seguridad
       });
 
-      // Mapear cada combo con sus cálculos (sin queries adicionales, todo viene del include)
+      // Obtener reservaciones de todos los combos en un solo query
+      const comboIds = combos.map(c => c.id);
+      const reservaciones = await this.prisma.comboReservacion.findMany({
+        where: { comboId: { in: comboIds }, sedeId },
+      });
+      const reservaMap = new Map(reservaciones.map(r => [r.comboId, r.cantidad]));
+
+      // Mapear cada combo con sus cálculos
       const combosCompletos = combos.map((combo: any) => {
         const componentes = combo.componentesCombo.map((c: any) => this.mapToResponseDto(c, sedeId));
         const stockDisponible = this.calcularStockDisponibleFromComponentes(combo.componentesCombo);
@@ -812,8 +828,9 @@ export class ProductoComboService {
           descuentoPorcentaje,
           descuentoAplicado: precioRegularTotal - precioFinalConOferta,
           stockDisponible,
+          stockReservado: reservaMap.get(combo.id) ?? 0,
           componentes,
-          tieneStockSuficiente: stockDisponible > 0,
+          tieneStockSuficiente: (reservaMap.get(combo.id) ?? 0) > 0,
           componentesSinStock: componentesSinStock.length > 0 ? componentesSinStock : undefined,
           imagen: null,
           precioOferta: ofertaInfo.precioOferta,
@@ -1232,8 +1249,9 @@ export class ProductoComboService {
       const componentes = componentesPorCombo.get(comboId) || [];
       const comboData = combosMap.get(comboId);
 
-      // Stock
-      stocks.set(comboId, this.calcularStockDisponibleFromComponentes(componentes));
+      // Stock: para el listado, mostrar reservado (lo vendible)
+      const reserva = todasReservaciones.find(r => r.comboId === comboId);
+      stocks.set(comboId, reserva?.cantidad ?? 0);
 
       // Precio
       const { precioCalculado } = this.calcularPreciosFromComponentes(componentes);
@@ -1272,7 +1290,7 @@ export class ProductoComboService {
     usuarioId: string,
   ): Promise<{ cantidad: number }> {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         // Obtener reservación actual
         const reservacionActual = await tx.comboReservacion.findUnique({
           where: { comboId_sedeId: { comboId, sedeId } },
@@ -1402,6 +1420,12 @@ export class ProductoComboService {
         this.logger.log(`Reserva de combo ${comboId} actualizada a ${cantidad} en sede ${sedeId}`);
         return { cantidad };
       });
+
+      // Invalidar cache de productos (stock cambió)
+      const combo = await this.prisma.producto.findUnique({ where: { id: comboId }, select: { empresaId: true } });
+      if (combo) await this.cacheService.invalidateProductosLists(combo.empresaId);
+
+      return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al reservar stock de combo: ${errorMessage}`);
@@ -1554,6 +1578,17 @@ export class ProductoComboService {
   ): Promise<void> {
     try {
       await this.prisma.$transaction(async (tx) => {
+        // Validar que haya reservación suficiente antes de descontar
+        const reservacion = await tx.comboReservacion.findUnique({
+          where: { comboId_sedeId: { comboId, sedeId } },
+        });
+        const reservado = reservacion?.cantidad ?? 0;
+        if (reservado < cantidad) {
+          throw new BadRequestException(
+            `Stock insuficiente del combo. Reservados: ${reservado}, Solicitado: ${cantidad}. Reserve más combos antes de vender.`,
+          );
+        }
+
         // Obtener componentes del combo
         const componentes = await tx.productoCombo.findMany({
           where: { comboId },
@@ -1664,14 +1699,9 @@ export class ProductoComboService {
           await tx.movimientoStock.createMany({ data: movimientosVenta });
         }
 
-        // Decrementar stockReservadoCombo si hay reservación activa
-        const reservacion = await tx.comboReservacion.findUnique({
-          where: { comboId_sedeId: { comboId, sedeId } },
-        });
-
-        if (reservacion && reservacion.cantidad > 0) {
-          const cantVentaContraReserva = Math.min(cantidad, reservacion.cantidad);
-          const nuevaCantReserva = reservacion.cantidad - cantVentaContraReserva;
+        // Decrementar stockReservadoCombo (ya validamos que reservacion existe arriba)
+        {
+          const nuevaCantReserva = reservado - cantidad;
 
           for (const componente of componentes) {
             const stockRef = componente.componenteVariante
@@ -1680,7 +1710,7 @@ export class ProductoComboService {
 
             if (!stockRef) continue;
 
-            const cantidadLiberar = componente.cantidad * cantVentaContraReserva;
+            const cantidadLiberar = componente.cantidad * cantidad;
             await tx.productoStock.update({
               where: { id: stockRef.id },
               data: { stockReservadoCombo: { decrement: cantidadLiberar } },
@@ -1701,6 +1731,10 @@ export class ProductoComboService {
 
         this.logger.log(`Stock descontado para ${cantidad} unidad(es) del combo ${comboId} en sede ${sedeId}`);
       });
+
+      // Invalidar cache de productos (stock cambió)
+      const combo = await this.prisma.producto.findUnique({ where: { id: comboId }, select: { empresaId: true } });
+      if (combo) await this.cacheService.invalidateProductosLists(combo.empresaId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al descontar stock de combo: ${errorMessage}`);

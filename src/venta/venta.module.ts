@@ -8,6 +8,7 @@ import { LoggerModule } from '../common/logger/logger.module';
 import { AuthModule } from '../auth/auth.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
 import { CajaModule } from '../caja/caja.module';
+import { ProductoModule } from '../producto/producto.module';
 
 @Module({
   imports: [
@@ -16,8 +17,9 @@ import { CajaModule } from '../caja/caja.module';
     AuthModule,
     ConfiguracionCodigosModule,
     forwardRef(() => CajaModule),
+    ProductoModule,
   ],
-  controllers: [VentaController, VentaAnalyticsController],
+  controllers: [VentaAnalyticsController, VentaController],
   providers: [VentaService, VentaAnalyticsService],
   exports: [VentaService],
 })

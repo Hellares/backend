@@ -6,6 +6,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { CajaService } from '../caja/caja.service';
+import { ProductoComboService } from '../producto/producto-combo.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -33,6 +34,7 @@ export class VentaService {
     private readonly cacheService: CacheService,
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     @Inject(forwardRef(() => CajaService)) private readonly cajaService: CajaService,
+    private readonly comboService: ProductoComboService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -81,6 +83,13 @@ export class VentaService {
         },
       },
       cotizacion: { select: { id: true, codigo: true } },
+      comprobante: {
+        select: {
+          id: true, tipoComprobante: true, codigoGenerado: true, serie: true, correlativo: true,
+          estado: true, sunatStatus: true, sunatHash: true,
+          gravada: true, exonerada: true, inafecta: true, igv: true, icbper: true, total: true,
+        },
+      },
     };
   }
 
@@ -235,6 +244,30 @@ export class VentaService {
           this.calcularDetalle(d, index),
         );
 
+        // 2b. Validar descuentos máximos por producto
+        const detallesConDescuento = detallesCalculados.filter(d => d.descuento > 0 && d.productoId);
+        if (detallesConDescuento.length > 0) {
+          const productoIds = [...new Set(detallesConDescuento.map(d => d.productoId!))];
+          const productosConLimite = await tx.producto.findMany({
+            where: { id: { in: productoIds }, descuentoMaximo: { not: null }, esCombo: false },
+            select: { id: true, descuentoMaximo: true },
+          });
+          const limiteMap = new Map(productosConLimite.map(p => [p.id, Number(p.descuentoMaximo)]));
+
+          for (const detalle of detallesConDescuento) {
+            const limite = limiteMap.get(detalle.productoId!);
+            if (limite != null && limite > 0) {
+              const subtotalBruto = detalle.cantidad * detalle.precioUnitario;
+              const porcentaje = subtotalBruto > 0 ? (detalle.descuento / subtotalBruto) * 100 : 0;
+              if (porcentaje > limite) {
+                throw new BadRequestException(
+                  `Descuento de "${detalle.descripcion}" (${porcentaje.toFixed(1)}%) excede el máximo permitido (${limite}%)`,
+                );
+              }
+            }
+          }
+        }
+
         const subtotalVenta = detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0);
         const descuentoVenta = detallesCalculados.reduce((sum, d) => sum + d.descuento, 0);
         const impuestosVenta = detallesCalculados.reduce((sum, d) => sum + d.igv, 0);
@@ -320,20 +353,24 @@ export class VentaService {
 
         if (detallesConProducto.length > 0) {
           // 4a. Buscar todos los ProductoStock en un solo query
+          // Para variantes: buscar por varianteId (productoId es null en ProductoStock)
+          // Para productos simples: buscar por productoId (varianteId es null)
           const stockRecords = await tx.productoStock.findMany({
             where: {
               sedeId: dto.sedeId,
-              OR: detallesConProducto.map((d) => ({
-                productoId: d.productoId ?? null,
-                varianteId: d.varianteId ?? null,
-              })),
+              OR: detallesConProducto.map((d) => d.varianteId
+                ? { varianteId: d.varianteId }
+                : { productoId: d.productoId, varianteId: null }
+              ),
             },
           });
 
-          // Mapear stock por productoId+varianteId para lookup rápido
+          // Mapear stock: variantes por "_varianteId", productos por "productoId_"
           const stockMap = new Map<string, typeof stockRecords[0]>();
           for (const s of stockRecords) {
-            const key = `${s.productoId || ''}_${s.varianteId || ''}`;
+            const key = s.varianteId
+              ? `_${s.varianteId}`
+              : `${s.productoId || ''}_`;
             stockMap.set(key, s);
           }
 
@@ -368,7 +405,10 @@ export class VentaService {
             const movimientosData: Array<any> = [];
 
             for (const detalle of detallesConProducto) {
-              const key = `${detalle.productoId || ''}_${detalle.varianteId || ''}`;
+              // Para variantes: buscar por "_varianteId" (productoId es null en stock)
+              const key = detalle.varianteId
+                ? `_${detalle.varianteId}`
+                : `${detalle.productoId || ''}_`;
               const productoStock = stockMap.get(key);
               if (!productoStock) {
                 this.logger.warn(`No existe stock para "${detalle.descripcion}" en sede ${dto.sedeId}`);
@@ -423,6 +463,17 @@ export class VentaService {
               await tx.movimientoStock.createMany({ data: movimientosData });
             }
           }
+        }
+
+        // 4e. Descontar stock de combos
+        const detallesConCombo = detallesCalculados.filter(d => d.comboId && !d.productoId && !d.varianteId);
+        for (const detalle of detallesConCombo) {
+          await this.comboService.descontarStockCombo(
+            detalle.comboId!,
+            dto.sedeId,
+            dto.vendedorId || empresaId,
+            Number(detalle.cantidad),
+          );
         }
 
         // 5. Registrar pagos (batch con createMany)
@@ -512,6 +563,7 @@ export class VentaService {
 
           const comprobante = await tx.comprobanteElectronico.create({
             data: {
+              ventaId: venta.id,
               empresaId,
               clienteId: dto.clienteId,
               clienteEmpresaId: dto.clienteEmpresaId,
@@ -860,8 +912,9 @@ export class VentaService {
         const productoStock = await tx.productoStock.findFirst({
           where: {
             sedeId: cotizacion.sedeId,
-            productoId: detalle.productoId ?? null,
-            varianteId: detalle.varianteId ?? null,
+            ...(detalle.varianteId
+              ? { varianteId: detalle.varianteId }
+              : { productoId: detalle.productoId, varianteId: null }),
           },
         });
 
@@ -928,6 +981,17 @@ export class VentaService {
         });
       }
 
+      // 5b. Descontar stock de combos en cotización
+      const detallesCombo = todosLosDetalles.filter(d => (d as any).comboId && !d.productoId && !d.varianteId);
+      for (const detalle of detallesCombo) {
+        await this.comboService.descontarStockCombo(
+          (detalle as any).comboId,
+          cotizacion.sedeId,
+          cotizacion.vendedorId || empresaId,
+          Number(detalle.cantidad),
+        );
+      }
+
       // 6. Registrar pagos (múltiples o único legacy)
       if (dto.pagos && dto.pagos.length > 0 && !esCredito) {
         for (const pago of dto.pagos) {
@@ -955,16 +1019,19 @@ export class VentaService {
         });
       }
 
-      // 7. Crear comprobante electrónico
+      // 7. Crear comprobante electrónico (solo BOLETA o FACTURA, no TICKET)
       const tipoComprobante = dto.tipoComprobante || 'BOLETA';
+      const esComprobanteElectronico = tipoComprobante === 'BOLETA' || tipoComprobante === 'FACTURA';
 
+      let sedeLocked: any = null;
+      if (esComprobanteElectronico) {
       // ConfiguracionFacturacion = datos tributarios globales (IGV, credenciales SUNAT)
       const configFacturacion = await tx.configuracionFacturacion.findUnique({
         where: { empresaId },
       });
 
       // Sede = punto de emisión (series y correlativos) — FOR UPDATE para concurrencia
-      const [sedeLocked] = await tx.$queryRaw<
+      [sedeLocked] = await tx.$queryRaw<
         Array<{
           id: string;
           serieFactura: string;
@@ -1002,6 +1069,7 @@ export class VentaService {
         // Usar subtotal e IGV ya calculados en la cotización (ya contemplan precioIncluyeIgv)
         const comprobante = await tx.comprobanteElectronico.create({
           data: {
+            ventaId: venta.id,
             empresaId,
             clienteId: cotizacion.clienteId,
             clienteEmpresaId: cotizacion.clienteEmpresaId,
@@ -1063,6 +1131,7 @@ export class VentaService {
 
         this.logger.log(`Comprobante ${codigoGenerado} generado para venta ${venta.codigo}`);
       }
+      } // fin esComprobanteElectronico
 
       // 8. Cambiar estado de cotización a CONVERTIDA
       await tx.cotizacion.update({
@@ -1915,6 +1984,114 @@ export class VentaService {
       total: Math.round(total * 100) / 100,
       orden: index,
     };
+  }
+
+  /**
+   * Generar comprobante electrónico (boleta/factura) para una venta tipo TICKET
+   */
+  async generarComprobante(ventaId: string, empresaId: string, dto: { tipoComprobante: 'BOLETA' | 'FACTURA'; tipoDocumentoCliente?: string }) {
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId },
+      include: {
+        ...this.getInclude(),
+      },
+    });
+
+    if (!venta) throw new NotFoundException('Venta no encontrada');
+    if (venta.comprobante) throw new BadRequestException('Esta venta ya tiene un comprobante electrónico generado');
+
+    return this.prisma.$transaction(async (tx) => {
+      // Lock sede para concurrencia de serie/correlativo
+      const [sedeLocked] = await tx.$queryRaw<
+        Array<{ id: string; serieFactura: string; serieBoleta: string; ultimoNumeroFactura: number; ultimoNumeroBoleta: number }>
+      >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
+        FROM "Sede" WHERE id = ${venta.sedeId} FOR UPDATE`;
+
+      if (!sedeLocked) throw new BadRequestException('Sede no encontrada');
+
+      const serie = dto.tipoComprobante === 'FACTURA' ? sedeLocked.serieFactura : sedeLocked.serieBoleta;
+      const nuevoCorrelativo = dto.tipoComprobante === 'FACTURA'
+        ? sedeLocked.ultimoNumeroFactura + 1
+        : sedeLocked.ultimoNumeroBoleta + 1;
+      const correlativo = String(nuevoCorrelativo);
+
+      await tx.sede.update({
+        where: { id: sedeLocked.id },
+        data: dto.tipoComprobante === 'FACTURA'
+          ? { ultimoNumeroFactura: nuevoCorrelativo }
+          : { ultimoNumeroBoleta: nuevoCorrelativo },
+      });
+
+      const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
+      const subtotalVenta = Number(venta.subtotal);
+      const impuestosVenta = Number(venta.impuestos);
+      const totalVenta = Number(venta.total);
+
+      const comprobante = await tx.comprobanteElectronico.create({
+        data: {
+          ventaId: venta.id,
+          empresaId,
+          clienteId: venta.clienteId,
+          clienteEmpresaId: venta.clienteEmpresaId,
+          tipoComprobante: dto.tipoComprobante as any,
+          serie,
+          correlativo: correlativo.padStart(8, '0'),
+          codigoGenerado,
+          tipoDocumento: dto.tipoDocumentoCliente || (dto.tipoComprobante === 'FACTURA' ? '6' : '1'),
+          numeroDocumento: venta.documentoCliente,
+          nombreCliente: venta.nombreCliente,
+          direccionCliente: venta.direccionCliente,
+          emailCliente: venta.emailCliente,
+          moneda: venta.moneda,
+          gravada: new Prisma.Decimal(subtotalVenta.toFixed(2)),
+          igv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+          totalIgv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+          total: new Prisma.Decimal(totalVenta.toFixed(2)),
+          estado: 'REGISTRADO' as any,
+          detalles: {
+            create: venta.detalles.map((d: any) => {
+              const subtotalItem = Number(d.subtotal || 0);
+              const igvItem = Number(d.igv || 0);
+              const totalItem = Number(d.total || subtotalItem + igvItem);
+              const cant = Number(d.cantidad || 1);
+              const valorUnit = cant > 0 ? subtotalItem / cant : 0;
+              const precioUnit = cant > 0 ? totalItem / cant : 0;
+              return {
+                descripcion: d.descripcion,
+                cantidad: d.cantidad,
+                valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
+                precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
+                valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
+                igv: new Prisma.Decimal(igvItem.toFixed(2)),
+                subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
+                total: new Prisma.Decimal(totalItem.toFixed(2)),
+                ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
+              };
+            }),
+          },
+        },
+      });
+
+      // Registrar pago del comprobante
+      const totalPagado = venta.pagos?.reduce((s: number, p: any) => s + Number(p.monto), 0) ?? 0;
+      await tx.pagoComprobante.create({
+        data: {
+          comprobanteId: comprobante.id,
+          metodoPago: venta.metodoPago || 'EFECTIVO',
+          monto: new Prisma.Decimal(Math.min(totalPagado, totalVenta).toFixed(2)),
+          referencia: null,
+          estado: venta.esCredito ? 'PENDIENTE' : 'COMPLETADO',
+        },
+      });
+
+      this.logger.log(`Comprobante ${codigoGenerado} generado para venta ${venta.codigo}`);
+
+      // Retornar venta actualizada
+      return tx.venta.findUnique({
+        where: { id: ventaId },
+        include: this.getInclude(),
+      });
+    }, { timeout: 15000 });
   }
 
   /**

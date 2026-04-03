@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { EstadoVenta, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
+import { getTodayStart, getTomorrowStart, getWeekStart, getMonthStart, parseStartOfDay, parseEndOfDay } from '../../common/utils/date-utils';
 import {
   VentaAnalyticsQueryDto,
   PeriodoAgrupacion,
@@ -22,8 +23,8 @@ export class VentaAnalyticsService {
     if (!query.fechaInicio && !query.fechaFin) return undefined;
 
     const filter: { gte?: Date; lte?: Date } = {};
-    if (query.fechaInicio) filter.gte = new Date(query.fechaInicio);
-    if (query.fechaFin) filter.lte = new Date(query.fechaFin);
+    if (query.fechaInicio) filter.gte = parseStartOfDay(query.fechaInicio);
+    if (query.fechaFin) filter.lte = parseEndOfDay(query.fechaFin);
     return filter;
   }
 
@@ -48,7 +49,10 @@ export class VentaAnalyticsService {
   }
 
   private getPeriodoKey(fecha: Date, periodo?: PeriodoAgrupacion): string {
-    const d = new Date(fecha);
+    // Convertir a hora Perú para agrupar correctamente
+    const utc = new Date(fecha);
+    const peruMs = utc.getTime() + (-5 * 60 * 60 * 1000) + (utc.getTimezoneOffset() * 60 * 1000);
+    const d = new Date(peruMs);
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -279,18 +283,33 @@ export class VentaAnalyticsService {
     let fechaInicioAnterior: Date;
     let fechaFinAnterior: Date;
 
-    if (query.fechaInicio && query.fechaFin) {
-      fechaInicioActual = new Date(query.fechaInicio);
-      fechaFinActual = new Date(query.fechaFin);
-      const diffMs = fechaFinActual.getTime() - fechaInicioActual.getTime();
-      fechaFinAnterior = new Date(fechaInicioActual.getTime() - 1);
-      fechaInicioAnterior = new Date(fechaFinAnterior.getTime() - diffMs);
+    if (query.fechaInicioA && query.fechaFinA && query.fechaInicioB && query.fechaFinB) {
+      // Periodos explícitos del frontend
+      fechaInicioAnterior = parseStartOfDay(query.fechaInicioA);
+      fechaFinAnterior = parseEndOfDay(query.fechaFinA);
+      fechaInicioActual = parseStartOfDay(query.fechaInicioB);
+      fechaFinActual = parseEndOfDay(query.fechaFinB);
+    } else if (query.fechaInicio && query.fechaFin) {
+      fechaInicioActual = parseStartOfDay(query.fechaInicio);
+      fechaFinActual = parseEndOfDay(query.fechaFin);
+      const esInicioMes = fechaInicioActual.getDate() === 1;
+      if (esInicioMes) {
+        const m = fechaInicioActual.getMonth();
+        const y = fechaInicioActual.getFullYear();
+        fechaInicioAnterior = new Date(y, m - 1, 1);
+        fechaFinAnterior = new Date(y, m, 0, 23, 59, 59, 999);
+      } else {
+        const diffMs = fechaFinActual.getTime() - fechaInicioActual.getTime();
+        fechaFinAnterior = new Date(fechaInicioActual.getTime() - 1);
+        fechaInicioAnterior = new Date(fechaFinAnterior.getTime() - diffMs);
+      }
     } else {
-      // Default: mes actual vs mes anterior
-      fechaInicioActual = new Date(now.getFullYear(), now.getMonth(), 1);
+      // Default: mes actual vs mes anterior (zona negocio)
+      fechaInicioActual = getMonthStart();
       fechaFinActual = now;
-      fechaInicioAnterior = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      fechaFinAnterior = new Date(now.getFullYear(), now.getMonth(), 0);
+      const biz = fechaInicioActual;
+      fechaInicioAnterior = new Date(Date.UTC(biz.getUTCFullYear(), biz.getUTCMonth() - 1, 1));
+      fechaFinAnterior = new Date(Date.UTC(biz.getUTCFullYear(), biz.getUTCMonth(), 0, 23, 59, 59, 999));
     }
 
     const baseWhere: Prisma.VentaWhereInput = {
@@ -351,16 +370,10 @@ export class VentaAnalyticsService {
     this.logger.log(`Obteniendo dashboard del vendedor ${vendedorId}`);
 
     const now = new Date();
-    const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const manana = new Date(hoy); manana.setDate(manana.getDate() + 1);
-
-    // Start of week (Monday)
-    const inicioSemana = new Date(hoy);
-    const day = inicioSemana.getDay();
-    const diff = inicioSemana.getDate() - day + (day === 0 ? -6 : 1);
-    inicioSemana.setDate(diff);
-
-    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const hoy = getTodayStart();
+    const manana = getTomorrowStart();
+    const inicioSemana = getWeekStart();
+    const inicioMes = getMonthStart();
 
     const baseWhere: any = { empresaId, vendedorId, estado: { not: 'ANULADA' as const } };
     if (sedeId) baseWhere.sedeId = sedeId;
@@ -442,7 +455,7 @@ export class VentaAnalyticsService {
     hace7Dias.setDate(hace7Dias.getDate() - 6);
 
     const ventasPorDiaRaw = await this.prisma.$queryRaw<any[]>`
-      SELECT DATE(v."fechaVenta") as fecha,
+      SELECT DATE(v."fechaVenta" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Lima') as fecha,
              COUNT(*)::int as cantidad,
              COALESCE(SUM(v.total), 0)::float as monto
       FROM "Venta" v
@@ -451,7 +464,7 @@ export class VentaAnalyticsService {
       AND v."estado" != 'ANULADA'
       AND v."fechaVenta" >= ${hace7Dias}
       ${sedeId ? Prisma.sql`AND v."sedeId" = ${sedeId}` : Prisma.empty}
-      GROUP BY DATE(v."fechaVenta")
+      GROUP BY DATE(v."fechaVenta" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Lima')
       ORDER BY fecha ASC
     `;
 

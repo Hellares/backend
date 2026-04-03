@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsOptional, IsArray, ValidateNested, ArrayMinSize, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsOptional, IsArray, ValidateNested, ArrayMinSize, Min, IsEnum, IsInt } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class AtributoCombinacionDto {
@@ -33,4 +33,14 @@ export class GenerateVarianteCombinationsDto {
   @IsString()
   @IsOptional()
   skuBase?: string;
+
+  @IsEnum(['EQUITATIVO', 'SIN_STOCK'])
+  @IsOptional()
+  stockDistribucion?: 'EQUITATIVO' | 'SIN_STOCK';
+
+  @IsInt()
+  @Min(0)
+  @IsOptional()
+  @Type(() => Number)
+  stockTotal?: number;
 }

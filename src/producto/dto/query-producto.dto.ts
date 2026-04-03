@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, IsInt, Min, IsBoolean, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export enum OrdenProducto {
   NOMBRE_ASC = 'nombre_asc',
@@ -74,8 +74,7 @@ export class QueryProductoDto {
     default: false,
   })
   @IsOptional()
-  @IsBoolean()
-  @Type(() => Boolean)
+  @Transform(({ value }) => value === 'true' || value === true)
   mostrarTodos?: boolean;
 
   @ApiPropertyOptional({
@@ -83,8 +82,7 @@ export class QueryProductoDto {
     example: true,
   })
   @IsOptional()
-  @IsBoolean()
-  @Type(() => Boolean)
+  @Transform(({ value }) => value === 'true' || value === true)
   visibleMarketplace?: boolean;
 
   @ApiPropertyOptional({
@@ -92,8 +90,7 @@ export class QueryProductoDto {
     example: false,
   })
   @IsOptional()
-  @IsBoolean()
-  @Type(() => Boolean)
+  @Transform(({ value }) => value === 'true' || value === true)
   destacado?: boolean;
 
   @ApiPropertyOptional({
@@ -101,8 +98,7 @@ export class QueryProductoDto {
     example: false,
   })
   @IsOptional()
-  @IsBoolean()
-  @Type(() => Boolean)
+  @Transform(({ value }) => value === 'true' || value === true)
   stockBajo?: boolean;
 
   @ApiPropertyOptional({
@@ -110,8 +106,7 @@ export class QueryProductoDto {
     example: false,
   })
   @IsOptional()
-  @IsBoolean()
-  @Type(() => Boolean)
+  @Transform(({ value }) => value === 'true' || value === true)
   soloProductos?: boolean;
 
   @ApiPropertyOptional({
@@ -119,8 +114,7 @@ export class QueryProductoDto {
     example: false,
   })
   @IsOptional()
-  @IsBoolean()
-  @Type(() => Boolean)
+  @Transform(({ value }) => value === 'true' || value === true)
   soloCombos?: boolean;
 
   @ApiPropertyOptional({

@@ -107,6 +107,7 @@ model Venta {
   movimientos    MovimientoStock[]
   devoluciones   Devolucion[]
   movimientosCaja MovimientoCaja[] @relation("MovimientoCajaVenta")
+  comprobante    ComprobanteElectronico?
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

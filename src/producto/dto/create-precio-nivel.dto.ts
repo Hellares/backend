@@ -4,7 +4,7 @@ import {
   IsInt,
   IsEnum,
   IsOptional,
-  IsDecimal,
+  IsNumber,
   Min,
   Max,
   ValidateIf,
@@ -55,7 +55,8 @@ export class CreatePrecioNivelDto {
     type: Number,
   })
   @ValidateIf((o) => o.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO)
-  @IsDecimal({ decimal_digits: '0,2' })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
   @Type(() => Number)
   precio?: number;
 
@@ -68,7 +69,7 @@ export class CreatePrecioNivelDto {
     type: Number,
   })
   @ValidateIf((o) => o.tipoPrecio === TipoPrecioNivel.PORCENTAJE_DESCUENTO)
-  @IsDecimal({ decimal_digits: '0,2' })
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   @Max(100)
   @Type(() => Number)

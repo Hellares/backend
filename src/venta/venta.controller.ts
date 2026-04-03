@@ -29,6 +29,7 @@ import { CrearYCobrarVentaDto } from './dto/crear-y-cobrar-venta.dto';
 import { UpdateVentaDto } from './dto/update-venta.dto';
 import { ProcesarPagoDto } from './dto/procesar-pago.dto';
 import { AnularVentaDto } from './dto/anular-venta.dto';
+import { GenerarComprobanteDto } from './dto/generar-comprobante.dto';
 import { EstadoVenta } from '@prisma/client';
 
 @ApiTags('Ventas')
@@ -189,5 +190,17 @@ export class VentaController {
     @Body() dto: AnularVentaDto,
   ) {
     return this.ventaService.anular(id, empresaId, usuarioId, dto);
+  }
+
+  @Post(':id/generar-comprobante')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Generar comprobante electrónico (boleta/factura) para una venta tipo ticket' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async generarComprobante(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Body() dto: GenerarComprobanteDto,
+  ) {
+    return this.ventaService.generarComprobante(id, empresaId, dto);
   }
 }

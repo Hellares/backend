@@ -187,15 +187,30 @@ export class ProductoCatalogService {
 
     if (producto.stocksPorSede && producto.stocksPorSede.length > 0) {
       stockTotal = producto.stocksPorSede.reduce(
-        (sum: number, stock: any) => sum + stock.stockActual,
+        (sum: number, stock: any) => {
+          const disponible = stock.stockActual
+            - (stock.stockReservado || 0)
+            - (stock.stockReservadoVenta || 0)
+            - (stock.stockReservadoCombo || 0)
+            - (stock.stockDanado || 0)
+            - (stock.stockEnGarantia || 0);
+          return sum + Math.max(0, disponible);
+        },
         0,
       );
 
-      stocksPorSede = producto.stocksPorSede.map((stock: any) => ({
+      stocksPorSede = producto.stocksPorSede.map((stock: any) => {
+        const disponible = stock.stockActual
+          - (stock.stockReservado || 0)
+          - (stock.stockReservadoVenta || 0)
+          - (stock.stockReservadoCombo || 0)
+          - (stock.stockDanado || 0)
+          - (stock.stockEnGarantia || 0);
+        return {
         sedeId: stock.sede.id,
         sedeNombre: stock.sede.nombre,
         sedeCodigo: stock.sede.codigo,
-        cantidad: stock.stockActual,
+        cantidad: Math.max(0, disponible),
         stockMinimo: stock.stockMinimo,
         stockMaximo: stock.stockMaximo,
         ubicacion: stock.ubicacion,
@@ -207,14 +222,23 @@ export class ProductoCatalogService {
         fechaFinOferta: stock.fechaFinOferta,
         precioConfigurado: stock.precioConfigurado ?? false,
         precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
-      }));
+      };
+      });
     } else if (producto.tieneVariantes && producto.variantes?.length > 0) {
       // Calcular stock total desde stocksPorSede de las variantes
       stockTotal = producto.variantes.reduce(
         (sum: number, variante: any) => {
           if (variante.stocksPorSede && variante.stocksPorSede.length > 0) {
             return sum + variante.stocksPorSede.reduce(
-              (varianteSum: number, stock: any) => varianteSum + stock.stockActual,
+              (varianteSum: number, stock: any) => {
+                const disponible = stock.stockActual
+                  - (stock.stockReservado || 0)
+                  - (stock.stockReservadoVenta || 0)
+                  - (stock.stockReservadoCombo || 0)
+                  - (stock.stockDanado || 0)
+                  - (stock.stockEnGarantia || 0);
+                return varianteSum + Math.max(0, disponible);
+              },
               0,
             );
           }
@@ -659,6 +683,11 @@ export class ProductoCatalogService {
         varianteInclude.stocksPorSede = {
           select: {
             stockActual: true,
+            stockReservado: true,
+            stockReservadoVenta: true,
+            stockReservadoCombo: true,
+            stockDanado: true,
+            stockEnGarantia: true,
             stockMinimo: true,
             stockMaximo: true,
             ubicacion: true,
@@ -707,6 +736,11 @@ export class ProductoCatalogService {
       include.stocksPorSede = {
         select: {
           stockActual: true,
+          stockReservado: true,
+          stockReservadoVenta: true,
+          stockReservadoCombo: true,
+          stockDanado: true,
+          stockEnGarantia: true,
           stockMinimo: true,
           stockMaximo: true,
           ubicacion: true,

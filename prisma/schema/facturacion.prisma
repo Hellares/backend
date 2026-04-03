@@ -137,7 +137,9 @@ model ComprobanteElectronico {
   componentes      ServicioComponente[] @relation("ComprobanteComponente")
   productos        Producto[]           @relation("ProductoComprobante")
   servicios        Servicio[]           @relation("ServicioComprobante")
-  // ventas           Venta[]              // Relación inversa: ventas que generaron este comprobante (comentado hasta implementar módulo Venta)
+  // Relación con Venta (1:1 opcional)
+  ventaId          String?              @unique
+  venta            Venta?               @relation(fields: [ventaId], references: [id])
 
   @@unique([empresaId, tipoComprobante, serie, correlativo])
   @@unique([empresaId, codigoGenerado])

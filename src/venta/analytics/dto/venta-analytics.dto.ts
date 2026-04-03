@@ -41,4 +41,25 @@ export class VentaAnalyticsQueryDto {
   @IsOptional()
   @IsEnum(PeriodoAgrupacion)
   periodo?: PeriodoAgrupacion;
+
+  // Comparativo: periodos explícitos
+  @ApiPropertyOptional({ description: 'Inicio periodo A (comparativo)' })
+  @IsOptional()
+  @IsString()
+  fechaInicioA?: string;
+
+  @ApiPropertyOptional({ description: 'Fin periodo A (comparativo)' })
+  @IsOptional()
+  @IsString()
+  fechaFinA?: string;
+
+  @ApiPropertyOptional({ description: 'Inicio periodo B (comparativo)' })
+  @IsOptional()
+  @IsString()
+  fechaInicioB?: string;
+
+  @ApiPropertyOptional({ description: 'Fin periodo B (comparativo)' })
+  @IsOptional()
+  @IsString()
+  fechaFinB?: string;
 }

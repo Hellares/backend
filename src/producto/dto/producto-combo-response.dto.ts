@@ -46,6 +46,7 @@ export class ComboCompletoResponseDto {
   descuentoPorcentaje?: number;
   descuentoAplicado?: number;  // Ahorro total: precioRegularTotal - precio
   stockDisponible: number;
+  stockReservado: number;  // Cantidad de combos reservados (vendibles)
 
   componentes: ProductoComboResponseDto[];
   tieneStockSuficiente: boolean;

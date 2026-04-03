@@ -54,6 +54,30 @@ export class CotizacionService {
         this.calcularDetalle(d, index),
       );
 
+      // Validar descuentos máximos por producto
+      const detallesConDescuento = detallesCalculados.filter(d => d.descuento > 0 && d.productoId);
+      if (detallesConDescuento.length > 0) {
+        const productoIds = [...new Set(detallesConDescuento.map(d => d.productoId!))];
+        const productosConLimite = await tx.producto.findMany({
+          where: { id: { in: productoIds }, descuentoMaximo: { not: null }, esCombo: false },
+          select: { id: true, descuentoMaximo: true },
+        });
+        const limiteMap = new Map(productosConLimite.map(p => [p.id, Number(p.descuentoMaximo)]));
+
+        for (const detalle of detallesConDescuento) {
+          const limite = limiteMap.get(detalle.productoId!);
+          if (limite != null && limite > 0) {
+            const subtotalBruto = detalle.cantidad * detalle.precioUnitario;
+            const porcentaje = subtotalBruto > 0 ? (detalle.descuento / subtotalBruto) * 100 : 0;
+            if (porcentaje > limite) {
+              throw new BadRequestException(
+                `Descuento de "${detalle.descripcion}" (${porcentaje.toFixed(1)}%) excede el máximo permitido (${limite}%)`,
+              );
+            }
+          }
+        }
+      }
+
       // Calcular totales del header
       const subtotal = detallesCalculados.reduce(
         (sum, d) => sum + d.subtotal,
