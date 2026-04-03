@@ -17,6 +17,8 @@ model Producto {
   videoUrl           String?
   impuestoPorcentaje Decimal? @db.Decimal(5, 2)
   descuentoMaximo    Decimal? @db.Decimal(5, 2)
+  tipoAfectacionIgv  TipoAfectacionIgv @default(GRAVADO)
+  aplicaIcbper       Boolean           @default(false)
 
   // Campos para Marketplace
   visibleMarketplace Boolean @default(false)
@@ -495,6 +497,13 @@ model ComboReservacion {
   @@unique([comboId, sedeId])
   @@index([comboId])
   @@index([sedeId])
+}
+
+/// Tipo de afectación IGV (Catálogo SUNAT N° 07)
+enum TipoAfectacionIgv {
+  GRAVADO     // 10 - Operación Onerosa gravada
+  EXONERADO   // 20 - Operación Onerosa exonerada
+  INAFECTO    // 30 - Operación Onerosa inafecta
 }
 
 /// Tipos de atributos para productos

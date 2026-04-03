@@ -1969,6 +1969,11 @@ export class VentaService {
       total = subtotal + igv;
     }
 
+    // Tipo de afectación IGV (SUNAT Cat. 07)
+    const tipoAfectacion = dto.tipoAfectacion || (porcentajeIGV > 0 ? '10' : '10');
+    const icbperMonto = dto.icbper ?? 0;
+    const totalConIcbper = total + icbperMonto;
+
     return {
       productoId: dto.productoId || null,
       varianteId: dto.varianteId || null,
@@ -1979,9 +1984,11 @@ export class VentaService {
       precioUnitario,
       descuento,
       porcentajeIGV,
+      tipoAfectacion,
+      icbper: Math.round(icbperMonto * 100) / 100,
       igv: Math.round(igv * 100) / 100,
       subtotal: Math.round(subtotal * 100) / 100,
-      total: Math.round(total * 100) / 100,
+      total: Math.round(totalConIcbper * 100) / 100,
       orden: index,
     };
   }
@@ -2023,9 +2030,16 @@ export class VentaService {
       });
 
       const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
-      const subtotalVenta = Number(venta.subtotal);
-      const impuestosVenta = Number(venta.impuestos);
       const totalVenta = Number(venta.total);
+
+      // Calcular totales tributarios por tipo de afectación
+      const detallesParaTributario = venta.detalles.map((d: any) => ({
+        tipoAfectacion: d.tipoAfectacion || '10',
+        subtotal: Number(d.subtotal || 0),
+        igv: Number(d.igv || 0),
+        icbper: Number(d.icbper || 0),
+      }));
+      const tributario = this.calcularTotalesTributarios(detallesParaTributario);
 
       const comprobante = await tx.comprobanteElectronico.create({
         data: {
@@ -2043,9 +2057,12 @@ export class VentaService {
           direccionCliente: venta.direccionCliente,
           emailCliente: venta.emailCliente,
           moneda: venta.moneda,
-          gravada: new Prisma.Decimal(subtotalVenta.toFixed(2)),
-          igv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
-          totalIgv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+          gravada: new Prisma.Decimal(tributario.gravada.toFixed(2)),
+          exonerada: new Prisma.Decimal(tributario.exonerada.toFixed(2)),
+          inafecta: new Prisma.Decimal(tributario.inafecta.toFixed(2)),
+          igv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+          totalIgv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+          icbper: new Prisma.Decimal(tributario.icbper.toFixed(2)),
           total: new Prisma.Decimal(totalVenta.toFixed(2)),
           estado: 'REGISTRADO' as any,
           detalles: {
@@ -2092,6 +2109,34 @@ export class VentaService {
         include: this.getInclude(),
       });
     }, { timeout: 15000 });
+  }
+
+  /**
+   * Calcula totales tributarios SUNAT desde detalles calculados
+   */
+  private calcularTotalesTributarios(detalles: Array<{ tipoAfectacion?: string; subtotal: number; igv: number; icbper?: number }>) {
+    let gravada = 0, exonerada = 0, inafecta = 0, igvTotal = 0, icbperTotal = 0;
+
+    for (const d of detalles) {
+      const tipo = d.tipoAfectacion || '10';
+      if (tipo === '10') {
+        gravada += d.subtotal;
+        igvTotal += d.igv;
+      } else if (tipo === '20') {
+        exonerada += d.subtotal;
+      } else if (tipo === '30') {
+        inafecta += d.subtotal;
+      }
+      icbperTotal += d.icbper ?? 0;
+    }
+
+    return {
+      gravada: Math.round(gravada * 100) / 100,
+      exonerada: Math.round(exonerada * 100) / 100,
+      inafecta: Math.round(inafecta * 100) / 100,
+      igv: Math.round(igvTotal * 100) / 100,
+      icbper: Math.round(icbperTotal * 100) / 100,
+    };
   }
 
   /**

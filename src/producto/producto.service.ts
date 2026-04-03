@@ -67,7 +67,7 @@ export class ProductoService {
     createDto: CreateProductoDto,
     userId: string,
   ): Promise<ProductoResponseDto> {
-    const { empresaId, imagenesIds, sedesIds, ...productoData } = createDto;
+    const { empresaId, imagenesIds, sedesIds, atributosEstructurados, ...productoData } = createDto as any;
 
     // 1. Verificar permisos del usuario (mantener en Facade)
     await this.verifyUserPermissions(userId, empresaId);
@@ -165,7 +165,7 @@ export class ProductoService {
     }
 
     // 5. Validar atributosEstructurados (lógica de negocio - mantener en Facade)
-    if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
+    if (atributosEstructurados && atributosEstructurados.length > 0) {
       // Solo permitir atributos en productos sin variantes y sin combo
       if (productoData.tieneVariantes === true) {
         throw new BadRequestException(
@@ -221,11 +221,11 @@ export class ProductoService {
           }
 
           // 10. Crear atributos (delegar a AtributoService, pasar tx)
-          if (productoData.atributosEstructurados && productoData.atributosEstructurados.length > 0) {
+          if (atributosEstructurados && atributosEstructurados.length > 0) {
             await this.atributoService.createProductoAtributosFromStructured(
               productoCreado.id,
               empresaId,
-              productoData.atributosEstructurados,
+              atributosEstructurados,
               tx,
             );
           }

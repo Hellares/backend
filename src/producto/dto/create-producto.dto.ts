@@ -140,6 +140,23 @@ export class CreateProductoDto {
   descuentoMaximo?: number;
 
   @ApiPropertyOptional({
+    description: 'Tipo de afectación IGV (SUNAT Cat. 07)',
+    enum: ['GRAVADO', 'EXONERADO', 'INAFECTO'],
+    default: 'GRAVADO',
+  })
+  @IsOptional()
+  @IsEnum(['GRAVADO', 'EXONERADO', 'INAFECTO'])
+  tipoAfectacionIgv?: string;
+
+  @ApiPropertyOptional({
+    description: 'Aplica ICBPER (bolsa plástica)',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  aplicaIcbper?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Visible en marketplace',
     example: true,
     default: true,
