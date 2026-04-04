@@ -24,6 +24,7 @@ import {
   Prisma,
   Rol,
 } from '@prisma/client';
+import { NubefactService } from '../sunat/nubefact.service';
 
 @Injectable()
 export class VentaService {
@@ -35,6 +36,7 @@ export class VentaService {
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     @Inject(forwardRef(() => CajaService)) private readonly cajaService: CajaService,
     private readonly comboService: ProductoComboService,
+    private readonly nubefactService: NubefactService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -85,9 +87,24 @@ export class VentaService {
       cotizacion: { select: { id: true, codigo: true } },
       comprobante: {
         select: {
-          id: true, tipoComprobante: true, codigoGenerado: true, serie: true, correlativo: true,
+          id: true, sedeId: true, tipoComprobante: true, codigoGenerado: true, serie: true, correlativo: true,
           estado: true, sunatStatus: true, sunatHash: true,
           gravada: true, exonerada: true, inafecta: true, igv: true, icbper: true, total: true,
+          sunatXmlUrl: true, sunatPdfUrl: true, sunatCdrUrl: true,
+          cadenaQR: true, enlaceNubefact: true,
+          nubefactEnviado: true, nubefactError: true, intentosEnvio: true,
+          anulado: true,
+          notasRelacionadas: {
+            select: {
+              id: true, tipoComprobante: true, codigoGenerado: true,
+              estado: true, sunatStatus: true, sunatHash: true,
+              total: true, motivoNota: true, tipoNotaCredito: true, tipoNotaDebito: true,
+              cadenaQR: true, anulado: true,
+              fechaEmision: true,
+              enlaceNubefact: true, sunatPdfUrl: true,
+            },
+            orderBy: { creadoEn: 'desc' as const },
+          },
         },
       },
     };
@@ -189,8 +206,10 @@ export class VentaService {
               cantidad: d.cantidad,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
+              tipoAfectacion: d.tipoAfectacion,
               porcentajeIGV: d.porcentajeIGV,
               igv: d.igv,
+              icbper: d.icbper,
               subtotal: d.subtotal,
               total: d.total,
               orden: d.orden,
@@ -335,8 +354,10 @@ export class VentaService {
                 cantidad: d.cantidad,
                 precioUnitario: d.precioUnitario,
                 descuento: d.descuento,
+                tipoAfectacion: d.tipoAfectacion,
                 porcentajeIGV: d.porcentajeIGV,
                 igv: d.igv,
+                icbper: d.icbper,
                 subtotal: d.subtotal,
                 total: d.total,
                 orden: d.orden,
@@ -527,9 +548,12 @@ export class VentaService {
         }
 
         // 6. Generar comprobante electrónico (solo BOLETA/FACTURA, no TICKET)
+        let comprobanteIdGenerado: string | null = null;
         const tipoComprobante = dto.tipoComprobante || 'TICKET';
 
         if (tipoComprobante !== 'TICKET') {
+        // Usar sede de facturación si se especificó (multi-RUC), sino la sede operativa
+        const sedeIdFacturacion = dto.sedeFacturacionId || dto.sedeId;
         const [sedeLocked] = await tx.$queryRaw<
           Array<{
             id: string;
@@ -539,7 +563,7 @@ export class VentaService {
             ultimoNumeroBoleta: number;
           }>
         >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
-          FROM "Sede" WHERE id = ${dto.sedeId} FOR UPDATE`;
+          FROM "Sede" WHERE id = ${sedeIdFacturacion} FOR UPDATE`;
 
         if (sedeLocked) {
           const serie = tipoComprobante === 'FACTURA'
@@ -561,10 +585,14 @@ export class VentaService {
 
           const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
+          // Calcular totales tributarios por tipo de afectación
+          const tributario = this.calcularTotalesTributarios(detallesCalculados);
+
           const comprobante = await tx.comprobanteElectronico.create({
             data: {
               ventaId: venta.id,
               empresaId,
+              sedeId: dto.sedeFacturacionId || dto.sedeId,
               clienteId: dto.clienteId,
               clienteEmpresaId: dto.clienteEmpresaId,
               tipoComprobante: tipoComprobante as any,
@@ -577,9 +605,12 @@ export class VentaService {
               direccionCliente: dto.direccionCliente,
               emailCliente: dto.emailCliente,
               moneda: dto.moneda || 'PEN',
-              gravada: new Prisma.Decimal(subtotalVenta.toFixed(2)),
-              igv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
-              totalIgv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+              gravada: new Prisma.Decimal(tributario.gravada.toFixed(2)),
+              exonerada: new Prisma.Decimal(tributario.exonerada.toFixed(2)),
+              inafecta: new Prisma.Decimal(tributario.inafecta.toFixed(2)),
+              igv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+              totalIgv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+              icbper: new Prisma.Decimal(tributario.icbper.toFixed(2)),
               total: new Prisma.Decimal(totalVenta.toFixed(2)),
               estado: 'REGISTRADO' as any,
               detalles: {
@@ -593,6 +624,7 @@ export class VentaService {
                   return {
                     descripcion: d.descripcion,
                     cantidad: d.cantidad,
+                    tipoAfectacion: d.tipoAfectacion,
                     valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
                     precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                     valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
@@ -619,6 +651,7 @@ export class VentaService {
           });
 
           this.logger.log(`Comprobante ${codigoGenerado} generado para venta POS ${venta.codigo}`);
+          comprobanteIdGenerado = comprobante.id;
         }
         } // fin if tipoComprobante !== 'TICKET'
 
@@ -645,13 +678,20 @@ export class VentaService {
         }
 
         this.logger.log(`Venta POS creada y cobrada: ${venta.codigo}`);
-        return venta;
+        return { venta, comprobanteIdGenerado };
       },
       { timeout: Math.max(30000, dto.detalles.length * 1000 + 15000) },
     );
 
     await this.invalidateProductCache(empresaId);
-    return result;
+
+    // Fire-after-commit: enviar comprobante a Nubefact (no bloquea la venta)
+    if (result.comprobanteIdGenerado) {
+      this.nubefactService.enviarComprobante(result.comprobanteIdGenerado, empresaId)
+        .catch(err => this.logger.warn(`Nubefact envio fallido para comprobante ${result.comprobanteIdGenerado}: ${err?.message}`));
+    }
+
+    return result.venta;
   }
 
   /**
@@ -774,9 +814,11 @@ export class VentaService {
         const precioUnitario = item.precioUnitario;
         const descuento = item.descuento ?? 0;
         const porcentajeIGV = item.porcentajeIGV ?? 18;
+        const tipoAfectacion = item.tipoAfectacion || (porcentajeIGV > 0 ? '10' : '10');
+        const icbperMonto = item.icbper ?? 0;
         const subtotal = (cantidad * precioUnitario) - descuento;
         const igv = Math.round(subtotal * (porcentajeIGV / 100) * 100) / 100;
-        const total = subtotal + igv;
+        const total = subtotal + igv + icbperMonto;
         return {
           productoId: item.productoId || null,
           varianteId: item.varianteId || null,
@@ -785,8 +827,10 @@ export class VentaService {
           cantidad: new Prisma.Decimal(cantidad),
           precioUnitario: new Prisma.Decimal(precioUnitario),
           descuento: new Prisma.Decimal(descuento),
+          tipoAfectacion,
           porcentajeIGV: new Prisma.Decimal(porcentajeIGV),
           igv: new Prisma.Decimal(igv.toFixed(2)),
+          icbper: new Prisma.Decimal(Math.round(icbperMonto * 100) / 100),
           subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
           total: new Prisma.Decimal(total.toFixed(2)),
           orden: 0,
@@ -876,8 +920,10 @@ export class VentaService {
                 cantidad: d.cantidad,
                 precioUnitario: d.precioUnitario,
                 descuento: d.descuento,
+                tipoAfectacion: d.tipoAfectacion,
                 porcentajeIGV: d.porcentajeIGV,
                 igv: d.igv,
+                icbper: d.icbper,
                 subtotal: d.subtotal,
                 total: d.total,
                 orden: d.orden,
@@ -890,8 +936,10 @@ export class VentaService {
                 cantidad: d.cantidad,
                 precioUnitario: d.precioUnitario,
                 descuento: d.descuento,
+                tipoAfectacion: d.tipoAfectacion,
                 porcentajeIGV: d.porcentajeIGV,
                 igv: d.igv,
+                icbper: d.icbper,
                 subtotal: d.subtotal,
                 total: d.total,
                 orden: detallesVenta.length + i,
@@ -1020,6 +1068,7 @@ export class VentaService {
       }
 
       // 7. Crear comprobante electrónico (solo BOLETA o FACTURA, no TICKET)
+      let comprobanteIdGenerado: string | null = null;
       const tipoComprobante = dto.tipoComprobante || 'BOLETA';
       const esComprobanteElectronico = tipoComprobante === 'BOLETA' || tipoComprobante === 'FACTURA';
 
@@ -1066,11 +1115,22 @@ export class VentaService {
 
         const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
-        // Usar subtotal e IGV ya calculados en la cotización (ya contemplan precioIncluyeIgv)
+        // Calcular totales tributarios por tipo de afectación
+        const todosDetallesComprobante = [...detallesVenta, ...itemsAdicionales];
+        const tributario = this.calcularTotalesTributarios(
+          todosDetallesComprobante.map((d: any) => ({
+            tipoAfectacion: d.tipoAfectacion || '10',
+            subtotal: Number(d.subtotal || 0),
+            igv: Number(d.igv || 0),
+            icbper: Number(d.icbper || 0),
+          })),
+        );
+
         const comprobante = await tx.comprobanteElectronico.create({
           data: {
             ventaId: venta.id,
             empresaId,
+            sedeId: venta.sedeId,
             clienteId: cotizacion.clienteId,
             clienteEmpresaId: cotizacion.clienteEmpresaId,
             tipoComprobante: tipoComprobante as any,
@@ -1083,15 +1143,16 @@ export class VentaService {
             direccionCliente: cotizacion.direccionCliente,
             emailCliente: cotizacion.emailCliente,
             moneda: cotizacion.moneda || 'PEN',
-            // Usar totales recalculados (pueden diferir si se excluyeron ítems)
-            gravada: new Prisma.Decimal(subtotalVenta.toFixed(2)),
-            igv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
-            totalIgv: new Prisma.Decimal(impuestosVenta.toFixed(2)),
+            gravada: new Prisma.Decimal(tributario.gravada.toFixed(2)),
+            exonerada: new Prisma.Decimal(tributario.exonerada.toFixed(2)),
+            inafecta: new Prisma.Decimal(tributario.inafecta.toFixed(2)),
+            igv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+            totalIgv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+            icbper: new Prisma.Decimal(tributario.icbper.toFixed(2)),
             total: new Prisma.Decimal(totalVenta.toFixed(2)),
             estado: 'REGISTRADO' as any,
             detalles: {
-              create: detallesVenta.map((d) => {
-                // Usar subtotal e IGV ya calculados por item (respetan precioIncluyeIgv)
+              create: detallesVenta.map((d: any) => {
                 const subtotalItem = Number(d.subtotal || 0);
                 const igvItem = Number(d.igv || 0);
                 const totalItem = Number(d.total || subtotalItem + igvItem);
@@ -1101,6 +1162,7 @@ export class VentaService {
                 return {
                   descripcion: d.descripcion,
                   cantidad: d.cantidad,
+                  tipoAfectacion: d.tipoAfectacion || '10',
                   valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
                   precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                   valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
@@ -1130,6 +1192,7 @@ export class VentaService {
         });
 
         this.logger.log(`Comprobante ${codigoGenerado} generado para venta ${venta.codigo}`);
+        comprobanteIdGenerado = comprobante.id;
       }
       } // fin esComprobanteElectronico
 
@@ -1173,15 +1236,20 @@ export class VentaService {
       this.logger.log(
         `Venta ${venta.codigo} creada desde cotizacion ${cotizacion.codigo}`,
       );
-      return venta;
+      return { venta, comprobanteIdGenerado };
     },
-    { timeout: 30000 }, // 30s para operaciones con múltiples locks de stock
+    { timeout: 30000 },
     );
 
-    // Invalidar cache de productos después de descontar stock
     await this.invalidateProductCache(empresaId);
 
-    return result;
+    // Fire-after-commit: enviar comprobante a Nubefact
+    if (result.comprobanteIdGenerado) {
+      this.nubefactService.enviarComprobante(result.comprobanteIdGenerado, empresaId)
+        .catch(err => this.logger.warn(`Nubefact envio fallido: ${err?.message}`));
+    }
+
+    return result.venta;
   }
 
   /**
@@ -1357,8 +1425,10 @@ export class VentaService {
             cantidad: d.cantidad,
             precioUnitario: d.precioUnitario,
             descuento: d.descuento,
+            tipoAfectacion: d.tipoAfectacion,
             porcentajeIGV: d.porcentajeIGV,
             igv: d.igv,
+            icbper: d.icbper,
             subtotal: d.subtotal,
             total: d.total,
             orden: d.orden,
@@ -2007,7 +2077,7 @@ export class VentaService {
     if (!venta) throw new NotFoundException('Venta no encontrada');
     if (venta.comprobante) throw new BadRequestException('Esta venta ya tiene un comprobante electrónico generado');
 
-    return this.prisma.$transaction(async (tx) => {
+    const ventaResult = await this.prisma.$transaction(async (tx) => {
       // Lock sede para concurrencia de serie/correlativo
       const [sedeLocked] = await tx.$queryRaw<
         Array<{ id: string; serieFactura: string; serieBoleta: string; ultimoNumeroFactura: number; ultimoNumeroBoleta: number }>
@@ -2045,6 +2115,7 @@ export class VentaService {
         data: {
           ventaId: venta.id,
           empresaId,
+          sedeId: venta.sedeId,
           clienteId: venta.clienteId,
           clienteEmpresaId: venta.clienteEmpresaId,
           tipoComprobante: dto.tipoComprobante as any,
@@ -2076,6 +2147,7 @@ export class VentaService {
               return {
                 descripcion: d.descripcion,
                 cantidad: d.cantidad,
+                tipoAfectacion: d.tipoAfectacion || '10',
                 valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
                 precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                 valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
@@ -2109,6 +2181,15 @@ export class VentaService {
         include: this.getInclude(),
       });
     }, { timeout: 15000 });
+
+    // Fire-after-commit: enviar comprobante a Nubefact
+    const comprobanteId = ventaResult?.comprobante?.id;
+    if (comprobanteId) {
+      this.nubefactService.enviarComprobante(comprobanteId, empresaId)
+        .catch(err => this.logger.warn(`Nubefact envio fallido: ${err?.message}`));
+    }
+
+    return ventaResult;
   }
 
   /**

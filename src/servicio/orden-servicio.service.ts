@@ -1033,8 +1033,9 @@ export class OrdenServicioService {
 
         const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
-        // IGV desde ConfiguracionFacturacion (config tributaria global)
-        const porcentajeIGV = Number(configFacturacion?.porcentajeIGV || 18);
+        // IGV desde ConfiguracionEmpresa (fuente de verdad) o fallback ConfiguracionFacturacion
+        const configEmpresa = await tx.configuracionEmpresa.findUnique({ where: { empresaId } });
+        const porcentajeIGV = configEmpresa?.impuestoDefaultPorcentaje ?? Number(configFacturacion?.porcentajeIGV || 18);
         const factorIGV = 1 + porcentajeIGV / 100;
         const incluyeIGV = configFacturacion?.incluirIGV ?? true;
         const subtotal = incluyeIGV ? saldoPendiente / factorIGV : saldoPendiente;

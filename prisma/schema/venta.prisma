@@ -139,8 +139,10 @@ model VentaDetalle {
   descuento      Decimal @default(0) @db.Decimal(10, 2)
 
   // Impuesto
-  porcentajeIGV Decimal @default(18.00) @db.Decimal(5, 2)
-  igv           Decimal @default(0) @db.Decimal(10, 2)
+  tipoAfectacion String  @default("10") // SUNAT Cat.07: 10=Gravado, 20=Exonerado, 30=Inafecto
+  porcentajeIGV  Decimal @default(18.00) @db.Decimal(5, 2)
+  igv            Decimal @default(0) @db.Decimal(10, 2)
+  icbper         Decimal @default(0) @db.Decimal(10, 2)
 
   // Totales
   subtotal Decimal @db.Decimal(10, 2)

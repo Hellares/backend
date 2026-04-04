@@ -20,15 +20,12 @@ model ConfiguracionDocumentos {
   id        String @id @default(cuid())
   empresaId String @unique
 
-  // Identidad de empresa para documentos
-  logoUrl         String?
-  nombreComercial String?
-  ruc             String?
-  direccion       String?
-  telefono        String?
-  email           String?
+  // Marca/visual para documentos
+  logoUrl         String?  // Logo de la empresa
+  nombreComercial String?  // Nombre comercial (marca que ve el cliente)
+  // Datos fiscales (ruc, dirección, teléfono, email) se leen de Empresa/Sede dinámicamente
 
-  // Colores para documentos (reemplaza los hardcoded PdfColors.blue800)
+  // Colores para documentos
   colorPrimario   String @default("#1565C0")
   colorSecundario String @default("#1E88E5")
   colorTexto      String @default("#333333")

@@ -9,6 +9,7 @@ import { AuthModule } from '../auth/auth.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
 import { CajaModule } from '../caja/caja.module';
 import { ProductoModule } from '../producto/producto.module';
+import { SunatModule } from '../sunat/sunat.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ProductoModule } from '../producto/producto.module';
     ConfiguracionCodigosModule,
     forwardRef(() => CajaModule),
     ProductoModule,
+    SunatModule,
   ],
   controllers: [VentaAnalyticsController, VentaController],
   providers: [VentaService, VentaAnalyticsService],

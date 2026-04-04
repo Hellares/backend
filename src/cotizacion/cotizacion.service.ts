@@ -126,8 +126,10 @@ export class CotizacionService {
               cantidad: d.cantidad,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
+              tipoAfectacion: d.tipoAfectacion,
               porcentajeIGV: d.porcentajeIGV,
               igv: d.igv,
+              icbper: d.icbper,
               subtotal: d.subtotal,
               total: d.total,
               orden: d.orden,
@@ -304,8 +306,10 @@ export class CotizacionService {
             cantidad: d.cantidad,
             precioUnitario: d.precioUnitario,
             descuento: d.descuento,
+            tipoAfectacion: d.tipoAfectacion,
             porcentajeIGV: d.porcentajeIGV,
             igv: d.igv,
+            icbper: d.icbper,
             subtotal: d.subtotal,
             total: d.total,
             orden: d.orden,
@@ -629,6 +633,11 @@ export class CotizacionService {
       total = subtotal + igv;
     }
 
+    // Tipo de afectación IGV (SUNAT Cat. 07)
+    const tipoAfectacion = dto.tipoAfectacion || (porcentajeIGV > 0 ? '10' : '10');
+    const icbperMonto = dto.icbper ?? 0;
+    const totalConIcbper = total + icbperMonto;
+
     return {
       productoId: dto.productoId || null,
       varianteId: dto.varianteId || null,
@@ -637,10 +646,12 @@ export class CotizacionService {
       cantidad,
       precioUnitario,
       descuento,
+      tipoAfectacion,
       porcentajeIGV,
       igv: Math.round(igv * 100) / 100,
+      icbper: Math.round(icbperMonto * 100) / 100,
       subtotal: Math.round(subtotal * 100) / 100,
-      total: Math.round(total * 100) / 100,
+      total: Math.round(totalConIcbper * 100) / 100,
       orden: index,
     };
   }

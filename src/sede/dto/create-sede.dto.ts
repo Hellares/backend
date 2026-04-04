@@ -204,6 +204,42 @@ export class CreateSedeDto {
   @IsString()
   serieGuiaRemision?: string;
 
+  // Facturación electrónica (override por sede)
+  @ApiPropertyOptional({ description: 'RUC propio de la sede (si difiere del de la empresa)' })
+  @IsOptional()
+  @IsString()
+  rucSede?: string;
+
+  @ApiPropertyOptional({ description: 'Razón social del contribuyente de la sede' })
+  @IsOptional()
+  @IsString()
+  razonSocialSede?: string;
+
+  @ApiPropertyOptional({ description: 'Dirección fiscal SUNAT de la sede' })
+  @IsOptional()
+  @IsString()
+  direccionFiscalSede?: string;
+
+  @ApiPropertyOptional({ description: 'URL API Nubefact propia de la sede' })
+  @IsOptional()
+  @IsString()
+  nubefactRuta?: string;
+
+  @ApiPropertyOptional({ description: 'Token Nubefact propio de la sede' })
+  @IsOptional()
+  @IsString()
+  nubefactToken?: string;
+
+  @ApiPropertyOptional({ description: 'Nubefact activo para esta sede' })
+  @IsOptional()
+  @IsBoolean()
+  nubefactActivo?: boolean;
+
+  @ApiPropertyOptional({ description: 'Resolución SUNAT de la sede' })
+  @IsOptional()
+  @IsString()
+  resolucionSunat?: string;
+
   @ApiPropertyOptional({
     description: 'Indica si la sede está activa',
     default: true,

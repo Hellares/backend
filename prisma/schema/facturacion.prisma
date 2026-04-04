@@ -69,23 +69,24 @@ model TransaccionPago {
 model ConfiguracionFacturacion {
   id                 String   @id @default(cuid())
   empresaId          String   @unique
-  ruc                String?
-  razonSocial        String?
-  nombreComercial    String?
-  direccionFiscal    String?
-  telefono           String?
-  emailFacturacion   String?
+  // Datos fiscales ahora viven en Empresa (ruc, razonSocial, direccionFiscal)
+  // Datos de marca/logo viven en ConfiguracionDocumentos (nombreComercial, logoUrl)
+  emailFacturacion   String?  // Email específico para facturación (puede diferir del email general)
   certificadoDigital String?
   claveCertificado   String?
   usuarioSol         String?
   claveSol           String?
   entorno            String   @default("BETA")
-  logoEmpresa        String?
+  // Nubefact (proveedor facturación electrónica)
+  nubefactRuta       String?  // URL API por empresa
+  nubefactToken      String?  // Token por empresa
+  nubefactActivo     Boolean  @default(false) // Switch maestro
+  resolucionSunat    String?  // Ej: "No.034-005-0005315"
   textoPiePagina     String   @default("Gracias por su compra")
   incluirIGV         Boolean  @default(true)
   incluirDetalles    Boolean  @default(true)
   formatoPapel       String   @default("A4")
-  porcentajeIGV      Decimal  @default(18.00) @db.Decimal(5, 2)
+  porcentajeIGV      Decimal  @default(18.00) @db.Decimal(5, 2) // Fuente de verdad para IGV
   creadoEn           DateTime @default(now())
   actualizadoEn      DateTime @updatedAt
   empresa            Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -96,6 +97,7 @@ model ConfiguracionFacturacion {
 model ComprobanteElectronico {
   id               String               @id @default(cuid())
   empresaId        String
+  sedeId           String?
   clienteId        String?
   clienteEmpresaId String?
   tipoComprobante  TipoComprobante
@@ -123,20 +125,36 @@ model ComprobanteElectronico {
   sunatHash        String?
   sunatXmlUrl      String?
   sunatPdfUrl      String?
+  sunatCdrUrl      String?
+  cadenaQR         String?
+  enlaceNubefact   String?
+  nubefactEnviado  Boolean              @default(false)
+  nubefactError    String?
+  intentosEnvio    Int                  @default(0)
+  ultimoIntentoEnvio DateTime?
   estado           EstadoComprobante    @default(BORRADOR)
   anulado          Boolean              @default(false)
   motivoAnulacion  String?
+  // Notas de crédito/débito: referencia al comprobante original
+  comprobanteOrigenId String?
+  tipoNotaCredito    Int?
+  tipoNotaDebito     Int?
+  motivoNota         String?
   creadoEn         DateTime             @default(now())
   actualizadoEn    DateTime             @updatedAt
   cliente          EmpresaPersona?      @relation("ComoCliente", fields: [clienteId], references: [id])
   clienteEmpresa   ClienteEmpresa?      @relation("ComprobanteClienteEmpresa", fields: [clienteEmpresaId], references: [id])
   empresa          Empresa              @relation(fields: [empresaId], references: [id])
+  sede             Sede?                @relation(fields: [sedeId], references: [id])
   detalles         DetalleComprobante[]
   ordenesServicio  OrdenServicio[]
   pagos            PagoComprobante[]
   componentes      ServicioComponente[] @relation("ComprobanteComponente")
   productos        Producto[]           @relation("ProductoComprobante")
   servicios        Servicio[]           @relation("ServicioComprobante")
+  // Notas: self-relation
+  comprobanteOrigen  ComprobanteElectronico?  @relation("NotasRelacionadas", fields: [comprobanteOrigenId], references: [id])
+  notasRelacionadas  ComprobanteElectronico[] @relation("NotasRelacionadas")
   // Relación con Venta (1:1 opcional)
   ventaId          String?              @unique
   venta            Venta?               @relation(fields: [ventaId], references: [id])
@@ -151,6 +169,9 @@ model ComprobanteElectronico {
   @@index([empresaId, estado])
   @@index([empresaId, fechaEmision])
   @@index([empresaId, estado, fechaEmision])
+  @@index([comprobanteOrigenId])
+  @@index([sunatStatus])
+  @@index([sedeId])
 }
 
 model DetalleComprobante {

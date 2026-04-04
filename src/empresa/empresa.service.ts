@@ -1482,6 +1482,15 @@ export class EmpresaService {
       });
     }
 
+    // Consolidar IGV: ConfigFacturacion.porcentajeIGV es la fuente de verdad
+    const configFacturacion = await this.prisma.configuracionFacturacion.findUnique({
+      where: { empresaId },
+      select: { porcentajeIGV: true },
+    });
+    if (configFacturacion?.porcentajeIGV != null) {
+      (configuracion as any).impuestoDefaultPorcentaje = Number(configFacturacion.porcentajeIGV);
+    }
+
     this.logger.success('Configuration retrieved successfully', { empresaId });
     return configuracion as ConfiguracionEmpresaResponseDto;
   }
@@ -1550,6 +1559,15 @@ export class EmpresaService {
         condicionesDefault: data.condicionesDefault ?? null,
       },
     });
+
+    // Sincronizar IGV a ConfiguracionFacturacion (fuente de verdad para facturación)
+    if (data.impuestoDefaultPorcentaje !== undefined) {
+      await this.prisma.configuracionFacturacion.upsert({
+        where: { empresaId },
+        update: { porcentajeIGV: data.impuestoDefaultPorcentaje },
+        create: { empresaId, porcentajeIGV: data.impuestoDefaultPorcentaje },
+      });
+    }
 
     this.logger.success('Configuration updated successfully', { empresaId });
 

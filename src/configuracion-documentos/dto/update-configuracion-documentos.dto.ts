@@ -18,30 +18,7 @@ export class UpdateConfiguracionDocumentosDto {
   @IsOptional()
   @MaxLength(200)
   nombreComercial?: string;
-
-  @ApiPropertyOptional({ description: 'RUC de la empresa' })
-  @IsString()
-  @IsOptional()
-  @MaxLength(20)
-  ruc?: string;
-
-  @ApiPropertyOptional({ description: 'Direccion de la empresa' })
-  @IsString()
-  @IsOptional()
-  @MaxLength(500)
-  direccion?: string;
-
-  @ApiPropertyOptional({ description: 'Telefono de la empresa' })
-  @IsString()
-  @IsOptional()
-  @MaxLength(50)
-  telefono?: string;
-
-  @ApiPropertyOptional({ description: 'Email de la empresa' })
-  @IsString()
-  @IsOptional()
-  @MaxLength(200)
-  email?: string;
+  // ruc, direccion, telefono, email eliminados — se leen de Empresa/Sede dinámicamente
 
   @ApiPropertyOptional({
     description: 'Color primario en formato hex (#RRGGBB)',

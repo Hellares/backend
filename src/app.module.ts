@@ -59,6 +59,7 @@ import { AdminModule } from './admin/admin.module';
 import { PagoSuscripcionModule } from './pago-suscripcion/pago-suscripcion.module';
 import { ConfiguracionSistemaModule } from './configuracion-sistema/configuracion-sistema.module';
 import { AuditModule } from './audit/audit.module';
+import { SunatModule } from './sunat/sunat.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -75,6 +76,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     }),
     ScheduleModule.forRoot(),
     AuditModule,
+    SunatModule,
     LoggerModule, // Logger global
     PrismaModule,
     AuthModule,

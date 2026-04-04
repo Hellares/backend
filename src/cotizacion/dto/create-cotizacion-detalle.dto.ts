@@ -2,6 +2,7 @@ import {
   IsString,
   IsOptional,
   IsNumber,
+  IsBoolean,
   Min,
   IsNotEmpty,
 } from 'class-validator';
@@ -57,5 +58,24 @@ export class CreateCotizacionDetalleDto {
 
   @ApiPropertyOptional({ description: 'El precio ya incluye IGV', example: true })
   @IsOptional()
+  @IsBoolean()
   precioIncluyeIgv?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Tipo afectación IGV SUNAT (10=Gravado, 20=Exonerado, 30=Inafecto)',
+    example: '10',
+  })
+  @IsOptional()
+  @IsString()
+  tipoAfectacion?: string;
+
+  @ApiPropertyOptional({
+    description: 'Monto ICBPER por este item',
+    example: 0.5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  icbper?: number;
 }

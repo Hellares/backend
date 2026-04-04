@@ -40,17 +40,12 @@ async function main() {
       const facturacion = empresa.configuracionFacturacion;
       const personalizacion = empresa.personalizaciones?.[0];
 
-      // Create config with consolidated data from existing tables
+      // Create config: solo marca/estilos, datos fiscales se leen dinámicamente
       const config = await prisma.configuracionDocumentos.create({
         data: {
           empresaId: empresa.id,
-          logoUrl: facturacion?.logoEmpresa ?? empresa.logo ?? null,
-          nombreComercial:
-            facturacion?.nombreComercial ?? empresa.nombre ?? null,
-          ruc: facturacion?.ruc ?? empresa.ruc ?? null,
-          direccion: facturacion?.direccionFiscal ?? null,
-          telefono: facturacion?.telefono ?? empresa.telefono ?? null,
-          email: facturacion?.emailFacturacion ?? empresa.email ?? null,
+          logoUrl: empresa.logo ?? null,
+          nombreComercial: empresa.nombre ?? null,
           colorPrimario: personalizacion?.colorPrimario ?? '#1565C0',
           colorSecundario: personalizacion?.colorSecundario ?? '#1E88E5',
           textoPiePagina:

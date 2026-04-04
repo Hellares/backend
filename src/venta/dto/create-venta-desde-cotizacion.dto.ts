@@ -101,6 +101,8 @@ export class CreateVentaDesdeCotizacionDto {
     precioUnitario: number;
     descuento?: number;
     porcentajeIGV?: number;
+    tipoAfectacion?: string;
+    icbper?: number;
     productoId?: string;
     varianteId?: string;
     servicioId?: string;

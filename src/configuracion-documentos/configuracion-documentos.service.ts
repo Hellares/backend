@@ -60,10 +60,6 @@ export class ConfiguracionDocumentosService {
         ...(dto.nombreComercial !== undefined && {
           nombreComercial: dto.nombreComercial,
         }),
-        ...(dto.ruc !== undefined && { ruc: dto.ruc }),
-        ...(dto.direccion !== undefined && { direccion: dto.direccion }),
-        ...(dto.telefono !== undefined && { telefono: dto.telefono }),
-        ...(dto.email !== undefined && { email: dto.email }),
         ...(dto.colorPrimario !== undefined && {
           colorPrimario: dto.colorPrimario,
         }),
@@ -210,9 +206,16 @@ export class ConfiguracionDocumentosService {
     formato: FormatoPapel = FormatoPapel.A4,
     sedeId?: string,
   ) {
-    const [configuracion, plantilla] = await Promise.all([
+    const [configuracion, plantilla, empresa] = await Promise.all([
       this.getOrCreateConfiguracion(empresaId),
       this.getPlantillaByTipo(empresaId, tipo, formato),
+      this.prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: {
+          ruc: true, razonSocial: true, nombre: true,
+          direccionFiscal: true, telefono: true, email: true, logo: true,
+        },
+      }),
     ]);
 
     let sede = null;
@@ -220,20 +223,28 @@ export class ConfiguracionDocumentosService {
       sede = await this.prisma.sede.findUnique({
         where: { id: sedeId },
         select: {
-          id: true,
-          nombre: true,
-          direccion: true,
-          telefono: true,
-          email: true,
-          distrito: true,
-          provincia: true,
-          departamento: true,
+          id: true, nombre: true,
+          direccion: true, telefono: true, email: true,
+          distrito: true, provincia: true, departamento: true,
+          rucSede: true, razonSocialSede: true, direccionFiscalSede: true,
         },
       });
     }
 
+    // Enriquecer configuración con datos dinámicos (fuente: Empresa + Sede override)
+    // ConfigDocumentos solo aporta: nombreComercial, logoUrl, colores, márgenes
+    const configEnriquecida = {
+      ...configuracion,
+      // Datos fiscales dinámicos (NO copias estáticas)
+      ruc:       sede?.rucSede             ?? empresa?.ruc            ?? null,
+      direccion: sede?.direccionFiscalSede ?? empresa?.direccionFiscal ?? null,
+      telefono:  sede?.telefono            ?? empresa?.telefono       ?? null,
+      email:     sede?.email               ?? empresa?.email          ?? null,
+      logoUrl:   configuracion.logoUrl     ?? empresa?.logo,
+    };
+
     return {
-      configuracion,
+      configuracion: configEnriquecida,
       plantilla,
       sede,
     };
@@ -268,24 +279,18 @@ export class ConfiguracionDocumentosService {
       throw new NotFoundException('Empresa no encontrada');
     }
 
-    const facturacion = empresa.configuracionFacturacion;
     const personalizacion = empresa.personalizaciones?.[0];
 
-    // Create config with consolidated data
+    // Create config: solo datos de marca/estilo visual, NO copiar datos fiscales
+    // (ruc, dirección, teléfono, email se leen dinámicamente de Empresa/Sede)
     const config = await this.prisma.configuracionDocumentos.create({
       data: {
         empresaId,
-        logoUrl: facturacion?.logoEmpresa ?? empresa.logo ?? null,
-        nombreComercial:
-          facturacion?.nombreComercial ?? empresa.nombre ?? null,
-        ruc: facturacion?.ruc ?? empresa.ruc ?? null,
-        direccion: facturacion?.direccionFiscal ?? null,
-        telefono: facturacion?.telefono ?? empresa.telefono ?? null,
-        email: facturacion?.emailFacturacion ?? empresa.email ?? null,
+        logoUrl: empresa.logo ?? null,
+        nombreComercial: empresa.nombre ?? null,
         colorPrimario: personalizacion?.colorPrimario ?? '#1565C0',
         colorSecundario: personalizacion?.colorSecundario ?? '#1E88E5',
-        textoPiePagina:
-          facturacion?.textoPiePagina ?? 'Gracias por su preferencia',
+        textoPiePagina: 'Gracias por su preferencia',
       },
     });
 

@@ -74,6 +74,28 @@ export class SedeDetailDto {
   @ApiPropertyOptional({ description: 'Serie para guías de remisión' })
   serieGuiaRemision?: string;
 
+  // Facturación electrónica por sede
+  @ApiPropertyOptional({ description: 'RUC propio de la sede' })
+  rucSede?: string;
+
+  @ApiPropertyOptional({ description: 'Razón social del contribuyente' })
+  razonSocialSede?: string;
+
+  @ApiPropertyOptional({ description: 'Dirección fiscal SUNAT' })
+  direccionFiscalSede?: string;
+
+  @ApiPropertyOptional({ description: 'URL API Nubefact' })
+  nubefactRuta?: string;
+
+  @ApiPropertyOptional({ description: 'Token Nubefact' })
+  nubefactToken?: string;
+
+  @ApiPropertyOptional({ description: 'Nubefact activo' })
+  nubefactActivo?: boolean;
+
+  @ApiPropertyOptional({ description: 'Resolución SUNAT' })
+  resolucionSunat?: string;
+
   @ApiProperty({ description: 'Último número de factura emitido' })
   ultimoNumeroFactura: number;
 

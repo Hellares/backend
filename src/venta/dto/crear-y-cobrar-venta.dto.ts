@@ -156,6 +156,11 @@ export class CrearYCobrarVentaDto {
   @IsString()
   tipoDocumentoCliente?: string;
 
+  @ApiPropertyOptional({ description: 'ID de la sede emisora (si difiere de la sede operativa). Para multi-RUC.' })
+  @IsOptional()
+  @IsString()
+  sedeFacturacionId?: string;
+
   @ApiPropertyOptional({ description: 'Condicion de pago', example: 'CONTADO' })
   @IsOptional()
   @IsString()
