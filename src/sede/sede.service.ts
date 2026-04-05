@@ -82,9 +82,9 @@ export class SedeService {
         rucSede: data.rucSede,
         razonSocialSede: data.razonSocialSede,
         direccionFiscalSede: data.direccionFiscalSede,
-        nubefactRuta: data.nubefactRuta,
-        nubefactToken: data.nubefactToken,
-        nubefactActivo: data.nubefactActivo,
+        proveedorRuta: data.proveedorRuta,
+        proveedorToken: data.proveedorToken,
+        facturacionActiva: data.facturacionActiva,
         resolucionSunat: data.resolucionSunat,
         ultimoNumeroFactura: 0,
         ultimoNumeroBoleta: 0,
@@ -246,6 +246,28 @@ export class SedeService {
         },
         sedeId,
       );
+
+      // Validar que no haya comprobantes pendientes con series que se están cambiando
+      const seriesCambiadas: string[] = [];
+      if (data.serieFactura && data.serieFactura !== sedeExistente.serieFactura) seriesCambiadas.push(sedeExistente.serieFactura);
+      if (data.serieBoleta && data.serieBoleta !== sedeExistente.serieBoleta) seriesCambiadas.push(sedeExistente.serieBoleta);
+      if (data.serieNotaCredito && data.serieNotaCredito !== sedeExistente.serieNotaCredito) seriesCambiadas.push(sedeExistente.serieNotaCredito);
+      if (data.serieNotaDebito && data.serieNotaDebito !== sedeExistente.serieNotaDebito) seriesCambiadas.push(sedeExistente.serieNotaDebito);
+
+      if (seriesCambiadas.length > 0) {
+        const pendientes = await this.prisma.comprobanteElectronico.count({
+          where: {
+            empresaId,
+            serie: { in: seriesCambiadas },
+            sunatStatus: { in: ['PENDIENTE', 'ERROR_COMUNICACION', 'PROCESANDO'] },
+          },
+        });
+        if (pendientes > 0) {
+          throw new BadRequestException(
+            `No se puede cambiar la serie: hay ${pendientes} comprobante(s) pendientes de envío con la serie anterior. Envíelos primero desde el Monitor de Facturación.`,
+          );
+        }
+      }
     }
 
     // Actualizar sede (el código NO se actualiza, se mantiene el original)
@@ -277,9 +299,9 @@ export class SedeService {
         rucSede: data.rucSede,
         razonSocialSede: data.razonSocialSede,
         direccionFiscalSede: data.direccionFiscalSede,
-        nubefactRuta: data.nubefactRuta,
-        nubefactToken: data.nubefactToken,
-        nubefactActivo: data.nubefactActivo,
+        proveedorRuta: data.proveedorRuta,
+        proveedorToken: data.proveedorToken,
+        facturacionActiva: data.facturacionActiva,
         resolucionSunat: data.resolucionSunat,
         isActive: data.isActive,
       },
@@ -912,9 +934,9 @@ export class SedeService {
       rucSede: sede.rucSede,
       razonSocialSede: sede.razonSocialSede,
       direccionFiscalSede: sede.direccionFiscalSede,
-      nubefactRuta: sede.nubefactRuta,
-      nubefactToken: sede.nubefactToken,
-      nubefactActivo: sede.nubefactActivo,
+      proveedorRuta: sede.proveedorRuta,
+      proveedorToken: sede.proveedorToken,
+      facturacionActiva: sede.facturacionActiva,
       resolucionSunat: sede.resolucionSunat,
       ultimoNumeroFactura: sede.ultimoNumeroFactura,
       ultimoNumeroBoleta: sede.ultimoNumeroBoleta,

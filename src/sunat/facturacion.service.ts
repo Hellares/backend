@@ -1,26 +1,29 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
-import { NubefactMapper } from './nubefact.mapper';
+import { AuditService } from '../audit/audit.service';
+import { FacturacionProvider, FACTURACION_PROVIDER, EnvioResult } from './facturacion-provider.interface';
 import {
-  NubefactComprobanteResponse,
-  NubefactAnulacionResponse,
-  TIPO_COMPROBANTE_MAP,
-} from './nubefact.types';
+  ENVIO_BATCH_SIZE,
+  MAX_FALTANTES_REPORTE,
+  MAX_INTENTOS_ENVIO,
+} from './providers/nubefact.types';
 import { CrearNotaDto } from './dto/crear-nota.dto';
 import { ConfiguracionFacturacionDto } from './dto/configuracion-facturacion.dto';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
-export class NubefactService {
+export class FacturacionService {
   private readonly logger: AppLoggerService;
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+    @Inject(FACTURACION_PROVIDER) private readonly provider: FacturacionProvider,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
-    this.logger.setContext('NubefactService');
+    this.logger.setContext('FacturacionService');
   }
 
   // ── Config efectiva: Sede > ConfiguracionFacturacion > Empresa ──
@@ -33,7 +36,7 @@ export class NubefactService {
    * - nombreComercial → ConfigDocumentos (marca/visual) > Empresa.nombre
    * - logo → ConfigDocumentos.logoUrl > Empresa.logo
    * - teléfono, email → Sede > Empresa
-   * - Nubefact credentials → Sede > ConfigFacturacion
+   * - Proveedor facturación → Sede > ConfigFacturacion
    * - IGV, entorno, resolucion → ConfigFacturacion (billing-only)
    * - textoPiePagina → ConfigFacturacion
    */
@@ -42,7 +45,7 @@ export class NubefactService {
       this.prisma.configuracionFacturacion.findUnique({
         where: { empresaId },
         select: {
-          nubefactRuta: true, nubefactToken: true, nubefactActivo: true,
+          proveedorRuta: true, proveedorToken: true, facturacionActiva: true,
           entorno: true, porcentajeIGV: true, resolucionSunat: true,
           emailFacturacion: true, textoPiePagina: true,
         },
@@ -52,7 +55,7 @@ export class NubefactService {
             where: { id: sedeId, empresaId },
             select: {
               rucSede: true, razonSocialSede: true, direccionFiscalSede: true,
-              nubefactRuta: true, nubefactToken: true, nubefactActivo: true,
+              proveedorRuta: true, proveedorToken: true, facturacionActiva: true,
               resolucionSunat: true, telefono: true, email: true,
             },
           })
@@ -83,10 +86,10 @@ export class NubefactService {
       telefono:         sede?.telefono              ?? empresa?.telefono      ?? null,
       email:            sede?.email                 ?? empresa?.email         ?? null,
       emailFacturacion: config?.emailFacturacion    ?? sede?.email            ?? empresa?.email ?? null,
-      // Nubefact: Sede > ConfigFacturacion
-      nubefactRuta:     sede?.nubefactRuta          ?? config?.nubefactRuta   ?? null,
-      nubefactToken:    sede?.nubefactToken         ?? config?.nubefactToken  ?? null,
-      nubefactActivo:   sede?.nubefactActivo        ?? config?.nubefactActivo ?? false,
+      // Proveedor: Sede > ConfigFacturacion
+      proveedorRuta:     sede?.proveedorRuta          ?? config?.proveedorRuta   ?? null,
+      proveedorToken:    sede?.proveedorToken         ?? config?.proveedorToken  ?? null,
+      facturacionActiva:   sede?.facturacionActiva        ?? config?.facturacionActiva ?? false,
       // Billing-only: ConfigFacturacion
       resolucionSunat:  sede?.resolucionSunat       ?? config?.resolucionSunat ?? null,
       entorno:          config?.entorno             ?? 'BETA',
@@ -101,7 +104,7 @@ export class NubefactService {
     const [config, empresa, sedes] = await Promise.all([
       this.prisma.configuracionFacturacion.findUnique({
         where: { empresaId },
-        select: { nubefactActivo: true },
+        select: { facturacionActiva: true },
       }),
       this.prisma.empresa.findUnique({
         where: { id: empresaId },
@@ -109,7 +112,7 @@ export class NubefactService {
       }),
       this.prisma.sede.findMany({
         where: { empresaId, rucSede: { not: null }, isActive: true },
-        select: { id: true, nombre: true, rucSede: true, razonSocialSede: true, nubefactActivo: true },
+        select: { id: true, nombre: true, rucSede: true, razonSocialSede: true, facturacionActiva: true },
       }),
     ]);
 
@@ -132,7 +135,7 @@ export class NubefactService {
         razonSocial: empresa.razonSocial || empresa.nombre || '',
         nombreComercial: empresa.nombre || null,
         sedeNombre: null,
-        activo: config?.nubefactActivo ?? false,
+        activo: config?.facturacionActiva ?? false,
       });
     }
 
@@ -145,11 +148,170 @@ export class NubefactService {
         razonSocial: sede.razonSocialSede || '',
         nombreComercial: null,
         sedeNombre: sede.nombre,
-        activo: sede.nubefactActivo ?? false,
+        activo: sede.facturacionActiva ?? false,
       });
     }
 
     return emisores;
+  }
+
+  // ── Reporte de Correlativos ──
+
+  async reporteCorrelativos(empresaId: string, sedeId?: string, fechaDesde?: string, fechaHasta?: string) {
+    const sedeWhere: any = { empresaId, isActive: true };
+    if (sedeId) sedeWhere.id = sedeId;
+
+    const compWhere: any = { empresaId, ...(sedeId ? { sedeId } : {}) };
+    if (fechaDesde || fechaHasta) {
+      compWhere.fechaEmision = {};
+      if (fechaDesde) compWhere.fechaEmision.gte = new Date(`${fechaDesde}T00:00:00`);
+      if (fechaHasta) compWhere.fechaEmision.lte = new Date(`${fechaHasta}T23:59:59.999`);
+    }
+
+    const [sedes, comprobantes] = await Promise.all([
+      this.prisma.sede.findMany({
+        where: sedeWhere,
+        select: {
+          id: true, nombre: true,
+          serieFactura: true, serieBoleta: true,
+          serieNotaCredito: true, serieNotaDebito: true,
+          ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
+          ultimoNumeroNotaCredito: true, ultimoNumeroNotaDebito: true,
+        },
+      }),
+      this.prisma.comprobanteElectronico.findMany({
+        where: compWhere,
+        select: {
+          serie: true, correlativo: true, tipoComprobante: true,
+          estado: true, anulado: true, sedeId: true,
+        },
+        orderBy: [{ serie: 'asc' }, { correlativo: 'asc' }],
+      }),
+    ]);
+
+    // Agrupar comprobantes por serie
+    // Agrupar por serie (cada serie pertenece a una sola sede por ley SUNAT)
+    const porSerie = new Map<string, {
+      tipo: string;
+      sedeId: string | null;
+      items: { correlativo: number; anulado: boolean }[];
+    }>();
+
+    for (const c of comprobantes) {
+      if (!porSerie.has(c.serie)) {
+        porSerie.set(c.serie, { tipo: c.tipoComprobante, sedeId: c.sedeId, items: [] });
+      }
+      porSerie.get(c.serie)!.items.push({
+        correlativo: parseInt(c.correlativo, 10),
+        anulado: c.anulado,
+      });
+    }
+
+    const series: any[] = [];
+
+    for (const [serie, { tipo, sedeId: compSedeId, items }] of porSerie) {
+      items.sort((a, b) => a.correlativo - b.correlativo);
+      const correlativoSet = new Set(items.map(i => i.correlativo));
+      const min = items[0].correlativo;
+      const max = items[items.length - 1].correlativo;
+
+      // Detectar gaps entre el primer y último correlativo encontrado (no desde 1)
+      const faltantes: number[] = [];
+      for (let i = min; i <= max; i++) {
+        if (!correlativoSet.has(i)) faltantes.push(i);
+      }
+
+      // Detectar duplicados
+      const duplicados = items.length - correlativoSet.size;
+
+      // Buscar sede por sedeId del comprobante, fallback por nombre de serie
+      let sede = compSedeId ? sedes.find(s => s.id === compSedeId) : null;
+      if (!sede) {
+        sede = sedes.find(s => {
+          switch (tipo) {
+            case 'FACTURA': return s.serieFactura === serie;
+            case 'BOLETA': return s.serieBoleta === serie;
+            case 'NOTA_CREDITO': return s.serieNotaCredito === serie;
+            case 'NOTA_DEBITO': return s.serieNotaDebito === serie;
+            default: return false;
+          }
+        }) || sedes[0] || null;
+      }
+
+      let contadorSede = 0;
+      if (sede) {
+        switch (tipo) {
+          case 'FACTURA': contadorSede = sede.ultimoNumeroFactura; break;
+          case 'BOLETA': contadorSede = sede.ultimoNumeroBoleta; break;
+          case 'NOTA_CREDITO': contadorSede = sede.ultimoNumeroNotaCredito; break;
+          case 'NOTA_DEBITO': contadorSede = sede.ultimoNumeroNotaDebito; break;
+        }
+      }
+
+      const desincronizado = contadorSede !== max;
+      const anulados = items.filter(i => i.anulado).length;
+      const hayGaps = faltantes.length > 0;
+
+      let estado = 'OK';
+      if (desincronizado && hayGaps) estado = 'DESINCRONIZADO';
+      else if (desincronizado) estado = 'DESINCRONIZADO';
+      else if (hayGaps) estado = 'GAPS';
+
+      series.push({
+        serie,
+        tipoComprobante: tipo,
+        sedeId: compSedeId || sede?.id || null,
+        sedeNombre: sede?.nombre || 'Principal',
+        primerCorrelativo: min,
+        ultimoCorrelativo: max,
+        contadorSede,
+        totalEmitidos: items.length,
+        totalAnulados: anulados,
+        duplicados,
+        faltantes: faltantes.slice(0, MAX_FALTANTES_REPORTE),
+        totalFaltantes: faltantes.length,
+        desincronizado,
+        estado,
+      });
+    }
+
+    // Agregar series de sedes con contador > 0 pero sin comprobantes
+    for (const sede of sedes) {
+      const checks = [
+        { serie: sede.serieFactura, tipo: 'FACTURA', contador: sede.ultimoNumeroFactura },
+        { serie: sede.serieBoleta, tipo: 'BOLETA', contador: sede.ultimoNumeroBoleta },
+        { serie: sede.serieNotaCredito, tipo: 'NOTA_CREDITO', contador: sede.ultimoNumeroNotaCredito },
+        { serie: sede.serieNotaDebito, tipo: 'NOTA_DEBITO', contador: sede.ultimoNumeroNotaDebito },
+      ];
+      for (const ch of checks) {
+        if (ch.contador > 0 && !porSerie.has(ch.serie)) {
+          series.push({
+            serie: ch.serie, tipoComprobante: ch.tipo,
+            sedeId: sede.id, sedeNombre: sede.nombre,
+            primerCorrelativo: 0, ultimoCorrelativo: 0,
+            contadorSede: ch.contador,
+            totalEmitidos: 0, totalAnulados: 0, duplicados: 0,
+            faltantes: [], totalFaltantes: 0,
+            desincronizado: true, estado: 'DESINCRONIZADO',
+          });
+        }
+      }
+    }
+
+    // Ordenar por tipo y serie
+    const tipoOrder: Record<string, number> = { FACTURA: 0, BOLETA: 1, NOTA_CREDITO: 2, NOTA_DEBITO: 3 };
+    series.sort((a, b) => (tipoOrder[a.tipoComprobante] ?? 99) - (tipoOrder[b.tipoComprobante] ?? 99) || a.serie.localeCompare(b.serie));
+
+    return {
+      series,
+      resumen: {
+        totalSeries: series.length,
+        seriesOk: series.filter(s => s.estado === 'OK').length,
+        seriesConGaps: series.filter(s => s.estado === 'GAPS').length,
+        seriesDesincronizadas: series.filter(s => s.estado === 'DESINCRONIZADO').length,
+        totalFaltantes: series.reduce((acc, s) => acc + s.totalFaltantes, 0),
+      },
+    };
   }
 
   // ── Monitor: Listar comprobantes con filtros ──
@@ -202,10 +364,10 @@ export class NubefactService {
           estado: true,
           sunatStatus: true,
           sunatHash: true,
-          nubefactEnviado: true,
-          nubefactError: true,
+          enviadoAProveedor: true,
+          errorProveedor: true,
           intentosEnvio: true,
-          enlaceNubefact: true,
+          enlaceProveedor: true,
           sunatPdfUrl: true,
           anulado: true,
           motivoNota: true,
@@ -238,11 +400,11 @@ export class NubefactService {
         empresaId,
         sunatStatus: { in: ['PENDIENTE', 'ERROR_COMUNICACION'] },
         estado: 'REGISTRADO',
-        intentosEnvio: { lt: 10 },
+        intentosEnvio: { lt: MAX_INTENTOS_ENVIO },
       },
       select: { id: true, codigoGenerado: true },
       orderBy: { fechaEmision: 'desc' },
-      take: 50,
+      take: ENVIO_BATCH_SIZE,
     });
 
     let enviados = 0;
@@ -265,7 +427,7 @@ export class NubefactService {
     return { total: pendientes.length, enviados, errores };
   }
 
-  // ── Core: Enviar comprobante a Nubefact ──
+  // ── Core: Enviar comprobante al proveedor ──
 
   async enviarComprobante(comprobanteId: string, empresaId: string): Promise<void> {
     try {
@@ -281,7 +443,17 @@ export class NubefactService {
           comprobanteOrigen: {
             select: { tipoComprobante: true, serie: true, correlativo: true },
           },
-          venta: { select: { sedeId: true } },
+          venta: {
+            select: {
+              sedeId: true,
+              descuento: true,
+              esCredito: true,
+              cuotas: {
+                select: { numero: true, monto: true, fechaVencimiento: true },
+                orderBy: { numero: 'asc' },
+              },
+            },
+          },
         },
       });
 
@@ -293,77 +465,83 @@ export class NubefactService {
       // Resolver sedeId: del comprobante directo, o de la venta asociada
       const sedeId = comprobante.sedeId || comprobante.venta?.sedeId || null;
 
-      const credenciales = await this.getCredenciales(empresaId, sedeId);
-      if (!credenciales) {
-        this.logger.log(`Nubefact no configurado/activo para empresa ${empresaId}, omitiendo envío`);
+      const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId);
+      if (!config.facturacionActiva || !config.proveedorRuta || !config.proveedorToken) {
+        this.logger.log(`Facturación no configurada/activa para empresa ${empresaId}, omitiendo envío`);
         return;
       }
 
-      const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId);
+      this.logger.log(`Enviando comprobante ${comprobante.codigoGenerado}`);
 
-      const body = NubefactMapper.toNubefactRequest(
+      const result: EnvioResult = await this.provider.enviar(
         comprobante as any,
         config as any,
         comprobante.comprobanteOrigen as any,
       );
 
-      this.logger.log(`Enviando comprobante ${comprobante.codigoGenerado} a Nubefact`);
-
-      const response = await this.callNubefact<NubefactComprobanteResponse>(
-        credenciales.ruta,
-        credenciales.token,
-        body,
-      );
-
-      // Determinar si fue aceptado:
-      // - aceptada_por_sunat === true → aceptado
-      // - Tiene enlace (doc creado en Nubefact) → aceptado (en demo aceptada_por_sunat puede ser false)
-      const fueAceptado = response.aceptada_por_sunat === true || !!response.enlace;
-
-      if (fueAceptado) {
-        const updateData = NubefactMapper.fromNubefactResponse(response);
+      if (result.aceptado) {
         await this.prisma.comprobanteElectronico.update({
           where: { id: comprobanteId },
           data: {
-            ...updateData,
+            sunatHash: result.hash ?? null,
+            sunatXmlUrl: result.xmlUrl ?? null,
+            sunatPdfUrl: result.pdfUrl ?? null,
+            sunatCdrUrl: result.cdrUrl ?? null,
+            cadenaQR: result.cadenaQR ?? null,
+            enlaceProveedor: result.enlace ?? null,
+            cdrResponse: result.rawResponse ?? null,
+            enviadoAProveedor: true,
             sunatStatus: 'ACEPTADO',
             estado: 'ACEPTADO',
             intentosEnvio: { increment: 1 },
             ultimoIntentoEnvio: new Date(),
           },
         });
-        this.logger.log(`Comprobante ${comprobante.codigoGenerado} ACEPTADO por SUNAT`);
+        this.logger.log(`Comprobante ${comprobante.codigoGenerado} ACEPTADO`);
+      } else if (result.procesando) {
+        await this.prisma.comprobanteElectronico.update({
+          where: { id: comprobanteId },
+          data: {
+            sunatHash: result.hash ?? null,
+            sunatXmlUrl: result.xmlUrl ?? null,
+            sunatPdfUrl: result.pdfUrl ?? null,
+            sunatCdrUrl: result.cdrUrl ?? null,
+            cadenaQR: result.cadenaQR ?? null,
+            enlaceProveedor: result.enlace ?? null,
+            enviadoAProveedor: true,
+            sunatStatus: 'PROCESANDO',
+            intentosEnvio: { increment: 1 },
+            ultimoIntentoEnvio: new Date(),
+          },
+        });
+        this.logger.log(`Comprobante ${comprobante.codigoGenerado} enviado, pendiente confirmación SUNAT`);
+      } else if (result.yaExiste) {
+        await this.prisma.comprobanteElectronico.update({
+          where: { id: comprobanteId },
+          data: {
+            sunatStatus: 'ACEPTADO',
+            estado: 'ACEPTADO',
+            enviadoAProveedor: true,
+            cdrResponse: result.rawResponse ?? null,
+            intentosEnvio: { increment: 1 },
+            ultimoIntentoEnvio: new Date(),
+          },
+        });
+        this.logger.log(`Comprobante ${comprobante.codigoGenerado} ya existía, marcado como ACEPTADO`);
       } else {
-        const errorMsg = response.sunat_description || response.sunat_soap_error || '';
-        // "ya existe en NubeFacT" = el doc fue creado antes, marcar como aceptado
-        if (errorMsg.toLowerCase().includes('ya existe')) {
-          await this.prisma.comprobanteElectronico.update({
-            where: { id: comprobanteId },
-            data: {
-              sunatStatus: 'ACEPTADO',
-              estado: 'ACEPTADO',
-              nubefactEnviado: true,
-              cdrResponse: response as any,
-              intentosEnvio: { increment: 1 },
-              ultimoIntentoEnvio: new Date(),
-            },
-          });
-          this.logger.log(`Comprobante ${comprobante.codigoGenerado} ya existía en Nubefact, marcado como ACEPTADO`);
-        } else {
-          await this.prisma.comprobanteElectronico.update({
-            where: { id: comprobanteId },
-            data: {
-              sunatStatus: 'RECHAZADO',
-              estado: 'RECHAZADO',
-              nubefactEnviado: true,
-              nubefactError: errorMsg || 'Rechazado por SUNAT',
-              cdrResponse: response as any,
-              intentosEnvio: { increment: 1 },
-              ultimoIntentoEnvio: new Date(),
-            },
-          });
-          this.logger.warn(`Comprobante ${comprobante.codigoGenerado} RECHAZADO: ${errorMsg}`);
-        }
+        await this.prisma.comprobanteElectronico.update({
+          where: { id: comprobanteId },
+          data: {
+            sunatStatus: 'RECHAZADO',
+            estado: 'RECHAZADO',
+            enviadoAProveedor: true,
+            errorProveedor: result.error || 'Rechazado por SUNAT',
+            cdrResponse: result.rawResponse ?? null,
+            intentosEnvio: { increment: 1 },
+            ultimoIntentoEnvio: new Date(),
+          },
+        });
+        this.logger.warn(`Comprobante ${comprobante.codigoGenerado} RECHAZADO: ${result.error}`);
       }
     } catch (error: any) {
       this.logger.error(`Error enviando comprobante ${comprobanteId}: ${error.message}`);
@@ -371,7 +549,7 @@ export class NubefactService {
         where: { id: comprobanteId },
         data: {
           sunatStatus: 'ERROR_COMUNICACION',
-          nubefactError: error.message,
+          errorProveedor: error.message,
           intentosEnvio: { increment: 1 },
           ultimoIntentoEnvio: new Date(),
         },
@@ -396,7 +574,7 @@ export class NubefactService {
       select: {
         id: true, sunatStatus: true, estado: true, sunatHash: true,
         sunatXmlUrl: true, sunatPdfUrl: true, cadenaQR: true,
-        nubefactError: true, intentosEnvio: true,
+        errorProveedor: true, intentosEnvio: true,
       },
     });
   }
@@ -410,32 +588,28 @@ export class NubefactService {
     });
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
 
-    const credenciales = await this.getCredenciales(empresaId, comprobante.sedeId);
-    if (!credenciales) throw new BadRequestException('Nubefact no configurado');
-    if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
+    const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
+    if (!config.facturacionActiva) throw new BadRequestException('Facturación no configurada');
 
-    const body = NubefactMapper.toConsultaRequest(
-      comprobante as any,
-      'consultar_comprobante',
-      credenciales.entorno,
-    );
+    const result = await this.provider.consultar(comprobante as any, config as any);
 
-    const response = await this.callNubefact(credenciales.ruta, credenciales.token, body);
-
-    // Actualizar estado con datos completos de la respuesta
-    if (response.aceptada_por_sunat === true || response.enlace) {
-      const updateData = NubefactMapper.fromNubefactResponse(response);
+    if (result.aceptado) {
       await this.prisma.comprobanteElectronico.update({
         where: { id: comprobanteId },
         data: {
-          ...updateData,
+          sunatHash: result.hash ?? undefined,
+          sunatXmlUrl: result.xmlUrl ?? undefined,
+          sunatPdfUrl: result.pdfUrl ?? undefined,
+          sunatCdrUrl: result.cdrUrl ?? undefined,
+          cadenaQR: result.cadenaQR ?? undefined,
+          enlaceProveedor: result.enlace ?? undefined,
           sunatStatus: 'ACEPTADO',
           estado: 'ACEPTADO',
         },
       });
     }
 
-    return response;
+    return result.rawResponse;
   }
 
   // ── Anular comprobante ──
@@ -447,20 +621,8 @@ export class NubefactService {
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
     if (comprobante.anulado) throw new BadRequestException('El comprobante ya está anulado');
 
-    const credenciales = await this.getCredenciales(empresaId, comprobante.sedeId);
-    if (!credenciales) throw new BadRequestException('Nubefact no configurado');
-
-    const body = NubefactMapper.toAnulacionRequest(
-      comprobante as any,
-      motivo,
-      credenciales.entorno,
-    );
-
-    const response = await this.callNubefact<NubefactAnulacionResponse>(
-      credenciales.ruta,
-      credenciales.token,
-      body,
-    );
+    const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
+    const result = await this.provider.anular(comprobante as any, motivo, config as any);
 
     await this.prisma.comprobanteElectronico.update({
       where: { id: comprobanteId },
@@ -468,11 +630,11 @@ export class NubefactService {
         anulado: true,
         motivoAnulacion: motivo,
         estado: 'ANULADO',
-        cdrResponse: response as any,
+        cdrResponse: result.rawResponse ?? null,
       },
     });
 
-    return response;
+    return result.rawResponse;
   }
 
   // ── Consultar anulación ──
@@ -484,16 +646,8 @@ export class NubefactService {
     });
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
 
-    const credenciales = await this.getCredenciales(empresaId, comprobante.sedeId);
-    if (!credenciales) throw new BadRequestException('Nubefact no configurado');
-
-    const body = NubefactMapper.toConsultaRequest(
-      comprobante as any,
-      'consultar_anulacion',
-      credenciales.entorno,
-    );
-
-    return this.callNubefact(credenciales.ruta, credenciales.token, body);
+    const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
+    return this.provider.consultarAnulacion(comprobante as any, config as any);
   }
 
   // ── Crear Nota de Crédito ──
@@ -524,12 +678,50 @@ export class NubefactService {
     });
   }
 
-  async updateConfiguracion(empresaId: string, dto: ConfiguracionFacturacionDto) {
-    return this.prisma.configuracionFacturacion.upsert({
+  async updateConfiguracion(empresaId: string, dto: ConfiguracionFacturacionDto, userId?: string) {
+    // Obtener config anterior para comparar cambios
+    const anterior = await this.prisma.configuracionFacturacion.findUnique({
+      where: { empresaId },
+    });
+
+    const resultado = await this.prisma.configuracionFacturacion.upsert({
       where: { empresaId },
       update: { ...dto },
       create: { empresaId, ...dto },
     });
+
+    // Registrar auditoría con campos que cambiaron
+    const cambios: Record<string, { antes: any; despues: any }> = {};
+    if (anterior) {
+      for (const key of Object.keys(dto) as Array<keyof typeof dto>) {
+        const valorAnterior = (anterior as any)[key];
+        const valorNuevo = dto[key];
+        if (valorNuevo !== undefined && String(valorAnterior) !== String(valorNuevo)) {
+          // No loguear tokens completos por seguridad
+          const esSecreto = key === 'proveedorToken';
+          cambios[key] = {
+            antes: esSecreto ? '***' : valorAnterior,
+            despues: esSecreto ? '***' : valorNuevo,
+          };
+        }
+      }
+    }
+
+    if (Object.keys(cambios).length > 0 || !anterior) {
+      this.auditService.log({
+        usuarioId: userId,
+        empresaId,
+        accion: 'CONFIG_ACTUALIZADA',
+        entidad: 'ConfiguracionFacturacion',
+        entidadId: resultado.id,
+        detalle: anterior
+          ? `Actualización: ${Object.keys(cambios).join(', ')}`
+          : 'Configuración de facturación creada',
+        metadata: cambios,
+      });
+    }
+
+    return resultado;
   }
 
   // ── Privados ──
@@ -554,31 +746,34 @@ export class NubefactService {
     if (origen.anulado) throw new BadRequestException('El comprobante origen está anulado');
 
     return this.prisma.$transaction(async (tx) => {
-      // Lock sede para serie/correlativo
-      // Nubefact: serie de nota debe empezar con mismo prefijo que doc original (B=boleta, F=factura)
-      const campoUltimo = tipoNota === 'NOTA_CREDITO' ? 'ultimoNumeroNotaCredito' : 'ultimoNumeroNotaDebito';
+      // Lock sede para serie/correlativo (atómico: increment + read en un solo UPDATE)
+      const esNotaCredito = tipoNota === 'NOTA_CREDITO';
+      const campoUltimo = esNotaCredito ? 'ultimoNumeroNotaCredito' : 'ultimoNumeroNotaDebito';
+      const campoSerie = esNotaCredito ? 'serieNotaCredito' : 'serieNotaDebito';
 
+      // Lock con FOR UPDATE, luego increment atómico para evitar race conditions
       const [sedeLocked] = await tx.$queryRaw<any[]>`
-        SELECT id, "${Prisma.raw(campoUltimo)}" as ultimo
+        SELECT id, "${Prisma.raw(campoSerie)}" as serie, "${Prisma.raw(campoUltimo)}" as ultimo
         FROM "Sede" WHERE id = ${dto.sedeId} AND "empresaId" = ${empresaId} FOR UPDATE
       `;
       if (!sedeLocked) throw new BadRequestException('Sede no encontrada o no pertenece a esta empresa');
 
-      // Serie: BN01 para notas de boleta, FN01 para notas de factura
-      // (prefijo B/F requerido por Nubefact + N para distinguir de boletas/facturas regulares)
-      const esFactura = origen.tipoComprobante === 'FACTURA';
-      const prefijo = esFactura ? 'F' : 'B';
-      const sufijo = tipoNota === 'NOTA_CREDITO' ? 'C01' : 'D01';
-      const serie = `${prefijo}${sufijo}`;
+      // Increment atómico: evita race condition si 2 requests concurrentes pasan el lock
+      const sedeActualizada = await tx.sede.update({
+        where: { id: dto.sedeId },
+        data: { [campoUltimo]: { increment: 1 } },
+        select: { [campoUltimo]: true },
+      });
+      const nuevoCorrelativo: number = (sedeActualizada as any)[campoUltimo];
 
-      const nuevoCorrelativo = (sedeLocked.ultimo || 0) + 1;
+      // Serie desde la Sede (no hardcoded) — respeta configuración del usuario
+      const serie: string = sedeLocked.serie || (
+        (origen.tipoComprobante === 'FACTURA' ? 'F' : 'B') +
+        (esNotaCredito ? 'C01' : 'D01')
+      );
+
       const correlativo = String(nuevoCorrelativo).padStart(8, '0');
       const codigoGenerado = `${serie}-${correlativo}`;
-
-      await tx.sede.update({
-        where: { id: dto.sedeId },
-        data: { [campoUltimo]: nuevoCorrelativo },
-      });
 
       // Items: usar del DTO o copiar del original
       const itemsOrigen = dto.items && dto.items.length > 0
@@ -589,6 +784,7 @@ export class NubefactService {
             precioUnitario: new Prisma.Decimal(item.precioUnitario.toFixed(2)),
             tipoAfectacion: item.tipoAfectacion || '10',
             igv: new Prisma.Decimal((item.igv || 0).toFixed(2)),
+            icbper: new Prisma.Decimal((item.icbper || 0).toFixed(2)),
             valorVenta: new Prisma.Decimal((item.subtotal || item.valorUnitario * item.cantidad).toFixed(2)),
             subtotal: new Prisma.Decimal((item.subtotal || item.valorUnitario * item.cantidad).toFixed(2)),
             total: new Prisma.Decimal((item.total || item.precioUnitario * item.cantidad).toFixed(2)),
@@ -600,6 +796,7 @@ export class NubefactService {
             precioUnitario: d.precioUnitario,
             tipoAfectacion: d.tipoAfectacion,
             igv: d.igv,
+            icbper: d.icbper,
             valorVenta: d.valorVenta,
             subtotal: d.subtotal,
             total: d.total,
@@ -643,74 +840,11 @@ export class NubefactService {
 
       return nota;
     }, { timeout: 15000 }).then(async (nota) => {
-      // Fire-after-commit: enviar a Nubefact
+      // Fire-after-commit: enviar al proveedor
       this.enviarComprobante(nota.id, empresaId)
-        .catch((err) => this.logger.warn(`Nubefact nota envio fallido: ${err?.message}`));
+        .catch((err) => this.logger.warn(`Envío nota fallido: ${err?.message}`));
       return nota;
     });
   }
 
-  private async getCredenciales(empresaId: string, sedeId?: string | null): Promise<{ ruta: string; token: string; entorno: string } | null> {
-    const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId);
-
-    if (!config.nubefactActivo || !config.nubefactRuta || !config.nubefactToken) {
-      return null;
-    }
-
-    return {
-      ruta: config.nubefactRuta,
-      token: config.nubefactToken,
-      entorno: config.entorno,
-    };
-  }
-
-  private async callNubefact<T = any>(ruta: string, token: string, body: any): Promise<T> {
-    // Timeout de 30 segundos
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-
-    let response: Response;
-    try {
-      response = await fetch(ruta, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'Authorization': token,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw new Error('Timeout: Nubefact no respondió en 30 segundos');
-      }
-      throw err;
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    // Parsear JSON de forma segura
-    let data: any;
-    try {
-      data = await response.json();
-    } catch {
-      throw new Error(`Respuesta no válida de Nubefact: HTTP ${response.status} ${response.statusText}`);
-    }
-
-    // Si Nubefact devuelve un response con campos SUNAT, retornar para procesar
-    if (data.aceptada_por_sunat !== undefined || data.enlace || data.sunat_description || data.codigo_hash) {
-      return data as T;
-    }
-
-    // Error real de API (auth, formato, etc)
-    if (!response.ok) {
-      const msg = data?.errors || data?.message || `HTTP ${response.status}`;
-      if (typeof msg === 'string' && msg.toLowerCase().includes('ya existe')) {
-        return { ...data, sunat_description: msg } as T;
-      }
-      throw new Error(msg);
-    }
-
-    return data as T;
-  }
 }

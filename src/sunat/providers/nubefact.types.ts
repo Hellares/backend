@@ -1,7 +1,32 @@
-import { TipoComprobante } from '@prisma/client';
+// ── Constantes de negocio ──
 
-// ── Mapeos de constantes ──
+/** Longitudes de documentos SUNAT */
+export const DOC_LENGTH = { RUC: 11, DNI: 8 } as const;
 
+/** Código tipo documento SUNAT */
+export const TIPO_DOC_SUNAT = { RUC: '6', DNI: '1', VARIOS: '-' } as const;
+
+/** Series BETA de Nubefact (entorno demo) */
+export const SERIE_BETA = { FACTURA: 'FFF1', BOLETA: 'BBB1' } as const;
+
+/** Timeout HTTP para llamadas a Nubefact (ms) */
+export const NUBEFACT_TIMEOUT_MS = 30_000;
+
+/** Máximo de comprobantes a reenviar en batch */
+export const ENVIO_BATCH_SIZE = 50;
+
+/** Máximo de faltantes a retornar en reporte de correlativos */
+export const MAX_FALTANTES_REPORTE = 50;
+
+/** Máximo de intentos de envío antes de dejar como permanente */
+export const MAX_INTENTOS_ENVIO = 10;
+
+/** IGV por defecto en Perú */
+export const IGV_DEFAULT = 18;
+
+// ── Mapeos Nubefact ──
+
+/** Tipo comprobante → código Nubefact */
 export const TIPO_COMPROBANTE_MAP: Record<string, number> = {
   FACTURA: 1,
   BOLETA: 2,
@@ -9,13 +34,14 @@ export const TIPO_COMPROBANTE_MAP: Record<string, number> = {
   NOTA_DEBITO: 4,
 };
 
-/** SUNAT Cat. 07 → Nubefact tipo_de_igv */
+/** SUNAT Cat. 07 (tipoAfectacion) → Nubefact tipo_de_igv */
 export const TIPO_IGV_MAP: Record<string, number> = {
   '10': 1,  // Gravado - Operación Onerosa
   '20': 8,  // Exonerado - Operación Onerosa
   '30': 9,  // Inafecto - Operación Onerosa
 };
 
+/** Moneda ISO → código Nubefact */
 export const MONEDA_MAP: Record<string, number> = {
   PEN: 1,
   USD: 2,
@@ -59,6 +85,7 @@ export interface NubefactItemRequest {
   anticipo_regularizacion: boolean;
   anticipo_documento_serie: string;
   anticipo_documento_numero: string;
+  impuesto_bolsas?: number;
 }
 
 export interface NubefactVentaCredito {

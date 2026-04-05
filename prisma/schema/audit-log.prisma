@@ -59,6 +59,9 @@ enum AccionAudit {
   // Config
   CONFIG_ACTUALIZADA
 
+  // Descuentos
+  DESCUENTO_AUTORIZADO
+
   // Admin
   ADMIN_ACCION
 }

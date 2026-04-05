@@ -54,6 +54,7 @@ export class CajaService {
         montoApertura: dto.montoApertura,
         estado: EstadoCaja.ABIERTA,
         observacionesApertura: dto.observaciones,
+        sedeFacturacionId: dto.sedeFacturacionId || null,
       },
       include: {
         sede: { select: { id: true, nombre: true, codigo: true } },
@@ -81,6 +82,7 @@ export class CajaService {
       },
       include: {
         sede: { select: { id: true, nombre: true, codigo: true } },
+        sedeFacturacion: { select: { id: true, nombre: true, rucSede: true, razonSocialSede: true } },
         usuario: {
           select: {
             id: true,

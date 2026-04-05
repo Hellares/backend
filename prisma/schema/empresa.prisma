@@ -339,9 +339,9 @@ model Sede {
   rucSede              String?  // RUC propio de la sede (si difiere del de la empresa)
   razonSocialSede      String?  // Razón social del contribuyente
   direccionFiscalSede  String?  // Dirección fiscal SUNAT
-  nubefactRuta         String?  // Credenciales Nubefact propias
-  nubefactToken        String?
-  nubefactActivo       Boolean? // null = usa config global
+  proveedorRuta        String?  // URL API proveedor facturación
+  proveedorToken       String?  // Token proveedor facturación
+  facturacionActiva    Boolean? // null = usa config global
   resolucionSunat      String?
 
   // Series de comprobantes por sede
@@ -415,6 +415,7 @@ model Sede {
 
   // Relaciones para módulo de caja
   cajas Caja[]
+  cajasFacturacion Caja[] @relation("CajaSedeFacturacion")
 
   // Relaciones para módulo de caja chica
   cajasChicas CajaChica[]

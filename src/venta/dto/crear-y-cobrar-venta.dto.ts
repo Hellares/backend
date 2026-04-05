@@ -165,4 +165,23 @@ export class CrearYCobrarVentaDto {
   @IsOptional()
   @IsString()
   condicionPago?: string;
+
+  // --- Descuento global con autorización ---
+
+  @ApiPropertyOptional({ description: 'Monto del descuento global sobre el total' })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  descuentoGlobal?: number;
+
+  @ApiPropertyOptional({ description: 'Porcentaje del descuento global (referencia)' })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  descuentoGlobalPorcentaje?: number;
+
+  @ApiPropertyOptional({ description: 'ID del usuario que autorizó el descuento' })
+  @IsOptional()
+  @IsString()
+  descuentoAutorizadoPorId?: string;
 }

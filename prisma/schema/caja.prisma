@@ -46,15 +46,19 @@ model Caja {
   observacionesApertura String?
   observacionesCierre   String?
 
+  // Emisor por defecto: sede/RUC con el que esta caja factura
+  sedeFacturacionId     String?
+
   // Auditoria
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa     Empresa  @relation(fields: [empresaId], references: [id])
-  sede        Sede     @relation(fields: [sedeId], references: [id])
-  usuario     Usuario  @relation("CajaUsuario", fields: [usuarioId], references: [id])
-  cerradoPor  Usuario? @relation("CajaCerradoPor", fields: [cerradoPorId], references: [id])
+  empresa          Empresa  @relation(fields: [empresaId], references: [id])
+  sede             Sede     @relation(fields: [sedeId], references: [id])
+  usuario          Usuario  @relation("CajaUsuario", fields: [usuarioId], references: [id])
+  cerradoPor       Usuario? @relation("CajaCerradoPor", fields: [cerradoPorId], references: [id])
+  sedeFacturacion  Sede?    @relation("CajaSedeFacturacion", fields: [sedeFacturacionId], references: [id])
   movimientos MovimientoCaja[]
   cierre      CierreCaja?
 

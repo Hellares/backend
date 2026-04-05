@@ -9,6 +9,7 @@ export class CrearNotaItemDto {
   @ApiProperty() @IsNumber() @Min(0) @Max(9999999.99) @Type(() => Number) precioUnitario: number;
   @ApiPropertyOptional() @IsOptional() @IsString() tipoAfectacion?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Type(() => Number) igv?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() @Type(() => Number) icbper?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Type(() => Number) subtotal?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Type(() => Number) total?: number;
 }

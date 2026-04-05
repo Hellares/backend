@@ -84,14 +84,14 @@ export class SedeDetailDto {
   @ApiPropertyOptional({ description: 'Dirección fiscal SUNAT' })
   direccionFiscalSede?: string;
 
-  @ApiPropertyOptional({ description: 'URL API Nubefact' })
-  nubefactRuta?: string;
+  @ApiPropertyOptional({ description: 'URL API proveedor facturación' })
+  proveedorRuta?: string;
 
-  @ApiPropertyOptional({ description: 'Token Nubefact' })
-  nubefactToken?: string;
+  @ApiPropertyOptional({ description: 'Token proveedor facturación' })
+  proveedorToken?: string;
 
-  @ApiPropertyOptional({ description: 'Nubefact activo' })
-  nubefactActivo?: boolean;
+  @ApiPropertyOptional({ description: 'Facturación activa' })
+  facturacionActiva?: boolean;
 
   @ApiPropertyOptional({ description: 'Resolución SUNAT' })
   resolucionSunat?: string;

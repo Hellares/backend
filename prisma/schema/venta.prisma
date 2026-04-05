@@ -57,6 +57,12 @@ model Venta {
   impuestos Decimal @default(0) @db.Decimal(10, 2)
   total     Decimal @db.Decimal(10, 2)
 
+  // Descuento global (aplicado sobre el total, no por item)
+  descuentoGlobal           Decimal?  @db.Decimal(10, 2)
+  descuentoGlobalPorcentaje Decimal?  @db.Decimal(5, 2)
+  descuentoAutorizadoPorId  String?
+  descuentoAutorizadoEn     DateTime?
+
   // Pago
   estado        EstadoVenta @default(BORRADOR)
   metodoPago    MetodoPagoVenta?
@@ -110,6 +116,7 @@ model Venta {
   comprobante    ComprobanteElectronico?
 
   @@unique([empresaId, codigo])
+  // FK indexes
   @@index([empresaId])
   @@index([sedeId])
   @@index([vendedorId])
@@ -117,10 +124,20 @@ model Venta {
   @@index([clienteId])
   @@index([clienteEmpresaId])
   @@index([cotizacionId])
+  // Queries frecuentes
   @@index([estado])
   @@index([fechaVenta])
   @@index([empresaId, estado])
   @@index([empresaId, sedeId, estado])
+  // Reportes y analytics (fecha + empresa + sede)
+  @@index([empresaId, fechaVenta])
+  @@index([empresaId, sedeId, fechaVenta])
+  // Créditos: listado de ventas a crédito pendientes
+  @@index([empresaId, esCredito, estado])
+  // Canal de venta (POS/ONLINE/COTIZACION)
+  @@index([empresaId, canalVenta, fechaVenta])
+  // Búsqueda por documento del cliente
+  @@index([empresaId, documentoCliente])
 }
 
 /// Detalle/línea de una venta

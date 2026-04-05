@@ -77,10 +77,10 @@ model ConfiguracionFacturacion {
   usuarioSol         String?
   claveSol           String?
   entorno            String   @default("BETA")
-  // Nubefact (proveedor facturación electrónica)
-  nubefactRuta       String?  // URL API por empresa
-  nubefactToken      String?  // Token por empresa
-  nubefactActivo     Boolean  @default(false) // Switch maestro
+  // Proveedor de facturación electrónica (Nubefact, Efact, etc.)
+  proveedorRuta      String?  // URL API del proveedor
+  proveedorToken     String?  // Token/credencial del proveedor
+  facturacionActiva  Boolean  @default(false) // Switch maestro
   resolucionSunat    String?  // Ej: "No.034-005-0005315"
   textoPiePagina     String   @default("Gracias por su compra")
   incluirIGV         Boolean  @default(true)
@@ -127,9 +127,9 @@ model ComprobanteElectronico {
   sunatPdfUrl      String?
   sunatCdrUrl      String?
   cadenaQR         String?
-  enlaceNubefact   String?
-  nubefactEnviado  Boolean              @default(false)
-  nubefactError    String?
+  enlaceProveedor    String?
+  enviadoAProveedor  Boolean              @default(false)
+  errorProveedor     String?
   intentosEnvio    Int                  @default(0)
   ultimoIntentoEnvio DateTime?
   estado           EstadoComprobante    @default(BORRADOR)
@@ -161,17 +161,28 @@ model ComprobanteElectronico {
 
   @@unique([empresaId, tipoComprobante, serie, correlativo])
   @@unique([empresaId, codigoGenerado])
+  // FK indexes
   @@index([empresaId])
+  @@index([sedeId])
+  @@index([comprobanteOrigenId])
+  @@index([ventaId])
+  // Queries frecuentes
   @@index([tipoComprobante])
   @@index([fechaEmision])
   @@index([estado])
-  // Índices compuestos para queries comunes
+  @@index([sunatStatus])
+  // Compuestos: monitor de facturación, reportes, reenvíos
   @@index([empresaId, estado])
   @@index([empresaId, fechaEmision])
   @@index([empresaId, estado, fechaEmision])
-  @@index([comprobanteOrigenId])
-  @@index([sunatStatus])
-  @@index([sedeId])
+  @@index([empresaId, sunatStatus])
+  @@index([empresaId, tipoComprobante, fechaEmision])
+  // Reenvío de pendientes: busca por status + estado + intentos
+  @@index([sunatStatus, estado, intentosEnvio])
+  // Reporte correlativos: busca por empresa + serie
+  @@index([empresaId, serie])
+  // Búsqueda por documento cliente
+  @@index([empresaId, numeroDocumento])
 }
 
 model DetalleComprobante {
@@ -188,6 +199,7 @@ model DetalleComprobante {
   tipoAfectacion  String                 @default("10")
   porcentajeIGV   Decimal                @default(18.00) @db.Decimal(5, 2)
   igv             Decimal                @default(0) @db.Decimal(12, 2)
+  icbper          Decimal                @default(0) @db.Decimal(12, 2)
   valorVenta      Decimal                @default(0) @db.Decimal(12, 2)
   descuentoItem   Decimal?               @db.Decimal(12, 2)
   cargoItem       Decimal?               @db.Decimal(12, 2)

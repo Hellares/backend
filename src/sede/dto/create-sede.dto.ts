@@ -220,20 +220,20 @@ export class CreateSedeDto {
   @IsString()
   direccionFiscalSede?: string;
 
-  @ApiPropertyOptional({ description: 'URL API Nubefact propia de la sede' })
+  @ApiPropertyOptional({ description: 'URL API proveedor facturación' })
   @IsOptional()
   @IsString()
-  nubefactRuta?: string;
+  proveedorRuta?: string;
 
-  @ApiPropertyOptional({ description: 'Token Nubefact propio de la sede' })
+  @ApiPropertyOptional({ description: 'Token proveedor facturación' })
   @IsOptional()
   @IsString()
-  nubefactToken?: string;
+  proveedorToken?: string;
 
-  @ApiPropertyOptional({ description: 'Nubefact activo para esta sede' })
+  @ApiPropertyOptional({ description: 'Facturación activa para esta sede' })
   @IsOptional()
   @IsBoolean()
-  nubefactActivo?: boolean;
+  facturacionActiva?: boolean;
 
   @ApiPropertyOptional({ description: 'Resolución SUNAT de la sede' })
   @IsOptional()

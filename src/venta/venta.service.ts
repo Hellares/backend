@@ -24,7 +24,8 @@ import {
   Prisma,
   Rol,
 } from '@prisma/client';
-import { NubefactService } from '../sunat/nubefact.service';
+import { FacturacionService } from '../sunat/facturacion.service';
+import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
 
 @Injectable()
 export class VentaService {
@@ -36,7 +37,7 @@ export class VentaService {
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     @Inject(forwardRef(() => CajaService)) private readonly cajaService: CajaService,
     private readonly comboService: ProductoComboService,
-    private readonly nubefactService: NubefactService,
+    private readonly facturacionService: FacturacionService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -91,8 +92,8 @@ export class VentaService {
           estado: true, sunatStatus: true, sunatHash: true,
           gravada: true, exonerada: true, inafecta: true, igv: true, icbper: true, total: true,
           sunatXmlUrl: true, sunatPdfUrl: true, sunatCdrUrl: true,
-          cadenaQR: true, enlaceNubefact: true,
-          nubefactEnviado: true, nubefactError: true, intentosEnvio: true,
+          cadenaQR: true, enlaceProveedor: true,
+          enviadoAProveedor: true, errorProveedor: true, intentosEnvio: true,
           anulado: true,
           notasRelacionadas: {
             select: {
@@ -101,7 +102,7 @@ export class VentaService {
               total: true, motivoNota: true, tipoNotaCredito: true, tipoNotaDebito: true,
               cadenaQR: true, anulado: true,
               fechaEmision: true,
-              enlaceNubefact: true, sunatPdfUrl: true,
+              enlaceProveedor: true, sunatPdfUrl: true,
             },
             orderBy: { creadoEn: 'desc' as const },
           },
@@ -288,9 +289,14 @@ export class VentaService {
         }
 
         const subtotalVenta = detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0);
-        const descuentoVenta = detallesCalculados.reduce((sum, d) => sum + d.descuento, 0);
+        const descuentoItems = detallesCalculados.reduce((sum, d) => sum + d.descuento, 0);
         const impuestosVenta = detallesCalculados.reduce((sum, d) => sum + d.igv, 0);
-        const totalVenta = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
+        const totalSinDescuentoGlobal = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
+
+        // Descuento global: se resta del total final
+        const descuentoGlobal = Math.round((dto.descuentoGlobal || 0) * 100) / 100;
+        const descuentoVenta = descuentoItems + descuentoGlobal;
+        const totalVenta = Math.round((totalSinDescuentoGlobal - descuentoGlobal) * 100) / 100;
 
         const esCredito = dto.esCredito ?? false;
         // For hybrid sales: calculate immediate payment total from pagos array
@@ -341,6 +347,10 @@ export class VentaService {
               ? new Date(dto.fechaVencimientoPago)
               : null,
             observaciones: dto.observaciones,
+            descuentoGlobal: descuentoGlobal > 0 ? descuentoGlobal : null,
+            descuentoGlobalPorcentaje: dto.descuentoGlobalPorcentaje ?? null,
+            descuentoAutorizadoPorId: descuentoGlobal > 0 ? dto.descuentoAutorizadoPorId : null,
+            descuentoAutorizadoEn: descuentoGlobal > 0 ? new Date() : null,
             estado: estaPagada
               ? EstadoVenta.PAGADA_COMPLETA
               : EstadoVenta.CONFIRMADA,
@@ -552,6 +562,12 @@ export class VentaService {
         const tipoComprobante = dto.tipoComprobante || 'TICKET';
 
         if (tipoComprobante !== 'TICKET') {
+        // Validar documento del cliente para comprobante electrónico
+        const validacionDoc = validarDocumentoParaComprobante(tipoComprobante, dto.documentoCliente);
+        if (!validacionDoc.valido) {
+          throw new BadRequestException(validacionDoc.error);
+        }
+
         // Usar sede de facturación si se especificó (multi-RUC), sino la sede operativa
         const sedeIdFacturacion = dto.sedeFacturacionId || dto.sedeId;
         const [sedeLocked] = await tx.$queryRaw<
@@ -570,18 +586,16 @@ export class VentaService {
             ? sedeLocked.serieFactura
             : sedeLocked.serieBoleta;
 
-          const nuevoCorrelativo = tipoComprobante === 'FACTURA'
-            ? sedeLocked.ultimoNumeroFactura + 1
-            : sedeLocked.ultimoNumeroBoleta + 1;
+          // Increment atómico para evitar race conditions en concurrencia
+          const campoContador = tipoComprobante === 'FACTURA' ? 'ultimoNumeroFactura' : 'ultimoNumeroBoleta';
+          const sedeActualizada = await tx.sede.update({
+            where: { id: sedeLocked.id },
+            data: { [campoContador]: { increment: 1 } },
+            select: { [campoContador]: true },
+          });
+          const nuevoCorrelativo: number = (sedeActualizada as any)[campoContador];
 
           const correlativo = String(nuevoCorrelativo);
-
-          await tx.sede.update({
-            where: { id: sedeLocked.id },
-            data: tipoComprobante === 'FACTURA'
-              ? { ultimoNumeroFactura: nuevoCorrelativo }
-              : { ultimoNumeroBoleta: nuevoCorrelativo },
-          });
 
           const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
@@ -629,6 +643,7 @@ export class VentaService {
                     precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                     valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
                     igv: new Prisma.Decimal(igvItem.toFixed(2)),
+                    icbper: new Prisma.Decimal((d.icbper || 0).toFixed(2)),
                     subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
                     total: new Prisma.Decimal(totalItem.toFixed(2)),
                     ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
@@ -687,8 +702,8 @@ export class VentaService {
 
     // Fire-after-commit: enviar comprobante a Nubefact (no bloquea la venta)
     if (result.comprobanteIdGenerado) {
-      this.nubefactService.enviarComprobante(result.comprobanteIdGenerado, empresaId)
-        .catch(err => this.logger.warn(`Nubefact envio fallido para comprobante ${result.comprobanteIdGenerado}: ${err?.message}`));
+      this.facturacionService.enviarComprobante(result.comprobanteIdGenerado, empresaId)
+        .catch(err => this.logger.warn(`Envío fallido para comprobante ${result.comprobanteIdGenerado}: ${err?.message}`));
     }
 
     return result.venta;
@@ -1100,18 +1115,15 @@ export class VentaService {
           ? sedeLocked.serieFactura
           : sedeLocked.serieBoleta;
 
-        const nuevoCorrelativo = tipoComprobante === 'FACTURA'
-          ? sedeLocked.ultimoNumeroFactura + 1
-          : sedeLocked.ultimoNumeroBoleta + 1;
+        const campoContador = tipoComprobante === 'FACTURA' ? 'ultimoNumeroFactura' : 'ultimoNumeroBoleta';
+        const sedeActualizada = await tx.sede.update({
+          where: { id: sedeLocked.id },
+          data: { [campoContador]: { increment: 1 } },
+          select: { [campoContador]: true },
+        });
+        const nuevoCorrelativo: number = (sedeActualizada as any)[campoContador];
 
         const correlativo = String(nuevoCorrelativo);
-
-        await tx.sede.update({
-          where: { id: sedeLocked.id },
-          data: tipoComprobante === 'FACTURA'
-            ? { ultimoNumeroFactura: nuevoCorrelativo }
-            : { ultimoNumeroBoleta: nuevoCorrelativo },
-        });
 
         const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
@@ -1167,6 +1179,7 @@ export class VentaService {
                   precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                   valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
                   igv: new Prisma.Decimal(igvItem.toFixed(2)),
+                  icbper: new Prisma.Decimal(Number(d.icbper || 0).toFixed(2)),
                   subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
                   total: new Prisma.Decimal(totalItem.toFixed(2)),
                   ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
@@ -1245,8 +1258,8 @@ export class VentaService {
 
     // Fire-after-commit: enviar comprobante a Nubefact
     if (result.comprobanteIdGenerado) {
-      this.nubefactService.enviarComprobante(result.comprobanteIdGenerado, empresaId)
-        .catch(err => this.logger.warn(`Nubefact envio fallido: ${err?.message}`));
+      this.facturacionService.enviarComprobante(result.comprobanteIdGenerado, empresaId)
+        .catch(err => this.logger.warn(`Envío fallido: ${err?.message}`));
     }
 
     return result.venta;
@@ -2077,6 +2090,12 @@ export class VentaService {
     if (!venta) throw new NotFoundException('Venta no encontrada');
     if (venta.comprobante) throw new BadRequestException('Esta venta ya tiene un comprobante electrónico generado');
 
+    // Validar documento del cliente
+    const validacionDoc = validarDocumentoParaComprobante(dto.tipoComprobante, venta.documentoCliente);
+    if (!validacionDoc.valido) {
+      throw new BadRequestException(validacionDoc.error);
+    }
+
     const ventaResult = await this.prisma.$transaction(async (tx) => {
       // Lock sede para concurrencia de serie/correlativo
       const [sedeLocked] = await tx.$queryRaw<
@@ -2087,17 +2106,14 @@ export class VentaService {
       if (!sedeLocked) throw new BadRequestException('Sede no encontrada');
 
       const serie = dto.tipoComprobante === 'FACTURA' ? sedeLocked.serieFactura : sedeLocked.serieBoleta;
-      const nuevoCorrelativo = dto.tipoComprobante === 'FACTURA'
-        ? sedeLocked.ultimoNumeroFactura + 1
-        : sedeLocked.ultimoNumeroBoleta + 1;
-      const correlativo = String(nuevoCorrelativo);
-
-      await tx.sede.update({
+      const campoContador = dto.tipoComprobante === 'FACTURA' ? 'ultimoNumeroFactura' : 'ultimoNumeroBoleta';
+      const sedeActualizada = await tx.sede.update({
         where: { id: sedeLocked.id },
-        data: dto.tipoComprobante === 'FACTURA'
-          ? { ultimoNumeroFactura: nuevoCorrelativo }
-          : { ultimoNumeroBoleta: nuevoCorrelativo },
+        data: { [campoContador]: { increment: 1 } },
+        select: { [campoContador]: true },
       });
+      const nuevoCorrelativo: number = (sedeActualizada as any)[campoContador];
+      const correlativo = String(nuevoCorrelativo);
 
       const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
       const totalVenta = Number(venta.total);
@@ -2152,6 +2168,7 @@ export class VentaService {
                 precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                 valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
                 igv: new Prisma.Decimal(igvItem.toFixed(2)),
+                icbper: new Prisma.Decimal(Number(d.icbper || 0).toFixed(2)),
                 subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
                 total: new Prisma.Decimal(totalItem.toFixed(2)),
                 ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
@@ -2185,8 +2202,8 @@ export class VentaService {
     // Fire-after-commit: enviar comprobante a Nubefact
     const comprobanteId = ventaResult?.comprobante?.id;
     if (comprobanteId) {
-      this.nubefactService.enviarComprobante(comprobanteId, empresaId)
-        .catch(err => this.logger.warn(`Nubefact envio fallido: ${err?.message}`));
+      this.facturacionService.enviarComprobante(comprobanteId, empresaId)
+        .catch(err => this.logger.warn(`Envío fallido: ${err?.message}`));
     }
 
     return ventaResult;

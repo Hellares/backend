@@ -15,4 +15,9 @@ export class AbrirCajaDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiProperty({ required: false, description: 'Sede/RUC emisor por defecto para facturación' })
+  @IsOptional()
+  @IsString()
+  sedeFacturacionId?: string;
 }

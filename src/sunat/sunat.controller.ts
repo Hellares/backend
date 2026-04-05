@@ -7,11 +7,12 @@ import {
   Body,
   Headers,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { NubefactService } from './nubefact.service';
+import { FacturacionService } from './facturacion.service';
 import { AnularComprobanteDto } from './dto/anular-comprobante.dto';
 import { CrearNotaDto } from './dto/crear-nota.dto';
 import { ConfiguracionFacturacionDto } from './dto/configuracion-facturacion.dto';
@@ -21,7 +22,19 @@ import { ConfiguracionFacturacionDto } from './dto/configuracion-facturacion.dto
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class SunatController {
-  constructor(private readonly nubefactService: NubefactService) {}
+  constructor(private readonly facturacionService: FacturacionService) {}
+
+  // ── Reporte de correlativos ──
+  @Get('reporte-correlativos')
+  @ApiOperation({ summary: 'Reporte de integridad de correlativos por serie' })
+  async reporteCorrelativos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
+  ) {
+    return this.facturacionService.reporteCorrelativos(empresaId, sedeId || undefined, fechaDesde, fechaHasta);
+  }
 
   // ── Monitor: listar comprobantes con filtros ──
   @Get('comprobantes')
@@ -36,7 +49,7 @@ export class SunatController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.nubefactService.listarComprobantes(empresaId, {
+    return this.facturacionService.listarComprobantes(empresaId, {
       tipo, sunatStatus, fechaDesde, fechaHasta, busqueda,
       page: parseInt(page || '1', 10),
       limit: parseInt(limit || '20', 10),
@@ -45,26 +58,26 @@ export class SunatController {
 
   // ── Enviar masivo: reenviar todos los pendientes ──
   @Post('comprobantes/enviar-pendientes')
-  @ApiOperation({ summary: 'Reenviar todos los comprobantes pendientes a Nubefact' })
+  @ApiOperation({ summary: 'Reenviar todos los comprobantes pendientes al proveedor' })
   async enviarPendientes(@Headers('x-tenant-id') empresaId: string) {
-    return this.nubefactService.enviarPendientes(empresaId);
+    return this.facturacionService.enviarPendientes(empresaId);
   }
 
-  // ── Enviar/Reenviar comprobante a Nubefact ──
+  // ── Enviar/Reenviar comprobante ──
   @Post('comprobantes/:id/enviar')
-  @ApiOperation({ summary: 'Enviar o reenviar comprobante a SUNAT via Nubefact' })
+  @ApiOperation({ summary: 'Enviar o reenviar comprobante a SUNAT' })
   async enviarComprobante(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') comprobanteId: string,
   ) {
-    return this.nubefactService.reenviarComprobante(comprobanteId, empresaId);
+    return this.facturacionService.reenviarComprobante(comprobanteId, empresaId);
   }
 
   // ── Listar emisores disponibles (RUCs configurados) ──
   @Get('emisores')
   @ApiOperation({ summary: 'Listar emisores disponibles (empresa + sedes con RUC propio)' })
   async listarEmisores(@Headers('x-tenant-id') empresaId: string) {
-    return this.nubefactService.listarEmisores(empresaId);
+    return this.facturacionService.listarEmisores(empresaId);
   }
 
   // ── Consultar estado en SUNAT ──
@@ -74,7 +87,7 @@ export class SunatController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') comprobanteId: string,
   ) {
-    return this.nubefactService.consultarComprobante(comprobanteId, empresaId);
+    return this.facturacionService.consultarComprobante(comprobanteId, empresaId);
   }
 
   // ── Anular comprobante ──
@@ -85,7 +98,7 @@ export class SunatController {
     @Param('id') comprobanteId: string,
     @Body() dto: AnularComprobanteDto,
   ) {
-    return this.nubefactService.anularComprobante(comprobanteId, empresaId, dto.motivo);
+    return this.facturacionService.anularComprobante(comprobanteId, empresaId, dto.motivo);
   }
 
   // ── Consultar anulación ──
@@ -95,7 +108,7 @@ export class SunatController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') comprobanteId: string,
   ) {
-    return this.nubefactService.consultarAnulacion(comprobanteId, empresaId);
+    return this.facturacionService.consultarAnulacion(comprobanteId, empresaId);
   }
 
   // ── Nota de Crédito ──
@@ -106,7 +119,7 @@ export class SunatController {
     @Param('id') comprobanteOrigenId: string,
     @Body() dto: CrearNotaDto,
   ) {
-    return this.nubefactService.crearNotaCredito(comprobanteOrigenId, empresaId, dto);
+    return this.facturacionService.crearNotaCredito(comprobanteOrigenId, empresaId, dto);
   }
 
   // ── Nota de Débito ──
@@ -117,7 +130,7 @@ export class SunatController {
     @Param('id') comprobanteOrigenId: string,
     @Body() dto: CrearNotaDto,
   ) {
-    return this.nubefactService.crearNotaDebito(comprobanteOrigenId, empresaId, dto);
+    return this.facturacionService.crearNotaDebito(comprobanteOrigenId, empresaId, dto);
   }
 
   // ── Configuración de facturación ──
@@ -127,7 +140,7 @@ export class SunatController {
     @Headers('x-tenant-id') empresaId: string,
     @Query('sedeId') sedeId?: string,
   ) {
-    return this.nubefactService.getConfigFacturacionEfectiva(empresaId, sedeId || null);
+    return this.facturacionService.getConfigFacturacionEfectiva(empresaId, sedeId || null);
   }
 
   @Put('configuracion')
@@ -135,7 +148,9 @@ export class SunatController {
   async updateConfiguracion(
     @Headers('x-tenant-id') empresaId: string,
     @Body() dto: ConfiguracionFacturacionDto,
+    @Req() req: any,
   ) {
-    return this.nubefactService.updateConfiguracion(empresaId, dto);
+    const userId = req?.user?.sub || req?.user?.id;
+    return this.facturacionService.updateConfiguracion(empresaId, dto, userId);
   }
 }
