@@ -1,3 +1,4 @@
+
 # Guía: Cambio de Proveedor de Facturación Electrónica
 
 ## Arquitectura actual

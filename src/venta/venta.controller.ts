@@ -131,6 +131,39 @@ export class VentaController {
     return this.ventaService.buscarPorCodigo(empresaId, codigo);
   }
 
+  @Get('flujo-documentos/autocomplete')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Autocompletar código de documento' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async autocompleteDocumentos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('q') query: string,
+  ) {
+    return this.ventaService.autocompleteDocumentos(empresaId, query);
+  }
+
+  @Get('flujo-documentos/buscar')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Buscar flujo de documentos por código de cualquier documento' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async buscarFlujoDocumentos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('codigo') codigo: string,
+  ) {
+    return this.ventaService.buscarFlujoDocumentos(empresaId, codigo);
+  }
+
+  @Get(':id/flujo-documentos')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Obtener flujo de documentos de una venta' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async flujoDocumentos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.ventaService.flujoDocumentos(id, empresaId);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Obtener venta por ID' })

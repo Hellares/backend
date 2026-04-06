@@ -406,6 +406,7 @@ model Devolucion {
   items       DevolucionItem[]
   movimientos MovimientoStock[]
   movimientosCaja MovimientoCaja[] @relation("MovimientoCajaDevolucion")
+  guiasRemision   GuiaRemision[]
 
   @@index([empresaId, sedeId, estado])
   @@index([codigo])

@@ -104,6 +104,9 @@ model Producto {
   pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoProducto")
   solicitudCotizacionItems  SolicitudCotizacionItem[]    @relation("SolicitudProducto")
 
+  // Guías de remisión
+  guiasRemisionDetalles     GuiaRemisionDetalle[]        @relation("GuiaRemisionProducto")
+
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
   @@index([empresaId])
@@ -280,6 +283,9 @@ model ProductoVariante {
   carritoItems              CarritoItem[]                @relation("CarritoVariante")
   pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoVariante")
   solicitudCotizacionItems  SolicitudCotizacionItem[]    @relation("SolicitudVariante")
+
+  // Guías de remisión
+  guiasRemisionDetalles     GuiaRemisionDetalle[]        @relation("GuiaRemisionVariante")
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])

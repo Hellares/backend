@@ -1,0 +1,313 @@
+// ── Guía de Remisión Electrónica (GRE) ──
+// Soporta GRE-Remitente (serie T) y GRE-Transportista (serie V)
+// Integrado con Nubefact API (operaciones generar_guia / consultar_guia)
+
+model GuiaRemision {
+  id        String @id @default(cuid())
+  empresaId String
+  sedeId    String? // Sede desde donde se emite
+
+  // Identificación del documento
+  tipo            TipoGuiaRemision  @default(REMITENTE)
+  serie           String            // T001 (remitente) o V001 (transportista)
+  correlativo     Int
+  codigoGenerado  String            // T001-00000001
+
+  // Estado
+  estado      EstadoGuiaRemision @default(BORRADOR)
+  sunatStatus EstadoSunat        @default(PENDIENTE)
+
+  // Fechas
+  fechaEmision          DateTime @default(now())
+  fechaInicioTraslado   DateTime
+
+  // Motivo y observaciones
+  motivoTraslado                     MotivoTraslado
+  motivoTrasladoOtrosDescripcion     String?  // Solo si motivo = OTROS
+  observaciones                      String?
+
+  // Peso y bultos
+  pesoBrutoTotal          Decimal  @db.Decimal(12, 3)
+  pesoBrutoUnidadMedida   String   @default("KGM") // KGM o TNE
+  numeroBultos            Int?
+
+  // Modalidad de transporte (solo GRE Remitente)
+  tipoTransporte  TipoTransporte?
+
+  // ── Datos del destinatario (GRE Remitente) / Remitente (GRE Transportista) ──
+  clienteTipoDocumento     String   // 6=RUC, 1=DNI, 4=CE, 7=Pasaporte
+  clienteNumeroDocumento   String
+  clienteDenominacion      String
+  clienteDireccion         String?
+  clienteEmail             String?
+
+  // ── Punto de partida ──
+  puntoPartidaUbigeo                      String
+  puntoPartidaDireccion                   String
+  puntoPartidaCodigoEstablecimientoSunat  String?  // "0000" para motivos 04, 18
+
+  // ── Punto de llegada ──
+  puntoLlegadaUbigeo                      String
+  puntoLlegadaDireccion                   String
+  puntoLlegadaCodigoEstablecimientoSunat  String?  // "0000" para motivos 04, 18
+
+  // ── Transportista (transporte público - tipo_de_transporte = "01") ──
+  transportistaDocumentoTipo    String?  // Solo "6" (RUC)
+  transportistaDocumentoNumero  String?
+  transportistaDenominacion     String?
+  transportistaPlacaNumero      String?  // Obligatorio siempre
+  transportistaMtc              String?  // Registro MTC
+
+  // ── Conductor principal (transporte privado - tipo_de_transporte = "02") ──
+  conductorDocumentoTipo    String?
+  conductorDocumentoNumero  String?
+  conductorNombre           String?
+  conductorApellidos        String?
+  conductorNumeroLicencia   String?
+
+  // ── TUC vehículo principal (solo GRE Transportista) ──
+  tucVehiculoPrincipal  String?
+
+  // ── Indicadores SUNAT ──
+  sunatEnvioIndicador   String?  // 01-06 según tipo
+
+  // ── Destinatario (solo GRE Transportista) ──
+  destinatarioDocumentoTipo    String?
+  destinatarioDocumentoNumero  String?
+  destinatarioDenominacion     String?
+
+  // ── Documento relacionado importación/exportación ──
+  documentoRelacionadoCodigo  String?  // "50" DAM o "52" DS
+
+  // ── SUNAT response fields ──
+  sunatHash       String?
+  sunatXmlUrl     String?
+  sunatPdfUrl     String?
+  sunatCdrUrl     String?
+  cadenaQR        String?
+  enlaceProveedor String?
+  errorProveedor  String?
+  intentosEnvio   Int       @default(0)
+  ultimoIntentoEnvio DateTime?
+
+  // ── Documento origen (vinculación) ──
+  ventaId          String?
+  compraId         String?
+  transferenciaId  String?
+  devolucionId     String?
+
+  // ── Auditoría ──
+  creadoPorId   String?
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  // ── Relaciones ──
+  empresa       Empresa              @relation(fields: [empresaId], references: [id])
+  sede          Sede?                @relation(fields: [sedeId], references: [id])
+  venta         Venta?               @relation(fields: [ventaId], references: [id])
+  compra        Compra?              @relation(fields: [compraId], references: [id])
+  transferencia TransferenciaStock?  @relation(fields: [transferenciaId], references: [id])
+  devolucion    Devolucion?          @relation(fields: [devolucionId], references: [id])
+  creadoPor     Usuario?             @relation("GuiaRemisionCreador", fields: [creadoPorId], references: [id])
+
+  detalles                GuiaRemisionDetalle[]
+  documentosRelacionados  GuiaRemisionDocRelacionado[]
+  vehiculosSecundarios    GuiaRemisionVehiculo[]
+  conductoresSecundarios  GuiaRemisionConductor[]
+
+  // Unique solo por codigoGenerado (temporal o real)
+  // serie+correlativo se valida a nivel de servicio al asignar
+  @@unique([empresaId, codigoGenerado])
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([estado])
+  @@index([sunatStatus])
+  @@index([fechaEmision])
+  @@index([motivoTraslado])
+  @@index([ventaId])
+  @@index([compraId])
+  @@index([transferenciaId])
+  @@index([devolucionId])
+  @@index([empresaId, estado, fechaEmision])
+  @@index([empresaId, sunatStatus])
+  @@index([empresaId, serie])
+}
+
+model GuiaRemisionDetalle {
+  id              String @id @default(cuid())
+  guiaRemisionId  String
+
+  productoId   String?
+  varianteId   String?
+
+  unidadMedida String  @default("NIU") // NIU=producto, ZZ=servicio
+  codigo       String? // Código interno del producto
+  descripcion  String
+  cantidad     Decimal @db.Decimal(12, 3)
+
+  // Solo para importación/exportación
+  codigoDam    String?
+
+  creadoEn     DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  guiaRemision GuiaRemision      @relation(fields: [guiaRemisionId], references: [id], onDelete: Cascade)
+  producto     Producto?         @relation("GuiaRemisionProducto", fields: [productoId], references: [id])
+  variante     ProductoVariante? @relation("GuiaRemisionVariante", fields: [varianteId], references: [id])
+
+  @@index([guiaRemisionId])
+  @@index([productoId])
+  @@index([varianteId])
+}
+
+model GuiaRemisionDocRelacionado {
+  id             String @id @default(cuid())
+  guiaRemisionId String
+
+  tipo    String  // "01"=Factura, "03"=Boleta, "09"=GRE Remitente, "31"=GRE Transportista
+  serie   String  // F001, B001, T001, etc.
+  numero  Int
+
+  guiaRemision GuiaRemision @relation(fields: [guiaRemisionId], references: [id], onDelete: Cascade)
+
+  @@index([guiaRemisionId])
+}
+
+model GuiaRemisionVehiculo {
+  id             String @id @default(cuid())
+  guiaRemisionId String
+
+  placaNumero String
+  tuc         String?  // Tarjeta Única de Circulación (solo GRE Transportista)
+
+  guiaRemision GuiaRemision @relation(fields: [guiaRemisionId], references: [id], onDelete: Cascade)
+
+  @@index([guiaRemisionId])
+}
+
+model GuiaRemisionConductor {
+  id             String @id @default(cuid())
+  guiaRemisionId String
+
+  documentoTipo    String  // 1=DNI, 4=CE, 7=Pasaporte
+  documentoNumero  String
+  nombre           String
+  apellidos        String
+  numeroLicencia   String
+
+  guiaRemision GuiaRemision @relation(fields: [guiaRemisionId], references: [id], onDelete: Cascade)
+
+  @@index([guiaRemisionId])
+}
+
+// ── Vehículos y Conductores de la empresa (catálogos reutilizables) ���─
+
+model VehiculoEmpresa {
+  id        String @id @default(cuid())
+  empresaId String
+
+  placaNumero    String
+  marca          String?
+  modelo         String?
+  tipo           String?  // Camión, camioneta, moto, etc.
+  capacidadTM    Decimal? @db.Decimal(8, 2) // Toneladas métricas
+  tuc            String?  // Tarjeta Única de Circulación
+  isActive       Boolean  @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@unique([empresaId, placaNumero])
+  @@index([empresaId])
+  @@index([isActive])
+}
+
+model ConductorEmpresa {
+  id        String @id @default(cuid())
+  empresaId String
+
+  tipoDocumento    String  @default("1") // 1=DNI
+  numeroDocumento  String
+  nombre           String
+  apellidos        String
+  numeroLicencia   String
+  categoriaLicencia String? // A-I, A-IIa, A-IIb, A-IIIa, etc.
+  isActive         Boolean @default(true)
+
+  // FK opcional a empleado
+  empleadoId String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa  Empresa   @relation(fields: [empresaId], references: [id])
+  empleado Empleado? @relation("EmpleadoConductor", fields: [empleadoId], references: [id])
+
+  @@unique([empresaId, numeroDocumento])
+  @@index([empresaId])
+  @@index([isActive])
+  @@index([empleadoId])
+}
+
+// ── Transportistas registrados (empresas de transporte terceras) ──
+
+model TransportistaEmpresa {
+  id        String @id @default(cuid())
+  empresaId String
+
+  ruc              String
+  razonSocial      String
+  direccion        String?
+  telefono         String?
+  email            String?
+  registroMtc      String?
+  isActive         Boolean @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@unique([empresaId, ruc])
+  @@index([empresaId])
+  @@index([isActive])
+}
+
+// ── Enums ──
+
+enum TipoGuiaRemision {
+  REMITENTE
+  TRANSPORTISTA
+}
+
+enum EstadoGuiaRemision {
+  BORRADOR
+  REGISTRADO
+  ENVIADO
+  ACEPTADO
+  RECHAZADO
+  ANULADO
+}
+
+enum MotivoTraslado {
+  VENTA                          // 01
+  COMPRA                         // 02
+  VENTA_CON_ENTREGA_A_TERCEROS   // 03
+  TRASLADO_ENTRE_ESTABLECIMIENTOS // 04
+  CONSIGNACION                   // 05
+  DEVOLUCION                     // 06
+  RECOJO_BIENES_TRANSFORMADOS    // 07
+  IMPORTACION                    // 08
+  EXPORTACION                    // 09
+  OTROS                          // 13
+  VENTA_SUJETA_A_CONFIRMACION    // 14
+  TRASLADO_BIENES_TRANSFORMACION // 17
+  TRASLADO_EMISOR_ITINERANTE     // 18
+}
+
+enum TipoTransporte {
+  PUBLICO  // 01
+  PRIVADO  // 02
+}

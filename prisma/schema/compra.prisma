@@ -200,6 +200,7 @@ model Compra {
   devoluciones Devolucion[]
   movimientosCaja MovimientoCaja[] @relation("MovimientoCajaCompra")
   pagos           PagoCompra[]
+  guiasRemision   GuiaRemision[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId, estado])

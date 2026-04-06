@@ -153,6 +153,9 @@ model Usuario {
   adelantosAprobados             AdelantoPago[]         @relation("AdelantoAprobadoPor")
   adelantosPagados               AdelantoPago[]         @relation("AdelantoPagadoPor")
 
+  // Guías de remisión
+  guiasRemisionCreadas           GuiaRemision[]         @relation("GuiaRemisionCreador")
+
   @@index([email])
   @@index([telefono])
   @@index([personaId])

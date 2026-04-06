@@ -191,6 +191,7 @@ model TransferenciaStock {
   movimientos           MovimientoStock[]
   incidencias           TransferenciaStockIncidencia[] // Incidencias reportadas en esta transferencia
   itemsIncidenciaOrigen ReporteIncidenciaItem[]        @relation("ItemIncidenciaTransferencia") // Items que generaron esta transferencia de devolución
+  guiasRemision         GuiaRemision[]
 
   @@unique([empresaId, codigo]) // Código único por empresa
   @@index([empresaId])

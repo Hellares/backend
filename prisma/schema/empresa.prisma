@@ -195,6 +195,12 @@ model Empresa {
   boletasPago        BoletaPago[]
   adelantosPago      AdelantoPago[]
 
+  // Relaciones para módulo de guía de remisión
+  guiasRemision       GuiaRemision[]
+  vehiculosEmpresa    VehiculoEmpresa[]
+  conductoresEmpresa  ConductorEmpresa[]
+  transportistas      TransportistaEmpresa[]
+
   @@index([subdominio])
   @@index([isActive])
   @@index([ruc])
@@ -327,6 +333,7 @@ model Sede {
   distrito     String?
   provincia    String?
   departamento String?
+  ubigeo       String?  // Código ubigeo SUNAT 6 dígitos (ej: "150131")
   pais         String? @default("PERU")
   coordenadas  Json?   // {lat: -12.0464, lon: -77.0428} para geolocalización
   imagenes     String[] // URLs de imágenes referenciales de la sede
@@ -433,6 +440,9 @@ model Sede {
 
   // Comprobantes electrónicos emitidos desde esta sede
   comprobantes ComprobanteElectronico[]
+
+  // Guías de remisión
+  guiasRemision GuiaRemision[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

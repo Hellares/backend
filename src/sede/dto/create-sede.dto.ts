@@ -109,6 +109,11 @@ export class CreateSedeDto {
   @IsString()
   departamento?: string;
 
+  @ApiPropertyOptional({ description: 'Código ubigeo SUNAT (6 dígitos)', example: '150131' })
+  @IsOptional()
+  @IsString()
+  ubigeo?: string;
+
   @ApiPropertyOptional({
     description: 'País',
     example: 'PERU',

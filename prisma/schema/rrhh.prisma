@@ -213,6 +213,7 @@ model Empleado {
   incidencias      Incidencia[]
   boletasPago      BoletaPago[]
   adelantos        AdelantoPago[]
+  conductorEmpresa ConductorEmpresa[] @relation("EmpleadoConductor")
 
   @@unique([empresaId, usuarioId])
   @@unique([empresaId, codigo])

@@ -2292,4 +2292,384 @@ export class VentaService {
       }),
     };
   }
+
+  // ── Flujo de documentos ──
+
+  /**
+   * Autocompletado: busca documentos que coincidan parcialmente con el texto ingresado.
+   * Busca en ventas, comprobantes, guías, cotizaciones, devoluciones.
+   */
+  async autocompleteDocumentos(empresaId: string, query: string) {
+    if (!query?.trim() || query.trim().length < 2) return [];
+
+    const q = query.trim();
+    const limit = 10;
+
+    const [ventas, comprobantes, guias, cotizaciones, devoluciones] = await Promise.all([
+      this.prisma.venta.findMany({
+        where: { empresaId, codigo: { contains: q, mode: 'insensitive' } },
+        select: { id: true, codigo: true, estado: true, nombreCliente: true, total: true },
+        take: limit,
+        orderBy: { creadoEn: 'desc' },
+      }),
+      this.prisma.comprobanteElectronico.findMany({
+        where: { empresaId, codigoGenerado: { contains: q, mode: 'insensitive' } },
+        select: { id: true, codigoGenerado: true, tipoComprobante: true, estado: true, total: true },
+        take: limit,
+        orderBy: { creadoEn: 'desc' },
+      }),
+      this.prisma.guiaRemision.findMany({
+        where: { empresaId, codigoGenerado: { contains: q, mode: 'insensitive' } },
+        select: { id: true, codigoGenerado: true, tipo: true, estado: true, clienteDenominacion: true },
+        take: limit,
+        orderBy: { creadoEn: 'desc' },
+      }),
+      this.prisma.cotizacion.findMany({
+        where: { empresaId, codigo: { contains: q, mode: 'insensitive' } },
+        select: { id: true, codigo: true, estado: true, total: true },
+        take: limit,
+        orderBy: { creadoEn: 'desc' },
+      }),
+      this.prisma.devolucion.findMany({
+        where: { empresaId, codigo: { contains: q, mode: 'insensitive' } },
+        select: { id: true, codigo: true, tipo: true, estado: true },
+        take: limit,
+        orderBy: { creadoEn: 'desc' },
+      }),
+    ]);
+
+    const resultados: any[] = [];
+
+    for (const v of ventas) {
+      resultados.push({ codigo: v.codigo, tipo: 'VENTA', estado: v.estado, detalle: v.nombreCliente, monto: v.total });
+    }
+    for (const c of comprobantes) {
+      resultados.push({ codigo: c.codigoGenerado, tipo: c.tipoComprobante, estado: c.estado, monto: c.total });
+    }
+    for (const g of guias) {
+      resultados.push({ codigo: g.codigoGenerado, tipo: 'GUIA_REMISION', estado: g.estado, detalle: g.clienteDenominacion });
+    }
+    for (const c of cotizaciones) {
+      resultados.push({ codigo: c.codigo, tipo: 'COTIZACION', estado: c.estado, monto: c.total });
+    }
+    for (const d of devoluciones) {
+      resultados.push({ codigo: d.codigo, tipo: 'DEVOLUCION', estado: d.estado });
+    }
+
+    return resultados.slice(0, limit);
+  }
+
+  /**
+   * Busca el flujo de documentos a partir de cualquier código de documento.
+   * Busca en: Venta, Comprobante, Guía Remisión, Cotización, Devolución.
+   * Todos resuelven a la venta raíz para construir el árbol.
+   */
+  async buscarFlujoDocumentos(empresaId: string, codigo: string) {
+    if (!codigo?.trim()) {
+      throw new BadRequestException('Ingrese un código de documento');
+    }
+
+    const codigoLimpio = codigo.trim().toUpperCase();
+    let ventaId: string | null = null;
+
+    // 1. Buscar en Venta
+    const venta = await this.prisma.venta.findFirst({
+      where: { empresaId, codigo: { equals: codigoLimpio, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (venta) ventaId = venta.id;
+
+    // 2. Buscar en Comprobante Electrónico
+    if (!ventaId) {
+      const comprobante = await this.prisma.comprobanteElectronico.findFirst({
+        where: { empresaId, codigoGenerado: { equals: codigoLimpio, mode: 'insensitive' } },
+        select: { ventaId: true, comprobanteOrigenId: true },
+      });
+      if (comprobante) {
+        if (comprobante.ventaId) {
+          ventaId = comprobante.ventaId;
+        } else if (comprobante.comprobanteOrigenId) {
+          // Es una nota — buscar el comprobante padre
+          const padre = await this.prisma.comprobanteElectronico.findUnique({
+            where: { id: comprobante.comprobanteOrigenId },
+            select: { ventaId: true },
+          });
+          if (padre?.ventaId) ventaId = padre.ventaId;
+        }
+      }
+    }
+
+    // 3. Buscar en Guía de Remisión
+    if (!ventaId) {
+      const guia = await this.prisma.guiaRemision.findFirst({
+        where: { empresaId, codigoGenerado: { equals: codigoLimpio, mode: 'insensitive' } },
+        select: { ventaId: true },
+      });
+      if (guia?.ventaId) ventaId = guia.ventaId;
+    }
+
+    // 4. Buscar en Cotización
+    if (!ventaId) {
+      const cotizacion = await this.prisma.cotizacion.findFirst({
+        where: { empresaId, codigo: { equals: codigoLimpio, mode: 'insensitive' } },
+        select: { ventaId: true },
+      });
+      if (cotizacion?.ventaId) ventaId = cotizacion.ventaId;
+    }
+
+    // 5. Buscar en Devolución
+    if (!ventaId) {
+      const devolucion = await this.prisma.devolucion.findFirst({
+        where: { empresaId, codigo: { equals: codigoLimpio, mode: 'insensitive' } },
+        select: { ventaId: true },
+      });
+      if (devolucion?.ventaId) ventaId = devolucion.ventaId;
+    }
+
+    if (!ventaId) {
+      throw new NotFoundException(`No se encontró ningún documento con código "${codigo}"`);
+    }
+
+    return this.flujoDocumentos(ventaId, empresaId);
+  }
+
+  async flujoDocumentos(ventaId: string, empresaId: string) {
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId },
+      select: {
+        id: true,
+        codigo: true,
+        estado: true,
+        nombreCliente: true,
+        documentoCliente: true,
+        total: true,
+        moneda: true,
+        fechaVenta: true,
+        esCredito: true,
+        cotizacionId: true,
+        // Cotización origen
+        cotizacion: {
+          select: { id: true, codigo: true, estado: true, total: true, fechaEmision: true },
+        },
+        // Comprobante electrónico (factura/boleta)
+        comprobante: {
+          select: {
+            id: true, tipoComprobante: true, codigoGenerado: true,
+            estado: true, sunatStatus: true, total: true, fechaEmision: true,
+            sunatPdfUrl: true, enlaceProveedor: true, anulado: true,
+            // Notas de crédito/débito vinculadas
+            notasRelacionadas: {
+              select: {
+                id: true, tipoComprobante: true, codigoGenerado: true,
+                estado: true, sunatStatus: true, total: true, fechaEmision: true,
+                motivoNota: true, tipoNotaCredito: true, tipoNotaDebito: true,
+                sunatPdfUrl: true, enlaceProveedor: true, anulado: true,
+              },
+              orderBy: { creadoEn: 'asc' as const },
+            },
+          },
+        },
+        // Guías de remisión
+        guiasRemision: {
+          select: {
+            id: true, codigoGenerado: true, tipo: true,
+            estado: true, sunatStatus: true,
+            motivoTraslado: true, fechaEmision: true,
+            clienteDenominacion: true,
+            sunatPdfUrl: true, enlaceProveedor: true,
+          },
+          orderBy: { creadoEn: 'asc' as const },
+        },
+        // Devoluciones
+        devoluciones: {
+          select: {
+            id: true, codigo: true, tipo: true,
+            estado: true, motivo: true,
+            tipoReembolso: true, creadoEn: true,
+          },
+          orderBy: { creadoEn: 'asc' as const },
+        },
+        // Pagos
+        pagos: {
+          select: {
+            id: true, metodoPago: true, monto: true,
+            referencia: true, fechaPago: true,
+          },
+          orderBy: { fechaPago: 'asc' as const },
+        },
+        // Cuotas (si es crédito)
+        cuotas: {
+          select: {
+            id: true, numero: true, monto: true, montoPagado: true,
+            saldoPendiente: true, estado: true, fechaVencimiento: true,
+          },
+          orderBy: { numero: 'asc' as const },
+        },
+      },
+    });
+
+    if (!venta) throw new NotFoundException('Venta no encontrada');
+
+    // Construir árbol de documentos
+    const nodos: any[] = [];
+
+    // 1. Cotización (si existe)
+    if (venta.cotizacion) {
+      nodos.push({
+        tipo: 'COTIZACION',
+        icono: 'request_quote',
+        id: venta.cotizacion.id,
+        codigo: venta.cotizacion.codigo,
+        estado: venta.cotizacion.estado,
+        fecha: venta.cotizacion.fechaEmision,
+        monto: venta.cotizacion.total,
+        moneda: venta.moneda,
+        ruta: `/empresa/cotizaciones/${venta.cotizacion.id}`,
+        hijos: [],
+      });
+    }
+
+    // 2. Venta (nodo principal)
+    const ventaNodo: any = {
+      tipo: 'VENTA',
+      icono: 'shopping_cart',
+      id: venta.id,
+      codigo: venta.codigo,
+      estado: venta.estado,
+      fecha: venta.fechaVenta,
+      monto: venta.total,
+      moneda: venta.moneda,
+      detalle: `${venta.nombreCliente}${venta.esCredito ? ' (Crédito)' : ''}`,
+      ruta: `/empresa/ventas/${venta.id}`,
+      hijos: [],
+    };
+
+    // 3. Comprobante electrónico
+    if (venta.comprobante) {
+      const comp = venta.comprobante;
+      const comprobanteNodo: any = {
+        tipo: comp.tipoComprobante,
+        icono: comp.tipoComprobante === 'FACTURA' ? 'description' : 'receipt',
+        id: comp.id,
+        codigo: comp.codigoGenerado,
+        estado: comp.anulado ? 'ANULADO' : comp.estado,
+        sunatStatus: comp.sunatStatus,
+        fecha: comp.fechaEmision,
+        monto: comp.total,
+        moneda: venta.moneda,
+        pdfUrl: comp.sunatPdfUrl,
+        enlace: comp.enlaceProveedor,
+        ruta: `/empresa/ventas/${venta.id}`,
+        hijos: [],
+      };
+
+      // 3.1 Notas de crédito/débito
+      for (const nota of comp.notasRelacionadas || []) {
+        comprobanteNodo.hijos.push({
+          tipo: nota.tipoComprobante,
+          icono: nota.tipoComprobante === 'NOTA_CREDITO' ? 'remove_circle' : 'add_circle',
+          id: nota.id,
+          codigo: nota.codigoGenerado,
+          estado: nota.anulado ? 'ANULADO' : nota.estado,
+          sunatStatus: nota.sunatStatus,
+          fecha: nota.fechaEmision,
+          monto: nota.total,
+          moneda: venta.moneda,
+          detalle: nota.motivoNota,
+          pdfUrl: nota.sunatPdfUrl,
+          enlace: nota.enlaceProveedor,
+          ruta: `/empresa/ventas/${venta.id}`,
+          hijos: [],
+        });
+      }
+
+      ventaNodo.hijos.push(comprobanteNodo);
+    }
+
+    // 4. Guías de remisión
+    for (const guia of venta.guiasRemision || []) {
+      ventaNodo.hijos.push({
+        tipo: 'GUIA_REMISION',
+        icono: 'local_shipping',
+        id: guia.id,
+        codigo: guia.codigoGenerado,
+        estado: guia.estado,
+        sunatStatus: guia.sunatStatus,
+        fecha: guia.fechaEmision,
+        detalle: `${guia.tipo} — ${guia.clienteDenominacion}`,
+        pdfUrl: guia.sunatPdfUrl,
+        enlace: guia.enlaceProveedor,
+        ruta: `/empresa/guias-remision/${guia.id}`,
+        hijos: [],
+      });
+    }
+
+    // 5. Pagos
+    for (const pago of venta.pagos || []) {
+      ventaNodo.hijos.push({
+        tipo: 'PAGO',
+        icono: 'payments',
+        id: pago.id,
+        codigo: `Pago ${pago.metodoPago}`,
+        estado: 'COMPLETADO',
+        fecha: pago.fechaPago,
+        monto: pago.monto,
+        moneda: venta.moneda,
+        detalle: pago.referencia || null,
+        ruta: null,
+        hijos: [],
+      });
+    }
+
+    // 6. Cuotas (si es crédito)
+    if (venta.esCredito && venta.cuotas?.length) {
+      for (const cuota of venta.cuotas) {
+        ventaNodo.hijos.push({
+          tipo: 'CUOTA',
+          icono: 'event',
+          id: cuota.id,
+          codigo: `Cuota ${cuota.numero}/${venta.cuotas.length}`,
+          estado: cuota.estado,
+          fecha: cuota.fechaVencimiento,
+          monto: cuota.monto,
+          moneda: venta.moneda,
+          detalle: `Pagado: ${cuota.montoPagado} | Saldo: ${cuota.saldoPendiente}`,
+          ruta: null,
+          hijos: [],
+        });
+      }
+    }
+
+    // 7. Devoluciones
+    for (const dev of venta.devoluciones || []) {
+      ventaNodo.hijos.push({
+        tipo: 'DEVOLUCION',
+        icono: 'assignment_return',
+        id: dev.id,
+        codigo: dev.codigo,
+        estado: dev.estado,
+        fecha: dev.creadoEn,
+        detalle: dev.motivo,
+        ruta: `/empresa/devoluciones/${dev.id}`,
+        hijos: [],
+      });
+    }
+
+    nodos.push(ventaNodo);
+
+    return {
+      ventaId: venta.id,
+      ventaCodigo: venta.codigo,
+      totalDocumentos: this.contarNodos(nodos),
+      nodos,
+    };
+  }
+
+  private contarNodos(nodos: any[]): number {
+    let count = nodos.length;
+    for (const n of nodos) {
+      if (n.hijos?.length) count += this.contarNodos(n.hijos);
+    }
+    return count;
+  }
 }

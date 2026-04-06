@@ -41,6 +41,9 @@ export class SedeDetailDto {
   @ApiPropertyOptional({ description: 'Departamento' })
   departamento?: string;
 
+  @ApiPropertyOptional({ description: 'Código ubigeo SUNAT (6 dígitos)' })
+  ubigeo?: string;
+
   @ApiPropertyOptional({ description: 'País', default: 'PERU' })
   pais?: string;
 

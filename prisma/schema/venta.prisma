@@ -114,6 +114,7 @@ model Venta {
   devoluciones   Devolucion[]
   movimientosCaja MovimientoCaja[] @relation("MovimientoCajaVenta")
   comprobante    ComprobanteElectronico?
+  guiasRemision  GuiaRemision[]
 
   @@unique([empresaId, codigo])
   // FK indexes

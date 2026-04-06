@@ -60,6 +60,7 @@ import { PagoSuscripcionModule } from './pago-suscripcion/pago-suscripcion.modul
 import { ConfiguracionSistemaModule } from './configuracion-sistema/configuracion-sistema.module';
 import { AuditModule } from './audit/audit.module';
 import { SunatModule } from './sunat/sunat.module';
+import { GuiaRemisionModule } from './guia-remision/guia-remision.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { CurrentEmpresaMiddleware } from './common/middleware/current-empresa.middleware';
@@ -133,6 +134,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     AdminModule,
     PagoSuscripcionModule,
     ConfiguracionSistemaModule,
+    GuiaRemisionModule,
   ],
   controllers: [AppController],
   providers: [

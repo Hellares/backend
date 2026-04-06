@@ -5,6 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { ConsultaDniResponseDto } from './dto/consulta-dni-response.dto';
 import { ConsultaRucResponseDto } from './dto/consulta-ruc-response.dto';
+import { ConsultaLicenciaResponseDto } from './dto/consulta-licencia-response.dto';
+import { ConsultaPlacaResponseDto } from './dto/consulta-placa-response.dto';
 import { TipoCambioResponseDto } from './dto/tipo-cambio-response.dto';
 
 @Injectable()
@@ -272,6 +274,128 @@ export class ConsultasExternasService {
         }
       },
       14400, // 4 horas
+    );
+  }
+
+  async consultarLicencia(dni: string): Promise<ConsultaLicenciaResponseDto> {
+    if (!/^\d{8}$/.test(dni)) {
+      throw new BadRequestException('El DNI debe tener exactamente 8 dígitos numéricos');
+    }
+
+    if (!this.apiToken) {
+      throw new ServiceUnavailableException('El servicio de consulta de licencia no está configurado.');
+    }
+
+    const cacheKey = `consulta:licencia:${dni}`;
+
+    return this.cache.getOrSet<ConsultaLicenciaResponseDto>(
+      cacheKey,
+      async () => {
+        this.logger.info('Consultando licencia de conducir en API externa', { dni });
+
+        try {
+          const response = await fetch(`${this.apiUrl}/licencia/info/${dni}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${this.apiToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (!response.ok) {
+            throw new BadRequestException(`No se pudo consultar la licencia para DNI ${dni}`);
+          }
+
+          const body = await response.json();
+
+          if (!body.data || body.status !== 200) {
+            throw new BadRequestException(`No se encontraron datos de licencia para DNI ${dni}`);
+          }
+
+          const data = body.data;
+          const lic = data.licencia || {};
+
+          const result: ConsultaLicenciaResponseDto = {
+            numeroDocumento: data.numero_documento,
+            nombreCompleto: data.nombre_completo,
+            licenciaNumero: lic.numero || '',
+            licenciaCategoria: lic.categoria || '',
+            licenciaFechaVencimiento: lic.fecha_vencimiento || '',
+            licenciaEstado: lic.estado || '',
+            licenciaRestricciones: lic.restricciones || '',
+          };
+
+          this.logger.info('Consulta licencia exitosa', { dni, licencia: result.licenciaNumero, estado: result.licenciaEstado });
+
+          return result;
+        } catch (error) {
+          if (error instanceof BadRequestException) throw error;
+          this.logger.error(`Error al consultar licencia - DNI: ${dni}`, error.stack);
+          throw new ServiceUnavailableException('No se pudo conectar con el servicio de consulta de licencias.');
+        }
+      },
+      this.CACHE_TTL,
+    );
+  }
+
+  async consultarPlaca(placa: string): Promise<ConsultaPlacaResponseDto> {
+    const placaLimpia = placa.replace(/[-\s]/g, '').toUpperCase();
+    if (!/^[A-Z0-9]{5,8}$/.test(placaLimpia)) {
+      throw new BadRequestException('Formato de placa inválido');
+    }
+
+    if (!this.apiToken) {
+      throw new ServiceUnavailableException('El servicio de consulta de placa no está configurado.');
+    }
+
+    const cacheKey = `consulta:placa:${placaLimpia}`;
+
+    return this.cache.getOrSet<ConsultaPlacaResponseDto>(
+      cacheKey,
+      async () => {
+        this.logger.info('Consultando placa en API externa', { placa: placaLimpia });
+
+        try {
+          const response = await fetch(`${this.apiUrl}/placa/info/${placaLimpia}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${this.apiToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (!response.ok) {
+            throw new BadRequestException(`No se encontraron datos para la placa ${placaLimpia}`);
+          }
+
+          const body = await response.json();
+
+          if (!body.data || !body.success) {
+            throw new BadRequestException(`No se encontraron datos para la placa ${placaLimpia}`);
+          }
+
+          const data = body.data;
+
+          const result: ConsultaPlacaResponseDto = {
+            placa: data.placa,
+            marca: data.marca || '',
+            modelo: data.modelo || '',
+            serie: data.serie || '',
+            color: data.color || '',
+            motor: data.motor || '',
+            vin: data.vin || '',
+          };
+
+          this.logger.info('Consulta placa exitosa', { placa: result.placa, marca: result.marca, modelo: result.modelo });
+
+          return result;
+        } catch (error) {
+          if (error instanceof BadRequestException) throw error;
+          this.logger.error(`Error al consultar placa: ${placaLimpia}`, error.stack);
+          throw new ServiceUnavailableException('No se pudo conectar con el servicio de consulta de placas.');
+        }
+      },
+      this.CACHE_TTL,
     );
   }
 }
