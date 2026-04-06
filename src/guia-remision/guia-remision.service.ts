@@ -642,7 +642,7 @@ export class GuiaRemisionService {
     if (!this._ubigeosCache) {
       const fs = require('fs');
       const path = require('path');
-      const filePath = path.join(process.cwd(), 'src', 'guia-remision', 'ubigeos.json');
+      const filePath = path.join(__dirname, 'ubigeos.json');
       this._ubigeosCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     }
     return this._ubigeosCache;
