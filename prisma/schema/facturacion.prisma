@@ -77,9 +77,11 @@ model ConfiguracionFacturacion {
   usuarioSol         String?
   claveSol           String?
   entorno            String   @default("BETA")
-  // Proveedor de facturación electrónica (Nubefact, Efact, etc.)
-  proveedorRuta      String?  // URL API del proveedor
+  // Proveedor de facturación electrónica (Nubefact, Syncrofact, Efact, etc.)
+  proveedorActivo    ProveedorFacturacion @default(SYNCROFACT) // Proveedor que emitirá nuevos comprobantes
+  proveedorRuta      String?  // URL API del proveedor (base URL)
   proveedorToken     String?  // Token/credencial del proveedor
+  proveedorConfig    Json?    // Config extra específica del proveedor (ej. Syncrofact: { companyId, branchId })
   facturacionActiva  Boolean  @default(false) // Switch maestro
   resolucionSunat    String?  // Ej: "No.034-005-0005315"
   textoPiePagina     String   @default("Gracias por su compra")
@@ -100,6 +102,9 @@ model ComprobanteElectronico {
   sedeId           String?
   clienteId        String?
   clienteEmpresaId String?
+  // Proveedor que emitió este comprobante. Se graba al crear y nunca cambia
+  // para garantizar que envío/consulta/anulación usen el mismo proveedor.
+  proveedorEmisor  ProveedorFacturacion?
   tipoComprobante  TipoComprobante
   serie            String
   correlativo      String
@@ -183,6 +188,8 @@ model ComprobanteElectronico {
   @@index([empresaId, serie])
   // Búsqueda por documento cliente
   @@index([empresaId, numeroDocumento])
+  // Filtrar por proveedor emisor
+  @@index([empresaId, proveedorEmisor])
 }
 
 model DetalleComprobante {
@@ -323,6 +330,17 @@ enum EstadoSunat {
   RECHAZADO
   ERROR_COMUNICACION
   PROCESANDO
+}
+
+/**
+ * Proveedor de facturación electrónica que emitió un comprobante.
+ * Se guarda en cada ComprobanteElectronico para enrutar envío/consulta/anulación
+ * al provider correcto, aunque el proveedor activo de la empresa cambie después.
+ * Agregar nuevos proveedores (ej. EFACT, BIZLINKS) requiere añadirlos aquí.
+ */
+enum ProveedorFacturacion {
+  NUBEFACT
+  SYNCROFACT
 }
 
 enum Moneda {

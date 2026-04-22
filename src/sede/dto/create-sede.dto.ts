@@ -10,7 +10,7 @@ import {
   MaxLength,
   Matches,
 } from 'class-validator';
-import { TipoSede } from '@prisma/client';
+import { TipoSede, ProveedorFacturacion } from '@prisma/client';
 
 export class CreateSedeDto {
   @ApiProperty({
@@ -225,6 +225,14 @@ export class CreateSedeDto {
   @IsString()
   direccionFiscalSede?: string;
 
+  @ApiPropertyOptional({
+    description: 'Proveedor de facturación activo para esta sede (override del de empresa)',
+    enum: ProveedorFacturacion,
+  })
+  @IsOptional()
+  @IsEnum(ProveedorFacturacion)
+  proveedorActivo?: ProveedorFacturacion;
+
   @ApiPropertyOptional({ description: 'URL API proveedor facturación' })
   @IsOptional()
   @IsString()
@@ -234,6 +242,13 @@ export class CreateSedeDto {
   @IsOptional()
   @IsString()
   proveedorToken?: string;
+
+  @ApiPropertyOptional({
+    description: 'Config extra del proveedor (ej. Syncrofact: { companyId, branchId })',
+    example: { companyId: 1, branchId: 1 },
+  })
+  @IsOptional()
+  proveedorConfig?: Record<string, any>;
 
   @ApiPropertyOptional({ description: 'Facturación activa para esta sede' })
   @IsOptional()

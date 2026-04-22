@@ -16,6 +16,8 @@ import { FacturacionService } from './facturacion.service';
 import { AnularComprobanteDto } from './dto/anular-comprobante.dto';
 import { CrearNotaDto } from './dto/crear-nota.dto';
 import { ConfiguracionFacturacionDto } from './dto/configuracion-facturacion.dto';
+import { ProbarConexionDto } from './dto/probar-conexion.dto';
+import { PreviewSincronizacionQueryDto, AplicarSincronizacionDto } from './dto/sincronizar-series.dto';
 
 @ApiTags('SUNAT / Facturación Electrónica')
 @Controller('sunat')
@@ -61,6 +63,15 @@ export class SunatController {
   @ApiOperation({ summary: 'Reenviar todos los comprobantes pendientes al proveedor' })
   async enviarPendientes(@Headers('x-tenant-id') empresaId: string) {
     return this.facturacionService.enviarPendientes(empresaId);
+  }
+
+  // ── Consultar masivo: actualizar estado SUNAT de todos los PROCESANDO ──
+  @Post('comprobantes/consultar-pendientes')
+  @ApiOperation({
+    summary: 'Consulta masiva del estado SUNAT de comprobantes PROCESANDO (batch-status del proveedor)',
+  })
+  async consultarPendientes(@Headers('x-tenant-id') empresaId: string) {
+    return this.facturacionService.consultarPendientesBatch(empresaId);
   }
 
   // ── Enviar/Reenviar comprobante ──
@@ -152,5 +163,39 @@ export class SunatController {
   ) {
     const userId = req?.user?.sub || req?.user?.id;
     return this.facturacionService.updateConfiguracion(empresaId, dto, userId);
+  }
+
+  @Post('configuracion/probar')
+  @ApiOperation({
+    summary: 'Probar conexión con el proveedor usando credenciales tentativas (no persiste)',
+  })
+  async probarConexion(@Body() dto: ProbarConexionDto) {
+    return this.facturacionService.probarConexion(dto);
+  }
+
+  // ── Sincronización de series con el proveedor ──
+
+  @Get('series/preview')
+  @ApiOperation({
+    summary: 'Consultar series del proveedor y comparar contra la Sede (dry-run, no modifica)',
+  })
+  async previewSincronizacionSeries(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: PreviewSincronizacionQueryDto,
+  ) {
+    return this.facturacionService.previewSincronizacionSeries(empresaId, query.sedeId);
+  }
+
+  @Post('series/sincronizar')
+  @ApiOperation({
+    summary: 'Aplicar selecciones de sincronización a la Sede (rechaza CONFLICTO)',
+  })
+  async aplicarSincronizacionSeries(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: AplicarSincronizacionDto,
+    @Req() req: any,
+  ) {
+    const userId = req?.user?.sub || req?.user?.id;
+    return this.facturacionService.aplicarSincronizacionSeries(empresaId, dto, userId);
   }
 }

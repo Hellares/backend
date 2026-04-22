@@ -346,10 +346,13 @@ model Sede {
   rucSede              String?  // RUC propio de la sede (si difiere del de la empresa)
   razonSocialSede      String?  // Razón social del contribuyente
   direccionFiscalSede  String?  // Dirección fiscal SUNAT
-  proveedorRuta        String?  // URL API proveedor facturación
+  proveedorActivo      ProveedorFacturacion? // null = usa proveedorActivo de ConfiguracionFacturacion
+  proveedorRuta        String?  // URL API proveedor facturación (base URL)
   proveedorToken       String?  // Token proveedor facturación
+  proveedorConfig      Json?    // Config extra específica del proveedor (override de sede)
   facturacionActiva    Boolean? // null = usa config global
   resolucionSunat      String?
+  seriesSincronizadasEn DateTime? // Última sincronización de series con el proveedor
 
   // Series de comprobantes por sede
   serieFactura      String  @default("F001")

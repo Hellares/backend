@@ -129,10 +129,15 @@ export class CrearYCobrarVentaDto {
   @Type(() => Number)
   montoRecibido?: number;
 
-  @ApiPropertyOptional({ description: 'Referencia del pago (pago unico legacy)' })
+  @ApiPropertyOptional({ description: 'Referencia del pago (pago unico legacy, también usado como N° operación para bancarización)' })
   @IsOptional()
   @IsString()
   referenciaPago?: string;
+
+  @ApiPropertyOptional({ description: 'Banco/entidad financiera (requerido para bancarización Ley 28194 con TARJETA/TRANSFERENCIA)' })
+  @IsOptional()
+  @IsString()
+  bancoPago?: string;
 
   @ApiPropertyOptional({ description: 'Pagos multiples' })
   @IsOptional()

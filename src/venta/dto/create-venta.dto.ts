@@ -87,6 +87,16 @@ export class CreateVentaDto {
   @Type(() => Number)
   montoRecibido?: number;
 
+  @ApiPropertyOptional({ description: 'Banco/entidad financiera (requerido si total>=2000 PEN o 500 USD y metodo es TARJETA/TRANSFERENCIA)' })
+  @IsOptional()
+  @IsString()
+  bancoPago?: string;
+
+  @ApiPropertyOptional({ description: 'N° de operación bancaria (requerido si total>=2000 PEN o 500 USD y metodo no es EFECTIVO/CREDITO)' })
+  @IsOptional()
+  @IsString()
+  referenciaPago?: string;
+
   @ApiPropertyOptional({ description: 'Es venta a credito' })
   @IsOptional()
   @IsBoolean()

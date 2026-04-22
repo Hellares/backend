@@ -71,6 +71,16 @@ export class UpdateVentaDto {
   @Type(() => Number)
   montoRecibido?: number;
 
+  @ApiPropertyOptional({ description: 'Banco/entidad financiera (bancarización Ley 28194)' })
+  @IsOptional()
+  @IsString()
+  bancoPago?: string;
+
+  @ApiPropertyOptional({ description: 'N° de operación bancaria (bancarización Ley 28194)' })
+  @IsOptional()
+  @IsString()
+  referenciaPago?: string;
+
   @ApiPropertyOptional({ description: 'Es venta a credito' })
   @IsOptional()
   @IsBoolean()

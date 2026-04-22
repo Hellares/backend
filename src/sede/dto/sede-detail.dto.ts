@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { TipoSede, SedeRole } from '@prisma/client';
+import { TipoSede, SedeRole, ProveedorFacturacion } from '@prisma/client';
 
 export class SedeDetailDto {
   @ApiProperty({ description: 'ID de la sede' })
@@ -87,11 +87,23 @@ export class SedeDetailDto {
   @ApiPropertyOptional({ description: 'Dirección fiscal SUNAT' })
   direccionFiscalSede?: string;
 
+  @ApiPropertyOptional({
+    description: 'Proveedor de facturación activo para esta sede (override del de empresa)',
+    enum: ProveedorFacturacion,
+  })
+  proveedorActivo?: ProveedorFacturacion;
+
   @ApiPropertyOptional({ description: 'URL API proveedor facturación' })
   proveedorRuta?: string;
 
   @ApiPropertyOptional({ description: 'Token proveedor facturación' })
   proveedorToken?: string;
+
+  @ApiPropertyOptional({
+    description: 'Config extra del proveedor (ej. Syncrofact: { companyId, branchId })',
+    example: { companyId: 1, branchId: 1 },
+  })
+  proveedorConfig?: Record<string, any>;
 
   @ApiPropertyOptional({ description: 'Facturación activa' })
   facturacionActiva?: boolean;

@@ -3,15 +3,19 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { LoggerModule } from '../common/logger/logger.module';
 import { FacturacionService } from './facturacion.service';
 import { NubefactProvider } from './providers/nubefact.provider';
-import { FACTURACION_PROVIDER } from './facturacion-provider.interface';
+import { SyncrofactProvider } from './providers/syncrofact.provider';
+import { FacturacionProviderFactory } from './providers/facturacion-provider.factory';
 import { SunatController } from './sunat.controller';
 
 @Module({
   imports: [PrismaModule, LoggerModule],
   controllers: [SunatController],
   providers: [
-    // Provider de facturación: cambiar useClass para otro proveedor (EfactProvider, etc.)
-    { provide: FACTURACION_PROVIDER, useClass: NubefactProvider },
+    // Registro de todos los providers soportados. El factory decide cuál usar
+    // en cada operación según el proveedorEmisor del comprobante.
+    NubefactProvider,
+    SyncrofactProvider,
+    FacturacionProviderFactory,
     FacturacionService,
   ],
   exports: [FacturacionService],

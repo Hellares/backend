@@ -62,6 +62,9 @@ enum AccionAudit {
   // Descuentos
   DESCUENTO_AUTORIZADO
 
+  // Facturación
+  SERIES_SINCRONIZADAS
+
   // Admin
   ADMIN_ACCION
 }

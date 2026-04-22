@@ -69,6 +69,11 @@ model Venta {
   montoRecibido Decimal?    @db.Decimal(10, 2)
   montoCambio   Decimal?    @db.Decimal(10, 2)
 
+  // Bancarización (Ley 28194) — requerido cuando total >= S/2000 o USD 500
+  // y el método de pago no es EFECTIVO/CREDITO.
+  bancoPago      String? @db.VarChar(50)
+  referenciaPago String? @db.VarChar(50)
+
   // Crédito
   esCredito             Boolean   @default(false)
   plazoCredito          Int? // Días de crédito

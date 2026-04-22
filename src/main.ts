@@ -24,6 +24,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: new AppLoggerService(),
     bufferLogs: true,
+    // Necesario para validar HMAC de webhooks sobre el body crudo.
+    // Disponible en `req.rawBody` para las rutas que lo necesiten.
+    rawBody: true,
   });
 
   // Usar el logger personalizado

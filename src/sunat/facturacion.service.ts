@@ -1,16 +1,49 @@
-import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { AuditService } from '../audit/audit.service';
-import { FacturacionProvider, FACTURACION_PROVIDER, EnvioResult } from './facturacion-provider.interface';
-import {
-  ENVIO_BATCH_SIZE,
-  MAX_FALTANTES_REPORTE,
-  MAX_INTENTOS_ENVIO,
-} from './providers/nubefact.types';
+import { EnvioResult, ProveedorSeriesInfo } from './facturacion-provider.interface';
+import { FacturacionProviderFactory, PROVEEDORES_ARCHIVADOS } from './providers/facturacion-provider.factory';
 import { CrearNotaDto } from './dto/crear-nota.dto';
 import { ConfiguracionFacturacionDto } from './dto/configuracion-facturacion.dto';
-import { Prisma } from '@prisma/client';
+import { ProbarConexionDto, ProbarConexionResponse } from './dto/probar-conexion.dto';
+import {
+  AplicarSincronizacionDto,
+  SeleccionSerieDto,
+} from './dto/sincronizar-series.dto';
+import {
+  AccionDiff,
+  DiffSerie,
+  SincronizacionPreviewResponse,
+  ResultadoAplicarSincronizacion,
+} from './dto/sincronizacion-preview.response';
+import { Prisma, ProveedorFacturacion } from '@prisma/client';
+
+/**
+ * Mapeo entre tipo de documento SUNAT y los campos de Sede donde se guarda
+ * la serie y el contador. Clave para el diff y el apply.
+ */
+const TIPO_DOC_A_SEDE = [
+  { tipoDoc: '01', nombre: 'Factura',          campoSerie: 'serieFactura',      campoContador: 'ultimoNumeroFactura' },
+  { tipoDoc: '03', nombre: 'Boleta',           campoSerie: 'serieBoleta',       campoContador: 'ultimoNumeroBoleta' },
+  { tipoDoc: '07', nombre: 'Nota de Crédito',  campoSerie: 'serieNotaCredito',  campoContador: 'ultimoNumeroNotaCredito' },
+  { tipoDoc: '08', nombre: 'Nota de Débito',   campoSerie: 'serieNotaDebito',   campoContador: 'ultimoNumeroNotaDebito' },
+  { tipoDoc: '09', nombre: 'Guía de Remisión', campoSerie: 'serieGuiaRemision', campoContador: 'ultimoNumeroGuiaRemision' },
+] as const;
+
+type TipoComprobanteInterno = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO' | 'GUIA_REMISION';
+const TIPO_DOC_A_COMPROBANTE: Record<string, TipoComprobanteInterno> = {
+  '01': 'FACTURA',
+  '03': 'BOLETA',
+  '07': 'NOTA_CREDITO',
+  '08': 'NOTA_DEBITO',
+  '09': 'GUIA_REMISION',
+};
+
+/** Constantes de envío */
+const ENVIO_BATCH_SIZE = 50;
+const MAX_FALTANTES_REPORTE = 50;
+const MAX_INTENTOS_ENVIO = 10;
 
 @Injectable()
 export class FacturacionService {
@@ -19,7 +52,7 @@ export class FacturacionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
-    @Inject(FACTURACION_PROVIDER) private readonly provider: FacturacionProvider,
+    private readonly providerFactory: FacturacionProviderFactory,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -45,7 +78,8 @@ export class FacturacionService {
       this.prisma.configuracionFacturacion.findUnique({
         where: { empresaId },
         select: {
-          proveedorRuta: true, proveedorToken: true, facturacionActiva: true,
+          proveedorActivo: true, proveedorRuta: true, proveedorToken: true, proveedorConfig: true,
+          facturacionActiva: true,
           entorno: true, porcentajeIGV: true, resolucionSunat: true,
           emailFacturacion: true, textoPiePagina: true,
         },
@@ -55,7 +89,8 @@ export class FacturacionService {
             where: { id: sedeId, empresaId },
             select: {
               rucSede: true, razonSocialSede: true, direccionFiscalSede: true,
-              proveedorRuta: true, proveedorToken: true, facturacionActiva: true,
+              proveedorActivo: true, proveedorRuta: true, proveedorToken: true, proveedorConfig: true,
+              facturacionActiva: true,
               resolucionSunat: true, telefono: true, email: true,
             },
           })
@@ -87,8 +122,17 @@ export class FacturacionService {
       email:            sede?.email                 ?? empresa?.email         ?? null,
       emailFacturacion: config?.emailFacturacion    ?? sede?.email            ?? empresa?.email ?? null,
       // Proveedor: Sede > ConfigFacturacion
+      proveedorActivo:   sede?.proveedorActivo        ?? config?.proveedorActivo ?? ProveedorFacturacion.SYNCROFACT,
       proveedorRuta:     sede?.proveedorRuta          ?? config?.proveedorRuta   ?? null,
       proveedorToken:    sede?.proveedorToken         ?? config?.proveedorToken  ?? null,
+      // proveedorConfig: merge granular. Sede hace override por campo sobre empresa.
+      // Ej. si empresa={companyId:3, branchId:3} y sede={branchId:5}, efectivo={companyId:3, branchId:5}.
+      proveedorConfig: (() => {
+        const empresaCfg = (config?.proveedorConfig as Record<string, any> | null) ?? null;
+        const sedeCfg = (sede?.proveedorConfig as Record<string, any> | null) ?? null;
+        if (!empresaCfg && !sedeCfg) return null;
+        return { ...(empresaCfg ?? {}), ...(sedeCfg ?? {}) };
+      })(),
       facturacionActiva:   sede?.facturacionActiva        ?? config?.facturacionActiva ?? false,
       // Billing-only: ConfigFacturacion
       resolucionSunat:  sede?.resolucionSunat       ?? config?.resolucionSunat ?? null,
@@ -375,6 +419,7 @@ export class FacturacionService {
           tipoNotaDebito: true,
           comprobanteOrigenId: true,
           ventaId: true,
+          proveedorEmisor: true,
         },
         orderBy: { fechaEmision: 'desc' },
         skip,
@@ -395,12 +440,16 @@ export class FacturacionService {
   // ── Enviar pendientes masivo ──
 
   async enviarPendientes(empresaId: string) {
+    const archivados = Array.from(PROVEEDORES_ARCHIVADOS);
+
     const pendientes = await this.prisma.comprobanteElectronico.findMany({
       where: {
         empresaId,
         sunatStatus: { in: ['PENDIENTE', 'ERROR_COMUNICACION'] },
         estado: 'REGISTRADO',
         intentosEnvio: { lt: MAX_INTENTOS_ENVIO },
+        // No intentar reenviar comprobantes de proveedores archivados
+        ...(archivados.length > 0 ? { proveedorEmisor: { notIn: archivados } } : {}),
       },
       select: { id: true, codigoGenerado: true },
       orderBy: { fechaEmision: 'desc' },
@@ -448,6 +497,9 @@ export class FacturacionService {
               sedeId: true,
               descuento: true,
               esCredito: true,
+              metodoPago: true,
+              bancoPago: true,
+              referenciaPago: true,
               cuotas: {
                 select: { numero: true, monto: true, fechaVencimiento: true },
                 orderBy: { numero: 'asc' },
@@ -471,9 +523,32 @@ export class FacturacionService {
         return;
       }
 
-      this.logger.log(`Enviando comprobante ${comprobante.codigoGenerado}`);
+      // Resolver proveedor: si el comprobante ya tiene uno (reenvío) lo respeta,
+      // si es primera emisión, toma el activo de la config y lo graba.
+      let proveedorEmisor = comprobante.proveedorEmisor;
+      if (!proveedorEmisor) {
+        proveedorEmisor = config.proveedorActivo;
+        await this.prisma.comprobanteElectronico.update({
+          where: { id: comprobanteId },
+          data: { proveedorEmisor },
+        });
+      }
 
-      const result: EnvioResult = await this.provider.enviar(
+      // Proveedor archivado: solo lectura, no se puede reenviar
+      if (this.providerFactory.isArchivado(proveedorEmisor)) {
+        const msg = this.providerFactory.mensajeArchivado(proveedorEmisor);
+        this.logger.warn(`Comprobante ${comprobante.codigoGenerado}: ${msg}`);
+        await this.prisma.comprobanteElectronico.update({
+          where: { id: comprobanteId },
+          data: { errorProveedor: msg },
+        });
+        return;
+      }
+
+      this.logger.log(`Enviando comprobante ${comprobante.codigoGenerado} vía ${proveedorEmisor}`);
+
+      const provider = this.providerFactory.get(proveedorEmisor);
+      const result: EnvioResult = await provider.enviar(
         comprobante as any,
         config as any,
         comprobante.comprobanteOrigen as any,
@@ -584,14 +659,24 @@ export class FacturacionService {
   async consultarComprobante(comprobanteId: string, empresaId: string): Promise<any> {
     const comprobante = await this.prisma.comprobanteElectronico.findFirst({
       where: { id: comprobanteId, empresaId },
-      select: { id: true, tipoComprobante: true, serie: true, correlativo: true, sedeId: true },
+      select: {
+        id: true, tipoComprobante: true, serie: true, correlativo: true,
+        sedeId: true, proveedorEmisor: true, cdrResponse: true,
+      },
     });
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
+
+    if (this.providerFactory.isArchivado(comprobante.proveedorEmisor)) {
+      throw new BadRequestException(
+        this.providerFactory.mensajeArchivado(comprobante.proveedorEmisor!),
+      );
+    }
 
     const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
     if (!config.facturacionActiva) throw new BadRequestException('Facturación no configurada');
 
-    const result = await this.provider.consultar(comprobante as any, config as any);
+    const provider = this.providerFactory.get(comprobante.proveedorEmisor);
+    const result = await provider.consultar(comprobante as any, config as any);
 
     if (result.aceptado) {
       await this.prisma.comprobanteElectronico.update({
@@ -621,8 +706,15 @@ export class FacturacionService {
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
     if (comprobante.anulado) throw new BadRequestException('El comprobante ya está anulado');
 
+    if (this.providerFactory.isArchivado(comprobante.proveedorEmisor)) {
+      throw new BadRequestException(
+        this.providerFactory.mensajeArchivado(comprobante.proveedorEmisor!),
+      );
+    }
+
     const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
-    const result = await this.provider.anular(comprobante as any, motivo, config as any);
+    const provider = this.providerFactory.get(comprobante.proveedorEmisor);
+    const result = await provider.anular(comprobante as any, motivo, config as any);
 
     await this.prisma.comprobanteElectronico.update({
       where: { id: comprobanteId },
@@ -642,12 +734,22 @@ export class FacturacionService {
   async consultarAnulacion(comprobanteId: string, empresaId: string): Promise<any> {
     const comprobante = await this.prisma.comprobanteElectronico.findFirst({
       where: { id: comprobanteId, empresaId },
-      select: { id: true, tipoComprobante: true, serie: true, correlativo: true, sedeId: true },
+      select: {
+        id: true, tipoComprobante: true, serie: true, correlativo: true,
+        sedeId: true, proveedorEmisor: true,
+      },
     });
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
 
+    if (this.providerFactory.isArchivado(comprobante.proveedorEmisor)) {
+      throw new BadRequestException(
+        this.providerFactory.mensajeArchivado(comprobante.proveedorEmisor!),
+      );
+    }
+
     const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
-    return this.provider.consultarAnulacion(comprobante as any, config as any);
+    const provider = this.providerFactory.get(comprobante.proveedorEmisor);
+    return provider.consultarAnulacion(comprobante as any, config as any);
   }
 
   // ── Crear Nota de Crédito ──
@@ -668,6 +770,198 @@ export class FacturacionService {
     dto: CrearNotaDto,
   ): Promise<any> {
     return this.crearNota(comprobanteOrigenId, empresaId, dto, 'NOTA_DEBITO');
+  }
+
+  // ── Consulta masiva de pendientes (Syncrofact batch-status) ──
+
+  /**
+   * Mapeo tipo_comprobante interno → código SUNAT catálogo 01.
+   */
+  private tipoDocSunatDesdeInterno(tipo: string): string | null {
+    switch (tipo) {
+      case 'FACTURA': return '01';
+      case 'BOLETA': return '03';
+      case 'NOTA_CREDITO': return '07';
+      case 'NOTA_DEBITO': return '08';
+      case 'GUIA_REMISION': return '09';
+      default: return null;
+    }
+  }
+
+  /**
+   * Consulta masiva del estado SUNAT para los comprobantes PROCESANDO de la
+   * empresa, usando batchStatus del provider.
+   *
+   * Optimizaciones:
+   *  - (C) LIMIT: procesa hasta MAX_POR_CALL por invocación. Si hay más, el
+   *    endpoint devuelve `truncado:true` y el usuario/cron reinvoca.
+   *  - (B) Paralelismo: los chunks HTTP del proveedor corren con Promise.all.
+   *  - (A) Bulk UPDATE: al terminar se ejecutan solo 2 updateMany (ACEPTADOS y
+   *    RECHAZADOS) en vez de N updates individuales.
+   *
+   * Devuelve resumen con contadores por categoría.
+   */
+  async consultarPendientesBatch(empresaId: string): Promise<{
+    total: number;
+    procesados: number;
+    pendientesRestantes: number;
+    truncado: boolean;
+    actualizados: number;
+    aunProcesando: number;
+    noEncontrados: number;
+    errores: Array<{ comprobanteId: string; error: string }>;
+  }> {
+    /** (C) Tope duro por invocación — evita timeouts y garantiza latencia predecible */
+    const MAX_POR_CALL = 500;
+    /** Tamaño del chunk al proveedor (límite de Syncrofact batch-status) */
+    const CHUNK_SIZE = 50;
+
+    // Count total para reportar `truncado` sin traerlos todos a memoria.
+    const total = await this.prisma.comprobanteElectronico.count({
+      where: { empresaId, sunatStatus: 'PROCESANDO' },
+    });
+
+    const pendientes = await this.prisma.comprobanteElectronico.findMany({
+      where: { empresaId, sunatStatus: 'PROCESANDO' },
+      select: {
+        id: true, tipoComprobante: true, serie: true, correlativo: true,
+        sedeId: true, proveedorEmisor: true,
+      },
+      take: MAX_POR_CALL,
+      orderBy: { actualizadoEn: 'asc' }, // procesa los más antiguos primero
+    });
+
+    const resumen = {
+      total,
+      procesados: pendientes.length,
+      pendientesRestantes: Math.max(0, total - pendientes.length),
+      truncado: total > pendientes.length,
+      actualizados: 0,
+      aunProcesando: 0,
+      noEncontrados: 0,
+      errores: [] as Array<{ comprobanteId: string; error: string }>,
+    };
+
+    if (!pendientes.length) return resumen;
+
+    // Acumuladores para (A) bulk update al final
+    const idsAceptados: string[] = [];
+    const idsRechazados: string[] = [];
+
+    // Agrupar por (sedeId, tipoComprobante, proveedorEmisor). Cada combinación
+    // usa un provider/config distinto y tipo_documento SUNAT distinto.
+    const grupos = new Map<string, typeof pendientes>();
+    for (const c of pendientes) {
+      const key = `${c.sedeId ?? '_'}|${c.tipoComprobante}|${c.proveedorEmisor ?? '_'}`;
+      const arr = grupos.get(key) ?? [];
+      arr.push(c);
+      grupos.set(key, arr);
+    }
+
+    for (const [key, comprobantes] of grupos) {
+      const [sedeId, tipoComprobante, proveedor] = key.split('|');
+
+      if (this.providerFactory.isArchivado(proveedor as any)) {
+        for (const c of comprobantes) {
+          resumen.errores.push({
+            comprobanteId: c.id,
+            error: `Proveedor ${proveedor} deprecado — reenvío manual requerido`,
+          });
+        }
+        continue;
+      }
+
+      const provider = this.providerFactory.get(proveedor as any);
+      if (typeof provider.batchStatus !== 'function') {
+        for (const c of comprobantes) {
+          resumen.errores.push({
+            comprobanteId: c.id,
+            error: `${proveedor} no soporta consulta batch — use Consultar individual`,
+          });
+        }
+        continue;
+      }
+
+      const tipoSunat = this.tipoDocSunatDesdeInterno(tipoComprobante);
+      if (!tipoSunat) {
+        for (const c of comprobantes) {
+          resumen.errores.push({ comprobanteId: c.id, error: `Tipo ${tipoComprobante} no soportado` });
+        }
+        continue;
+      }
+
+      const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId === '_' ? null : sedeId);
+      if (!config.facturacionActiva) {
+        for (const c of comprobantes) {
+          resumen.errores.push({ comprobanteId: c.id, error: 'Facturación desactivada para esta sede' });
+        }
+        continue;
+      }
+
+      // Chunking: max CHUNK_SIZE refs por request
+      const chunks: typeof comprobantes[] = [];
+      for (let i = 0; i < comprobantes.length; i += CHUNK_SIZE) {
+        chunks.push(comprobantes.slice(i, i + CHUNK_SIZE));
+      }
+
+      // (B) Paralelizar requests HTTP del grupo. Usa allSettled implícito:
+      // capturamos el error dentro del .catch para que un chunk fallido
+      // no tumbe a los demás del mismo grupo.
+      type ChunkOk = { ok: true; chunk: typeof comprobantes; resultados: import('./facturacion-provider.interface').BatchStatusResult[] };
+      type ChunkErr = { ok: false; chunk: typeof comprobantes; error: string };
+      const promesas: Promise<ChunkOk | ChunkErr>[] = chunks.map((chunk) =>
+        provider.batchStatus!({ tipoDocumento: tipoSunat, referencias: chunk.map((c) => c.id) }, config as any)
+          .then<ChunkOk>((resultados) => ({ ok: true, chunk, resultados }))
+          .catch<ChunkErr>((e: any) => ({ ok: false, chunk, error: e?.message || 'Error batch-status' })),
+      );
+      const chunkResults = await Promise.all(promesas);
+
+      for (const cr of chunkResults) {
+        if (cr.ok === false) {
+          for (const c of cr.chunk) {
+            resumen.errores.push({ comprobanteId: c.id, error: cr.error });
+          }
+          continue;
+        }
+        const porRef = new Map(cr.chunk.map((c) => [c.id, c]));
+        for (const r of cr.resultados) {
+          const comp = porRef.get(r.referenciaInterna);
+          if (!comp) continue;
+
+          if (!r.encontrado) {
+            resumen.noEncontrados++;
+            continue;
+          }
+
+          const estado = (r.estadoSunat || '').toUpperCase();
+          if (estado === 'ACEPTADO') {
+            idsAceptados.push(comp.id);
+            resumen.actualizados++;
+          } else if (estado === 'RECHAZADO') {
+            idsRechazados.push(comp.id);
+            resumen.actualizados++;
+          } else {
+            resumen.aunProcesando++;
+          }
+        }
+      }
+    }
+
+    // (A) Bulk UPDATE — 2 queries en vez de N individuales
+    if (idsAceptados.length) {
+      await this.prisma.comprobanteElectronico.updateMany({
+        where: { id: { in: idsAceptados } },
+        data: { sunatStatus: 'ACEPTADO', estado: 'ACEPTADO' },
+      });
+    }
+    if (idsRechazados.length) {
+      await this.prisma.comprobanteElectronico.updateMany({
+        where: { id: { in: idsRechazados } },
+        data: { sunatStatus: 'RECHAZADO', estado: 'RECHAZADO' },
+      });
+    }
+
+    return resumen;
   }
 
   // ── Configuración ──
@@ -722,6 +1016,47 @@ export class FacturacionService {
     }
 
     return resultado;
+  }
+
+  async probarConexion(dto: ProbarConexionDto): Promise<ProbarConexionResponse> {
+    const provider = this.providerFactory.get(dto.proveedorActivo);
+
+    if (!provider.obtenerSeries) {
+      return {
+        ok: false,
+        proveedor: dto.proveedorActivo,
+        mensaje: `El proveedor ${dto.proveedorActivo} no expone un método de verificación. Los datos se guardarán tal cual.`,
+      };
+    }
+
+    try {
+      const info = await provider.obtenerSeries({
+        proveedorRuta: dto.proveedorRuta,
+        proveedorToken: dto.proveedorToken,
+        proveedorConfig: dto.proveedorConfig ?? null,
+      });
+
+      const branches = (info.branches ?? []).map((b) => ({
+        branchIdProveedor: Number(b.branchIdProveedor),
+        codigo: b.codigo,
+        nombre: b.nombre,
+        totalSeries: (b.series ?? []).length,
+      }));
+
+      return {
+        ok: true,
+        proveedor: dto.proveedorActivo,
+        mensaje: `Conexión exitosa. ${branches.length} sucursal(es) encontrada(s).`,
+        branches,
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        proveedor: dto.proveedorActivo,
+        mensaje: 'No se pudo conectar al proveedor',
+        error: err?.message || String(err),
+      };
+    }
   }
 
   // ── Privados ──
@@ -845,6 +1180,331 @@ export class FacturacionService {
         .catch((err) => this.logger.warn(`Envío nota fallido: ${err?.message}`));
       return nota;
     });
+  }
+
+  // ── Sincronización de series con el proveedor ──
+
+  /**
+   * Consulta las series disponibles en el proveedor (ej. Syncrofact) y las
+   * compara contra las configuradas en la Sede. Retorna un diff listo para
+   * que el usuario decida qué aplicar. NO modifica la BD.
+   */
+  async previewSincronizacionSeries(
+    empresaId: string,
+    sedeId: string,
+  ): Promise<SincronizacionPreviewResponse> {
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: sedeId, empresaId },
+      select: {
+        id: true, nombre: true, empresaId: true,
+        serieFactura: true, serieBoleta: true,
+        serieNotaCredito: true, serieNotaDebito: true, serieGuiaRemision: true,
+        ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
+        ultimoNumeroNotaCredito: true, ultimoNumeroNotaDebito: true,
+        ultimoNumeroGuiaRemision: true,
+        proveedorActivo: true, proveedorConfig: true,
+        seriesSincronizadasEn: true,
+      },
+    });
+    if (!sede) throw new NotFoundException('Sede no encontrada');
+
+    const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId);
+    if (!config.facturacionActiva) {
+      throw new BadRequestException('La facturación no está activa para esta sede');
+    }
+    if (this.providerFactory.isArchivado(config.proveedorActivo)) {
+      throw new BadRequestException(
+        this.providerFactory.mensajeArchivado(config.proveedorActivo),
+      );
+    }
+
+    const provider = this.providerFactory.get(config.proveedorActivo);
+    if (typeof provider.obtenerSeries !== 'function') {
+      throw new BadRequestException(
+        `El proveedor ${config.proveedorActivo} no soporta consulta de series. ` +
+        `Configura manualmente la serie y el correlativo desde la pantalla de sede.`,
+      );
+    }
+
+    let info: ProveedorSeriesInfo;
+    try {
+      info = await provider.obtenerSeries(config as any);
+    } catch (err: any) {
+      this.logger.warn(`Error consultando series del proveedor: ${err?.message}`);
+      throw new BadRequestException(
+        `No se pudieron consultar las series: ${err?.message || 'error desconocido'}`,
+      );
+    }
+
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: { ruc: true },
+    });
+
+    // branchId actual de la sede en el proveedor (si está configurado)
+    const branchIdActual = (sede.proveedorConfig as any)?.branchId ?? null;
+
+    // Pre-contar comprobantes por serie local (para warnings de REEMPLAZAR_SERIE)
+    const seriesLocales = TIPO_DOC_A_SEDE
+      .map((t) => ({ tipoDoc: t.tipoDoc, serie: (sede as any)[t.campoSerie] as string | null }))
+      .filter((s) => s.serie);
+
+    const counts = new Map<string, number>();
+    for (const { tipoDoc, serie } of seriesLocales) {
+      const tipoComp = TIPO_DOC_A_COMPROBANTE[tipoDoc];
+      if (!serie || !tipoComp) continue;
+      const count = await this.prisma.comprobanteElectronico.count({
+        where: { empresaId, sedeId, tipoComprobante: tipoComp as any, serie },
+      });
+      counts.set(`${tipoDoc}:${serie}`, count);
+    }
+
+    const branches = info.branches.map((b) => {
+      const diffs: DiffSerie[] = TIPO_DOC_A_SEDE.map((t) => {
+        const serieLocal = (sede as any)[t.campoSerie] as string | null;
+        const correlativoLocal = (sede as any)[t.campoContador] as number;
+        const serieProv = b.series.find((s) => s.tipoDocumento === t.tipoDoc);
+        const comprobantesLocal = serieLocal
+          ? counts.get(`${t.tipoDoc}:${serieLocal}`) ?? 0
+          : 0;
+
+        return this.clasificarDiff({
+          tipoDocumento: t.tipoDoc,
+          tipoDocumentoNombre: t.nombre,
+          serieLocal,
+          correlativoLocal: serieLocal ? correlativoLocal : null,
+          serieProveedor: serieProv?.serie ?? null,
+          correlativoProveedor: serieProv?.correlativoActual ?? null,
+          proximoNumeroProveedor: serieProv?.proximoNumero ?? null,
+          comprobantesEmitidosLocalmente: comprobantesLocal,
+        });
+      });
+
+      return {
+        branchIdProveedor: b.branchIdProveedor,
+        codigo: b.codigo,
+        nombre: b.nombre,
+        esActualDeLaSede:
+          branchIdActual !== null &&
+          String(branchIdActual) === String(b.branchIdProveedor),
+        diffs,
+      };
+    });
+
+    return {
+      empresaId,
+      sedeId: sede.id,
+      sedeNombre: sede.nombre,
+      rucEmpresa: empresa?.ruc ?? null,
+      proveedorActivo: config.proveedorActivo,
+      seriesSincronizadasEn: sede.seriesSincronizadasEn,
+      branches,
+      metadata: info.metadata,
+    };
+  }
+
+  /**
+   * Aplica las selecciones del usuario al Sede. Rechaza CONFLICTO siempre.
+   * Actualiza proveedorConfig.branchId si se proporciona. Registra audit log.
+   */
+  async aplicarSincronizacionSeries(
+    empresaId: string,
+    dto: AplicarSincronizacionDto,
+    userId?: string,
+  ): Promise<ResultadoAplicarSincronizacion> {
+    if (!dto.selecciones?.length) {
+      throw new BadRequestException('No hay selecciones para aplicar');
+    }
+
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: dto.sedeId, empresaId },
+      select: {
+        id: true, empresaId: true, proveedorConfig: true,
+        serieFactura: true, serieBoleta: true,
+        serieNotaCredito: true, serieNotaDebito: true, serieGuiaRemision: true,
+        ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
+        ultimoNumeroNotaCredito: true, ultimoNumeroNotaDebito: true,
+        ultimoNumeroGuiaRemision: true,
+      },
+    });
+    if (!sede) throw new NotFoundException('Sede no encontrada');
+
+    const config = await this.getConfigFacturacionEfectiva(empresaId, dto.sedeId);
+    if (!config.facturacionActiva) {
+      throw new BadRequestException('La facturación no está activa para esta sede');
+    }
+    if (this.providerFactory.isArchivado(config.proveedorActivo)) {
+      throw new BadRequestException(this.providerFactory.mensajeArchivado(config.proveedorActivo));
+    }
+
+    const aplicaciones = dto.selecciones.filter((s) => s.accion === 'APLICAR');
+    const omitidos = dto.selecciones.length - aplicaciones.length;
+
+    // Para validar CONFLICTO, releer correlativos locales bajo lock al aplicar.
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Sede" WHERE id = ${dto.sedeId} AND "empresaId" = ${empresaId} FOR UPDATE`;
+
+      const sedeLock = await tx.sede.findUnique({
+        where: { id: dto.sedeId },
+        select: {
+          serieFactura: true, serieBoleta: true,
+          serieNotaCredito: true, serieNotaDebito: true, serieGuiaRemision: true,
+          ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
+          ultimoNumeroNotaCredito: true, ultimoNumeroNotaDebito: true,
+          ultimoNumeroGuiaRemision: true,
+          proveedorConfig: true,
+        },
+      });
+      if (!sedeLock) throw new NotFoundException('Sede no encontrada');
+
+      const errores: string[] = [];
+      const cambios: ResultadoAplicarSincronizacion['cambios'] = [];
+      const updateData: Record<string, any> = {};
+
+      for (const sel of aplicaciones) {
+        const meta = TIPO_DOC_A_SEDE.find((t) => t.tipoDoc === sel.tipoDocumento);
+        if (!meta) {
+          errores.push(`Tipo documento desconocido: ${sel.tipoDocumento}`);
+          continue;
+        }
+
+        const serieActual = (sedeLock as any)[meta.campoSerie] as string | null;
+        const correlativoActual = (sedeLock as any)[meta.campoContador] as number;
+
+        // Rechazar CONFLICTO: correlativo local > proveedor
+        if (
+          serieActual === sel.serieProveedor &&
+          correlativoActual > sel.correlativoProveedor
+        ) {
+          errores.push(
+            `${meta.nombre} (${serieActual}): correlativo local ${correlativoActual} > proveedor ${sel.correlativoProveedor}. Resuelva manualmente.`,
+          );
+          continue;
+        }
+
+        const accion: AccionDiff =
+          serieActual === null ? 'CREAR_NUEVA'
+            : serieActual !== sel.serieProveedor ? 'REEMPLAZAR_SERIE'
+            : correlativoActual === sel.correlativoProveedor ? 'EN_SINCRONIA'
+            : 'ACTUALIZAR_CORRELATIVO';
+
+        if (accion === 'EN_SINCRONIA') {
+          // Nada que cambiar, pero lo registramos como aplicado informativo
+          continue;
+        }
+
+        updateData[meta.campoSerie] = sel.serieProveedor;
+        updateData[meta.campoContador] = sel.correlativoProveedor;
+
+        cambios.push({
+          tipoDocumento: sel.tipoDocumento,
+          campoSerie: meta.campoSerie,
+          campoContador: meta.campoContador,
+          serieAntes: serieActual,
+          serieDespues: sel.serieProveedor,
+          correlativoAntes: serieActual ? correlativoActual : null,
+          correlativoDespues: sel.correlativoProveedor,
+          accion,
+        });
+      }
+
+      if (errores.length > 0 && cambios.length === 0) {
+        throw new BadRequestException(`No se pudo sincronizar:\n${errores.join('\n')}`);
+      }
+
+      // Actualizar proveedorConfig.branchId si se proporciona
+      let branchIdAplicado: string | number | null = null;
+      if (dto.branchIdProveedor !== undefined && dto.branchIdProveedor !== null) {
+        const cfgActual = (sedeLock.proveedorConfig as any) ?? {};
+        updateData.proveedorConfig = { ...cfgActual, branchId: dto.branchIdProveedor };
+        branchIdAplicado = dto.branchIdProveedor;
+      }
+
+      updateData.seriesSincronizadasEn = new Date();
+
+      if (Object.keys(updateData).length > 0) {
+        await tx.sede.update({ where: { id: dto.sedeId }, data: updateData });
+      }
+
+      // Audit log (fuera del lock, pero dentro del tx)
+      this.auditService.log({
+        usuarioId: userId,
+        empresaId,
+        accion: 'SERIES_SINCRONIZADAS',
+        entidad: 'Sede',
+        entidadId: dto.sedeId,
+        detalle: `Sincronizadas ${cambios.length} series con proveedor ${config.proveedorActivo}`,
+        metadata: { cambios, branchIdProveedor: branchIdAplicado, omitidos, errores },
+      });
+
+      return {
+        aplicados: cambios.length,
+        omitidos,
+        rechazados: errores.length,
+        sedeId: dto.sedeId,
+        branchIdProveedor: branchIdAplicado,
+        cambios,
+        errores,
+      };
+    }, { timeout: 15000 });
+  }
+
+  /** Clasificador puro del diff entre serie local y serie proveedor */
+  private clasificarDiff(params: {
+    tipoDocumento: string;
+    tipoDocumentoNombre: string;
+    serieLocal: string | null;
+    correlativoLocal: number | null;
+    serieProveedor: string | null;
+    correlativoProveedor: number | null;
+    proximoNumeroProveedor: string | null;
+    comprobantesEmitidosLocalmente: number;
+  }): DiffSerie {
+    const {
+      serieLocal, correlativoLocal,
+      serieProveedor, correlativoProveedor,
+      comprobantesEmitidosLocalmente,
+    } = params;
+
+    let accion: AccionDiff;
+    let mensaje: string | undefined;
+
+    if (!serieProveedor && !serieLocal) {
+      accion = 'EN_SINCRONIA';
+      mensaje = 'Sin serie configurada en ambos lados';
+    } else if (!serieProveedor && serieLocal) {
+      accion = 'NO_EMITIBLE';
+      mensaje = `La serie local ${serieLocal} no existe en el proveedor — no se pueden emitir nuevos documentos de este tipo por API`;
+    } else if (serieProveedor && !serieLocal) {
+      accion = 'CREAR_NUEVA';
+      mensaje = `Nueva serie ${serieProveedor} disponible en el proveedor`;
+    } else if (serieLocal !== serieProveedor) {
+      accion = 'REEMPLAZAR_SERIE';
+      mensaje = comprobantesEmitidosLocalmente > 0
+        ? `Hay ${comprobantesEmitidosLocalmente} comprobante(s) emitidos con ${serieLocal}. Se conservan en BD; los nuevos irán a ${serieProveedor}`
+        : `Cambio de ${serieLocal} a ${serieProveedor}`;
+    } else if ((correlativoLocal ?? 0) === (correlativoProveedor ?? 0)) {
+      accion = 'EN_SINCRONIA';
+    } else if ((correlativoLocal ?? 0) < (correlativoProveedor ?? 0)) {
+      accion = 'ACTUALIZAR_CORRELATIVO';
+      mensaje = `Correlativo proveedor adelantado: ${correlativoLocal} → ${correlativoProveedor}`;
+    } else {
+      accion = 'CONFLICTO';
+      mensaje = `Correlativo local (${correlativoLocal}) es mayor al del proveedor (${correlativoProveedor}). Resuelva manualmente antes de aplicar.`;
+    }
+
+    return {
+      tipoDocumento: params.tipoDocumento,
+      tipoDocumentoNombre: params.tipoDocumentoNombre,
+      serieLocal,
+      correlativoLocal,
+      serieProveedor,
+      correlativoProveedor,
+      proximoNumeroProveedor: params.proximoNumeroProveedor,
+      accion,
+      mensaje,
+      comprobantesEmitidosLocalmente,
+    };
   }
 
 }

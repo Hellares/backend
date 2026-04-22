@@ -134,6 +134,42 @@ export class VentaService {
   /**
    * Crear venta (estado BORRADOR)
    */
+  /**
+   * Valida bancarización (Ley 28194): si total >= umbral y método de pago
+   * requiere trazabilidad bancaria, exigimos banco y/o referencia.
+   * Lanzamos BadRequestException ANTES de crear la venta para que el error
+   * llegue claro al cliente y no cree registros a medio hacer.
+   */
+  private validarBancarizacion(dto: {
+    total: number;
+    moneda?: string;
+    metodoPago?: string | null;
+    esCredito?: boolean;
+    bancoPago?: string | null;
+    referenciaPago?: string | null;
+  }): void {
+    if (dto.esCredito) return;
+    if (!dto.metodoPago) return;
+
+    const moneda = dto.moneda || 'PEN';
+    const umbral = moneda === 'USD' ? 500 : 2000;
+    if (dto.total < umbral) return;
+
+    const requiereReferencia = ['YAPE', 'PLIN', 'TARJETA', 'TRANSFERENCIA'].includes(dto.metodoPago);
+    const requiereBanco = ['TARJETA', 'TRANSFERENCIA'].includes(dto.metodoPago);
+
+    if (requiereReferencia && !dto.referenciaPago?.trim()) {
+      throw new BadRequestException(
+        `Bancarización obligatoria: ventas >= ${umbral} ${moneda} con método ${dto.metodoPago} requieren N° de operación.`,
+      );
+    }
+    if (requiereBanco && !dto.bancoPago?.trim()) {
+      throw new BadRequestException(
+        `Bancarización obligatoria: ventas >= ${umbral} ${moneda} con método ${dto.metodoPago} requieren banco/entidad financiera.`,
+      );
+    }
+  }
+
   async create(empresaId: string, dto: CreateVentaDto) {
     this.logger.info('Creando venta', { empresaId, sede: dto.sedeId });
 
@@ -163,6 +199,15 @@ export class VentaService {
       );
       const total = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
 
+      this.validarBancarizacion({
+        total,
+        moneda: dto.moneda,
+        metodoPago: dto.metodoPago,
+        esCredito: dto.esCredito,
+        bancoPago: dto.bancoPago,
+        referenciaPago: dto.referenciaPago,
+      });
+
       const montoCambio =
         dto.montoRecibido && dto.montoRecibido > total
           ? Math.round((dto.montoRecibido - total) * 100) / 100
@@ -191,6 +236,8 @@ export class VentaService {
           metodoPago: dto.metodoPago,
           montoRecibido: dto.montoRecibido,
           montoCambio,
+          bancoPago: dto.bancoPago,
+          referenciaPago: dto.referenciaPago,
           esCredito: dto.esCredito ?? false,
           plazoCredito: dto.plazoCredito,
           fechaVencimientoPago: dto.fechaVencimientoPago
@@ -299,6 +346,16 @@ export class VentaService {
         const totalVenta = Math.round((totalSinDescuentoGlobal - descuentoGlobal) * 100) / 100;
 
         const esCredito = dto.esCredito ?? false;
+
+        this.validarBancarizacion({
+          total: totalVenta,
+          moneda: dto.moneda,
+          metodoPago: dto.metodoPago,
+          esCredito,
+          bancoPago: dto.bancoPago,
+          referenciaPago: dto.referenciaPago,
+        });
+
         // For hybrid sales: calculate immediate payment total from pagos array
         const montoPagadoInmediato = esCredito && dto.pagos && dto.pagos.length > 0
           ? dto.pagos.reduce((s, p) => s + p.monto, 0)
@@ -339,6 +396,8 @@ export class VentaService {
             metodoPago: dto.metodoPago,
             montoRecibido: montoRecibido || null,
             montoCambio: montoCambio || null,
+            bancoPago: dto.bancoPago,
+            referenciaPago: dto.referenciaPago,
             esCredito,
             plazoCredito: dto.plazoCredito,
             numeroCuotas: dto.numeroCuotas ?? null,
@@ -639,6 +698,7 @@ export class VentaService {
                     descripcion: d.descripcion,
                     cantidad: d.cantidad,
                     tipoAfectacion: d.tipoAfectacion,
+                    porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
                     valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
                     precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                     valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
@@ -1175,6 +1235,7 @@ export class VentaService {
                   descripcion: d.descripcion,
                   cantidad: d.cantidad,
                   tipoAfectacion: d.tipoAfectacion || '10',
+                  porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
                   valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
                   precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                   valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
@@ -2164,6 +2225,7 @@ export class VentaService {
                 descripcion: d.descripcion,
                 cantidad: d.cantidad,
                 tipoAfectacion: d.tipoAfectacion || '10',
+                porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
                 valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
                 precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
                 valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
