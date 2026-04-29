@@ -6,10 +6,12 @@ import { NubefactProvider } from './providers/nubefact.provider';
 import { SyncrofactProvider } from './providers/syncrofact.provider';
 import { FacturacionProviderFactory } from './providers/facturacion-provider.factory';
 import { SunatController } from './sunat.controller';
+import { ComunicacionBajaService } from './comunicacion-baja.service';
+import { ComunicacionBajaController } from './comunicacion-baja.controller';
 
 @Module({
   imports: [PrismaModule, LoggerModule],
-  controllers: [SunatController],
+  controllers: [SunatController, ComunicacionBajaController],
   providers: [
     // Registro de todos los providers soportados. El factory decide cuál usar
     // en cada operación según el proveedorEmisor del comprobante.
@@ -17,7 +19,8 @@ import { SunatController } from './sunat.controller';
     SyncrofactProvider,
     FacturacionProviderFactory,
     FacturacionService,
+    ComunicacionBajaService,
   ],
-  exports: [FacturacionService],
+  exports: [FacturacionService, ComunicacionBajaService],
 })
 export class SunatModule {}

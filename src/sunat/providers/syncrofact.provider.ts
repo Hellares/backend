@@ -1,6 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../common/logger/logger.service';
-import { FacturacionProvider, EnvioResult, ProveedorSeriesInfo, BatchStatusResult } from '../facturacion-provider.interface';
+import {
+  FacturacionProvider,
+  EnvioResult,
+  ProveedorSeriesInfo,
+  BatchStatusResult,
+  ComunicacionBajaInput,
+  ComunicacionBajaResult,
+} from '../facturacion-provider.interface';
 import { SyncrofactMapper } from './syncrofact.mapper';
 import {
   SYNCROFACT_TIMEOUT_MS,
@@ -158,6 +165,97 @@ export class SyncrofactProvider implements FacturacionProvider {
       total: typeof item.total === 'number' ? item.total : undefined,
       raw: item,
     }));
+  }
+
+  // ── Comunicación de Baja (RA) ──
+
+  /**
+   * Crea una Comunicación de Baja en Syncrofact (no la envía a SUNAT aún).
+   * Endpoint: POST /v1/voided-documents
+   */
+  async crearComunicacionBaja(
+    input: ComunicacionBajaInput,
+    config: any,
+  ): Promise<ComunicacionBajaResult> {
+    const url = this.buildUrl(config.proveedorRuta, '/v1/voided-documents');
+    const body: any = {
+      company_id: config.proveedorConfig?.companyId,
+      branch_id: config.proveedorConfig?.branchId,
+      fecha_referencia: input.fechaReferencia,
+      motivo_baja: input.motivoBaja,
+      detalles: input.detalles.map((d) => ({
+        tipo_documento: d.tipoDocumento,
+        serie: d.serie,
+        correlativo: d.correlativo,
+        motivo_especifico: d.motivoEspecifico,
+      })),
+    };
+    if (input.usuarioCreacion) body.usuario_creacion = input.usuarioCreacion;
+
+    const response = await this.callApi<any>(url, config.proveedorToken, body);
+    if (!response?.success || !response.data) {
+      throw new Error(response?.message || 'Syncrofact: respuesta inválida creando CDB');
+    }
+    return this.mapBajaResponse(response.data);
+  }
+
+  /**
+   * Envía a SUNAT una CDB previamente creada.
+   * Endpoint: POST /v1/voided-documents/{id}/send-sunat
+   */
+  async enviarComunicacionBaja(
+    proveedorBajaId: string,
+    config: any,
+  ): Promise<ComunicacionBajaResult> {
+    const url = this.buildUrl(
+      config.proveedorRuta,
+      `/v1/voided-documents/${encodeURIComponent(proveedorBajaId)}/send-sunat`,
+    );
+    const response = await this.callApi<any>(url, config.proveedorToken, {});
+    if (!response?.success || !response.data) {
+      const err = this.extraerError(response) || 'Syncrofact: respuesta inválida enviando CDB';
+      throw new Error(err);
+    }
+    return this.mapBajaResponse(response.data);
+  }
+
+  /**
+   * Re-consulta el estado de una CDB que quedó en ENVIADO.
+   * Endpoint: POST /v1/voided-documents/{id}/check-status
+   */
+  async consultarComunicacionBaja(
+    proveedorBajaId: string,
+    config: any,
+  ): Promise<ComunicacionBajaResult> {
+    const url = this.buildUrl(
+      config.proveedorRuta,
+      `/v1/voided-documents/${encodeURIComponent(proveedorBajaId)}/check-status`,
+    );
+    const response = await this.callApi<any>(url, config.proveedorToken, {});
+    if (!response?.success || !response.data) {
+      throw new Error(response?.message || 'Syncrofact: respuesta inválida consultando CDB');
+    }
+    return this.mapBajaResponse(response.data);
+  }
+
+  private mapBajaResponse(data: any): ComunicacionBajaResult {
+    return {
+      proveedorBajaId: String(data.id ?? ''),
+      numeroCompleto: String(data.numero_completo ?? data.numero ?? ''),
+      serie: String(data.serie ?? ''),
+      correlativo: String(data.correlativo ?? ''),
+      fechaEmision: String(data.fecha_emision ?? ''),
+      estadoSunat: String(data.estado_sunat ?? 'PENDIENTE').toUpperCase(),
+      ticket: data.ticket ?? null,
+      hashCdr: data.hash_cdr ?? null,
+      errorProveedor:
+        typeof data.respuesta_sunat === 'object' && data.respuesta_sunat?.descripcion
+          ? data.respuesta_sunat.descripcion
+          : null,
+      cdrUrl: data.cdr_path ?? data.cdr_url ?? null,
+      xmlUrl: data.xml_path ?? data.xml_url ?? null,
+      rawResponse: data,
+    };
   }
 
   // ── Helpers del provider ──

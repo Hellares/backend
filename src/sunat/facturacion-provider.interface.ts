@@ -76,6 +76,65 @@ export interface FacturacionProvider {
     params: { tipoDocumento: string; referencias: string[] },
     config: any,
   ): Promise<BatchStatusResult[]>;
+
+  /**
+   * Opcional: crea una Comunicación de Baja (RA) en el proveedor con uno
+   * o más documentos a anular. NO la envía a SUNAT (el proveedor la deja
+   * en estado PENDIENTE hasta que se llame a `enviarComunicacionBaja`).
+   */
+  crearComunicacionBaja?(
+    input: ComunicacionBajaInput,
+    config: any,
+  ): Promise<ComunicacionBajaResult>;
+
+  /**
+   * Opcional: dispara el envío a SUNAT de una CDB previamente creada.
+   * Es asíncrono — el proveedor devuelve un ticket y consulta el estado.
+   */
+  enviarComunicacionBaja?(
+    proveedorBajaId: string,
+    config: any,
+  ): Promise<ComunicacionBajaResult>;
+
+  /**
+   * Opcional: re-consulta el estado SUNAT por ticket si quedó en ENVIADO.
+   */
+  consultarComunicacionBaja?(
+    proveedorBajaId: string,
+    config: any,
+  ): Promise<ComunicacionBajaResult>;
+}
+
+/** Documento incluido en una Comunicación de Baja */
+export interface ComunicacionBajaDetalle {
+  tipoDocumento: string;       // "01" | "07" | "08"
+  serie: string;
+  correlativo: string;
+  motivoEspecifico: string;
+}
+
+/** Payload para crear una Comunicación de Baja en el proveedor */
+export interface ComunicacionBajaInput {
+  fechaReferencia: string;     // "YYYY-MM-DD"
+  motivoBaja: string;
+  detalles: ComunicacionBajaDetalle[];
+  usuarioCreacion?: string;
+}
+
+/** Resultado de operaciones sobre Comunicación de Baja */
+export interface ComunicacionBajaResult {
+  proveedorBajaId: string;     // ID en el proveedor
+  numeroCompleto: string;      // "RA-20260426-001"
+  serie: string;
+  correlativo: string;
+  fechaEmision: string;
+  estadoSunat: string;         // "PENDIENTE" | "ENVIADO" | "ACEPTADO" | "RECHAZADO"
+  ticket?: string | null;
+  hashCdr?: string | null;
+  errorProveedor?: string | null;
+  cdrUrl?: string | null;
+  xmlUrl?: string | null;
+  rawResponse?: any;
 }
 
 /** Resultado por referencia interna en una consulta batch */

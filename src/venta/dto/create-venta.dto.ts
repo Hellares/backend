@@ -13,6 +13,7 @@ import {
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateVentaDetalleDto } from './create-venta-detalle.dto';
+import { CreatePagoVentaDto } from './create-pago-venta.dto';
 import { MetodoPagoVenta, CanalVenta } from '@prisma/client';
 
 export class CreateVentaDto {
@@ -87,15 +88,29 @@ export class CreateVentaDto {
   @Type(() => Number)
   montoRecibido?: number;
 
-  @ApiPropertyOptional({ description: 'Banco/entidad financiera (requerido si total>=2000 PEN o 500 USD y metodo es TARJETA/TRANSFERENCIA)' })
+  /** @deprecated Usar `pagos[].banco` por pago. Conservado para compat Fase 1. */
+  @ApiPropertyOptional({ deprecated: true, description: '[deprecated] Usar pagos[].banco' })
   @IsOptional()
   @IsString()
   bancoPago?: string;
 
-  @ApiPropertyOptional({ description: 'N° de operación bancaria (requerido si total>=2000 PEN o 500 USD y metodo no es EFECTIVO/CREDITO)' })
+  /** @deprecated Usar `pagos[].referencia` por pago. Conservado para compat Fase 1. */
+  @ApiPropertyOptional({ deprecated: true, description: '[deprecated] Usar pagos[].referencia' })
   @IsOptional()
   @IsString()
   referenciaPago?: string;
+
+  @ApiPropertyOptional({ description: 'Pagos múltiples (multi-medio). Cada pago lleva su banco/referencia.', type: [CreatePagoVentaDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreatePagoVentaDto)
+  pagos?: CreatePagoVentaDto[];
+
+  @ApiPropertyOptional({ description: 'El cajero confirmó la advertencia legal de Ley 28194 cuando el efectivo excede el límite. Cliente asume riesgo.' })
+  @IsOptional()
+  @IsBoolean()
+  aceptaRiesgoBancarizacion?: boolean;
 
   @ApiPropertyOptional({ description: 'Es venta a credito' })
   @IsOptional()

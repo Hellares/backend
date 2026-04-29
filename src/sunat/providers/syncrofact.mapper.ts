@@ -48,9 +48,19 @@ interface ComprobanteData {
     descuento?: any;
     esCredito?: boolean;
     cuotas?: Array<{ numero: number; monto: any; fechaVencimiento: Date }>;
+    /** @deprecated Reemplazado por pagos[]. Conservado por compat Fase 1. */
     metodoPago?: string | null;
+    /** @deprecated Reemplazado por pagos[].banco. */
     bancoPago?: string | null;
+    /** @deprecated Reemplazado por pagos[].referencia. */
     referenciaPago?: string | null;
+    /** Pagos individuales — fuente principal para construir medios_pago en Fase 2. */
+    pagos?: Array<{
+      metodoPago: string;
+      monto: any;
+      referencia?: string | null;
+      banco?: string | null;
+    }>;
   } | null;
 }
 
@@ -228,64 +238,89 @@ export class SyncrofactMapper {
   }
 
   /**
-   * Construye `medios_pago` según Ley 28194 (bancarización).
+   * Construye `medios_pago` según Ley 28194 (bancarización) en modo multi-medio.
    *
    * Retorna null si:
-   *  - total < umbral (2000 PEN / 500 USD)
    *  - es venta a crédito (se usa `forma_pago_cuotas` en su lugar)
-   *  - no hay `venta.metodoPago` (caso legacy / cotizaciones sin venta vinculada)
+   *  - no hay pagos vinculados (caso legacy sin venta o venta sin pagos)
+   *  - el total < umbral Y todos los pagos son EFECTIVO (no es necesario reportar)
    *
-   * Lanza error explícito si falta un dato requerido por el catálogo del proveedor
-   * (ej. referencia en YAPE o banco en TRANSFERENCIA). Así el service puede
-   * abortar ANTES de pegarle a Syncrofact y devolver un 400 limpio al usuario.
+   * Itera `venta.pagos[]` y arma un array con todos los medios. Cuando solo hay
+   * legacy `venta.metodoPago` (registros pre-Fase2), sintetiza un pago virtual.
+   *
+   * Lanza error si falta un dato requerido por el catálogo del proveedor
+   * (referencia en YAPE / banco en TRANSFERENCIA). El service aborta ANTES de
+   * pegarle a Syncrofact.
    */
   private static buildMediosPago(comprobante: ComprobanteData): SyncrofactMedioPago[] | null {
     const venta = comprobante.venta;
     if (!venta || venta.esCredito) return null;
 
-    const metodoInterno = venta.metodoPago;
-    if (!metodoInterno) return null;
-
     const moneda = comprobante.moneda || 'PEN';
     const umbral = moneda === 'USD' ? UMBRAL_BANCARIZACION.USD : UMBRAL_BANCARIZACION.PEN;
     const total = Number(comprobante.total);
-    if (!Number.isFinite(total) || total < umbral) return null;
+    if (!Number.isFinite(total)) return null;
 
-    const tipoSyncrofact = METODO_PAGO_MAP[metodoInterno];
-    if (!tipoSyncrofact) {
-      throw new Error(
-        `Método de pago "${metodoInterno}" no tiene mapeo para bancarización Syncrofact. ` +
-        `Venta de ${moneda} ${total} requiere bancarización pero el método no está soportado.`,
-      );
-    }
+    // Fuente principal: pagos[]; fallback legacy: venta.metodoPago + venta.bancoPago + venta.referenciaPago
+    const pagosFuente = (venta.pagos && venta.pagos.length > 0)
+      ? venta.pagos
+      : (venta.metodoPago
+          ? [{
+              metodoPago: venta.metodoPago,
+              monto: total,
+              referencia: venta.referenciaPago ?? null,
+              banco: venta.bancoPago ?? null,
+            }]
+          : []);
 
-    const medio: SyncrofactMedioPago = {
-      tipo: tipoSyncrofact,
-      monto: this.round2(total),
-    };
+    if (pagosFuente.length === 0) return null;
 
-    if (!MEDIOS_SIN_REFERENCIA.has(tipoSyncrofact)) {
-      if (!venta.referenciaPago) {
+    const fechaOp = this.formatFecha(comprobante.fechaEmision);
+    const medios: SyncrofactMedioPago[] = [];
+
+    for (const p of pagosFuente) {
+      const tipoSyncrofact = METODO_PAGO_MAP[p.metodoPago];
+      if (!tipoSyncrofact) {
         throw new Error(
-          `Bancarización: la venta supera ${umbral} ${moneda} y requiere referencia/N° de operación ` +
-          `para el método de pago ${metodoInterno}.`,
+          `Método de pago "${p.metodoPago}" no tiene mapeo para bancarización Syncrofact.`,
         );
       }
-      medio.referencia = venta.referenciaPago;
-      medio.fecha_operacion = this.formatFecha(comprobante.fechaEmision);
-    }
 
-    if (MEDIOS_REQUIEREN_BANCO.has(tipoSyncrofact)) {
-      if (!venta.bancoPago) {
-        throw new Error(
-          `Bancarización: la venta supera ${umbral} ${moneda} y requiere banco (entidad financiera) ` +
-          `para el método de pago ${metodoInterno}.`,
-        );
+      const medio: SyncrofactMedioPago = {
+        tipo: tipoSyncrofact,
+        monto: this.round2(Number(p.monto)),
+      };
+
+      if (!MEDIOS_SIN_REFERENCIA.has(tipoSyncrofact)) {
+        if (!p.referencia) {
+          throw new Error(
+            `Bancarización: el pago de ${p.metodoPago} (${moneda} ${Number(p.monto).toFixed(2)}) ` +
+            `requiere referencia/N° de operación.`,
+          );
+        }
+        medio.referencia = p.referencia;
+        medio.fecha_operacion = fechaOp;
       }
-      medio.entidad_financiera = venta.bancoPago;
+
+      if (MEDIOS_REQUIEREN_BANCO.has(tipoSyncrofact)) {
+        if (!p.banco) {
+          throw new Error(
+            `Bancarización: el pago de ${p.metodoPago} (${moneda} ${Number(p.monto).toFixed(2)}) ` +
+            `requiere banco (entidad financiera).`,
+          );
+        }
+        medio.entidad_financiera = p.banco;
+      }
+
+      medios.push(medio);
     }
 
-    return [medio];
+    // Si el total no llega al umbral y todos son EFECTIVO, no enviamos medios_pago
+    // (Syncrofact no exige el campo y simplifica el payload).
+    const algunoBancarizable = medios.some(m => !MEDIOS_SIN_REFERENCIA.has(m.tipo));
+    if (total < umbral && !algunoBancarizable) return null;
+
+    return medios;
   }
 
   // ── Helpers ──

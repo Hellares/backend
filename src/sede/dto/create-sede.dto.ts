@@ -183,22 +183,40 @@ export class CreateSedeDto {
   serieBoleta?: string;
 
   @ApiPropertyOptional({
-    description: 'Serie para notas de crédito',
-    example: 'NC02',
-    default: 'NC01',
+    description: 'Serie para NC sobre Factura (prefijo FC). Default: FC01',
+    example: 'FC01',
+    default: 'FC01',
   })
   @IsOptional()
   @IsString()
   serieNotaCredito?: string;
 
   @ApiPropertyOptional({
-    description: 'Serie para notas de débito',
-    example: 'ND02',
-    default: 'ND01',
+    description: 'Serie para NC sobre Boleta (prefijo BC). Default: BC01',
+    example: 'BC01',
+    default: 'BC01',
+  })
+  @IsOptional()
+  @IsString()
+  serieNotaCreditoBoleta?: string;
+
+  @ApiPropertyOptional({
+    description: 'Serie para ND sobre Factura (prefijo FD). Default: FD01',
+    example: 'FD01',
+    default: 'FD01',
   })
   @IsOptional()
   @IsString()
   serieNotaDebito?: string;
+
+  @ApiPropertyOptional({
+    description: 'Serie para ND sobre Boleta (prefijo BD). Default: BD01',
+    example: 'BD01',
+    default: 'BD01',
+  })
+  @IsOptional()
+  @IsString()
+  serieNotaDebitoBoleta?: string;
 
   @ApiPropertyOptional({
     description: 'Serie para guías de remisión',

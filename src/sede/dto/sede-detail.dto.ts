@@ -68,11 +68,17 @@ export class SedeDetailDto {
   @ApiProperty({ description: 'Serie para boletas' })
   serieBoleta: string;
 
-  @ApiProperty({ description: 'Serie para notas de crédito' })
+  @ApiProperty({ description: 'Serie para NC sobre Factura (FC*)' })
   serieNotaCredito: string;
 
-  @ApiProperty({ description: 'Serie para notas de débito' })
+  @ApiProperty({ description: 'Serie para NC sobre Boleta (BC*)' })
+  serieNotaCreditoBoleta: string;
+
+  @ApiProperty({ description: 'Serie para ND sobre Factura (FD*)' })
   serieNotaDebito: string;
+
+  @ApiProperty({ description: 'Serie para ND sobre Boleta (BD*)' })
+  serieNotaDebitoBoleta: string;
 
   @ApiPropertyOptional({ description: 'Serie para guías de remisión' })
   serieGuiaRemision?: string;
@@ -117,11 +123,17 @@ export class SedeDetailDto {
   @ApiProperty({ description: 'Último número de boleta emitida' })
   ultimoNumeroBoleta: number;
 
-  @ApiProperty({ description: 'Último número de nota de crédito' })
+  @ApiProperty({ description: 'Último número de NC sobre Factura' })
   ultimoNumeroNotaCredito: number;
 
-  @ApiProperty({ description: 'Último número de nota de débito' })
+  @ApiProperty({ description: 'Último número de NC sobre Boleta' })
+  ultimoNumeroNotaCreditoBoleta: number;
+
+  @ApiProperty({ description: 'Último número de ND sobre Factura' })
   ultimoNumeroNotaDebito: number;
+
+  @ApiProperty({ description: 'Último número de ND sobre Boleta' })
+  ultimoNumeroNotaDebitoBoleta: number;
 
   @ApiProperty({ description: 'Último número de guía de remisión' })
   ultimoNumeroGuiaRemision: number;

@@ -54,7 +54,14 @@ const EVENTOS_RECHAZO = new Set([
 
 const EVENTOS_ANULACION = new Set([
   'invoice.voided',
+]);
+
+/** Eventos del flujo Comunicación de Baja (RA) — entidad propia ComunicacionBaja. */
+const EVENTOS_BAJA = new Set([
+  'voided_document.sent',
+  'voided_document.processed',
   'voided_document.accepted',
+  'voided_document.rejected',
 ]);
 
 @Injectable()
@@ -128,6 +135,11 @@ export class WebhooksService {
       return { ok: true, accion: 'ignorado' };
     }
 
+    // Eventos de Comunicación de Baja: actualizan ComunicacionBaja, no ComprobanteElectronico.
+    if (EVENTOS_BAJA.has(event)) {
+      return this.procesarEventoBaja(event, empresaId, data);
+    }
+
     // Localizar el comprobante: preferir referencia_interna (nuestro id),
     // fallback a numero + empresaId.
     const comprobante = await this.buscarComprobante(empresaId, data.referencia_interna, data.numero);
@@ -175,6 +187,76 @@ export class WebhooksService {
     // en ComprobanteElectronico — los aceptamos para devolver 200 y no provocar retries.
     this.logger.info(`Webhook ${event} recibido pero sin handler específico — ACK`);
     return { ok: true, accion: 'no_soportado' };
+  }
+
+  /**
+   * Procesa eventos de Comunicación de Baja. Actualiza la fila de ComunicacionBaja
+   * y, si el evento es `voided_document.accepted`, marca todos los comprobantes
+   * referenciados como `anulado=true`.
+   */
+  private async procesarEventoBaja(
+    event: string,
+    empresaId: string,
+    data: SyncrofactWebhookPayload['data'],
+  ): Promise<{ ok: boolean; accion: 'actualizado' | 'ignorado' | 'no_encontrado'; comprobanteId?: string }> {
+    const proveedorBajaId = data.document_id != null ? String(data.document_id) : null;
+    const numero = data.numero ?? null;
+
+    const baja = await this.prisma.comunicacionBaja.findFirst({
+      where: {
+        empresaId,
+        OR: [
+          ...(proveedorBajaId ? [{ proveedorBajaId }] : []),
+          ...(numero ? [{ numeroCompleto: numero }] : []),
+        ],
+      },
+      select: { id: true, estadoSunat: true, motivoBaja: true },
+    });
+
+    if (!baja) {
+      this.logger.warn(
+        `Webhook ${event} — CDB no encontrada (empresa=${empresaId}, document_id=${proveedorBajaId}, numero=${numero})`,
+      );
+      return { ok: true, accion: 'no_encontrado' };
+    }
+
+    // Idempotencia: si ya está en estado terminal, no tocar.
+    if (baja.estadoSunat === 'ACEPTADO' || baja.estadoSunat === 'RECHAZADO') {
+      return { ok: true, accion: 'ignorado' };
+    }
+
+    const estadoSunat = (data.estado_sunat ?? '').toString().toUpperCase();
+    const aceptado = event === 'voided_document.accepted' || estadoSunat === 'ACEPTADO';
+    const rechazado = event === 'voided_document.rejected' || estadoSunat === 'RECHAZADO';
+
+    const nuevoEstado = aceptado ? 'ACEPTADO' : rechazado ? 'RECHAZADO' : 'PROCESANDO';
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.comunicacionBaja.update({
+        where: { id: baja.id },
+        data: {
+          estadoSunat: nuevoEstado as any,
+          enviadoAProveedor: true,
+        },
+      });
+
+      if (aceptado) {
+        // Marcar comprobantes referenciados como anulados
+        const detalles = await tx.detalleComunicacionBaja.findMany({
+          where: { comunicacionBajaId: baja.id },
+          select: { comprobanteId: true },
+        });
+        if (detalles.length > 0) {
+          await tx.comprobanteElectronico.updateMany({
+            where: { id: { in: detalles.map((d) => d.comprobanteId) } },
+            data: { anulado: true, motivoAnulacion: baja.motivoBaja },
+          });
+        }
+      }
+    });
+
+    this.logger.info(`Webhook ${event} → CDB ${baja.id} marcada ${nuevoEstado}`);
+    return { ok: true, accion: 'actualizado' };
   }
 
   /**

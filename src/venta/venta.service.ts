@@ -21,6 +21,7 @@ import {
   EstadoVenta,
   EstadoCotizacion,
   TipoMovimientoStock,
+  MetodoPagoVenta,
   Prisma,
   Rol,
 } from '@prisma/client';
@@ -135,39 +136,98 @@ export class VentaService {
    * Crear venta (estado BORRADOR)
    */
   /**
-   * Valida bancarización (Ley 28194): si total >= umbral y método de pago
-   * requiere trazabilidad bancaria, exigimos banco y/o referencia.
-   * Lanzamos BadRequestException ANTES de crear la venta para que el error
-   * llegue claro al cliente y no cree registros a medio hacer.
+   * Valida bancarización (Ley 28194) en modo multi-medio.
+   *
+   * Reglas:
+   *  - Por cada pago bancarizable (YAPE/PLIN/TARJETA/TRANSFERENCIA) se exige
+   *    `referencia`. Para TARJETA/TRANSFERENCIA además `banco`.
+   *  - Si total >= umbral y la suma de pagos bancarizables NO cubre el umbral,
+   *    el efectivo excede lo legal: se exige `aceptaRiesgoBancarizacion=true`
+   *    (cajero confirma la advertencia, cliente asume el riesgo de no deducir IGV).
+   *
+   * Compat: si no llega `pagos[]` se sintetiza uno virtual desde el legacy
+   * (`metodoPago` + `montoRecibido` + `bancoPago` + `referenciaPago`).
    */
   private validarBancarizacion(dto: {
     total: number;
     moneda?: string;
-    metodoPago?: string | null;
     esCredito?: boolean;
+    pagos?: Array<{ metodoPago: string; monto: number; referencia?: string | null; banco?: string | null }>;
+    metodoPago?: string | null;
     bancoPago?: string | null;
     referenciaPago?: string | null;
+    montoRecibido?: number | null;
+    aceptaRiesgoBancarizacion?: boolean;
   }): void {
     if (dto.esCredito) return;
-    if (!dto.metodoPago) return;
 
     const moneda = dto.moneda || 'PEN';
     const umbral = moneda === 'USD' ? 500 : 2000;
     if (dto.total < umbral) return;
 
-    const requiereReferencia = ['YAPE', 'PLIN', 'TARJETA', 'TRANSFERENCIA'].includes(dto.metodoPago);
-    const requiereBanco = ['TARJETA', 'TRANSFERENCIA'].includes(dto.metodoPago);
+    const pagos = (dto.pagos && dto.pagos.length > 0)
+      ? dto.pagos
+      : (dto.metodoPago && (dto.montoRecibido ?? 0) > 0)
+        ? [{
+            metodoPago: dto.metodoPago,
+            monto: dto.montoRecibido!,
+            referencia: dto.referenciaPago,
+            banco: dto.bancoPago,
+          }]
+        : [];
 
-    if (requiereReferencia && !dto.referenciaPago?.trim()) {
+    if (pagos.length === 0) return;
+
+    for (const p of pagos) {
+      const m = p.metodoPago;
+      const necesitaRef = ['YAPE', 'PLIN', 'TARJETA', 'TRANSFERENCIA'].includes(m);
+      const necesitaBanco = ['TARJETA', 'TRANSFERENCIA'].includes(m);
+      if (necesitaRef && !p.referencia?.toString().trim()) {
+        throw new BadRequestException(
+          `Bancarización: el pago de ${m} (S/ ${Number(p.monto).toFixed(2)}) requiere N° de operación.`,
+        );
+      }
+      if (necesitaBanco && !p.banco?.toString().trim()) {
+        throw new BadRequestException(
+          `Bancarización: el pago de ${m} (S/ ${Number(p.monto).toFixed(2)}) requiere banco/entidad financiera.`,
+        );
+      }
+    }
+
+    const totalBancarizado = pagos
+      .filter(p => p.metodoPago !== 'EFECTIVO' && p.metodoPago !== 'CREDITO')
+      .reduce((s, p) => s + Number(p.monto), 0);
+    const totalEfectivo = pagos
+      .filter(p => p.metodoPago === 'EFECTIVO')
+      .reduce((s, p) => s + Number(p.monto), 0);
+
+    if (totalBancarizado >= umbral) return;
+
+    if (totalEfectivo > 0 && !dto.aceptaRiesgoBancarizacion) {
       throw new BadRequestException(
-        `Bancarización obligatoria: ventas >= ${umbral} ${moneda} con método ${dto.metodoPago} requieren N° de operación.`,
+        `Ley 28194: venta de ${moneda} ${dto.total.toFixed(2)} con pago en efectivo de ${moneda} ${totalEfectivo.toFixed(2)} ` +
+        `(parte bancarizada ${moneda} ${totalBancarizado.toFixed(2)} no cubre el límite de ${umbral}). ` +
+        `Requiere confirmación del cajero — el cliente perderá derecho a deducir IGV/sustento de gasto.`,
       );
     }
-    if (requiereBanco && !dto.bancoPago?.trim()) {
-      throw new BadRequestException(
-        `Bancarización obligatoria: ventas >= ${umbral} ${moneda} con método ${dto.metodoPago} requieren banco/entidad financiera.`,
-      );
+  }
+
+  /**
+   * Deriva `Venta.metodoPago` desde la lista de pagos.
+   *  - Sin pagos → fallback (compat con flujos legacy que solo mandan `metodoPago`).
+   *  - 1 método único → ese método.
+   *  - 2+ métodos distintos → 'MIXTO' (etiqueta UX; reportería usa PagoVenta).
+   */
+  private resolverMetodoPagoVenta(
+    pagos: Array<{ metodoPago: string }> | undefined,
+    fallback?: string | null,
+  ): MetodoPagoVenta | undefined {
+    if (!pagos || pagos.length === 0) {
+      return (fallback as MetodoPagoVenta | undefined) ?? undefined;
     }
+    const unicos = new Set(pagos.map((p) => p.metodoPago));
+    if (unicos.size === 1) return pagos[0].metodoPago as MetodoPagoVenta;
+    return 'MIXTO' as MetodoPagoVenta;
   }
 
   async create(empresaId: string, dto: CreateVentaDto) {
@@ -202,10 +262,13 @@ export class VentaService {
       this.validarBancarizacion({
         total,
         moneda: dto.moneda,
-        metodoPago: dto.metodoPago,
         esCredito: dto.esCredito,
+        pagos: dto.pagos,
+        metodoPago: dto.metodoPago,
+        montoRecibido: dto.montoRecibido,
         bancoPago: dto.bancoPago,
         referenciaPago: dto.referenciaPago,
+        aceptaRiesgoBancarizacion: dto.aceptaRiesgoBancarizacion,
       });
 
       const montoCambio =
@@ -233,11 +296,12 @@ export class VentaService {
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
-          metodoPago: dto.metodoPago,
+          metodoPago: this.resolverMetodoPagoVenta(dto.pagos, dto.metodoPago),
           montoRecibido: dto.montoRecibido,
           montoCambio,
           bancoPago: dto.bancoPago,
           referenciaPago: dto.referenciaPago,
+          bancarizacionAdvertida: dto.aceptaRiesgoBancarizacion ?? false,
           esCredito: dto.esCredito ?? false,
           plazoCredito: dto.plazoCredito,
           fechaVencimientoPago: dto.fechaVencimientoPago
@@ -350,10 +414,13 @@ export class VentaService {
         this.validarBancarizacion({
           total: totalVenta,
           moneda: dto.moneda,
-          metodoPago: dto.metodoPago,
           esCredito,
+          pagos: dto.pagos,
+          metodoPago: dto.metodoPago,
+          montoRecibido: dto.montoRecibido,
           bancoPago: dto.bancoPago,
           referenciaPago: dto.referenciaPago,
+          aceptaRiesgoBancarizacion: dto.aceptaRiesgoBancarizacion,
         });
 
         // For hybrid sales: calculate immediate payment total from pagos array
@@ -393,11 +460,12 @@ export class VentaService {
             descuento: descuentoVenta,
             impuestos: impuestosVenta,
             total: totalVenta,
-            metodoPago: dto.metodoPago,
+            metodoPago: this.resolverMetodoPagoVenta(dto.pagos, dto.metodoPago),
             montoRecibido: montoRecibido || null,
             montoCambio: montoCambio || null,
             bancoPago: dto.bancoPago,
             referenciaPago: dto.referenciaPago,
+            bancarizacionAdvertida: dto.aceptaRiesgoBancarizacion ?? false,
             esCredito,
             plazoCredito: dto.plazoCredito,
             numeroCuotas: dto.numeroCuotas ?? null,
@@ -574,6 +642,7 @@ export class VentaService {
               metodoPago: pago.metodoPago as any,
               monto: pago.monto,
               referencia: pago.referencia || null,
+              banco: pago.banco || null,
               monedaOriginal: pago.monedaOriginal || null,
               montoOriginal: pago.montoOriginal || null,
               tipoCambio: pago.tipoCambio || null,
@@ -586,6 +655,7 @@ export class VentaService {
               metodoPago: dto.metodoPago || 'EFECTIVO',
               monto: Math.min(montoRecibido, totalVenta),
               referencia: dto.referenciaPago || null,
+              banco: dto.bancoPago || null,
             },
           });
         }
@@ -713,42 +783,68 @@ export class VentaService {
             },
           });
 
-          const montoPago = esCredito ? 0 : Math.min(montoRecibido || totalVenta, totalVenta);
+          // Multi-medio: 1 PagoComprobante por cada PagoVenta no-CREDITO.
+          // Si la venta es a crédito puro o no hay pagos[], crear UN registro
+          // marcador (PENDIENTE para crédito, COMPLETADO para legacy).
+          const pagosComprobanteData = (!esCredito && dto.pagos && dto.pagos.length > 0)
+            ? dto.pagos
+                .filter((p) => p.metodoPago !== 'CREDITO')
+                .map((p) => ({
+                  comprobanteId: comprobante.id,
+                  metodoPago: p.metodoPago,
+                  monto: new Prisma.Decimal(Number(p.monto).toFixed(2)),
+                  referencia: p.referencia || null,
+                  estado: 'COMPLETADO',
+                }))
+            : [{
+                comprobanteId: comprobante.id,
+                metodoPago: dto.metodoPago || 'EFECTIVO',
+                monto: new Prisma.Decimal(
+                  (esCredito ? 0 : Math.min(montoRecibido || totalVenta, totalVenta)).toFixed(2),
+                ),
+                referencia: dto.referenciaPago || null,
+                estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
+              }];
 
-          await tx.pagoComprobante.create({
-            data: {
-              comprobanteId: comprobante.id,
-              metodoPago: dto.metodoPago || 'EFECTIVO',
-              monto: new Prisma.Decimal(montoPago.toFixed(2)),
-              referencia: dto.referenciaPago || null,
-              estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
-            },
-          });
+          await tx.pagoComprobante.createMany({ data: pagosComprobanteData });
 
           this.logger.log(`Comprobante ${codigoGenerado} generado para venta POS ${venta.codigo}`);
           comprobanteIdGenerado = comprobante.id;
         }
         } // fin if tipoComprobante !== 'TICKET'
 
-        // 7. Registrar movimiento en caja (incluye pagos inmediatos en ventas mixtas)
+        // 7. Registrar movimientos en caja — UNO POR PAGO REAL (multi-medio).
+        // Cada PagoVenta no-CREDITO genera su propio MovimientoCaja con su método.
+        // Así el cierre Z agrupa correctamente sin necesidad de tocar el groupBy.
         if (montoPagadoInmediato > 0) {
-          try {
-            await this.cajaService.registrarMovimientoSiHayCaja(
-              empresaId,
-              dto.sedeId,
-              cajeroId,
-              {
-                tipo: 'INGRESO' as any,
-                categoria: 'VENTA' as any,
-                metodoPago: dto.metodoPago || ('EFECTIVO' as any),
+          const pagosParaCaja = (dto.pagos && dto.pagos.length > 0)
+            ? dto.pagos
+                .filter((p) => p.metodoPago !== 'CREDITO')
+                .map((p) => ({ metodoPago: p.metodoPago, monto: p.monto }))
+            : [{
+                metodoPago: dto.metodoPago || 'EFECTIVO',
                 monto: Math.min(montoPagadoInmediato, totalVenta),
-                descripcion: `Venta POS ${codigoVenta}`,
-                ventaId: venta.id,
-              },
-              tx,
-            );
-          } catch (e: any) {
-            this.logger.warn(`Error registrando movimiento caja para venta POS ${codigoVenta}: ${e?.message ?? e}`);
+              }];
+
+          for (const p of pagosParaCaja) {
+            try {
+              await this.cajaService.registrarMovimientoSiHayCaja(
+                empresaId,
+                dto.sedeId,
+                cajeroId,
+                {
+                  tipo: 'INGRESO' as any,
+                  categoria: 'VENTA' as any,
+                  metodoPago: p.metodoPago as any,
+                  monto: p.monto,
+                  descripcion: `Venta POS ${codigoVenta}`,
+                  ventaId: venta.id,
+                },
+                tx,
+              );
+            } catch (e: any) {
+              this.logger.warn(`Error registrando movimiento caja (${p.metodoPago}) venta POS ${codigoVenta}: ${e?.message ?? e}`);
+            }
           }
         }
 
@@ -974,7 +1070,7 @@ export class VentaService {
           descuento: new Prisma.Decimal(descuentoVenta.toFixed(2)),
           impuestos: new Prisma.Decimal(impuestosVenta.toFixed(2)),
           total: new Prisma.Decimal(totalVenta.toFixed(2)),
-          metodoPago: dto.metodoPago,
+          metodoPago: this.resolverMetodoPagoVenta(dto.pagos, dto.metodoPago),
           montoRecibido: dto.montoRecibido,
           montoCambio,
           esCredito,
@@ -1124,6 +1220,7 @@ export class VentaService {
               metodoPago: pago.metodoPago as any,
               monto: pago.monto,
               referencia: pago.referencia || null,
+              banco: (pago as any).banco || null,
               monedaOriginal: (pago as any).monedaOriginal || null,
               montoOriginal: (pago as any).montoOriginal || null,
               tipoCambio: (pago as any).tipoCambio || null,
@@ -1131,7 +1228,9 @@ export class VentaService {
           });
         }
       } else if (dto.montoRecibido && dto.montoRecibido > 0 && !esCredito) {
-        // Fallback: pago único (compatibilidad)
+        // Fallback: pago único (compatibilidad). El DTO de cotización no
+        // expone banco/bancarización Fase 2 — cotización→venta queda como gap
+        // a cubrir si el caso lo necesita.
         await tx.pagoVenta.create({
           data: {
             ventaId: venta.id,
@@ -1250,20 +1349,31 @@ export class VentaService {
           },
         });
 
-        // Registrar pago del comprobante (registro tributario)
-        const montoPago = esCredito
+        // Registrar pago del comprobante (registro tributario).
+        // Multi-medio: 1 PagoComprobante por cada PagoVenta no-CREDITO.
+        const montoPagoLegacy = esCredito
           ? 0
           : Math.min(dto.montoRecibido || totalVenta, totalVenta);
 
-        await tx.pagoComprobante.create({
-          data: {
-            comprobanteId: comprobante.id,
-            metodoPago: dto.metodoPago || 'EFECTIVO',
-            monto: new Prisma.Decimal(montoPago.toFixed(2)),
-            referencia: dto.referenciaPago || null,
-            estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
-          },
-        });
+        const pagosComprobanteData = (!esCredito && dto.pagos && dto.pagos.length > 0)
+          ? dto.pagos
+              .filter((p) => p.metodoPago !== 'CREDITO')
+              .map((p) => ({
+                comprobanteId: comprobante.id,
+                metodoPago: p.metodoPago,
+                monto: new Prisma.Decimal(Number(p.monto).toFixed(2)),
+                referencia: p.referencia || null,
+                estado: 'COMPLETADO',
+              }))
+          : [{
+              comprobanteId: comprobante.id,
+              metodoPago: dto.metodoPago || 'EFECTIVO',
+              monto: new Prisma.Decimal(montoPagoLegacy.toFixed(2)),
+              referencia: dto.referenciaPago || null,
+              estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
+            }];
+
+        await tx.pagoComprobante.createMany({ data: pagosComprobanteData });
 
         this.logger.log(`Comprobante ${codigoGenerado} generado para venta ${venta.codigo}`);
         comprobanteIdGenerado = comprobante.id;
@@ -1287,23 +1397,35 @@ export class VentaService {
         : (dto.montoRecibido ?? 0);
 
       if (montoPagadoInmediato > 0 && cajeroId) {
-        try {
-          await this.cajaService.registrarMovimientoSiHayCaja(
-            empresaId,
-            cotizacion.sedeId,
-            cajeroId,
-            {
-              tipo: 'INGRESO' as any,
-              categoria: 'VENTA' as any,
-              metodoPago: dto.metodoPago || ('EFECTIVO' as any),
+        // Multi-medio: un MovimientoCaja por cada PagoVenta no-CREDITO.
+        const pagosParaCaja = (dto.pagos && dto.pagos.length > 0)
+          ? dto.pagos
+              .filter((p) => p.metodoPago !== 'CREDITO')
+              .map((p) => ({ metodoPago: p.metodoPago, monto: p.monto }))
+          : [{
+              metodoPago: dto.metodoPago || 'EFECTIVO',
               monto: Math.min(montoPagadoInmediato, totalVenta),
-              descripcion: `Venta ${codigoVenta} (cotización ${cotizacion.codigo})`,
-              ventaId: venta.id,
-            },
-            tx,
-          );
-        } catch (e: any) {
-          this.logger.warn(`Error registrando movimiento caja para venta ${codigoVenta}: ${e?.message ?? e}`);
+            }];
+
+        for (const p of pagosParaCaja) {
+          try {
+            await this.cajaService.registrarMovimientoSiHayCaja(
+              empresaId,
+              cotizacion.sedeId,
+              cajeroId,
+              {
+                tipo: 'INGRESO' as any,
+                categoria: 'VENTA' as any,
+                metodoPago: p.metodoPago as any,
+                monto: p.monto,
+                descripcion: `Venta ${codigoVenta} (cotización ${cotizacion.codigo})`,
+                ventaId: venta.id,
+              },
+              tx,
+            );
+          } catch (e: any) {
+            this.logger.warn(`Error registrando movimiento caja (${p.metodoPago}) venta ${codigoVenta}: ${e?.message ?? e}`);
+          }
         }
       }
 
@@ -1861,7 +1983,7 @@ export class VentaService {
             },
             tx,
           );
-        } catch (e) {
+        } catch (e: any) {
           this.logger.warn(`Error registrando movimiento caja para venta ${venta.codigo}: ${e?.message ?? e}`);
         }
       }
@@ -1882,7 +2004,11 @@ export class VentaService {
     const result = await this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
         where: { id, empresaId },
-        include: { detalles: true },
+        include: {
+          detalles: true,
+          // Necesario para reversar caja: 1 EGRESO por cada PagoVenta original.
+          pagos: { select: { metodoPago: true, monto: true } },
+        },
       });
 
       if (!venta) {
@@ -1967,9 +2093,26 @@ export class VentaService {
         include: this.getInclude(),
       });
 
-      // Registrar EGRESO en caja si la venta tenía pagos
+      // Registrar EGRESOS espejo en caja: uno por cada PagoVenta cobrado.
+      // Multi-medio: la devolución reversa cada método con su monto exacto.
+      const pagosACobrar = (venta.pagos ?? []).filter(
+        (p) => p.metodoPago !== 'CREDITO',
+      );
       const montoRecibido = Number(venta.montoRecibido ?? 0);
-      if (montoRecibido > 0) {
+
+      const reversos = pagosACobrar.length > 0
+        ? pagosACobrar.map((p) => ({
+            metodoPago: p.metodoPago as string,
+            monto: Number(p.monto),
+          }))
+        : (montoRecibido > 0
+            ? [{
+                metodoPago: (venta.metodoPago ?? 'EFECTIVO') as string,
+                monto: montoRecibido,
+              }]
+            : []);
+
+      for (const r of reversos) {
         try {
           await this.cajaService.registrarMovimientoSiHayCaja(
             empresaId,
@@ -1978,15 +2121,15 @@ export class VentaService {
             {
               tipo: 'EGRESO',
               categoria: 'DEVOLUCION',
-              metodoPago: venta.metodoPago ?? 'EFECTIVO',
-              monto: montoRecibido,
+              metodoPago: r.metodoPago as any,
+              monto: r.monto,
               descripcion: `Anulación venta ${venta.codigo}`,
               ventaId: venta.id,
             },
             tx,
           );
-        } catch (e) {
-          this.logger.warn(`Error registrando egreso caja por anulación ${venta.codigo}: ${e?.message ?? e}`);
+        } catch (e: any) {
+          this.logger.warn(`Error registrando egreso caja (${r.metodoPago}) por anulación ${venta.codigo}: ${e?.message ?? e}`);
         }
       }
 
@@ -2240,17 +2383,28 @@ export class VentaService {
         },
       });
 
-      // Registrar pago del comprobante
-      const totalPagado = venta.pagos?.reduce((s: number, p: any) => s + Number(p.monto), 0) ?? 0;
-      await tx.pagoComprobante.create({
-        data: {
-          comprobanteId: comprobante.id,
-          metodoPago: venta.metodoPago || 'EFECTIVO',
-          monto: new Prisma.Decimal(Math.min(totalPagado, totalVenta).toFixed(2)),
-          referencia: null,
-          estado: venta.esCredito ? 'PENDIENTE' : 'COMPLETADO',
-        },
-      });
+      // Registrar pagos del comprobante: 1 PagoComprobante por PagoVenta no-CREDITO.
+      // Multi-medio: refleja la realidad del cobro en el registro tributario.
+      const pagosVenta = (venta.pagos ?? []).filter(
+        (p: any) => p.metodoPago !== 'CREDITO',
+      );
+      const pagosComprobanteData = pagosVenta.length > 0
+        ? pagosVenta.map((p: any) => ({
+            comprobanteId: comprobante.id,
+            metodoPago: p.metodoPago,
+            monto: new Prisma.Decimal(Number(p.monto).toFixed(2)),
+            referencia: p.referencia || null,
+            estado: 'COMPLETADO',
+          }))
+        : [{
+            comprobanteId: comprobante.id,
+            metodoPago: venta.metodoPago || 'EFECTIVO',
+            monto: new Prisma.Decimal('0.00'),
+            referencia: null,
+            estado: venta.esCredito ? 'PENDIENTE' : 'COMPLETADO',
+          }];
+
+      await tx.pagoComprobante.createMany({ data: pagosComprobanteData });
 
       this.logger.log(`Comprobante ${codigoGenerado} generado para venta ${venta.codigo}`);
 

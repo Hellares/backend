@@ -58,6 +58,7 @@ model Empresa {
   actualizadoEn            DateTime                      @updatedAt
   componentes              Componente[]
   comprobantes             ComprobanteElectronico[]
+  comunicacionesBaja       ComunicacionBaja[]
   configuracionCampos      ConfiguracionCamposServicio[]
   configuracionCodigos     ConfiguracionCodigos?
   configuracionFacturacion ConfiguracionFacturacion?
@@ -355,18 +356,27 @@ model Sede {
   seriesSincronizadasEn DateTime? // Última sincronización de series con el proveedor
 
   // Series de comprobantes por sede
-  serieFactura      String  @default("F001")
-  serieBoleta       String  @default("B001")
-  serieNotaCredito  String  @default("NC01")
-  serieNotaDebito   String  @default("ND01")
-  serieGuiaRemision String? @default("GR01")
+  // SUNAT diferencia las series según el documento afectado por NC/ND:
+  //   serieNotaCredito       → NC sobre Factura  (prefijo FC, ej. "FC01")
+  //   serieNotaCreditoBoleta → NC sobre Boleta   (prefijo BC, ej. "BC01")
+  //   serieNotaDebito        → ND sobre Factura  (prefijo FD, ej. "FD01")
+  //   serieNotaDebitoBoleta  → ND sobre Boleta   (prefijo BD, ej. "BD01")
+  serieFactura            String  @default("F001")
+  serieBoleta             String  @default("B001")
+  serieNotaCredito        String  @default("NC01")
+  serieNotaCreditoBoleta  String  @default("BC01")
+  serieNotaDebito         String  @default("ND01")
+  serieNotaDebitoBoleta   String  @default("BD01")
+  serieGuiaRemision       String? @default("GR01")
 
   // Contadores de documentos por sede
-  ultimoNumeroFactura      Int @default(0)
-  ultimoNumeroBoleta       Int @default(0)
-  ultimoNumeroNotaCredito  Int @default(0)
-  ultimoNumeroNotaDebito   Int @default(0)
-  ultimoNumeroGuiaRemision Int @default(0)
+  ultimoNumeroFactura            Int @default(0)
+  ultimoNumeroBoleta             Int @default(0)
+  ultimoNumeroNotaCredito        Int @default(0)
+  ultimoNumeroNotaCreditoBoleta  Int @default(0)
+  ultimoNumeroNotaDebito         Int @default(0)
+  ultimoNumeroNotaDebitoBoleta   Int @default(0)
+  ultimoNumeroGuiaRemision       Int @default(0)
 
   // Estado
   isActive    Boolean   @default(true)
@@ -443,6 +453,9 @@ model Sede {
 
   // Comprobantes electrónicos emitidos desde esta sede
   comprobantes ComprobanteElectronico[]
+
+  // Comunicaciones de baja emitidas desde esta sede
+  comunicacionesBaja ComunicacionBaja[]
 
   // Guías de remisión
   guiasRemision GuiaRemision[]

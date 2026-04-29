@@ -18,17 +18,33 @@ import {
   ResultadoAplicarSincronizacion,
 } from './dto/sincronizacion-preview.response';
 import { Prisma, ProveedorFacturacion } from '@prisma/client';
+import {
+  esMotivoValido,
+  getMotivos,
+  MotivoNota,
+  TipoNota,
+} from './catalogos-sunat';
 
 /**
  * Mapeo entre tipo de documento SUNAT y los campos de Sede donde se guarda
  * la serie y el contador. Clave para el diff y el apply.
+ *
+ * NC (07) y ND (08) tienen DOS slots cada una porque SUNAT exige series
+ * distintas según el documento afectado:
+ *   - NC sobre Factura → serie con prefijo "F" (FC*)
+ *   - NC sobre Boleta  → serie con prefijo "B" (BC*)
+ *   - ND sobre Factura → serie con prefijo "F" (FD*)
+ *   - ND sobre Boleta  → serie con prefijo "B" (BD*)
+ * El campo `prefijoSerie` filtra qué serie del proveedor matchea con qué slot.
  */
 const TIPO_DOC_A_SEDE = [
-  { tipoDoc: '01', nombre: 'Factura',          campoSerie: 'serieFactura',      campoContador: 'ultimoNumeroFactura' },
-  { tipoDoc: '03', nombre: 'Boleta',           campoSerie: 'serieBoleta',       campoContador: 'ultimoNumeroBoleta' },
-  { tipoDoc: '07', nombre: 'Nota de Crédito',  campoSerie: 'serieNotaCredito',  campoContador: 'ultimoNumeroNotaCredito' },
-  { tipoDoc: '08', nombre: 'Nota de Débito',   campoSerie: 'serieNotaDebito',   campoContador: 'ultimoNumeroNotaDebito' },
-  { tipoDoc: '09', nombre: 'Guía de Remisión', campoSerie: 'serieGuiaRemision', campoContador: 'ultimoNumeroGuiaRemision' },
+  { tipoDoc: '01', nombre: 'Factura',           prefijoSerie: null, campoSerie: 'serieFactura',            campoContador: 'ultimoNumeroFactura' },
+  { tipoDoc: '03', nombre: 'Boleta',            prefijoSerie: null, campoSerie: 'serieBoleta',             campoContador: 'ultimoNumeroBoleta' },
+  { tipoDoc: '07', nombre: 'NC sobre Factura',  prefijoSerie: 'F',  campoSerie: 'serieNotaCredito',        campoContador: 'ultimoNumeroNotaCredito' },
+  { tipoDoc: '07', nombre: 'NC sobre Boleta',   prefijoSerie: 'B',  campoSerie: 'serieNotaCreditoBoleta',  campoContador: 'ultimoNumeroNotaCreditoBoleta' },
+  { tipoDoc: '08', nombre: 'ND sobre Factura',  prefijoSerie: 'F',  campoSerie: 'serieNotaDebito',         campoContador: 'ultimoNumeroNotaDebito' },
+  { tipoDoc: '08', nombre: 'ND sobre Boleta',   prefijoSerie: 'B',  campoSerie: 'serieNotaDebitoBoleta',   campoContador: 'ultimoNumeroNotaDebitoBoleta' },
+  { tipoDoc: '09', nombre: 'Guía de Remisión',  prefijoSerie: null, campoSerie: 'serieGuiaRemision',       campoContador: 'ultimoNumeroGuiaRemision' },
 ] as const;
 
 type TipoComprobanteInterno = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO' | 'GUIA_REMISION';
@@ -419,6 +435,7 @@ export class FacturacionService {
           tipoNotaDebito: true,
           comprobanteOrigenId: true,
           ventaId: true,
+          sedeId: true,
           proveedorEmisor: true,
         },
         orderBy: { fechaEmision: 'desc' },
@@ -503,6 +520,10 @@ export class FacturacionService {
               cuotas: {
                 select: { numero: true, monto: true, fechaVencimiento: true },
                 orderBy: { numero: 'asc' },
+              },
+              pagos: {
+                select: { metodoPago: true, monto: true, referencia: true, banco: true },
+                orderBy: { fechaPago: 'asc' },
               },
             },
           },
@@ -750,6 +771,21 @@ export class FacturacionService {
     const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
     const provider = this.providerFactory.get(comprobante.proveedorEmisor);
     return provider.consultarAnulacion(comprobante as any, config as any);
+  }
+
+  // ── Catálogos SUNAT ──
+
+  /**
+   * Devuelve los motivos válidos del catálogo SUNAT correspondiente al tipo de nota.
+   * Catálogo 09 para NC (12 motivos), catálogo 10 para ND (5 motivos).
+   */
+  getMotivosNota(tipo: string): ReadonlyArray<MotivoNota> {
+    if (tipo !== 'NOTA_CREDITO' && tipo !== 'NOTA_DEBITO') {
+      throw new BadRequestException(
+        `Tipo inválido: ${tipo}. Valores aceptados: NOTA_CREDITO, NOTA_DEBITO`,
+      );
+    }
+    return getMotivos(tipo as TipoNota);
   }
 
   // ── Crear Nota de Crédito ──
@@ -1075,16 +1111,40 @@ export class FacturacionService {
     });
 
     if (!origen) throw new NotFoundException('Comprobante origen no encontrado');
+    if (origen.tipoComprobante !== 'FACTURA' && origen.tipoComprobante !== 'BOLETA') {
+      throw new BadRequestException(
+        `Solo se pueden generar notas sobre FACTURA o BOLETA. Tipo recibido: ${origen.tipoComprobante}`,
+      );
+    }
     if (origen.sunatStatus !== 'ACEPTADO') {
       throw new BadRequestException('Solo se pueden generar notas de comprobantes ACEPTADOS por SUNAT');
     }
     if (origen.anulado) throw new BadRequestException('El comprobante origen está anulado');
 
+    if (!esMotivoValido(tipoNota, dto.tipoNota)) {
+      const validos = getMotivos(tipoNota)
+        .map((m) => `${m.codigo}=${m.descripcion}`)
+        .join(', ');
+      throw new BadRequestException(
+        `Motivo ${dto.tipoNota} no es válido para ${tipoNota}. Códigos válidos: ${validos}`,
+      );
+    }
+
     return this.prisma.$transaction(async (tx) => {
-      // Lock sede para serie/correlativo (atómico: increment + read en un solo UPDATE)
+      // Lock sede para serie/correlativo (atómico: increment + read en un solo UPDATE).
+      // SUNAT exige series distintas según el documento afectado (regla validada en CDR):
+      //   NC sobre FACTURA → serie FC* (campo serieNotaCredito)
+      //   NC sobre BOLETA  → serie BC* (campo serieNotaCreditoBoleta)
+      //   ND sobre FACTURA → serie FD* (campo serieNotaDebito)
+      //   ND sobre BOLETA  → serie BD* (campo serieNotaDebitoBoleta)
       const esNotaCredito = tipoNota === 'NOTA_CREDITO';
-      const campoUltimo = esNotaCredito ? 'ultimoNumeroNotaCredito' : 'ultimoNumeroNotaDebito';
-      const campoSerie = esNotaCredito ? 'serieNotaCredito' : 'serieNotaDebito';
+      const esBoletaOrigen = origen.tipoComprobante === 'BOLETA';
+      const campoUltimo = esNotaCredito
+        ? (esBoletaOrigen ? 'ultimoNumeroNotaCreditoBoleta' : 'ultimoNumeroNotaCredito')
+        : (esBoletaOrigen ? 'ultimoNumeroNotaDebitoBoleta' : 'ultimoNumeroNotaDebito');
+      const campoSerie = esNotaCredito
+        ? (esBoletaOrigen ? 'serieNotaCreditoBoleta' : 'serieNotaCredito')
+        : (esBoletaOrigen ? 'serieNotaDebitoBoleta' : 'serieNotaDebito');
 
       // Lock con FOR UPDATE, luego increment atómico para evitar race conditions
       const [sedeLocked] = await tx.$queryRaw<any[]>`
@@ -1198,9 +1258,12 @@ export class FacturacionService {
       select: {
         id: true, nombre: true, empresaId: true,
         serieFactura: true, serieBoleta: true,
-        serieNotaCredito: true, serieNotaDebito: true, serieGuiaRemision: true,
+        serieNotaCredito: true, serieNotaCreditoBoleta: true,
+        serieNotaDebito: true, serieNotaDebitoBoleta: true,
+        serieGuiaRemision: true,
         ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
-        ultimoNumeroNotaCredito: true, ultimoNumeroNotaDebito: true,
+        ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
+        ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
         ultimoNumeroGuiaRemision: true,
         proveedorActivo: true, proveedorConfig: true,
         seriesSincronizadasEn: true,
@@ -1259,13 +1322,42 @@ export class FacturacionService {
       counts.set(`${tipoDoc}:${serie}`, count);
     }
 
+    // MAX(correlativo) por (tipoComprobante, serie) en TODA la empresa.
+    // La unique constraint en ComprobanteElectronico es (empresaId, tipoComprobante,
+    // serie, correlativo) — sin sedeId — así que para detectar conflictos hay que
+    // mirar todas las sedes de la empresa, no solo la sede que se está sincronizando.
+    const maxPorSerie = new Map<string, number>();
+    const maxRows = await this.prisma.$queryRaw<
+      Array<{ tipoComprobante: string; serie: string; max: number | null }>
+    >`SELECT "tipoComprobante"::text, serie, MAX(CAST(correlativo AS INTEGER)) as max
+       FROM "ComprobanteElectronico"
+       WHERE "empresaId" = ${empresaId}
+       GROUP BY "tipoComprobante", serie`;
+    for (const row of maxRows) {
+      if (row.serie && row.max != null) {
+        maxPorSerie.set(`${row.tipoComprobante}:${row.serie}`, Number(row.max));
+      }
+    }
+
     const branches = info.branches.map((b) => {
       const diffs: DiffSerie[] = TIPO_DOC_A_SEDE.map((t) => {
         const serieLocal = (sede as any)[t.campoSerie] as string | null;
         const correlativoLocal = (sede as any)[t.campoContador] as number;
-        const serieProv = b.series.find((s) => s.tipoDocumento === t.tipoDoc);
+        // Para tipoDoc 07 (NC) y 08 (ND) hay dos series distintas según el documento
+        // afectado. Filtramos por prefijo de serie para diferenciar FC* vs BC* y
+        // FD* vs BD*. Si no hay prefijo, simplemente match por tipo de documento.
+        const serieProv = b.series.find((s) =>
+          s.tipoDocumento === t.tipoDoc &&
+          (t.prefijoSerie === null || s.serie.startsWith(t.prefijoSerie)),
+        );
         const comprobantesLocal = serieLocal
           ? counts.get(`${t.tipoDoc}:${serieLocal}`) ?? 0
+          : 0;
+        // MAX correlativo en BD para la serie destino (la del proveedor),
+        // que es lo que termina escrito si se aplica el sync.
+        const tipoComp = TIPO_DOC_A_COMPROBANTE[t.tipoDoc];
+        const maxBdEnSerieDestino = serieProv?.serie && tipoComp
+          ? maxPorSerie.get(`${tipoComp}:${serieProv.serie}`) ?? 0
           : 0;
 
         return this.clasificarDiff({
@@ -1277,6 +1369,7 @@ export class FacturacionService {
           correlativoProveedor: serieProv?.correlativoActual ?? null,
           proximoNumeroProveedor: serieProv?.proximoNumero ?? null,
           comprobantesEmitidosLocalmente: comprobantesLocal,
+          maxCorrelativoBdEnSerieDestino: maxBdEnSerieDestino,
         });
       });
 
@@ -1321,9 +1414,12 @@ export class FacturacionService {
       select: {
         id: true, empresaId: true, proveedorConfig: true,
         serieFactura: true, serieBoleta: true,
-        serieNotaCredito: true, serieNotaDebito: true, serieGuiaRemision: true,
+        serieNotaCredito: true, serieNotaCreditoBoleta: true,
+        serieNotaDebito: true, serieNotaDebitoBoleta: true,
+        serieGuiaRemision: true,
         ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
-        ultimoNumeroNotaCredito: true, ultimoNumeroNotaDebito: true,
+        ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
+        ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
         ultimoNumeroGuiaRemision: true,
       },
     });
@@ -1348,9 +1444,12 @@ export class FacturacionService {
         where: { id: dto.sedeId },
         select: {
           serieFactura: true, serieBoleta: true,
-          serieNotaCredito: true, serieNotaDebito: true, serieGuiaRemision: true,
+          serieNotaCredito: true, serieNotaCreditoBoleta: true,
+          serieNotaDebito: true, serieNotaDebitoBoleta: true,
+          serieGuiaRemision: true,
           ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
-          ultimoNumeroNotaCredito: true, ultimoNumeroNotaDebito: true,
+          ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
+          ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
           ultimoNumeroGuiaRemision: true,
           proveedorConfig: true,
         },
@@ -1362,22 +1461,52 @@ export class FacturacionService {
       const updateData: Record<string, any> = {};
 
       for (const sel of aplicaciones) {
-        const meta = TIPO_DOC_A_SEDE.find((t) => t.tipoDoc === sel.tipoDocumento);
+        // Para tipoDoc 07/08 hay 2 slots distintos según prefijo (F* vs B*).
+        // Inferimos el slot correcto a partir del prefijo de la serie del proveedor.
+        const serieProvFiltro = sel.serieProveedor ?? '';
+        const meta = TIPO_DOC_A_SEDE.find((t) =>
+          t.tipoDoc === sel.tipoDocumento &&
+          (t.prefijoSerie === null || serieProvFiltro.startsWith(t.prefijoSerie)),
+        );
         if (!meta) {
-          errores.push(`Tipo documento desconocido: ${sel.tipoDocumento}`);
+          errores.push(`Tipo documento desconocido o prefijo no reconocido: ${sel.tipoDocumento} (${sel.serieProveedor ?? 'sin serie'})`);
           continue;
         }
 
         const serieActual = (sedeLock as any)[meta.campoSerie] as string | null;
         const correlativoActual = (sedeLock as any)[meta.campoContador] as number;
 
-        // Rechazar CONFLICTO: correlativo local > proveedor
+        // Rechazar CONFLICTO 1: correlativo local de la sede > proveedor.
         if (
           serieActual === sel.serieProveedor &&
           correlativoActual > sel.correlativoProveedor
         ) {
           errores.push(
             `${meta.nombre} (${serieActual}): correlativo local ${correlativoActual} > proveedor ${sel.correlativoProveedor}. Resuelva manualmente.`,
+          );
+          continue;
+        }
+
+        // Rechazar CONFLICTO 2: hay comprobantes en BD (de cualquier sede de la
+        // empresa) con la serie destino y correlativo > proveedor. Aplicar bajaría
+        // el contador y la próxima emisión chocaría con la unique constraint
+        // (empresaId, tipoComprobante, serie, correlativo).
+        const tipoComp = TIPO_DOC_A_COMPROBANTE[sel.tipoDocumento];
+        let maxBdEnSerieDestino = 0;
+        if (tipoComp && sel.serieProveedor) {
+          const [maxRow] = await tx.$queryRaw<Array<{ max: number | null }>>`
+            SELECT MAX(CAST(correlativo AS INTEGER)) as max
+            FROM "ComprobanteElectronico"
+            WHERE "empresaId" = ${empresaId}
+              AND "tipoComprobante" = ${tipoComp}::"TipoComprobante"
+              AND serie = ${sel.serieProveedor}`;
+          maxBdEnSerieDestino = Number(maxRow?.max ?? 0);
+        }
+
+        if (maxBdEnSerieDestino > sel.correlativoProveedor) {
+          errores.push(
+            `${meta.nombre} (${sel.serieProveedor}): la empresa ya tiene comprobantes hasta correlativo ${maxBdEnSerieDestino} ` +
+            `pero el proveedor está en ${sel.correlativoProveedor}. Aplicar produciría choque al emitir. Resuelva manualmente.`,
           );
           continue;
         }
@@ -1394,7 +1523,10 @@ export class FacturacionService {
         }
 
         updateData[meta.campoSerie] = sel.serieProveedor;
-        updateData[meta.campoContador] = sel.correlativoProveedor;
+        // Defensa: el contador efectivo nunca debe quedar por debajo del MAX en BD.
+        // Si BD tiene comprobantes hasta N y el proveedor reporta M < N, ya rechazamos
+        // arriba. Si M >= N, escribimos M (correlativo del proveedor).
+        updateData[meta.campoContador] = Math.max(sel.correlativoProveedor, maxBdEnSerieDestino);
 
         cambios.push({
           tipoDocumento: sel.tipoDocumento,
@@ -1459,11 +1591,15 @@ export class FacturacionService {
     correlativoProveedor: number | null;
     proximoNumeroProveedor: string | null;
     comprobantesEmitidosLocalmente: number;
+    /** MAX(correlativo) en BD para la serie destino (en TODA la empresa).
+     *  Si > correlativoProveedor, el sync produciría choque al emitir el siguiente. */
+    maxCorrelativoBdEnSerieDestino?: number;
   }): DiffSerie {
     const {
       serieLocal, correlativoLocal,
       serieProveedor, correlativoProveedor,
       comprobantesEmitidosLocalmente,
+      maxCorrelativoBdEnSerieDestino = 0,
     } = params;
 
     let accion: AccionDiff;
@@ -1478,16 +1614,37 @@ export class FacturacionService {
     } else if (serieProveedor && !serieLocal) {
       accion = 'CREAR_NUEVA';
       mensaje = `Nueva serie ${serieProveedor} disponible en el proveedor`;
+      // Aun creando nueva: si en la empresa hay otra sede con esa misma serie y un MAX > proveedor, advertir.
+      if (maxCorrelativoBdEnSerieDestino > (correlativoProveedor ?? 0)) {
+        accion = 'CONFLICTO';
+        mensaje =
+          `La empresa ya tiene comprobantes con serie ${serieProveedor} hasta correlativo ${maxCorrelativoBdEnSerieDestino} ` +
+          `(probablemente en otra sede), pero el proveedor está en ${correlativoProveedor ?? 0}. ` +
+          `Resuelva manualmente: use otra serie o alinee el contador del proveedor a ${maxCorrelativoBdEnSerieDestino}.`;
+      }
     } else if (serieLocal !== serieProveedor) {
       accion = 'REEMPLAZAR_SERIE';
       mensaje = comprobantesEmitidosLocalmente > 0
         ? `Hay ${comprobantesEmitidosLocalmente} comprobante(s) emitidos con ${serieLocal}. Se conservan en BD; los nuevos irán a ${serieProveedor}`
         : `Cambio de ${serieLocal} a ${serieProveedor}`;
-    } else if ((correlativoLocal ?? 0) === (correlativoProveedor ?? 0)) {
+      if (maxCorrelativoBdEnSerieDestino > (correlativoProveedor ?? 0)) {
+        accion = 'CONFLICTO';
+        mensaje =
+          `Cambio a ${serieProveedor} bloqueado: la empresa ya emitió hasta correlativo ${maxCorrelativoBdEnSerieDestino} ` +
+          `con esa serie, pero el proveedor está en ${correlativoProveedor ?? 0}. Resuelva manualmente.`;
+      }
+    } else if ((correlativoLocal ?? 0) === (correlativoProveedor ?? 0)
+        && maxCorrelativoBdEnSerieDestino <= (correlativoProveedor ?? 0)) {
       accion = 'EN_SINCRONIA';
-    } else if ((correlativoLocal ?? 0) < (correlativoProveedor ?? 0)) {
+    } else if ((correlativoLocal ?? 0) < (correlativoProveedor ?? 0)
+        && maxCorrelativoBdEnSerieDestino <= (correlativoProveedor ?? 0)) {
       accion = 'ACTUALIZAR_CORRELATIVO';
       mensaje = `Correlativo proveedor adelantado: ${correlativoLocal} → ${correlativoProveedor}`;
+    } else if (maxCorrelativoBdEnSerieDestino > (correlativoProveedor ?? 0)) {
+      accion = 'CONFLICTO';
+      mensaje =
+        `BD tiene comprobantes ${serieProveedor}-${maxCorrelativoBdEnSerieDestino} pero proveedor está en ${correlativoProveedor ?? 0}. ` +
+        `Aplicar bajaría el contador y produciría choque de unique constraint. Resuelva manualmente.`;
     } else {
       accion = 'CONFLICTO';
       mensaje = `Correlativo local (${correlativoLocal}) es mayor al del proveedor (${correlativoProveedor}). Resuelva manualmente antes de aplicar.`;

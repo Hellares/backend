@@ -122,6 +122,15 @@ export class SunatController {
     return this.facturacionService.consultarAnulacion(comprobanteId, empresaId);
   }
 
+  // ── Catálogos SUNAT ──
+  @Get('catalogos/motivos-nota')
+  @ApiOperation({
+    summary: 'Listar motivos válidos para nota de crédito (catálogo 09) o débito (catálogo 10)',
+  })
+  async getMotivosNota(@Query('tipo') tipo: string) {
+    return this.facturacionService.getMotivosNota(tipo);
+  }
+
   // ── Nota de Crédito ──
   @Post('comprobantes/:id/nota-credito')
   @ApiOperation({ summary: 'Crear nota de crédito asociada a un comprobante' })

@@ -60,6 +60,27 @@ export class ProductoService {
   }
 
   /**
+   * Garantiza que `impuestoPorcentaje` coincida con `tipoAfectacionIgv` (Cat.07 SUNAT).
+   * GRAVADO → 18 ; EXONERADO/INAFECTO → 0. Lanza si el cliente envía valores incoherentes.
+   */
+  private normalizarIgvProducto(data: any, existingTipo?: string): void {
+    const tipoEfectivo = (data.tipoAfectacionIgv ?? existingTipo ?? 'GRAVADO') as string;
+    const porcentajeEsperado = tipoEfectivo === 'GRAVADO' ? 18 : 0;
+
+    if (data.impuestoPorcentaje !== undefined && data.impuestoPorcentaje !== null) {
+      const recibido = Number(data.impuestoPorcentaje);
+      if (recibido !== porcentajeEsperado) {
+        throw new BadRequestException(
+          `Inconsistencia IGV: tipoAfectacionIgv=${tipoEfectivo} requiere impuestoPorcentaje=${porcentajeEsperado}, ` +
+          `pero recibió ${recibido}. SUNAT solo acepta 18% para GRAVADO; EXONERADO/INAFECTO deben usar 0%.`,
+        );
+      }
+    }
+
+    data.impuestoPorcentaje = porcentajeEsperado;
+  }
+
+  /**
    * Crear un nuevo producto
    * Método delegador (Facade) - orquesta llamadas a servicios especializados
    */
@@ -140,6 +161,9 @@ export class ProductoService {
         empresaId,
       );
     }
+
+    // 4. Validar/normalizar IGV (tipoAfectacionIgv ↔ impuestoPorcentaje)
+    this.normalizarIgvProducto(productoData);
 
     // 4. Validar relación XOR entre esCombo y tieneVariantes (lógica de negocio - mantener en Facade)
     if (productoData.esCombo === true && productoData.tieneVariantes === true) {
@@ -511,6 +535,18 @@ export class ProductoService {
     }
 
     const { imagenesIds, ...productoData } = updateDto;
+
+    // Validar/normalizar IGV (tipoAfectacionIgv ↔ impuestoPorcentaje)
+    // Solo intervenir si el update toca alguno de los dos campos
+    if (
+      productoData.tipoAfectacionIgv !== undefined ||
+      productoData.impuestoPorcentaje !== undefined
+    ) {
+      this.normalizarIgvProducto(
+        productoData,
+        productoExistente.tipoAfectacionIgv as string,
+      );
+    }
 
     // DEBUG: Log para verificar qué datos llegan
     // this.logger.debug('Datos recibidos para actualización', {

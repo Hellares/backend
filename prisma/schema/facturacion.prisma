@@ -160,6 +160,8 @@ model ComprobanteElectronico {
   // Notas: self-relation
   comprobanteOrigen  ComprobanteElectronico?  @relation("NotasRelacionadas", fields: [comprobanteOrigenId], references: [id])
   notasRelacionadas  ComprobanteElectronico[] @relation("NotasRelacionadas")
+  // Comunicaciones de Baja en las que este comprobante fue anulado
+  bajas              DetalleComunicacionBaja[] @relation("ComprobanteBajas")
   // Relación con Venta (1:1 opcional)
   ventaId          String?              @unique
   venta            Venta?               @relation(fields: [ventaId], references: [id])
@@ -322,6 +324,67 @@ enum EstadoComprobante {
   RECHAZADO
   ANULADO
   EXPIRADO
+}
+
+/// Comunicación de Baja (Resumen tipo RA SUNAT) — anulación oficial de
+/// Facturas (01), NC sobre Factura (07 con prefijo FC) y ND sobre Factura
+/// (08 con prefijo FD) ya ACEPTADAS por SUNAT. Plazo: 7 días desde la
+/// fechaEmision del documento.
+/// Boletas y notas con prefijo BC/BD NO van por aquí — se anulan vía Resumen Diario.
+model ComunicacionBaja {
+  id                  String                @id @default(cuid())
+  empresaId           String
+  sedeId              String
+  // Identificación SUNAT
+  numeroCompleto      String                // "RA-20260426-001"
+  serie               String                // "RA-20260426"
+  correlativo         String                // "001"
+  fechaEmision        DateTime              @default(now())
+  fechaReferencia     DateTime              // fecha de los documentos a anular
+  motivoBaja          String                @db.VarChar(500)
+  // Estado
+  estadoSunat         EstadoSunat           @default(PENDIENTE)
+  ticket              String?
+  hashCdr             String?
+  errorProveedor      String?
+  cdrResponse         Json?
+  sunatXmlUrl         String?
+  sunatCdrUrl         String?
+  // Tracking del proveedor
+  proveedorEmisor     ProveedorFacturacion
+  proveedorBajaId     String?               // ID en el proveedor (Syncrofact)
+  enviadoAProveedor   Boolean               @default(false)
+  intentosEnvio       Int                   @default(0)
+  ultimoIntentoEnvio  DateTime?
+  // Auditoría
+  usuarioCreacionId   String?
+  creadoEn            DateTime              @default(now())
+  actualizadoEn       DateTime              @updatedAt
+
+  empresa             Empresa               @relation(fields: [empresaId], references: [id])
+  sede                Sede                  @relation(fields: [sedeId], references: [id])
+  detalles            DetalleComunicacionBaja[]
+
+  @@unique([empresaId, numeroCompleto])
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([empresaId, estadoSunat])
+  @@index([empresaId, fechaReferencia])
+  @@index([empresaId, fechaEmision])
+}
+
+model DetalleComunicacionBaja {
+  id                   String              @id @default(cuid())
+  comunicacionBajaId   String
+  comprobanteId        String              // FK al ComprobanteElectronico anulado
+  motivoEspecifico     String              @db.VarChar(250)
+  creadoEn             DateTime            @default(now())
+
+  comunicacionBaja     ComunicacionBaja        @relation(fields: [comunicacionBajaId], references: [id], onDelete: Cascade)
+  comprobante          ComprobanteElectronico  @relation("ComprobanteBajas", fields: [comprobanteId], references: [id])
+
+  @@unique([comunicacionBajaId, comprobanteId])
+  @@index([comprobanteId])
 }
 
 enum EstadoSunat {

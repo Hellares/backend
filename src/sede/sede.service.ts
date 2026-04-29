@@ -77,7 +77,9 @@ export class SedeService {
         serieFactura: seriesGeneradas.serieFactura,
         serieBoleta: seriesGeneradas.serieBoleta,
         serieNotaCredito: seriesGeneradas.serieNotaCredito,
+        serieNotaCreditoBoleta: seriesGeneradas.serieNotaCreditoBoleta,
         serieNotaDebito: seriesGeneradas.serieNotaDebito,
+        serieNotaDebitoBoleta: seriesGeneradas.serieNotaDebitoBoleta,
         serieGuiaRemision: seriesGeneradas.serieGuiaRemision,
         // Facturación electrónica por sede
         rucSede: data.rucSede,
@@ -92,7 +94,9 @@ export class SedeService {
         ultimoNumeroFactura: 0,
         ultimoNumeroBoleta: 0,
         ultimoNumeroNotaCredito: 0,
+        ultimoNumeroNotaCreditoBoleta: 0,
         ultimoNumeroNotaDebito: 0,
+        ultimoNumeroNotaDebitoBoleta: 0,
         ultimoNumeroGuiaRemision: 0,
         isActive: data.isActive !== undefined ? data.isActive : true,
         esPrincipal: false, // Las nuevas sedes nunca son principales
@@ -772,7 +776,9 @@ export class SedeService {
     serieFactura: string;
     serieBoleta: string;
     serieNotaCredito: string;
+    serieNotaCreditoBoleta: string;
     serieNotaDebito: string;
+    serieNotaDebitoBoleta: string;
     serieGuiaRemision: string;
   }> {
     // Si el usuario proporcionó todas las series, usarlas
@@ -786,7 +792,9 @@ export class SedeService {
         serieFactura: data.serieFactura,
         serieBoleta: data.serieBoleta,
         serieNotaCredito: data.serieNotaCredito,
+        serieNotaCreditoBoleta: (data as any).serieNotaCreditoBoleta || 'BC01',
         serieNotaDebito: data.serieNotaDebito,
+        serieNotaDebitoBoleta: (data as any).serieNotaDebitoBoleta || 'BD01',
         serieGuiaRemision: data.serieGuiaRemision || 'GR01',
       };
     }
@@ -798,19 +806,22 @@ export class SedeService {
         serieFactura: true,
         serieBoleta: true,
         serieNotaCredito: true,
+        serieNotaCreditoBoleta: true,
         serieNotaDebito: true,
+        serieNotaDebitoBoleta: true,
         serieGuiaRemision: true,
       },
     });
 
     let maxNumeroFactura = 0;
     let maxNumeroBoleta = 0;
-    let maxNumeroNC = 0;
-    let maxNumeroND = 0;
+    let maxNumeroFC = 0;  // NC sobre Factura (FC* o legacy NC*)
+    let maxNumeroBC = 0;  // NC sobre Boleta (BC*)
+    let maxNumeroFD = 0;  // ND sobre Factura (FD* o legacy ND*)
+    let maxNumeroBD = 0;  // ND sobre Boleta (BD*)
     let maxNumeroGR = 0;
 
     for (const sede of sedes) {
-      // Extraer números de las series
       const matchF = sede.serieFactura?.match(/F(\d+)/);
       if (matchF) {
         const num = parseInt(matchF[1], 10);
@@ -823,16 +834,29 @@ export class SedeService {
         if (num > maxNumeroBoleta) maxNumeroBoleta = num;
       }
 
-      const matchNC = sede.serieNotaCredito?.match(/NC(\d+)/);
-      if (matchNC) {
-        const num = parseInt(matchNC[1], 10);
-        if (num > maxNumeroNC) maxNumeroNC = num;
+      // Acepta tanto el legacy "NC01" como el correcto "FC01"
+      const matchFC = sede.serieNotaCredito?.match(/(NC|FC)(\d+)/);
+      if (matchFC) {
+        const num = parseInt(matchFC[2], 10);
+        if (num > maxNumeroFC) maxNumeroFC = num;
       }
 
-      const matchND = sede.serieNotaDebito?.match(/ND(\d+)/);
-      if (matchND) {
-        const num = parseInt(matchND[1], 10);
-        if (num > maxNumeroND) maxNumeroND = num;
+      const matchBC = sede.serieNotaCreditoBoleta?.match(/BC(\d+)/);
+      if (matchBC) {
+        const num = parseInt(matchBC[1], 10);
+        if (num > maxNumeroBC) maxNumeroBC = num;
+      }
+
+      const matchFD = sede.serieNotaDebito?.match(/(ND|FD)(\d+)/);
+      if (matchFD) {
+        const num = parseInt(matchFD[2], 10);
+        if (num > maxNumeroFD) maxNumeroFD = num;
+      }
+
+      const matchBD = sede.serieNotaDebitoBoleta?.match(/BD(\d+)/);
+      if (matchBD) {
+        const num = parseInt(matchBD[1], 10);
+        if (num > maxNumeroBD) maxNumeroBD = num;
       }
 
       const matchGR = sede.serieGuiaRemision?.match(/GR(\d+)/);
@@ -842,22 +866,19 @@ export class SedeService {
       }
     }
 
-    // Generar las siguientes series disponibles
-    const siguienteFactura = maxNumeroFactura + 1;
-    const siguienteBoleta = maxNumeroBoleta + 1;
-    const siguienteNC = maxNumeroNC + 1;
-    const siguienteND = maxNumeroND + 1;
-    const siguienteGR = maxNumeroGR + 1;
-
-    // Generar series automáticamente basadas en los máximos encontrados
     return {
-      serieFactura: data.serieFactura || `F${String(siguienteFactura).padStart(3, '0')}`,
-      serieBoleta: data.serieBoleta || `B${String(siguienteBoleta).padStart(3, '0')}`,
+      serieFactura: data.serieFactura || `F${String(maxNumeroFactura + 1).padStart(3, '0')}`,
+      serieBoleta: data.serieBoleta || `B${String(maxNumeroBoleta + 1).padStart(3, '0')}`,
       serieNotaCredito:
-        data.serieNotaCredito || `NC${String(siguienteNC).padStart(2, '0')}`,
-      serieNotaDebito: data.serieNotaDebito || `ND${String(siguienteND).padStart(2, '0')}`,
+        data.serieNotaCredito || `FC${String(maxNumeroFC + 1).padStart(2, '0')}`,
+      serieNotaCreditoBoleta:
+        (data as any).serieNotaCreditoBoleta || `BC${String(maxNumeroBC + 1).padStart(2, '0')}`,
+      serieNotaDebito:
+        data.serieNotaDebito || `FD${String(maxNumeroFD + 1).padStart(2, '0')}`,
+      serieNotaDebitoBoleta:
+        (data as any).serieNotaDebitoBoleta || `BD${String(maxNumeroBD + 1).padStart(2, '0')}`,
       serieGuiaRemision:
-        data.serieGuiaRemision || `GR${String(siguienteGR).padStart(2, '0')}`,
+        data.serieGuiaRemision || `GR${String(maxNumeroGR + 1).padStart(2, '0')}`,
     };
   }
 
@@ -935,7 +956,9 @@ export class SedeService {
       serieFactura: sede.serieFactura,
       serieBoleta: sede.serieBoleta,
       serieNotaCredito: sede.serieNotaCredito,
+      serieNotaCreditoBoleta: sede.serieNotaCreditoBoleta,
       serieNotaDebito: sede.serieNotaDebito,
+      serieNotaDebitoBoleta: sede.serieNotaDebitoBoleta,
       serieGuiaRemision: sede.serieGuiaRemision,
       // Facturación electrónica por sede
       rucSede: sede.rucSede,
@@ -950,7 +973,9 @@ export class SedeService {
       ultimoNumeroFactura: sede.ultimoNumeroFactura,
       ultimoNumeroBoleta: sede.ultimoNumeroBoleta,
       ultimoNumeroNotaCredito: sede.ultimoNumeroNotaCredito,
+      ultimoNumeroNotaCreditoBoleta: sede.ultimoNumeroNotaCreditoBoleta,
       ultimoNumeroNotaDebito: sede.ultimoNumeroNotaDebito,
+      ultimoNumeroNotaDebitoBoleta: sede.ultimoNumeroNotaDebitoBoleta,
       ultimoNumeroGuiaRemision: sede.ultimoNumeroGuiaRemision,
       isActive: sede.isActive,
       deletedAt: sede.deletedAt,

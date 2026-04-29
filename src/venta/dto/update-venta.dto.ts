@@ -71,15 +71,22 @@ export class UpdateVentaDto {
   @Type(() => Number)
   montoRecibido?: number;
 
-  @ApiPropertyOptional({ description: 'Banco/entidad financiera (bancarización Ley 28194)' })
+  /** @deprecated Usar `pagos[].banco` por pago. */
+  @ApiPropertyOptional({ deprecated: true, description: '[deprecated] Usar pagos[].banco' })
   @IsOptional()
   @IsString()
   bancoPago?: string;
 
-  @ApiPropertyOptional({ description: 'N° de operación bancaria (bancarización Ley 28194)' })
+  /** @deprecated Usar `pagos[].referencia` por pago. */
+  @ApiPropertyOptional({ deprecated: true, description: '[deprecated] Usar pagos[].referencia' })
   @IsOptional()
   @IsString()
   referenciaPago?: string;
+
+  @ApiPropertyOptional({ description: 'El cajero confirmó la advertencia legal de Ley 28194 (cliente asume riesgo)' })
+  @IsOptional()
+  @IsBoolean()
+  aceptaRiesgoBancarizacion?: boolean;
 
   @ApiPropertyOptional({ description: 'Es venta a credito' })
   @IsOptional()

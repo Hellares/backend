@@ -20,10 +20,15 @@ export class CrearNotaDto {
   @IsNotEmpty()
   sedeId: string;
 
-  @ApiProperty({ description: 'Tipo de nota (SUNAT)', example: 1 })
+  @ApiProperty({
+    description:
+      'Código de motivo SUNAT. NC: catálogo 09 (1-12). ND: catálogo 10 (1, 2, 3, 10, 11). ' +
+      'La validación contra el catálogo correspondiente se aplica en el service según el tipo de nota.',
+    example: 1,
+  })
   @IsInt()
   @Min(1)
-  @Max(13)
+  @Max(12)
   @Type(() => Number)
   tipoNota: number;
 
