@@ -59,6 +59,7 @@ model Empresa {
   componentes              Componente[]
   comprobantes             ComprobanteElectronico[]
   comunicacionesBaja       ComunicacionBaja[]
+  resumenesDiarios         ResumenDiario[]
   configuracionCampos      ConfiguracionCamposServicio[]
   configuracionCodigos     ConfiguracionCodigos?
   configuracionFacturacion ConfiguracionFacturacion?
@@ -456,6 +457,9 @@ model Sede {
 
   // Comunicaciones de baja emitidas desde esta sede
   comunicacionesBaja ComunicacionBaja[]
+
+  // Resúmenes diarios (RC) emitidos desde esta sede
+  resumenesDiarios   ResumenDiario[]
 
   // Guías de remisión
   guiasRemision GuiaRemision[]

@@ -1,3 +1,4 @@
+
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -515,8 +516,6 @@ export class FacturacionService {
               descuento: true,
               esCredito: true,
               metodoPago: true,
-              bancoPago: true,
-              referenciaPago: true,
               cuotas: {
                 select: { numero: true, monto: true, fechaVencimiento: true },
                 orderBy: { numero: 'asc' },
@@ -604,6 +603,9 @@ export class FacturacionService {
             sunatCdrUrl: result.cdrUrl ?? null,
             cadenaQR: result.cadenaQR ?? null,
             enlaceProveedor: result.enlace ?? null,
+            // Persistir rawResponse también en rama PROCESANDO para que el
+            // _syncrofactId quede disponible (necesario para anulación, RC, etc.)
+            cdrResponse: result.rawResponse ?? null,
             enviadoAProveedor: true,
             sunatStatus: 'PROCESANDO',
             intentosEnvio: { increment: 1 },
@@ -1170,9 +1172,12 @@ export class FacturacionService {
       const correlativo = String(nuevoCorrelativo).padStart(8, '0');
       const codigoGenerado = `${serie}-${correlativo}`;
 
-      // Items: usar del DTO o copiar del original
-      const itemsOrigen = dto.items && dto.items.length > 0
-        ? dto.items.map((item) => ({
+      // Items: si vienen del DTO usamos esos (ND con cargo adicional, NC parcial,
+      // etc.) y recalculamos totales del header desde ellos. Si no vienen, copiamos
+      // del comprobante origen (caso "anular completo").
+      const usaItemsCustom = !!(dto.items && dto.items.length > 0);
+      const itemsParaCrear = usaItemsCustom
+        ? dto.items!.map((item) => ({
             descripcion: item.descripcion,
             cantidad: new Prisma.Decimal(item.cantidad),
             valorUnitario: new Prisma.Decimal(item.valorUnitario.toFixed(2)),
@@ -1198,6 +1203,28 @@ export class FacturacionService {
             ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
           }));
 
+      // Recalcular totales del header cuando hay items custom.
+      // SUNAT cat. 07: 10=Gravado, 20=Exonerado, 30=Inafecto, 40=Exportación.
+      let gravadaT = 0, exoneradaT = 0, inafectaT = 0, igvT = 0, icbperT = 0;
+      if (usaItemsCustom) {
+        for (const it of dto.items!) {
+          const cant = Number(it.cantidad);
+          const valorU = Number(it.valorUnitario);
+          const sub = it.subtotal != null
+            ? Number(it.subtotal)
+            : Math.round(valorU * cant * 100) / 100;
+          const igvIt = it.igv != null ? Number(it.igv) : 0;
+          const icbperIt = it.icbper != null ? Number(it.icbper) : 0;
+          const ta = it.tipoAfectacion || '10';
+          if (ta === '20') exoneradaT += sub;
+          else if (ta === '30') inafectaT += sub;
+          else gravadaT += sub;
+          igvT += igvIt;
+          icbperT += icbperIt;
+        }
+      }
+      const totalT = gravadaT + exoneradaT + inafectaT + igvT + icbperT;
+
       const nota = await tx.comprobanteElectronico.create({
         data: {
           empresaId,
@@ -1214,20 +1241,20 @@ export class FacturacionService {
           emailCliente: origen.emailCliente,
           moneda: origen.moneda,
           tipoCambio: origen.tipoCambio,
-          gravada: origen.gravada,
-          exonerada: origen.exonerada,
-          inafecta: origen.inafecta,
-          igv: origen.igv,
-          totalIgv: origen.totalIgv,
-          icbper: origen.icbper,
-          total: origen.total,
+          gravada: usaItemsCustom ? new Prisma.Decimal(gravadaT.toFixed(2)) : origen.gravada,
+          exonerada: usaItemsCustom ? new Prisma.Decimal(exoneradaT.toFixed(2)) : origen.exonerada,
+          inafecta: usaItemsCustom ? new Prisma.Decimal(inafectaT.toFixed(2)) : origen.inafecta,
+          igv: usaItemsCustom ? new Prisma.Decimal(igvT.toFixed(2)) : origen.igv,
+          totalIgv: usaItemsCustom ? new Prisma.Decimal(igvT.toFixed(2)) : origen.totalIgv,
+          icbper: usaItemsCustom ? new Prisma.Decimal(icbperT.toFixed(2)) : origen.icbper,
+          total: usaItemsCustom ? new Prisma.Decimal(totalT.toFixed(2)) : origen.total,
           estado: 'REGISTRADO' as any,
           comprobanteOrigenId,
           tipoNotaCredito: tipoNota === 'NOTA_CREDITO' ? dto.tipoNota : null,
           tipoNotaDebito: tipoNota === 'NOTA_DEBITO' ? dto.tipoNota : null,
           motivoNota: dto.motivo,
           detalles: {
-            create: itemsOrigen,
+            create: itemsParaCrear,
           },
         },
         include: { detalles: true },

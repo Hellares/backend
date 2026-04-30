@@ -7,6 +7,8 @@ import {
   BatchStatusResult,
   ComunicacionBajaInput,
   ComunicacionBajaResult,
+  ResumenDiarioInput,
+  ResumenDiarioResult,
 } from '../facturacion-provider.interface';
 import { SyncrofactMapper } from './syncrofact.mapper';
 import {
@@ -238,6 +240,109 @@ export class SyncrofactProvider implements FacturacionProvider {
     return this.mapBajaResponse(response.data);
   }
 
+  // ── Resumen Diario (RC) — anulación de boletas ──
+
+  /**
+   * Crea un Resumen Diario de anulación en Syncrofact.
+   * Endpoint: POST /v1/boletas/anular-oficialmente
+   * Usa formato B (motivo por boleta) — más expresivo que formato A.
+   */
+  async crearResumenDiario(
+    input: ResumenDiarioInput,
+    config: any,
+  ): Promise<ResumenDiarioResult> {
+    const url = this.buildUrl(config.proveedorRuta, '/v1/boletas/anular-oficialmente');
+    const body: any = {
+      company_id: config.proveedorConfig?.companyId,
+      branch_id: config.proveedorConfig?.branchId,
+      boletas: input.detalles.map((d) => ({
+        id: typeof d.proveedorComprobanteId === 'string'
+          ? Number(d.proveedorComprobanteId)
+          : d.proveedorComprobanteId,
+        motivo: d.motivoEspecifico,
+      })),
+    };
+    if (input.usuarioCreacion) body.usuario_id = Number(input.usuarioCreacion) || undefined;
+
+    const response = await this.callApi<any>(url, config.proveedorToken, body);
+    if (!response?.success || !response.data?.summary) {
+      throw new Error(response?.message || 'Syncrofact: respuesta inválida creando RC');
+    }
+    return this.mapResumenResponse(response.data.summary);
+  }
+
+  /**
+   * Envía a SUNAT un RC previamente creado (auto-consulta estado tras ~2s).
+   * Endpoint: POST /v1/daily-summaries/{id}/send-sunat
+   */
+  async enviarResumenDiario(
+    proveedorResumenId: string,
+    config: any,
+  ): Promise<ResumenDiarioResult> {
+    const url = this.buildUrl(
+      config.proveedorRuta,
+      `/v1/daily-summaries/${encodeURIComponent(proveedorResumenId)}/send-sunat`,
+    );
+    const response = await this.callApi<any>(url, config.proveedorToken, {});
+    if (!response?.success || !response.data) {
+      const err = this.extraerError(response) || 'Syncrofact: respuesta inválida enviando RC';
+      throw new Error(err);
+    }
+    return this.mapResumenResponse(response.data);
+  }
+
+  /**
+   * Re-consulta el estado de un RC por ticket.
+   * Endpoint: POST /v1/daily-summaries/{id}/check-status
+   */
+  async consultarResumenDiario(
+    proveedorResumenId: string,
+    config: any,
+  ): Promise<ResumenDiarioResult> {
+    const url = this.buildUrl(
+      config.proveedorRuta,
+      `/v1/daily-summaries/${encodeURIComponent(proveedorResumenId)}/check-status`,
+    );
+    const response = await this.callApi<any>(url, config.proveedorToken, {});
+    if (!response?.success || !response.data) {
+      throw new Error(response?.message || 'Syncrofact: respuesta inválida consultando RC');
+    }
+    return this.mapResumenResponse(response.data);
+  }
+
+  private mapResumenResponse(data: any): ResumenDiarioResult {
+    return {
+      proveedorResumenId: String(data.id ?? ''),
+      numeroCompleto: String(data.numero_completo ?? data.numero ?? ''),
+      serie: String(data.serie ?? this.extraerSerieDeNumero(data.numero_completo ?? data.numero) ?? ''),
+      correlativo: String(data.correlativo ?? this.extraerCorrelativoDeNumero(data.numero_completo ?? data.numero) ?? ''),
+      fechaEmision: String(data.fecha_resumen ?? data.fecha_emision ?? ''),
+      estadoSunat: String(data.estado_sunat ?? 'PENDIENTE').toUpperCase(),
+      ticket: data.ticket ?? null,
+      hashCdr: data.hash_cdr ?? null,
+      errorProveedor:
+        typeof data.respuesta_sunat === 'object' && data.respuesta_sunat?.description
+          ? data.respuesta_sunat.description
+          : null,
+      cdrUrl: data.cdr_path ?? data.cdr_url ?? null,
+      xmlUrl: data.xml_path ?? data.xml_url ?? null,
+      rawResponse: data,
+    };
+  }
+
+  /** Extrae "RC-20260429" de "RC-20260429-001" (Syncrofact a veces no manda serie/correlativo separados). */
+  private extraerSerieDeNumero(numero?: string | null): string | null {
+    if (!numero) return null;
+    const idx = numero.lastIndexOf('-');
+    return idx > 0 ? numero.slice(0, idx) : null;
+  }
+
+  private extraerCorrelativoDeNumero(numero?: string | null): string | null {
+    if (!numero) return null;
+    const idx = numero.lastIndexOf('-');
+    return idx > 0 ? numero.slice(idx + 1) : null;
+  }
+
   private mapBajaResponse(data: any): ComunicacionBajaResult {
     return {
       proveedorBajaId: String(data.id ?? ''),
@@ -256,6 +361,39 @@ export class SyncrofactProvider implements FacturacionProvider {
       xmlUrl: data.xml_path ?? data.xml_url ?? null,
       rawResponse: data,
     };
+  }
+
+  // ── Recuperación de IDs ──
+
+  /**
+   * Resuelve el ID interno de Syncrofact para un comprobante a partir de su
+   * `referencia_interna` (= ComprobanteElectronico.id local). Útil cuando el
+   * `cdrResponse` no quedó persistido (rama PROCESANDO antigua, etc.).
+   *
+   * Endpoint: GET /v1/integracion/documentos?referencia_interna=X&tipo_documento=03
+   */
+  async resolverProveedorIdPorReferencia(
+    referenciaInterna: string,
+    tipoComprobante: string,
+    config: any,
+  ): Promise<string | null> {
+    const tipoDoc = this.tipoDocSunat(tipoComprobante);
+    const url = this.buildUrl(
+      config.proveedorRuta,
+      `/v1/integracion/documentos?referencia_interna=${encodeURIComponent(referenciaInterna)}&tipo_documento=${tipoDoc}`,
+    );
+    try {
+      const result = await this.callApiGet<any>(url, config.proveedorToken);
+      if (result?.data?.encontrado && result.data.id) {
+        return String(result.data.id);
+      }
+      return null;
+    } catch (err: any) {
+      this.logger.warn(
+        `resolverProveedorIdPorReferencia falló para ${referenciaInterna}: ${err?.message ?? err}`,
+      );
+      return null;
+    }
   }
 
   // ── Helpers del provider ──

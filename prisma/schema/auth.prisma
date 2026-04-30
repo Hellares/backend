@@ -156,6 +156,10 @@ model Usuario {
   // Guías de remisión
   guiasRemisionCreadas           GuiaRemision[]         @relation("GuiaRemisionCreador")
 
+  // Cajero original de ventas que luego fueron revertidas (Devolucion.cajeroOriginalId).
+  // Permite notificar/auditar al cajero original cuando otro usuario procesa la reversión.
+  devolucionesComoCajeroOriginal Devolucion[]           @relation("DevolucionCajeroOriginal")
+
   @@index([email])
   @@index([telefono])
   @@index([personaId])

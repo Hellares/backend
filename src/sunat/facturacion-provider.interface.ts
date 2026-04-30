@@ -103,6 +103,32 @@ export interface FacturacionProvider {
     proveedorBajaId: string,
     config: any,
   ): Promise<ComunicacionBajaResult>;
+
+  /**
+   * Opcional: crea un Resumen Diario (RC) de anulación de boletas en el
+   * proveedor. NO lo envía a SUNAT (queda PENDIENTE hasta `enviarResumenDiario`).
+   */
+  crearResumenDiario?(
+    input: ResumenDiarioInput,
+    config: any,
+  ): Promise<ResumenDiarioResult>;
+
+  /**
+   * Opcional: dispara el envío a SUNAT del RC. Asíncrono — devuelve ticket
+   * y auto-consulta estado tras unos segundos.
+   */
+  enviarResumenDiario?(
+    proveedorResumenId: string,
+    config: any,
+  ): Promise<ResumenDiarioResult>;
+
+  /**
+   * Opcional: re-consulta estado SUNAT del RC por ticket.
+   */
+  consultarResumenDiario?(
+    proveedorResumenId: string,
+    config: any,
+  ): Promise<ResumenDiarioResult>;
 }
 
 /** Documento incluido en una Comunicación de Baja */
@@ -129,6 +155,41 @@ export interface ComunicacionBajaResult {
   correlativo: string;
   fechaEmision: string;
   estadoSunat: string;         // "PENDIENTE" | "ENVIADO" | "ACEPTADO" | "RECHAZADO"
+  ticket?: string | null;
+  hashCdr?: string | null;
+  errorProveedor?: string | null;
+  cdrUrl?: string | null;
+  xmlUrl?: string | null;
+  rawResponse?: any;
+}
+
+/** Boleta incluida en un Resumen Diario (anulación) */
+export interface ResumenDiarioDetalle {
+  /** ID de la boleta en el proveedor (Syncrofact: invoices.id). */
+  proveedorComprobanteId: string | number;
+  motivoEspecifico: string;
+}
+
+/** Payload para crear un Resumen Diario de anulación en el proveedor */
+export interface ResumenDiarioInput {
+  /**
+   * Motivo aplicado al lote completo. La doc Syncrofact 20.5 acepta motivo único
+   * (formato A) o por boleta (formato B); aquí estandarizamos formato B
+   * pasando `motivoEspecifico` por detalle.
+   */
+  motivoAnulacion: string;
+  detalles: ResumenDiarioDetalle[];
+  usuarioCreacion?: string;
+}
+
+/** Resultado de operaciones sobre Resumen Diario */
+export interface ResumenDiarioResult {
+  proveedorResumenId: string;  // ID del daily_summary en el proveedor
+  numeroCompleto: string;      // "RC-20260429-001"
+  serie: string;
+  correlativo: string;
+  fechaEmision: string;
+  estadoSunat: string;         // "PENDIENTE" | "PROCESANDO" | "ACEPTADO" | "RECHAZADO"
   ticket?: string | null;
   hashCdr?: string | null;
   errorProveedor?: string | null;

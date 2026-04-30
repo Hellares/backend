@@ -48,12 +48,8 @@ interface ComprobanteData {
     descuento?: any;
     esCredito?: boolean;
     cuotas?: Array<{ numero: number; monto: any; fechaVencimiento: Date }>;
-    /** @deprecated Reemplazado por pagos[]. Conservado por compat Fase 1. */
+    /** Pago único legacy: si no hay `pagos[]` pero sí `metodoPago`, se sintetiza un pago virtual sin banco/referencia. */
     metodoPago?: string | null;
-    /** @deprecated Reemplazado por pagos[].banco. */
-    bancoPago?: string | null;
-    /** @deprecated Reemplazado por pagos[].referencia. */
-    referenciaPago?: string | null;
     /** Pagos individuales — fuente principal para construir medios_pago en Fase 2. */
     pagos?: Array<{
       metodoPago: string;
@@ -245,8 +241,10 @@ export class SyncrofactMapper {
    *  - no hay pagos vinculados (caso legacy sin venta o venta sin pagos)
    *  - el total < umbral Y todos los pagos son EFECTIVO (no es necesario reportar)
    *
-   * Itera `venta.pagos[]` y arma un array con todos los medios. Cuando solo hay
-   * legacy `venta.metodoPago` (registros pre-Fase2), sintetiza un pago virtual.
+   * Itera `venta.pagos[]` y arma un array con todos los medios. Si la venta
+   * no trae `pagos[]` (legacy sin Fase 2) sintetiza un pago virtual desde
+   * `venta.metodoPago` sin banco/referencia — la validación en el service
+   * abortará si el método requiere bancarización.
    *
    * Lanza error si falta un dato requerido por el catálogo del proveedor
    * (referencia en YAPE / banco en TRANSFERENCIA). El service aborta ANTES de
@@ -261,15 +259,15 @@ export class SyncrofactMapper {
     const total = Number(comprobante.total);
     if (!Number.isFinite(total)) return null;
 
-    // Fuente principal: pagos[]; fallback legacy: venta.metodoPago + venta.bancoPago + venta.referenciaPago
+    // Fuente principal: pagos[]; fallback legacy: venta.metodoPago sin banco/referencia
     const pagosFuente = (venta.pagos && venta.pagos.length > 0)
       ? venta.pagos
       : (venta.metodoPago
           ? [{
               metodoPago: venta.metodoPago,
               monto: total,
-              referencia: venta.referenciaPago ?? null,
-              banco: venta.bancoPago ?? null,
+              referencia: null,
+              banco: null,
             }]
           : []);
 

@@ -145,8 +145,8 @@ export class VentaService {
    *    el efectivo excede lo legal: se exige `aceptaRiesgoBancarizacion=true`
    *    (cajero confirma la advertencia, cliente asume el riesgo de no deducir IGV).
    *
-   * Compat: si no llega `pagos[]` se sintetiza uno virtual desde el legacy
-   * (`metodoPago` + `montoRecibido` + `bancoPago` + `referenciaPago`).
+   * Compat: si no llega `pagos[]` se sintetiza uno virtual desde
+   * `metodoPago` + `montoRecibido` (sin banco/referencia).
    */
   private validarBancarizacion(dto: {
     total: number;
@@ -154,8 +154,6 @@ export class VentaService {
     esCredito?: boolean;
     pagos?: Array<{ metodoPago: string; monto: number; referencia?: string | null; banco?: string | null }>;
     metodoPago?: string | null;
-    bancoPago?: string | null;
-    referenciaPago?: string | null;
     montoRecibido?: number | null;
     aceptaRiesgoBancarizacion?: boolean;
   }): void {
@@ -171,8 +169,8 @@ export class VentaService {
         ? [{
             metodoPago: dto.metodoPago,
             monto: dto.montoRecibido!,
-            referencia: dto.referenciaPago,
-            banco: dto.bancoPago,
+            referencia: null,
+            banco: null,
           }]
         : [];
 
@@ -266,8 +264,6 @@ export class VentaService {
         pagos: dto.pagos,
         metodoPago: dto.metodoPago,
         montoRecibido: dto.montoRecibido,
-        bancoPago: dto.bancoPago,
-        referenciaPago: dto.referenciaPago,
         aceptaRiesgoBancarizacion: dto.aceptaRiesgoBancarizacion,
       });
 
@@ -299,8 +295,6 @@ export class VentaService {
           metodoPago: this.resolverMetodoPagoVenta(dto.pagos, dto.metodoPago),
           montoRecibido: dto.montoRecibido,
           montoCambio,
-          bancoPago: dto.bancoPago,
-          referenciaPago: dto.referenciaPago,
           bancarizacionAdvertida: dto.aceptaRiesgoBancarizacion ?? false,
           esCredito: dto.esCredito ?? false,
           plazoCredito: dto.plazoCredito,
@@ -418,8 +412,6 @@ export class VentaService {
           pagos: dto.pagos,
           metodoPago: dto.metodoPago,
           montoRecibido: dto.montoRecibido,
-          bancoPago: dto.bancoPago,
-          referenciaPago: dto.referenciaPago,
           aceptaRiesgoBancarizacion: dto.aceptaRiesgoBancarizacion,
         });
 
@@ -463,8 +455,6 @@ export class VentaService {
             metodoPago: this.resolverMetodoPagoVenta(dto.pagos, dto.metodoPago),
             montoRecibido: montoRecibido || null,
             montoCambio: montoCambio || null,
-            bancoPago: dto.bancoPago,
-            referenciaPago: dto.referenciaPago,
             bancarizacionAdvertida: dto.aceptaRiesgoBancarizacion ?? false,
             esCredito,
             plazoCredito: dto.plazoCredito,
@@ -654,8 +644,6 @@ export class VentaService {
               ventaId: venta.id,
               metodoPago: dto.metodoPago || 'EFECTIVO',
               monto: Math.min(montoRecibido, totalVenta),
-              referencia: dto.referenciaPago || null,
-              banco: dto.bancoPago || null,
             },
           });
         }
@@ -802,7 +790,6 @@ export class VentaService {
                 monto: new Prisma.Decimal(
                   (esCredito ? 0 : Math.min(montoRecibido || totalVenta, totalVenta)).toFixed(2),
                 ),
-                referencia: dto.referenciaPago || null,
                 estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
               }];
 
@@ -1236,7 +1223,6 @@ export class VentaService {
             ventaId: venta.id,
             metodoPago: dto.metodoPago || 'EFECTIVO',
             monto: Math.min(dto.montoRecibido, totalVenta),
-            referencia: dto.referenciaPago || null,
           },
         });
       }
@@ -1369,7 +1355,6 @@ export class VentaService {
               comprobanteId: comprobante.id,
               metodoPago: dto.metodoPago || 'EFECTIVO',
               monto: new Prisma.Decimal(montoPagoLegacy.toFixed(2)),
-              referencia: dto.referenciaPago || null,
               estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
             }];
 
@@ -2770,6 +2755,7 @@ export class VentaService {
         codigo: comp.codigoGenerado,
         estado: comp.anulado ? 'ANULADO' : comp.estado,
         sunatStatus: comp.sunatStatus,
+        anulado: comp.anulado,
         fecha: comp.fechaEmision,
         monto: comp.total,
         moneda: venta.moneda,
@@ -2788,6 +2774,7 @@ export class VentaService {
           codigo: nota.codigoGenerado,
           estado: nota.anulado ? 'ANULADO' : nota.estado,
           sunatStatus: nota.sunatStatus,
+          anulado: nota.anulado,
           fecha: nota.fechaEmision,
           monto: nota.total,
           moneda: venta.moneda,

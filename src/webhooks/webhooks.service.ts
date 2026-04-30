@@ -64,6 +64,17 @@ const EVENTOS_BAJA = new Set([
   'voided_document.rejected',
 ]);
 
+/**
+ * Eventos del flujo Resumen Diario (RC) — entidad propia ResumenDiario.
+ * Nota: NO existe `daily_summary.rejected` separado. `daily_summary.processed`
+ * se dispara para cualquier estado terminal y hay que mirar `data.estado_sunat`.
+ */
+const EVENTOS_RC = new Set([
+  'daily_summary.created',
+  'daily_summary.sent',
+  'daily_summary.processed',
+]);
+
 @Injectable()
 export class WebhooksService {
   private readonly logger: AppLoggerService;
@@ -138,6 +149,11 @@ export class WebhooksService {
     // Eventos de Comunicación de Baja: actualizan ComunicacionBaja, no ComprobanteElectronico.
     if (EVENTOS_BAJA.has(event)) {
       return this.procesarEventoBaja(event, empresaId, data);
+    }
+
+    // Eventos de Resumen Diario: actualizan ResumenDiario y propagan anulado=true a boletas.
+    if (EVENTOS_RC.has(event)) {
+      return this.procesarEventoRC(event, empresaId, data);
     }
 
     // Localizar el comprobante: preferir referencia_interna (nuestro id),
@@ -256,6 +272,87 @@ export class WebhooksService {
     });
 
     this.logger.info(`Webhook ${event} → CDB ${baja.id} marcada ${nuevoEstado}`);
+    return { ok: true, accion: 'actualizado' };
+  }
+
+  /**
+   * Procesa eventos de Resumen Diario (RC). Actualiza la fila de ResumenDiario
+   * y, si el evento es `daily_summary.processed` con estado_sunat=ACEPTADO,
+   * marca todas las boletas referenciadas como `anulado=true`.
+   */
+  private async procesarEventoRC(
+    event: string,
+    empresaId: string,
+    data: SyncrofactWebhookPayload['data'],
+  ): Promise<{ ok: boolean; accion: 'actualizado' | 'ignorado' | 'no_encontrado'; comprobanteId?: string }> {
+    const proveedorResumenId = data.document_id != null ? String(data.document_id) : null;
+    const numero = data.numero ?? null;
+
+    const resumen = await this.prisma.resumenDiario.findFirst({
+      where: {
+        empresaId,
+        OR: [
+          ...(proveedorResumenId ? [{ proveedorResumenId }] : []),
+          ...(numero ? [{ numeroCompleto: numero }] : []),
+        ],
+      },
+      select: { id: true, estadoSunat: true, motivoAnulacion: true },
+    });
+
+    if (!resumen) {
+      this.logger.warn(
+        `Webhook ${event} — RC no encontrado (empresa=${empresaId}, document_id=${proveedorResumenId}, numero=${numero})`,
+      );
+      return { ok: true, accion: 'no_encontrado' };
+    }
+
+    // Idempotencia: si ya está en estado terminal, no tocar.
+    if (resumen.estadoSunat === 'ACEPTADO' || resumen.estadoSunat === 'RECHAZADO') {
+      return { ok: true, accion: 'ignorado' };
+    }
+
+    const estadoSunat = (data.estado_sunat ?? '').toString().toUpperCase();
+
+    // `daily_summary.created` y `daily_summary.sent` no implican estado terminal.
+    // Solo `daily_summary.processed` puede traer ACEPTADO/RECHAZADO.
+    let nuevoEstado: 'PENDIENTE' | 'PROCESANDO' | 'ACEPTADO' | 'RECHAZADO';
+    let aceptado = false;
+    if (event === 'daily_summary.processed') {
+      aceptado = estadoSunat === 'ACEPTADO';
+      const rechazado = estadoSunat === 'RECHAZADO';
+      nuevoEstado = aceptado ? 'ACEPTADO' : rechazado ? 'RECHAZADO' : 'PROCESANDO';
+    } else if (event === 'daily_summary.sent') {
+      nuevoEstado = 'PROCESANDO';
+    } else {
+      // daily_summary.created — el RC apenas se creó en el proveedor, sigue PENDIENTE.
+      nuevoEstado = 'PENDIENTE';
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.resumenDiario.update({
+        where: { id: resumen.id },
+        data: {
+          estadoSunat: nuevoEstado as any,
+          enviadoAProveedor: nuevoEstado !== 'PENDIENTE' ? true : undefined,
+        },
+      });
+
+      if (aceptado) {
+        // Marcar boletas referenciadas como anuladas
+        const detalles = await tx.detalleResumenDiario.findMany({
+          where: { resumenDiarioId: resumen.id },
+          select: { comprobanteId: true },
+        });
+        if (detalles.length > 0) {
+          await tx.comprobanteElectronico.updateMany({
+            where: { id: { in: detalles.map((d) => d.comprobanteId) } },
+            data: { anulado: true, motivoAnulacion: resumen.motivoAnulacion },
+          });
+        }
+      }
+    });
+
+    this.logger.info(`Webhook ${event} → RC ${resumen.id} marcado ${nuevoEstado}`);
     return { ok: true, accion: 'actualizado' };
   }
 

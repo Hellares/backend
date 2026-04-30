@@ -88,18 +88,6 @@ export class CreateVentaDto {
   @Type(() => Number)
   montoRecibido?: number;
 
-  /** @deprecated Usar `pagos[].banco` por pago. Conservado para compat Fase 1. */
-  @ApiPropertyOptional({ deprecated: true, description: '[deprecated] Usar pagos[].banco' })
-  @IsOptional()
-  @IsString()
-  bancoPago?: string;
-
-  /** @deprecated Usar `pagos[].referencia` por pago. Conservado para compat Fase 1. */
-  @ApiPropertyOptional({ deprecated: true, description: '[deprecated] Usar pagos[].referencia' })
-  @IsOptional()
-  @IsString()
-  referenciaPago?: string;
-
   @ApiPropertyOptional({ description: 'Pagos múltiples (multi-medio). Cada pago lleva su banco/referencia.', type: [CreatePagoVentaDto] })
   @IsOptional()
   @IsArray()

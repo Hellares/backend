@@ -195,6 +195,10 @@ export class ComunicacionBajaService {
       usuarioCreacion: dto.usuarioCreacion ?? userId ?? undefined,
     };
 
+    this.logger.info(
+      `Creando CDB en ${config.proveedorActivo} para ${dto.detalles.length} documento(s) (sede ${dto.sedeId}, fechaRef ${dto.fechaReferencia})`,
+    );
+
     let respProveedor: ComunicacionBajaResult;
     try {
       respProveedor = await provider.crearComunicacionBaja(input, config as any);
@@ -202,6 +206,10 @@ export class ComunicacionBajaService {
       this.logger.error(`Error creando CDB en proveedor: ${err?.message}`);
       throw new BadRequestException(`Proveedor rechazó la creación: ${err?.message ?? err}`);
     }
+
+    this.logger.info(
+      `CDB ${respProveedor.numeroCompleto} creada en ${config.proveedorActivo} (proveedorBajaId=${respProveedor.proveedorBajaId})`,
+    );
 
     // 7. Persistir local con sus detalles
     const baja = await this.prisma.comunicacionBaja.create({
@@ -262,6 +270,8 @@ export class ComunicacionBajaService {
       throw new BadRequestException(`Proveedor ${baja.proveedorEmisor} no soporta envío de CDB`);
     }
 
+    this.logger.info(`Enviando CDB ${baja.numeroCompleto} a SUNAT vía ${baja.proveedorEmisor}`);
+
     let resp: ComunicacionBajaResult;
     try {
       resp = await provider.enviarComunicacionBaja(baja.proveedorBajaId, config as any);
@@ -274,8 +284,13 @@ export class ComunicacionBajaService {
           errorProveedor: String(err?.message ?? err).slice(0, 1000),
         },
       });
+      this.logger.error(`Error enviando CDB ${baja.numeroCompleto} a SUNAT: ${err?.message ?? err}`);
       throw new BadRequestException(`Error enviando CDB a SUNAT: ${err?.message ?? err}`);
     }
+
+    this.logger.info(
+      `CDB ${baja.numeroCompleto} enviada, pendiente confirmación SUNAT (ticket=${resp.ticket ?? '—'})`,
+    );
 
     return this.aplicarEstado(id, resp);
   }
@@ -298,7 +313,11 @@ export class ComunicacionBajaService {
       throw new BadRequestException(`Proveedor ${baja.proveedorEmisor} no soporta consulta de CDB`);
     }
 
+    this.logger.info(`Re-consultando estado de CDB ${baja.numeroCompleto} en ${baja.proveedorEmisor}`);
     const resp = await provider.consultarComunicacionBaja(baja.proveedorBajaId, config as any);
+    this.logger.info(
+      `CDB ${baja.numeroCompleto} consulta SUNAT → ${resp.estadoSunat ?? '—'}`,
+    );
     return this.aplicarEstado(id, resp);
   }
 
@@ -461,6 +480,10 @@ export class ComunicacionBajaService {
       }
       return baja;
     });
+    this.logger.info(
+      `CDB ${updated.numeroCompleto} estado actualizado → ${estado}` +
+      (estado === 'ACEPTADO' ? ` (${updated.detalles.length} comprobante(s) marcados anulados)` : ''),
+    );
     return updated;
   }
 

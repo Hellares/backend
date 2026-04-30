@@ -72,12 +72,6 @@ model Venta {
   montoRecibido Decimal?    @db.Decimal(10, 2)
   montoCambio   Decimal?    @db.Decimal(10, 2)
 
-  // @deprecated Fase 1 de bancarización (1 banco/ref por venta).
-  // Reemplazado por PagoVenta.banco / PagoVenta.referencia (multi-medio real).
-  // Mantener hasta migrar datos históricos; código nuevo NO debe leer/escribir.
-  bancoPago      String? @db.VarChar(50)
-  referenciaPago String? @db.VarChar(50)
-
   // Bancarización (Ley 28194) — el cajero confirmó la advertencia legal cuando
   // el efectivo de la venta excede el límite permitido (cliente asume riesgo
   // de no poder deducir IGV / sustento de gasto).
@@ -239,6 +233,7 @@ enum EstadoCuota {
   PAGADA_PARCIAL
   PAGADA
   VENCIDA
+  ANULADA   // Cuota cancelada por reversión total de la venta (comprobante anulado)
 }
 
 /// Cuota individual de una venta a crédito

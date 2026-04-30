@@ -115,4 +115,42 @@ export class DevolucionVentaController {
   ) {
     return this.devolucionVentaService.cancelar(id, empresaId, userId);
   }
+
+  // ── Reversión total post-anulación ──
+
+  @Post('venta/:ventaId/reversion-total')
+  @RequiresPermission(Permission.MANAGE_DEVOLUCIONES)
+  @ApiOperation({
+    summary:
+      'Procesar reversión total de una venta cuyo comprobante (y notas) ya fueron anulados ante SUNAT. Devuelve stock, reversa caja y cancela cuotas pendientes.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async crearReversionTotal(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: { id: string; rolGlobal?: string },
+    @Param('ventaId') ventaId: string,
+    @Body() body: { motivo?: string },
+  ) {
+    return this.devolucionVentaService.crearReversionTotal(
+      empresaId,
+      user.id,
+      (user.rolGlobal as any) ?? null,
+      ventaId,
+      body?.motivo,
+    );
+  }
+
+  @Get('venta/:ventaId/reversion-total')
+  @RequiresPermission(Permission.VIEW_DEVOLUCIONES)
+  @ApiOperation({
+    summary:
+      'Devuelve la reversión total existente para la venta (si ya fue procesada).',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async obtenerReversionTotal(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('ventaId') ventaId: string,
+  ) {
+    return this.devolucionVentaService.obtenerReversionTotal(ventaId, empresaId);
+  }
 }

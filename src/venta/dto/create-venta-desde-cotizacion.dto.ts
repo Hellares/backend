@@ -65,11 +65,6 @@ export class CreateVentaDesdeCotizacionDto {
   @IsString()
   condicionPago?: string;
 
-  @ApiPropertyOptional({ description: 'Referencia del pago (pago unico, legacy)' })
-  @IsOptional()
-  @IsString()
-  referenciaPago?: string;
-
   @ApiPropertyOptional({ description: 'Pagos multiples' })
   @IsOptional()
   @IsArray()

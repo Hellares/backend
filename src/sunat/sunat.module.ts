@@ -8,10 +8,12 @@ import { FacturacionProviderFactory } from './providers/facturacion-provider.fac
 import { SunatController } from './sunat.controller';
 import { ComunicacionBajaService } from './comunicacion-baja.service';
 import { ComunicacionBajaController } from './comunicacion-baja.controller';
+import { ResumenDiarioService } from './resumen-diario.service';
+import { ResumenDiarioController } from './resumen-diario.controller';
 
 @Module({
   imports: [PrismaModule, LoggerModule],
-  controllers: [SunatController, ComunicacionBajaController],
+  controllers: [SunatController, ComunicacionBajaController, ResumenDiarioController],
   providers: [
     // Registro de todos los providers soportados. El factory decide cuál usar
     // en cada operación según el proveedorEmisor del comprobante.
@@ -20,7 +22,8 @@ import { ComunicacionBajaController } from './comunicacion-baja.controller';
     FacturacionProviderFactory,
     FacturacionService,
     ComunicacionBajaService,
+    ResumenDiarioService,
   ],
-  exports: [FacturacionService, ComunicacionBajaService],
+  exports: [FacturacionService, ComunicacionBajaService, ResumenDiarioService],
 })
 export class SunatModule {}

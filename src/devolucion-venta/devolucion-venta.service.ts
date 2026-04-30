@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CajaService } from '../caja/caja.service';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { NotificacionService } from '../notificacion/notificacion.service';
 import { CreateDevolucionVentaDto } from './dto/create-devolucion-venta.dto';
 import { QueryDevolucionVentaDto } from './dto/query-devolucion-venta.dto';
 import {
@@ -14,8 +15,16 @@ import {
   TipoDevolucion,
   TipoMovimientoStock,
   TipoReembolso,
+  Rol,
   Prisma,
 } from '@prisma/client';
+
+/** Roles que pueden procesar una reversión total sin caja abierta. */
+const ROLES_ESCAPE_CAJA: Set<Rol> = new Set<Rol>([
+  Rol.SUPER_ADMIN,
+  Rol.EMPRESA_ADMIN,
+  Rol.SEDE_ADMIN,
+]);
 
 @Injectable()
 export class DevolucionVentaService {
@@ -25,6 +34,7 @@ export class DevolucionVentaService {
     private readonly prisma: PrismaService,
     private readonly cacheService: CacheService,
     private readonly cajaService: CajaService,
+    private readonly notificacionService: NotificacionService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -519,6 +529,299 @@ export class DevolucionVentaService {
     return this.prisma.devolucion.update({
       where: { id },
       data: { estado: EstadoDevolucion.CANCELADA },
+    });
+  }
+
+  /**
+   * Reversión total post-anulación: el comprobante de la venta y todas sus
+   * notas relacionadas ya fueron anulados ante SUNAT. Esta acción genera la
+   * Devolucion espejo que reversiona stock + caja + cancela cuotas pendientes.
+   *
+   * Política de caja:
+   *  - Cajeros/vendedores → requieren caja propia abierta. Si no hay → 400.
+   *  - Roles ADMIN (SUPER/EMPRESA/SEDE_ADMIN) → pueden procesar sin caja
+   *    abierta; en ese caso `pendienteRegistroCaja=true` para que tesorería
+   *    haga el ajuste manual después.
+   */
+  async crearReversionTotal(
+    empresaId: string,
+    userId: string,
+    userRol: Rol | null | undefined,
+    ventaId: string,
+    motivo?: string,
+  ) {
+    const esRolAdmin = !!userRol && ROLES_ESCAPE_CAJA.has(userRol);
+
+    // Caja del usuario que procesa hoy (puede ser cualquier sede de la empresa).
+    const cajaAbierta = await this.prisma.caja.findFirst({
+      where: { empresaId, usuarioId: userId, estado: 'ABIERTA' },
+      select: { id: true, sedeId: true },
+    });
+    if (!cajaAbierta && !esRolAdmin) {
+      throw new BadRequestException(
+        'Necesitas una caja abierta para procesar reversiones. Vaya a Caja → Abrir Caja.',
+      );
+    }
+
+    // Cargar venta + dependencias.
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId },
+      include: {
+        detalles: true,
+        pagos: true,
+        cuotas: true,
+        comprobante: { include: { notasRelacionadas: true } },
+        devoluciones: { include: { items: true } },
+      },
+    });
+    if (!venta) throw new NotFoundException('Venta no encontrada');
+    if (!venta.comprobante) {
+      throw new BadRequestException(
+        'La venta no tiene comprobante electrónico — la reversión total no aplica',
+      );
+    }
+    if (!venta.comprobante.anulado) {
+      throw new BadRequestException(
+        'El comprobante no está anulado todavía. Anula primero vía Comunicación de Baja o Resumen Diario.',
+      );
+    }
+    const notasNoAnuladas = (venta.comprobante.notasRelacionadas ?? []).filter(
+      (n) => !n.anulado,
+    );
+    if (notasNoAnuladas.length > 0) {
+      const codigos = notasNoAnuladas.map((n) => n.codigoGenerado).join(', ');
+      throw new BadRequestException(
+        `Faltan anular ${notasNoAnuladas.length} nota(s) asociada(s): ${codigos}. Anular antes de reversionar.`,
+      );
+    }
+    const yaTieneReversion = venta.devoluciones.some(
+      (d) =>
+        d.esReversionTotal &&
+        d.estado !== EstadoDevolucion.CANCELADA &&
+        d.estado !== EstadoDevolucion.RECHAZADA,
+    );
+    if (yaTieneReversion) {
+      throw new BadRequestException(
+        'Esta venta ya tiene una reversión total procesada',
+      );
+    }
+
+    // Calcular cantidades pendientes (descontando devoluciones parciales previas).
+    const yaDevuelto = new Map<string, number>();
+    for (const d of venta.devoluciones) {
+      if (
+        d.estado === EstadoDevolucion.CANCELADA ||
+        d.estado === EstadoDevolucion.RECHAZADA
+      ) {
+        continue;
+      }
+      for (const it of d.items) {
+        const k = `${it.productoId ?? ''}|${it.varianteId ?? ''}`;
+        yaDevuelto.set(k, (yaDevuelto.get(k) ?? 0) + it.cantidad);
+      }
+    }
+    const itemsReversion: Array<{
+      productoId: string | null;
+      varianteId: string | null;
+      cantidad: number;
+    }> = [];
+    for (const det of venta.detalles) {
+      if (!det.productoId && !det.varianteId) continue; // servicios sin stock
+      const k = `${det.productoId ?? ''}|${det.varianteId ?? ''}`;
+      const ya = yaDevuelto.get(k) ?? 0;
+      const pendiente = Math.floor(Number(det.cantidad)) - ya;
+      if (pendiente <= 0) continue;
+      itemsReversion.push({
+        productoId: det.productoId,
+        varianteId: det.varianteId,
+        cantidad: pendiente,
+      });
+    }
+
+    const codigo = await this.generateCodigo(empresaId);
+    const sedeIdDevolucion = cajaAbierta?.sedeId ?? venta.sedeId;
+    const motivoFinal =
+      motivo?.trim() || 'Reversión total por anulación de comprobante';
+
+    this.logger.info(
+      `Iniciando reversión total ${codigo} sobre venta ${venta.codigo} (procesador=${userId}, cajaAbierta=${!!cajaAbierta}, esAdmin=${esRolAdmin})`,
+    );
+
+    const devolucion = await this.prisma.$transaction(
+      async (tx) => {
+        // 1. Crear Devolucion (PROCESADA directo: la baja oficial ya autorizó)
+        const dev = await tx.devolucion.create({
+          data: {
+            codigo,
+            empresaId,
+            sedeId: sedeIdDevolucion,
+            ventaId,
+            tipo: TipoDevolucion.CLIENTE_A_TIENDA,
+            estado: EstadoDevolucion.PROCESADA,
+            clienteId: venta.clienteId,
+            motivo: motivoFinal,
+            observaciones: `Reversión generada al anular ${venta.comprobante!.codigoGenerado}`,
+            tipoReembolso: TipoReembolso.EFECTIVO,
+            creadoPor: userId,
+            procesadoPor: userId,
+            procesadoEn: new Date(),
+            esReversionTotal: true,
+            cajeroOriginalId: venta.cajeroId,
+            pendienteRegistroCaja: !cajaAbierta,
+            items: {
+              create: itemsReversion.map((it) => ({
+                empresaId,
+                productoId: it.productoId,
+                varianteId: it.varianteId,
+                cantidad: it.cantidad,
+                motivo: 'OTRO' as any,
+                estadoProducto: 'BUENO' as any,
+                accion: 'REINGRESAR_STOCK' as any,
+                observaciones:
+                  'Reingreso por reversión total de venta anulada',
+              })),
+            },
+          },
+          include: { items: true },
+        });
+
+        // 2. Stock back: ENTRADA_DEVOLUCION_CLIENTE en sede ORIGINAL de la venta.
+        for (const item of dev.items) {
+          if (!item.productoId && !item.varianteId) continue;
+          const stock = await tx.productoStock.findFirst({
+            where: {
+              sedeId: venta.sedeId,
+              productoId: item.productoId ?? null,
+              varianteId: item.varianteId ?? null,
+            },
+          });
+          if (!stock) {
+            this.logger.warn(
+              `Reversión ${dev.codigo}: sin stock record para item ${item.id} (${item.productoId}/${item.varianteId}), saltando movimiento`,
+            );
+            continue;
+          }
+          const stockAnterior = stock.stockActual;
+          await tx.productoStock.update({
+            where: { id: stock.id },
+            data: { stockActual: { increment: item.cantidad } },
+          });
+          await tx.movimientoStock.create({
+            data: {
+              sedeId: venta.sedeId,
+              empresaId,
+              productoStockId: stock.id,
+              tipo: TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
+              tipoDocumento: 'DEVOLUCION',
+              numeroDocumento: dev.codigo,
+              cantidadAnterior: stockAnterior,
+              cantidad: item.cantidad,
+              cantidadNueva: stockAnterior + item.cantidad,
+              motivo: `Reversión total ${dev.codigo} — venta ${venta.codigo} anulada`,
+              devolucionId: dev.id,
+              usuarioId: userId,
+            },
+          });
+        }
+
+        // 3. Caja: 1 EGRESO por cada PagoVenta no-CREDITO, en la caja del procesador.
+        // Si no hay caja abierta y es admin → se omite y queda flag pendiente.
+        if (cajaAbierta) {
+          for (const pago of venta.pagos) {
+            if (pago.metodoPago === 'CREDITO') continue;
+            try {
+              await this.cajaService.registrarMovimientoSiHayCaja(
+                empresaId,
+                sedeIdDevolucion,
+                userId,
+                {
+                  tipo: 'EGRESO' as any,
+                  categoria: 'DEVOLUCION' as any,
+                  metodoPago: pago.metodoPago as any,
+                  monto: Number(pago.monto),
+                  descripcion: `Reversión venta ${venta.codigo} (${venta.comprobante!.codigoGenerado} anulado)`,
+                  devolucionId: dev.id,
+                },
+                tx,
+              );
+            } catch (e: any) {
+              this.logger.warn(
+                `Reversión ${dev.codigo}: error registrando egreso caja (${pago.metodoPago}): ${e?.message ?? e}`,
+              );
+            }
+          }
+        }
+
+        // 4. Cuotas pendientes → ANULADA (si era venta a crédito).
+        if (venta.esCredito) {
+          await tx.cuotaVenta.updateMany({
+            where: {
+              ventaId,
+              estado: { in: ['PENDIENTE', 'PAGADA_PARCIAL', 'VENCIDA'] as any },
+            },
+            data: { estado: 'ANULADA' as any },
+          });
+        }
+
+        return dev;
+      },
+      { timeout: 30000 },
+    );
+
+    // 5. Notificar al cajero original (si distinto del procesador). Best-effort.
+    if (venta.cajeroId && venta.cajeroId !== userId) {
+      try {
+        await this.notificacionService.enviarAUsuario(
+          venta.cajeroId,
+          'Venta revertida',
+          `Tu venta ${venta.codigo} fue revertida hoy. Comprobante ${venta.comprobante!.codigoGenerado} anulado.`,
+          {
+            empresaId,
+            data: {
+              ventaId,
+              devolucionId: devolucion.id,
+              tipo: 'REVERSION_TOTAL',
+            },
+          },
+        );
+      } catch (e: any) {
+        this.logger.warn(
+          `Notificación reversión a cajero original falló: ${e?.message ?? e}`,
+        );
+      }
+    }
+
+    await this.invalidateProductCache(empresaId);
+
+    this.logger.info(
+      `Reversión total ${devolucion.codigo} procesada (venta ${venta.codigo}, cajeroOrig=${venta.cajeroId}, procesador=${userId}, pendienteCaja=${devolucion.pendienteRegistroCaja})`,
+    );
+
+    return devolucion;
+  }
+
+  /**
+   * Devuelve la reversión total existente para una venta (si ya fue procesada),
+   * o null. Útil para que la UI sepa si mostrar el banner "VENTA REVERTIDA".
+   */
+  async obtenerReversionTotal(ventaId: string, empresaId: string) {
+    return this.prisma.devolucion.findFirst({
+      where: {
+        ventaId,
+        empresaId,
+        esReversionTotal: true,
+        estado: {
+          notIn: [EstadoDevolucion.CANCELADA, EstadoDevolucion.RECHAZADA],
+        },
+      },
+      include: {
+        items: {
+          include: {
+            producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+            variante: { select: { id: true, nombre: true, sku: true } },
+          },
+        },
+      },
     });
   }
 

@@ -396,6 +396,16 @@ model Devolucion {
   procesadoEn   DateTime?
   actualizadoEn DateTime  @updatedAt
 
+  // Reversión total post-anulación (cuando el comprobante y todas sus notas
+  // ya fueron anulados ante SUNAT y se procesa una devolución total para
+  // revertir stock + caja). Trazabilidad: cajeroOriginalId apunta al cajero
+  // que registró la venta original, distinto del procesadoPor que hace la
+  // reversión hoy. pendienteRegistroCaja=true cuando un admin procesó sin
+  // caja abierta y queda como ajuste pendiente para tesorería.
+  esReversionTotal      Boolean   @default(false)
+  cajeroOriginalId      String?
+  pendienteRegistroCaja Boolean   @default(false)
+
   // Relaciones
   empresa     Empresa           @relation(fields: [empresaId], references: [id])
   sede        Sede              @relation(fields: [sedeId], references: [id])
@@ -403,6 +413,7 @@ model Devolucion {
   compra      Compra?           @relation(fields: [compraId], references: [id])
   cliente     EmpresaPersona?   @relation(fields: [clienteId], references: [id])
   proveedor   Proveedor?        @relation(fields: [proveedorId], references: [id])
+  cajeroOriginal Usuario?       @relation("DevolucionCajeroOriginal", fields: [cajeroOriginalId], references: [id])
   items       DevolucionItem[]
   movimientos MovimientoStock[]
   movimientosCaja MovimientoCaja[] @relation("MovimientoCajaDevolucion")
@@ -414,6 +425,8 @@ model Devolucion {
   @@index([estado])
   @@index([ventaId])
   @@index([compraId])
+  @@index([ventaId, esReversionTotal])
+  @@index([cajeroOriginalId])
 }
 
 model DevolucionItem {

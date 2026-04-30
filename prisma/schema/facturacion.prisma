@@ -162,6 +162,8 @@ model ComprobanteElectronico {
   notasRelacionadas  ComprobanteElectronico[] @relation("NotasRelacionadas")
   // Comunicaciones de Baja en las que este comprobante fue anulado
   bajas              DetalleComunicacionBaja[] @relation("ComprobanteBajas")
+  // Resúmenes Diarios (RC) en los que este comprobante fue anulado (boletas)
+  resumenes          DetalleResumenDiario[]    @relation("ComprobanteResumenes")
   // Relación con Venta (1:1 opcional)
   ventaId          String?              @unique
   venta            Venta?               @relation(fields: [ventaId], references: [id])
@@ -393,6 +395,69 @@ enum EstadoSunat {
   RECHAZADO
   ERROR_COMUNICACION
   PROCESANDO
+}
+
+/// Resumen Diario (tipo RC) — mecanismo SUNAT para anular boletas (`03`) y
+/// notas vinculadas a boletas (`BC` / `BD`) ya ACEPTADAS. Plazo: **3 días** desde
+/// la fechaEmision del documento (más estricto que CDB).
+/// Facturas y notas `FC` / `FD` NO van por aquí — se anulan vía Comunicación de Baja.
+///
+/// Todas las boletas dentro de un mismo RC deben compartir `fechaEmision`
+/// (regla SUNAT). Si hay boletas de fechas distintas, se generan RCs separados.
+model ResumenDiario {
+  id                  String                @id @default(cuid())
+  empresaId           String
+  sedeId              String
+  // Identificación SUNAT
+  numeroCompleto      String                // "RC-20260429-001"
+  serie               String                // "RC-20260429"
+  correlativo         String                // "001"
+  fechaEmision        DateTime              @default(now())
+  fechaReferencia     DateTime              // fecha de las boletas a anular
+  motivoAnulacion     String                @db.VarChar(500)
+  // Estado
+  estadoSunat         EstadoSunat           @default(PENDIENTE)
+  ticket              String?
+  hashCdr             String?
+  errorProveedor      String?
+  cdrResponse         Json?
+  sunatXmlUrl         String?
+  sunatCdrUrl         String?
+  // Tracking del proveedor
+  proveedorEmisor     ProveedorFacturacion
+  proveedorResumenId  String?               // ID en el proveedor (Syncrofact)
+  enviadoAProveedor   Boolean               @default(false)
+  intentosEnvio       Int                   @default(0)
+  ultimoIntentoEnvio  DateTime?
+  // Auditoría
+  usuarioCreacionId   String?
+  creadoEn            DateTime              @default(now())
+  actualizadoEn       DateTime              @updatedAt
+
+  empresa             Empresa               @relation(fields: [empresaId], references: [id])
+  sede                Sede                  @relation(fields: [sedeId], references: [id])
+  detalles            DetalleResumenDiario[]
+
+  @@unique([empresaId, numeroCompleto])
+  @@index([empresaId])
+  @@index([sedeId])
+  @@index([empresaId, estadoSunat])
+  @@index([empresaId, fechaReferencia])
+  @@index([empresaId, fechaEmision])
+}
+
+model DetalleResumenDiario {
+  id                   String              @id @default(cuid())
+  resumenDiarioId      String
+  comprobanteId        String              // FK al ComprobanteElectronico anulado (BOLETA)
+  motivoEspecifico     String              @db.VarChar(250)
+  creadoEn             DateTime            @default(now())
+
+  resumenDiario        ResumenDiario           @relation(fields: [resumenDiarioId], references: [id], onDelete: Cascade)
+  comprobante          ComprobanteElectronico  @relation("ComprobanteResumenes", fields: [comprobanteId], references: [id])
+
+  @@unique([resumenDiarioId, comprobanteId])
+  @@index([comprobanteId])
 }
 
 /**
