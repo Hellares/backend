@@ -18,9 +18,9 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "seed:plans": "ts-node prisma/seed-plans.ts",
-    "seed:categorias": "ts-node prisma/seed-categorias-marcas.ts",
-    "seed:unidades": "ts-node prisma/seed-unidades-medida.ts",
+    "seed:plans": "ts-node --transpileOnly prisma/seed-plans.ts",
+    "seed:categorias": "ts-node --transpileOnly prisma/seed-categorias-marcas.ts",
+    "seed:unidades": "ts-node --transpileOnly prisma/seed-unidades-medida.ts",
     "seed:all": "npm run seed:plans && npm run seed:categorias && npm run seed:unidades",
     "migrate:unidades-empresas": "ts-node prisma/migrate-unidades-empresas.ts"
   },
