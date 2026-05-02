@@ -66,6 +66,9 @@ COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nestjs:nodejs /app/prisma.config.ts ./
 
+# tsconfig necesario para que ts-node ejecute los seeds en runtime
+COPY --from=builder --chown=nestjs:nodejs /app/tsconfig.json ./
+
 # Copiar build de la aplicación
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 
