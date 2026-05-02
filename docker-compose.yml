@@ -1,71 +1,31 @@
-# ===========================================
-# 🐳 DOCKER COMPOSE - SAAS BACKEND
-# Stack simplificado (solo backend)
-# ===========================================
-
-version: '3.8'
+# =============================================================================
+# Docker Compose - Syncronize Backend (DESARROLLO LOCAL solamente)
+# =============================================================================
+# El deploy en VPS usa el repo `syncronize-deploy/` con un compose distinto
+# que define beta + prod. Este archivo es solo para correr el backend local
+# contra una DB/Redis tambien local.
+# =============================================================================
 
 services:
-  # ========================================
-  # 🚀 Backend NestJS
-  # ========================================
   backend:
     build:
       context: .
       dockerfile: Dockerfile
       target: production
-    container_name: saas-backend
+    container_name: saas-backend-local
     restart: unless-stopped
     ports:
       - "6000:6000"
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    extra_hosts:
-      - "mail.syncronize.net.pe:86.48.26.221"
     env_file:
       - stack.env
-    # volumes:
-    #   - ./logs:/app/logs  # Deshabilitado - solo console logging por ahora
     networks:
       - elastika-network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`api.syncronize.net.pe`)"
-      - "traefik.http.routers.backend.entrypoints=websecure"
-      - "traefik.http.routers.backend.tls=true"
-      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.backend.loadbalancer.server.port=6000"
-      # Redirect HTTP to HTTPS
-      - "traefik.http.routers.backend-http.rule=Host(`api.syncronize.net.pe`)"
-      - "traefik.http.routers.backend-http.entrypoints=web"
-      - "traefik.http.routers.backend-http.middlewares=redirect-to-https"
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-  # ========================================
-  # 📧 SMTP Relay (opcional)
-  # ========================================
-  # smtp-relay:
-  #   image: juanluisbaptiste/postfix
-  #   container_name: saas-smtp-relay
-  #   restart: unless-stopped
-  #   environment:
-  #     - SMTP_SERVER=mail.syncronize.net.pe
-  #     - SMTP_PORT=587
-  #     - SMTP_USERNAME=${EMAIL_USER}
-  #     - SMTP_PASSWORD=${EMAIL_PASS}
-  #     - SERVER_HOSTNAME=syncronize.net.pe
-  #   networks:
-  #     - elastika-network
-
-# ========================================
-# 🌐 Networks
-# ========================================
 networks:
   elastika-network:
     external: true
