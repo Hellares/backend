@@ -847,4 +847,68 @@ export class ClientesService {
       actualizadoEn: empresaPersona.actualizadoEn,
     };
   }
+
+  /**
+   * Obtiene o crea el cliente genérico "CLIENTES VARIOS" (DNI 00000000) para la empresa.
+   * - La Persona con DNI 00000000 es global (compartida entre empresas) — el dni es @unique.
+   * - El EmpresaPersona se crea per-empresa para vincular esa persona como cliente.
+   * Idempotente: si ya existe lo devuelve.
+   */
+  async getOrCreateGenerico(empresaId: string): Promise<{
+    id: string;
+    nombres: string;
+    apellidos: string;
+    dni: string;
+  }> {
+    const dniGenerico = '00000000';
+    const nombres = 'CLIENTES';
+    const apellidos = 'VARIOS';
+
+    // 1) Asegurar Persona global con DNI 00000000.
+    let persona = await this.prisma.persona.findUnique({
+      where: { dni: dniGenerico },
+    });
+    if (!persona) {
+      persona = await this.prisma.persona.create({
+        data: {
+          dni: dniGenerico,
+          nombres,
+          apellidos,
+          esCliente: true,
+        },
+      });
+    }
+
+    // 2) Asegurar EmpresaPersona para esta empresa.
+    let empresaPersona = await this.prisma.empresaPersona.findUnique({
+      where: {
+        personaId_empresaId: {
+          personaId: persona.id,
+          empresaId,
+        },
+      },
+    });
+    if (!empresaPersona) {
+      empresaPersona = await this.prisma.empresaPersona.create({
+        data: {
+          personaId: persona.id,
+          empresaId,
+          rol: 'CLIENTE',
+          isActive: true,
+        },
+      });
+    } else if (empresaPersona.deletedAt !== null || !empresaPersona.isActive) {
+      empresaPersona = await this.prisma.empresaPersona.update({
+        where: { id: empresaPersona.id },
+        data: { deletedAt: null, isActive: true },
+      });
+    }
+
+    return {
+      id: empresaPersona.id,
+      nombres: persona.nombres,
+      apellidos: persona.apellidos ?? apellidos,
+      dni: persona.dni ?? dniGenerico,
+    };
+  }
 }

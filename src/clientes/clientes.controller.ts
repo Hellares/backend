@@ -95,6 +95,20 @@ export class ClientesController {
     return await this.clientesService.findAll(empresaId, queryDto);
   }
 
+  @Get('generico')
+  @RequiresPermission(Permission.VIEW_CLIENTS)
+  @ApiOperation({
+    summary: 'Obtener (o crear) el cliente genérico CLIENTES VARIOS',
+    description:
+      'Devuelve el id del EmpresaPersona CLIENTES VARIOS (DNI 00000000) para esta empresa. Si no existe, lo crea on-the-fly. Usado por Venta Rápida cuando el cajero elige "Genérico".',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getGenerico(
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<{ id: string; nombres: string; apellidos: string; dni: string }> {
+    return this.clientesService.getOrCreateGenerico(empresaId);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_CLIENTS)
   @ApiOperation({ summary: 'Obtener un cliente por ID' })
