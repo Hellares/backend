@@ -645,6 +645,13 @@ export class AdminService {
       if (value !== undefined) data[key] = value;
     });
 
+    // Si el cliente no envía caracteristicas explícito, lo regeneramos desde
+    // los campos tipados para mantener el JSON sincronizado con la fuente de
+    // verdad (límites + toggles).
+    if (data.caracteristicas === undefined) {
+      data.caracteristicas = this.buildCaracteristicas({ ...plan, ...data });
+    }
+
     const updated = await this.prisma.planSuscripcion.update({
       where: { id },
       data,
@@ -658,6 +665,68 @@ export class AdminService {
       precioSemestral: updated.precioSemestral ? Number(updated.precioSemestral) : null,
       precioAnual: updated.precioAnual ? Number(updated.precioAnual) : null,
     };
+  }
+
+  private buildCaracteristicas(plan: {
+    nombre: string;
+    limiteProductos: number | null;
+    limiteServicios: number | null;
+    limiteUsuarios: number | null;
+    limiteSedes: number | null;
+    limitePlantillasAtributos: number | null;
+    limiteCotizaciones: number | null;
+    limiteAlmacenamientoMB: number | null;
+    tieneWebPermanente: boolean;
+    tienePersonalizacion: boolean;
+    tieneDominioPropio: boolean;
+    tieneApi: boolean;
+    tieneReportesAvanzados: boolean;
+  }): Record<string, any> {
+    const formatStorage = (mb: number | null): string => {
+      if (mb == null) return 'ilimitado';
+      if (mb >= 1024 && mb % 1024 === 0) return `${mb / 1024}GB`;
+      if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
+      return `${mb}MB`;
+    };
+
+    const limit = (n: number | null): number | string => n ?? 'ilimitado';
+
+    const isEmpresarial = plan.nombre === 'EMPRESARIAL';
+    const isProfesional = plan.nombre === 'PROFESIONAL';
+
+    const reportes = plan.tieneReportesAvanzados
+      ? isEmpresarial
+        ? 'avanzados_personalizados'
+        : 'avanzados'
+      : 'basicos';
+
+    const soporte = isEmpresarial
+      ? '24/7'
+      : isProfesional
+        ? 'email_telefono'
+        : 'email';
+
+    const result: Record<string, any> = {
+      productos: limit(plan.limiteProductos),
+      servicios: limit(plan.limiteServicios),
+      usuarios: limit(plan.limiteUsuarios),
+      sedes: limit(plan.limiteSedes),
+      plantillas: limit(plan.limitePlantillasAtributos),
+      cotizaciones: limit(plan.limiteCotizaciones),
+      almacenamiento: formatStorage(plan.limiteAlmacenamientoMB),
+      paginaWeb: plan.tieneWebPermanente ? 'permanente' : 'trial_2_meses',
+      facturacion: true,
+      inventario: true,
+      clientes: true,
+      reportes,
+      soporte,
+    };
+
+    if (plan.tienePersonalizacion) result.personalizacion = true;
+    if (plan.tieneApi) result.api = true;
+    if (plan.tieneDominioPropio) result.dominio_propio = true;
+
+    return result;
   }
 
   // ==========================================
