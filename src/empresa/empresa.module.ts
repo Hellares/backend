@@ -5,7 +5,6 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { SeedPlanesService } from './scripts/seed-planes.service';
 import { CatalogosModule } from '../catalogos/catalogos.module';
 import { ConfiguracionDocumentosModule } from '../configuracion-documentos/configuracion-documentos.module';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
@@ -28,7 +27,7 @@ import { PlanLimitsService } from '../common/services/plan-limits.service';
     }),
   ],
   controllers: [EmpresaController],
-  providers: [EmpresaService, SeedPlanesService, PlanLimitsService],
+  providers: [EmpresaService, PlanLimitsService],
   exports: [EmpresaService],
 })
 export class EmpresaModule {}

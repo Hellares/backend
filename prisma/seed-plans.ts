@@ -4,7 +4,6 @@ import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as dotenv from 'dotenv';
 
-// Load environment variables
 dotenv.config();
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -12,20 +11,24 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
 export async function seedPlanesSuscripcion() {
-  console.log('📦 Creando planes de suscripción...');
+  console.log('📦 Sembrando planes de suscripción...');
 
   const planes = [
     {
       nombre: 'BÁSICO',
-      descripcion: 'Perfecto para pequeñas empresas y emprendedores',
+      descripcion: 'Capa gratuita para comenzar tu negocio digital',
       precio: 0.00,
+      precioSemestral: null,
+      precioAnual: null,
       periodo: 'MENSUAL' as PeriodoSuscripcion,
       limiteProductos: 50,
       limiteServicios: 20,
       limiteUsuarios: 3,
       limiteSedes: 1,
-      limitePlantillasAtributos: 5, // ✨ Límite de plantillas de atributos
-      limiteCotizaciones: 20, // ✨ Límite de cotizaciones
+      limitePlantillasAtributos: 3,
+      limiteCotizaciones: 20,
+      limiteAlmacenamientoMB: 200,
+      tieneWebPermanente: false,
       tienePersonalizacion: false,
       tieneDominioPropio: false,
       tieneApi: false,
@@ -35,56 +38,104 @@ export async function seedPlanesSuscripcion() {
         servicios: 20,
         usuarios: 3,
         sedes: 1,
-        plantillasAtributos: 5,
+        plantillas: 3,
         cotizaciones: 20,
+        almacenamiento: '200MB',
+        paginaWeb: 'trial_2_meses',
         facturacion: true,
         inventario: true,
         clientes: true,
         reportes: 'basicos',
-        soporte: 'email'
-      }
+        soporte: 'email',
+      },
     },
     {
-      nombre: 'PROFESIONAL',
-      descripcion: 'Ideal para empresas en crecimiento',
-      precio: 99.90,
+      nombre: 'EMPRENDEDOR',
+      descripcion: 'Para negocios en crecimiento que necesitan mas alcance',
+      precio: 30.00,
+      precioSemestral: 160.00,
+      precioAnual: 300.00,
       periodo: 'MENSUAL' as PeriodoSuscripcion,
-      limiteProductos: 500,
+      limiteProductos: 1000,
       limiteServicios: 100,
       limiteUsuarios: 10,
       limiteSedes: 3,
-      limitePlantillasAtributos: 15, // ✨ Límite de plantillas de atributos
-      limiteCotizaciones: 200, // ✨ Límite de cotizaciones
+      limitePlantillasAtributos: 10,
+      limiteCotizaciones: 100,
+      limiteAlmacenamientoMB: 3072,
+      tieneWebPermanente: true,
+      tienePersonalizacion: true,
+      tieneDominioPropio: false,
+      tieneApi: false,
+      tieneReportesAvanzados: false,
+      caracteristicas: {
+        productos: 1000,
+        servicios: 100,
+        usuarios: 10,
+        sedes: 3,
+        plantillas: 10,
+        cotizaciones: 100,
+        almacenamiento: '3GB',
+        paginaWeb: 'permanente',
+        facturacion: true,
+        inventario: true,
+        clientes: true,
+        reportes: 'basicos',
+        soporte: 'email',
+        personalizacion: true,
+      },
+    },
+    {
+      nombre: 'PROFESIONAL',
+      descripcion: 'Ideal para empresas consolidadas con operacion avanzada',
+      precio: 50.00,
+      precioSemestral: 250.00,
+      precioAnual: 500.00,
+      periodo: 'MENSUAL' as PeriodoSuscripcion,
+      limiteProductos: 2000,
+      limiteServicios: 300,
+      limiteUsuarios: 50,
+      limiteSedes: 10,
+      limitePlantillasAtributos: 30,
+      limiteCotizaciones: 500,
+      limiteAlmacenamientoMB: 5120,
+      tieneWebPermanente: true,
       tienePersonalizacion: true,
       tieneDominioPropio: false,
       tieneApi: false,
       tieneReportesAvanzados: true,
       caracteristicas: {
-        productos: 500,
-        servicios: 100,
-        usuarios: 10,
-        sedes: 3,
-        plantillasAtributos: 15,
-        cotizaciones: 200,
+        productos: 2000,
+        servicios: 300,
+        usuarios: 50,
+        sedes: 10,
+        plantillas: 30,
+        cotizaciones: 500,
+        almacenamiento: '5GB',
+        paginaWeb: 'permanente',
         facturacion: true,
         inventario: true,
         clientes: true,
         reportes: 'avanzados',
         soporte: 'email_telefono',
-        personalizacion: true
-      }
+        personalizacion: true,
+      },
     },
     {
       nombre: 'EMPRESARIAL',
-      descripcion: 'Solución completa para grandes empresas',
-      precio: 299.90,
+      descripcion: 'Solucion completa para grandes empresas sin limites',
+      precio: 100.00,
+      precioSemestral: 500.00,
+      precioAnual: 1000.00,
       periodo: 'MENSUAL' as PeriodoSuscripcion,
-      limiteProductos: null, // Ilimitado
-      limiteServicios: null, // Ilimitado
-      limiteUsuarios: 50,
-      limiteSedes: 10,
-      limitePlantillasAtributos: null, // ✨ Ilimitado
-      limiteCotizaciones: null, // ✨ Ilimitado
+      limiteProductos: null,
+      limiteServicios: null,
+      limiteUsuarios: 100,
+      limiteSedes: 20,
+      limitePlantillasAtributos: null,
+      limiteCotizaciones: null,
+      limiteAlmacenamientoMB: 10240,
+      tieneWebPermanente: true,
       tienePersonalizacion: true,
       tieneDominioPropio: true,
       tieneApi: true,
@@ -92,10 +143,12 @@ export async function seedPlanesSuscripcion() {
       caracteristicas: {
         productos: 'ilimitado',
         servicios: 'ilimitado',
-        usuarios: 50,
-        sedes: 10,
-        plantillasAtributos: 'ilimitado',
+        usuarios: 100,
+        sedes: 20,
+        plantillas: 'ilimitado',
         cotizaciones: 'ilimitado',
+        almacenamiento: '10GB',
+        paginaWeb: 'permanente',
         facturacion: true,
         inventario: true,
         clientes: true,
@@ -103,43 +156,27 @@ export async function seedPlanesSuscripcion() {
         soporte: '24/7',
         personalizacion: true,
         api: true,
-        dominio_propio: true
-      }
-    }
+        dominio_propio: true,
+      },
+    },
   ];
 
   for (const plan of planes) {
     try {
       await prisma.planSuscripcion.upsert({
         where: { nombre: plan.nombre },
-        update: {
-          descripcion: plan.descripcion,
-          precio: plan.precio,
-          periodo: plan.periodo,
-          limiteProductos: plan.limiteProductos,
-          limiteServicios: plan.limiteServicios,
-          limiteUsuarios: plan.limiteUsuarios,
-          limiteSedes: plan.limiteSedes,
-          limitePlantillasAtributos: plan.limitePlantillasAtributos,
-          limiteCotizaciones: plan.limiteCotizaciones,
-          tienePersonalizacion: plan.tienePersonalizacion,
-          tieneDominioPropio: plan.tieneDominioPropio,
-          tieneApi: plan.tieneApi,
-          tieneReportesAvanzados: plan.tieneReportesAvanzados,
-          caracteristicas: plan.caracteristicas,
-        },
-        create: plan
+        update: plan,
+        create: plan,
       });
-      console.log(`✅ Plan "${plan.nombre}" creado/actualizado exitosamente`);
+      console.log(`✅ Plan "${plan.nombre}" creado/actualizado`);
     } catch (error) {
       console.error(`❌ Error procesando plan "${plan.nombre}":`, error);
     }
   }
 
-  console.log('🎉 Planes de suscripción creados exitosamente');
+  console.log('🎉 Planes sembrados exitosamente');
 }
 
-// Para ejecutar manualmente si es necesario
 seedPlanesSuscripcion()
   .catch((e) => {
     console.error(e);
