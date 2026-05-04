@@ -147,17 +147,31 @@ export class CacheService {
   }
 
   /**
-   * Invalidar caché de acceso tenant para un usuario en una empresa
+   * Invalidar caché de acceso tenant para un usuario en una empresa.
+   *
+   * Invalida ambas claves dependientes:
+   *  - `tenant_access:${userId}:${empresaId}` — chequeo rápido de acceso.
+   *  - `context:empresa:${empresaId}:user:${userId}` — contexto completo
+   *    (permisos, accesos rápidos, flags caja). Sin esto, cambios en
+   *    `UsuarioSedeRol` no se reflejan hasta que expira el TTL (10 min).
    */
   async invalidateTenantAccess(userId: string, empresaId: string): Promise<void> {
-    await this.invalidate(`tenant_access:${userId}:${empresaId}`);
+    await Promise.all([
+      this.invalidate(`tenant_access:${userId}:${empresaId}`),
+      this.invalidate(this.getEmpresaContextKey(empresaId, userId)),
+    ]);
   }
 
   /**
-   * Invalidar caché de acceso tenant para todos los usuarios de una empresa
+   * Invalidar caché de acceso tenant para todos los usuarios de una empresa.
+   * Borra los acceso rápidos `tenant_access:*` y los contextos completos
+   * `context:empresa:${empresaId}:user:*`.
    */
   async invalidateAllTenantAccess(empresaId: string): Promise<void> {
-    await this.invalidatePattern(`tenant_access:*:${empresaId}`);
+    await Promise.all([
+      this.invalidatePattern(`tenant_access:*:${empresaId}`),
+      this.invalidatePattern(`context:empresa:${empresaId}:user:*`),
+    ]);
   }
 
   /**
