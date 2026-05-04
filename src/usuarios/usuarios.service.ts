@@ -126,6 +126,7 @@ export class UsuariosService {
               puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
               limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
               permisos: createUsuarioDto.permisos ?? [],
+              accesosRapidosOcultos: createUsuarioDto.accesosRapidosOcultos ?? [],
               creadoPor: registradoPor,
             })),
           });
@@ -333,6 +334,7 @@ export class UsuariosService {
             puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
             limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
             permisos: createUsuarioDto.permisos ?? [],
+            accesosRapidosOcultos: createUsuarioDto.accesosRapidosOcultos ?? [],
             creadoPor: registradoPor,
           })),
         });
@@ -433,6 +435,7 @@ export class UsuariosService {
             puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
             limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
             permisos: createUsuarioDto.permisos ?? [],
+            accesosRapidosOcultos: createUsuarioDto.accesosRapidosOcultos ?? [],
             creadoPor: registradoPor,
           })),
         });
@@ -545,6 +548,7 @@ export class UsuariosService {
             puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
             limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
             permisos: createUsuarioDto.permisos ?? [],
+            accesosRapidosOcultos: createUsuarioDto.accesosRapidosOcultos ?? [],
             creadoPor: registradoPor,
           })),
         });

@@ -265,6 +265,12 @@ model UsuarioSedeRol {
   puedeCerrarCaja    Boolean  @default(false)
   limiteCreditoVenta Decimal? @db.Decimal(10, 2) // Límite de crédito que puede autorizar
 
+  // Personalización de UI: IDs de accesos rápidos del dashboard que
+  // este usuario NO debe ver (override por encima del filtro por rol).
+  // Vacío = ver todos los que su rol permita. Catálogo de IDs en
+  // `lib/features/empresa/presentation/widgets/accesos_rapidos_section.dart`.
+  accesosRapidosOcultos String[] @default([])
+
   // Auditoría
   creadoPor     String?
   modificadoPor String?

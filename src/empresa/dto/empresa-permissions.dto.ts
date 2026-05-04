@@ -221,6 +221,13 @@ export class EmpresaPermissionsDto {
   canCerrarCaja: boolean;
 
   @ApiProperty({
+    description: 'IDs de accesos rápidos del dashboard que el usuario NO debe ver. Override individual por encima del filtro por rol.',
+    example: ['facturacion', 'monitor-productos'],
+    type: [String],
+  })
+  accesosRapidosOcultos?: string[];
+
+  @ApiProperty({
     description: 'Puede ver la lista de empleados',
     example: true,
   })

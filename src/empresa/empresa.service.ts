@@ -983,8 +983,35 @@ export class EmpresaService {
       this.planLimitsService.getPlanLimitsInfo(empresaId),
     ]);
 
-    // 5. Calcular permisos basados en roles
-    const permissions = this.calculatePermissions(userRoles);
+    // 5. Calcular permisos basados en roles + overrides individuales
+    //    cargados de UsuarioSedeRol (puedeAbrirCaja, puedeCerrarCaja).
+    //    También recolectamos `accesosRapidosOcultos` consolidado entre
+    //    todas las sedes del usuario para enviarlo al frontend.
+    const sedeRoles = await this.prisma.usuarioSedeRol.findMany({
+      where: {
+        usuarioId: userId,
+        sede: { empresaId, deletedAt: null },
+        isActive: true,
+        deletedAt: null,
+      },
+      select: {
+        puedeAbrirCaja: true,
+        puedeCerrarCaja: true,
+        accesosRapidosOcultos: true,
+      },
+    });
+    const overrides = {
+      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
+      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
+    };
+    // Unión de todos los IDs ocultos en cualquier sede del usuario.
+    // Si está oculto en alguna sede, se considera oculto. (Si en algún
+    // futuro hay diferencias por sede, este consolidado debe ajustarse.)
+    const accesosRapidosOcultos = Array.from(
+      new Set(sedeRoles.flatMap((s) => s.accesosRapidosOcultos)),
+    );
+    const permissions = this.calculatePermissions(userRoles, overrides);
+    permissions.accesosRapidosOcultos = accesosRapidosOcultos;
 
     // 6. Formatear respuesta
     const empresaInfo: EmpresaInfoDto = {
@@ -1086,12 +1113,16 @@ export class EmpresaService {
   }
 
   /**
-   * Calcular permisos del usuario basado en sus roles en la empresa
-   * Usa el PermissionsService centralizado
+   * Calcular permisos del usuario basado en sus roles en la empresa.
+   * Acepta overrides individuales (flags `UsuarioSedeRol`) que amplían
+   * los permisos del rol — ver `PermissionsService` para detalle.
    */
-  private calculatePermissions(userRoles: EmpresaUsuarioRol[]): EmpresaPermissionsDto {
+  private calculatePermissions(
+    userRoles: EmpresaUsuarioRol[],
+    overrides?: { puedeAbrirCaja?: boolean; puedeCerrarCaja?: boolean },
+  ): EmpresaPermissionsDto {
     const roles = userRoles.map(r => r.rol);
-    return this.permissionsService.calculatePermissions(roles);
+    return this.permissionsService.calculatePermissions(roles, overrides);
   }
 
   /**

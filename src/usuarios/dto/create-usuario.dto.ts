@@ -85,6 +85,14 @@ export class CreateUsuarioDto {
   @Min(0)
   limiteCreditoVenta?: number;
 
+  /// IDs de accesos rápidos del dashboard que el usuario NO debe ver.
+  /// Vacío (default) = ver todos los accesos que su rol permita.
+  /// Los IDs son los declarados en el catálogo del frontend
+  /// (`accesos_rapidos_section.dart`).
+  @IsOptional()
+  @IsArray()
+  accesosRapidosOcultos?: string[];
+
   // Permisos adicionales (opcional)
   @IsOptional()
   @IsArray()
