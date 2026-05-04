@@ -983,12 +983,56 @@ export class UsuariosService {
         });
       }
 
-      // Actualizar sedes si se proporcionaron
+      // Actualizar sedes si se proporcionaron.
+      //
+      // El schema tiene `@@unique([usuarioId, sedeId])` sin filtrar por
+      // deletedAt, así que soft-delete + create con misma (usuarioId,
+      // sedeId) revienta por unique constraint. Estrategia: para cada
+      // sede del payload hacer UPSERT (reactivando si estaba soft-deleted),
+      // y soft-delete solo las sedes que ya no están en el payload.
       if (sedeIds) {
-        // Eliminar sedes actuales (soft delete)
+        if (sedeIds.length > 0) {
+          const sedeRole = this.mapRolToSedeRole(rol || empresaUsuario.rol);
+
+          for (const sedeId of sedeIds) {
+            await prisma.usuarioSedeRol.upsert({
+              where: {
+                usuarioId_sedeId: { usuarioId, sedeId },
+              },
+              create: {
+                usuarioId,
+                sedeId,
+                rol: sedeRole,
+                puedeAbrirCaja: puedeAbrirCaja ?? false,
+                puedeCerrarCaja: puedeCerrarCaja ?? false,
+                limiteCreditoVenta,
+                permisos: permisos ?? [],
+                accesosRapidosOcultos: accesosRapidosOcultos ?? [],
+                creadoPor: modificadoPor,
+              },
+              update: {
+                rol: sedeRole,
+                ...(puedeAbrirCaja !== undefined && { puedeAbrirCaja }),
+                ...(puedeCerrarCaja !== undefined && { puedeCerrarCaja }),
+                ...(limiteCreditoVenta !== undefined && { limiteCreditoVenta }),
+                ...(permisos !== undefined && { permisos }),
+                ...(accesosRapidosOcultos !== undefined && {
+                  accesosRapidosOcultos,
+                }),
+                // Reactivar si previamente estaba soft-deleted/inactivo.
+                deletedAt: null,
+                isActive: true,
+                modificadoPor,
+              },
+            });
+          }
+        }
+
+        // Soft-delete sedes que el usuario tenía pero ya no están en el payload.
         await prisma.usuarioSedeRol.updateMany({
           where: {
             usuarioId,
+            sedeId: { notIn: sedeIds },
             deletedAt: null,
           },
           data: {
@@ -996,25 +1040,6 @@ export class UsuariosService {
             modificadoPor,
           },
         });
-
-        // Crear nuevas asignaciones de sedes
-        if (sedeIds.length > 0) {
-          const sedeRole = this.mapRolToSedeRole(rol || empresaUsuario.rol);
-
-          await prisma.usuarioSedeRol.createMany({
-            data: sedeIds.map((sedeId) => ({
-              usuarioId,
-              sedeId,
-              rol: sedeRole,
-              puedeAbrirCaja: puedeAbrirCaja ?? false,
-              puedeCerrarCaja: puedeCerrarCaja ?? false,
-              limiteCreditoVenta,
-              permisos: permisos ?? [],
-              accesosRapidosOcultos: accesosRapidosOcultos ?? [],
-              creadoPor: modificadoPor,
-            })),
-          });
-        }
       } else if (
         puedeAbrirCaja !== undefined ||
         puedeCerrarCaja !== undefined ||
