@@ -109,6 +109,30 @@ export class ClientesController {
     return this.clientesService.getOrCreateGenerico(empresaId);
   }
 
+  @Get('por-dni/:dni')
+  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @ApiOperation({
+    summary: 'Buscar (o crear) cliente por DNI usando RENIEC/cache',
+    description:
+      'Resuelve los datos de la persona vía consulta interna o RENIEC, hace upsert de la Persona y de su EmpresaPersona como cliente, y devuelve el clienteEmpresaId listo para vincular a una venta. Idempotente.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getClienteByDni(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('dni') dni: string,
+  ): Promise<{
+    clienteEmpresaId: string;
+    personaId: string;
+    dni: string;
+    nombres: string;
+    apellidos: string;
+    nombreCompleto: string;
+    direccion?: string;
+    origen: 'INTERNO' | 'RENIEC';
+  }> {
+    return this.clientesService.getOrCreateByDni(empresaId, dni);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_CLIENTS)
   @ApiOperation({ summary: 'Obtener un cliente por ID' })

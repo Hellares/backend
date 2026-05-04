@@ -17,6 +17,7 @@ import {
 import { createPaginatedResponse } from '../common/utils/pagination.util';
 import { AppLoggerService } from '../common/logger';
 import { CacheService } from '../redis/cache.service';
+import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
@@ -27,6 +28,7 @@ export class ClientesService {
     private prisma: PrismaService,
     private cache: CacheService,
     loggerService: AppLoggerService,
+    private consultasExternas: ConsultasExternasService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ClientesService.name);
@@ -909,6 +911,103 @@ export class ClientesService {
       nombres: persona.nombres,
       apellidos: persona.apellidos ?? apellidos,
       dni: persona.dni ?? dniGenerico,
+    };
+  }
+
+  /**
+   * Busca o crea un cliente por DNI usando consulta interna o RENIEC.
+   *
+   * Flujo:
+   *  1) Llama a `consultarDni` que ya unifica BD interna + RENIEC con caché.
+   *  2) Si la Persona existe, la reusa; si no, la crea con los datos resueltos.
+   *  3) Hace upsert de EmpresaPersona (rol CLIENTE) para vincularla a la empresa.
+   *  4) Reactiva si previamente fue soft-deleted.
+   *
+   * Idempotente: misma persona + misma empresa siempre devuelve el mismo
+   * `clienteEmpresaId`. Usado por Venta Rápida cuando el cajero ingresa un DNI.
+   */
+  async getOrCreateByDni(empresaId: string, dni: string): Promise<{
+    clienteEmpresaId: string;
+    personaId: string;
+    dni: string;
+    nombres: string;
+    apellidos: string;
+    nombreCompleto: string;
+    direccion?: string;
+    origen: 'INTERNO' | 'RENIEC';
+  }> {
+    const dniLimpio = (dni ?? '').trim();
+    if (!/^\d{8}$/.test(dniLimpio)) {
+      throw new BadRequestException('El DNI debe tener exactamente 8 dígitos numéricos');
+    }
+    if (dniLimpio === '00000000') {
+      throw new BadRequestException('Para cliente sin documento usar el endpoint /clientes/generico');
+    }
+
+    // 1) Resolver datos de la persona (interno → RENIEC)
+    const datos = await this.consultasExternas.consultarDni(dniLimpio);
+    const apellidos = `${datos.apellidoPaterno} ${datos.apellidoMaterno}`.trim();
+
+    // 2) Asegurar Persona
+    let persona = await this.prisma.persona.findUnique({
+      where: { dni: dniLimpio },
+    });
+    if (!persona) {
+      persona = await this.prisma.persona.create({
+        data: {
+          dni: dniLimpio,
+          nombres: datos.nombres,
+          apellidos: apellidos || null,
+          direccion: datos.direccion || null,
+          departamento: datos.departamento || null,
+          provincia: datos.provincia || null,
+          distrito: datos.distrito || null,
+          telefono: datos.telefono || null,
+          email: datos.email || null,
+          esCliente: true,
+        },
+      });
+    } else if (!persona.esCliente) {
+      persona = await this.prisma.persona.update({
+        where: { id: persona.id },
+        data: { esCliente: true },
+      });
+    }
+
+    // 3) Asegurar EmpresaPersona
+    let empresaPersona = await this.prisma.empresaPersona.findUnique({
+      where: {
+        personaId_empresaId: {
+          personaId: persona.id,
+          empresaId,
+        },
+      },
+    });
+    if (!empresaPersona) {
+      empresaPersona = await this.prisma.empresaPersona.create({
+        data: {
+          personaId: persona.id,
+          empresaId,
+          rol: 'CLIENTE',
+          isActive: true,
+        },
+      });
+    } else if (empresaPersona.deletedAt !== null || !empresaPersona.isActive) {
+      empresaPersona = await this.prisma.empresaPersona.update({
+        where: { id: empresaPersona.id },
+        data: { deletedAt: null, isActive: true },
+      });
+    }
+
+    return {
+      clienteEmpresaId: empresaPersona.id,
+      personaId: persona.id,
+      dni: persona.dni!,
+      nombres: persona.nombres,
+      apellidos: persona.apellidos ?? '',
+      nombreCompleto: `${persona.nombres} ${persona.apellidos ?? ''}`.trim(),
+      direccion: persona.direccion ?? undefined,
+      origen: datos.origen ?? 'INTERNO',
     };
   }
 }

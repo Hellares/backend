@@ -259,6 +259,11 @@ export class SyncrofactMapper {
     const total = Number(comprobante.total);
     if (!Number.isFinite(total)) return null;
 
+    // Ley 28194: solo es obligatorio reportar `medios_pago` cuando la venta
+    // alcanza el umbral. Por debajo, Syncrofact acepta el comprobante sin el array,
+    // así que omitimos la validación para no bloquear ventas pequeñas con YAPE/PLIN/etc.
+    if (total < umbral) return null;
+
     // Fuente principal: pagos[]; fallback legacy: venta.metodoPago sin banco/referencia
     const pagosFuente = (venta.pagos && venta.pagos.length > 0)
       ? venta.pagos
@@ -312,11 +317,6 @@ export class SyncrofactMapper {
 
       medios.push(medio);
     }
-
-    // Si el total no llega al umbral y todos son EFECTIVO, no enviamos medios_pago
-    // (Syncrofact no exige el campo y simplifica el payload).
-    const algunoBancarizable = medios.some(m => !MEDIOS_SIN_REFERENCIA.has(m.tipo));
-    if (total < umbral && !algunoBancarizable) return null;
 
     return medios;
   }
