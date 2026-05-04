@@ -674,6 +674,7 @@ export class UsuariosService {
           ? parseFloat(us.limiteCreditoVenta.toString())
           : undefined,
         permisos: us.permisos,
+        accesosRapidosOcultos: us.accesosRapidosOcultos,
         isActive: us.isActive,
       })),
     };
@@ -845,6 +846,7 @@ export class UsuariosService {
             ? parseFloat(us.limiteCreditoVenta.toString())
             : undefined,
           permisos: us.permisos,
+          accesosRapidosOcultos: us.accesosRapidosOcultos,
           isActive: us.isActive,
         })),
       };
@@ -908,6 +910,7 @@ export class UsuariosService {
       puedeCerrarCaja,
       limiteCreditoVenta,
       permisos,
+      accesosRapidosOcultos,
     } = updateUsuarioDto;
 
     // Validar email único (si está cambiando)
@@ -1007,6 +1010,7 @@ export class UsuariosService {
               puedeCerrarCaja: puedeCerrarCaja ?? false,
               limiteCreditoVenta,
               permisos: permisos ?? [],
+              accesosRapidosOcultos: accesosRapidosOcultos ?? [],
               creadoPor: modificadoPor,
             })),
           });
@@ -1015,7 +1019,8 @@ export class UsuariosService {
         puedeAbrirCaja !== undefined ||
         puedeCerrarCaja !== undefined ||
         limiteCreditoVenta !== undefined ||
-        permisos !== undefined
+        permisos !== undefined ||
+        accesosRapidosOcultos !== undefined
       ) {
         // Si no se cambian sedes pero sí configuración de caja/permisos
         await prisma.usuarioSedeRol.updateMany({
@@ -1029,6 +1034,7 @@ export class UsuariosService {
             ...(puedeCerrarCaja !== undefined && { puedeCerrarCaja }),
             ...(limiteCreditoVenta !== undefined && { limiteCreditoVenta }),
             ...(permisos !== undefined && { permisos }),
+            ...(accesosRapidosOcultos !== undefined && { accesosRapidosOcultos }),
             modificadoPor,
           },
         });

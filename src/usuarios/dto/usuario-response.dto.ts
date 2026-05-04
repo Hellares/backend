@@ -92,6 +92,7 @@ export class UsuarioResponseDto {
     puedeCerrarCaja: boolean;
     limiteCreditoVenta?: number;
     permisos: string[];
+    accesosRapidosOcultos: string[];
     isActive: boolean;
   }>;
 }
