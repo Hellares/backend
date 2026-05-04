@@ -18,6 +18,7 @@ import { createPaginatedResponse } from '../common/utils/pagination.util';
 import { AppLoggerService } from '../common/logger';
 import { CacheService } from '../redis/cache.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
+import { ClienteEmpresaService } from '../cliente-empresa/cliente-empresa.service';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
@@ -29,9 +30,15 @@ export class ClientesService {
     private cache: CacheService,
     loggerService: AppLoggerService,
     private consultasExternas: ConsultasExternasService,
+    private clienteEmpresaService: ClienteEmpresaService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ClientesService.name);
+  }
+
+  /** Delegado: ver `ClienteEmpresaService.getOrCreateByRuc`. */
+  async getOrCreateByRuc(empresaId: string, ruc: string, creadoPor: string) {
+    return this.clienteEmpresaService.getOrCreateByRuc(empresaId, ruc, creadoPor);
   }
 
   /**

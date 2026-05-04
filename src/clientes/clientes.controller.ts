@@ -133,6 +133,30 @@ export class ClientesController {
     return this.clientesService.getOrCreateByDni(empresaId, dni);
   }
 
+  @Get('por-ruc/:ruc')
+  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @ApiOperation({
+    summary: 'Buscar (o crear) cliente empresa por RUC usando SUNAT/cache',
+    description:
+      'Resuelve los datos de la persona jurídica vía consulta SUNAT, hace upsert de ClienteEmpresa, y devuelve el clienteEmpresaId listo para vincular a una venta como cliente B2B. Idempotente.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getClienteByRuc(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('ruc') ruc: string,
+    @CurrentUser() user: any,
+  ): Promise<{
+    clienteEmpresaId: string;
+    ruc: string;
+    razonSocial: string;
+    nombreComercial?: string;
+    direccion?: string;
+    estadoContribuyente?: string;
+    condicionContribuyente?: string;
+  }> {
+    return this.clientesService.getOrCreateByRuc(empresaId, ruc, user.sub);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_CLIENTS)
   @ApiOperation({ summary: 'Obtener un cliente por ID' })

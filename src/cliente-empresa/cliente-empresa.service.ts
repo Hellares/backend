@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
+import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import {
   CreateClienteEmpresaDto,
   UpdateClienteEmpresaDto,
@@ -18,7 +19,88 @@ export class ClienteEmpresaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configuracionCodigosService: ConfiguracionCodigosService,
+    private readonly consultasExternas: ConsultasExternasService,
   ) {}
+
+  /**
+   * Busca o crea un ClienteEmpresa por RUC usando consulta SUNAT.
+   *
+   * Flujo:
+   *  1) Valida RUC (11 dígitos).
+   *  2) Llama `consultarRuc` (con caché interna) que devuelve datos SUNAT.
+   *  3) Upsert por (empresaId, numeroDocumento): si existe lo reactiva si
+   *     estaba soft-deleted; si no, lo crea con código auto-generado.
+   *
+   * Idempotente. Usado por Venta Rápida cuando el cliente brinda RUC.
+   */
+  async getOrCreateByRuc(
+    empresaId: string,
+    ruc: string,
+    creadoPor: string,
+  ): Promise<{
+    clienteEmpresaId: string;
+    ruc: string;
+    razonSocial: string;
+    nombreComercial?: string;
+    direccion?: string;
+    estadoContribuyente?: string;
+    condicionContribuyente?: string;
+  }> {
+    const rucLimpio = (ruc ?? '').trim();
+    if (!/^\d{11}$/.test(rucLimpio)) {
+      throw new BadRequestException('El RUC debe tener exactamente 11 dígitos numéricos');
+    }
+
+    // 1) Resolver datos SUNAT
+    const datos = await this.consultasExternas.consultarRuc(rucLimpio);
+
+    // 2) Upsert ClienteEmpresa
+    const existente = await this.prisma.clienteEmpresa.findUnique({
+      where: {
+        empresaId_numeroDocumento: { empresaId, numeroDocumento: rucLimpio },
+      },
+    });
+
+    let cliente = existente;
+    if (!cliente) {
+      const { codigoClienteEmpresa: codigo } =
+        await this.configuracionCodigosService.generarCodigoClienteEmpresa(empresaId);
+      cliente = await this.prisma.clienteEmpresa.create({
+        data: {
+          empresaId,
+          codigo,
+          razonSocial: datos.razonSocial,
+          tipoDocumento: 'RUC',
+          numeroDocumento: rucLimpio,
+          direccion: datos.direccion || null,
+          departamento: datos.departamento || null,
+          provincia: datos.provincia || null,
+          distrito: datos.distrito || null,
+          ubigeo: datos.ubigeo || null,
+          estadoContribuyente: datos.estado || null,
+          condicionContribuyente: datos.condicion || null,
+          pais: 'PE',
+          isActive: true,
+          creadoPor,
+        },
+      });
+    } else if (cliente.deletedAt !== null || !cliente.isActive) {
+      cliente = await this.prisma.clienteEmpresa.update({
+        where: { id: cliente.id },
+        data: { deletedAt: null, isActive: true, actualizadoPor: creadoPor },
+      });
+    }
+
+    return {
+      clienteEmpresaId: cliente.id,
+      ruc: cliente.numeroDocumento,
+      razonSocial: cliente.razonSocial,
+      nombreComercial: cliente.nombreComercial ?? undefined,
+      direccion: cliente.direccion ?? undefined,
+      estadoContribuyente: cliente.estadoContribuyente ?? undefined,
+      condicionContribuyente: cliente.condicionContribuyente ?? undefined,
+    };
+  }
 
   async create(data: CreateClienteEmpresaDto) {
     if (!data.empresaId || !data.creadoPor) {
