@@ -10,15 +10,33 @@ import { EmpresaPermissionsDto } from '../../empresa/dto';
  *
  * IMPORTANTE: Si necesitas agregar/modificar permisos, hazlo AQUÍ.
  */
+/**
+ * Overrides individuales por sede que pueden ampliar los permisos
+ * derivados del rol. Hoy soporta caja granular (`puedeAbrirCaja` /
+ * `puedeCerrarCaja`). Si en alguna sede de la empresa el usuario tiene
+ * el flag, el permiso se concede a nivel global de empresa (el guard a
+ * nivel sede específica se valida en el endpoint si aplica).
+ */
+export interface PermissionsOverrides {
+  puedeAbrirCaja?: boolean;
+  puedeCerrarCaja?: boolean;
+}
+
 @Injectable()
 export class PermissionsService {
   /**
-   * Calcula permisos basados en los roles del usuario
+   * Calcula permisos basados en los roles del usuario y opcionalmente
+   * en overrides individuales (flags de `UsuarioSedeRol`).
    *
    * @param roles - Array de roles del usuario en la empresa
+   * @param overrides - Flags opcionales que amplían los permisos por rol
+   *                    (típicamente derivados de `UsuarioSedeRol`).
    * @returns Objeto con todos los permisos como propiedades boolean
    */
-  calculatePermissions(roles: Rol[]): EmpresaPermissionsDto {
+  calculatePermissions(
+    roles: Rol[],
+    overrides?: PermissionsOverrides,
+  ): EmpresaPermissionsDto {
     const isSuperAdmin = roles.includes(Rol.SUPER_ADMIN);
     const isEmpresaAdmin = roles.includes(Rol.EMPRESA_ADMIN);
     const isSedeAdmin = roles.includes(Rol.SEDE_ADMIN);
@@ -34,6 +52,12 @@ export class PermissionsService {
     const isAnyAdmin = isAdmin || isSedeAdmin;
     const isOperativo = isVendedor || isCajero || isTecnico || isOperador;
     const isViewer = isLectura; // solo lectura, nunca MANAGE
+
+    // Overrides granulares: se aplican como OR sobre el rol base. Si el
+    // usuario tiene el flag en cualquier sede de la empresa, le otorgamos
+    // el permiso correspondiente.
+    const puedeAbrirCajaPorFlag = overrides?.puedeAbrirCaja === true;
+    const puedeCerrarCajaPorFlag = overrides?.puedeCerrarCaja === true;
 
     return {
       // ==================== USUARIOS ====================
@@ -123,9 +147,16 @@ export class PermissionsService {
 
       // ==================== CAJA ====================
       canViewCaja:
-        isAnyAdmin || isCajero || isContador,
+        isAnyAdmin || isCajero || isContador ||
+        puedeAbrirCajaPorFlag || puedeCerrarCajaPorFlag,
       canManageCaja:
-        isAnyAdmin || isCajero,
+        isAnyAdmin || isCajero ||
+        puedeAbrirCajaPorFlag || puedeCerrarCajaPorFlag,
+      // Granulares: permiten abrir y/o cerrar por separado vía flag.
+      canAbrirCaja:
+        isAnyAdmin || isCajero || puedeAbrirCajaPorFlag,
+      canCerrarCaja:
+        isAnyAdmin || isCajero || puedeCerrarCajaPorFlag,
 
       // ==================== RRHH - EMPLEADOS ====================
       canViewEmpleados:
@@ -200,6 +231,8 @@ export class PermissionsService {
       'canManageReportesIncidencia',
       'canViewCaja',
       'canManageCaja',
+      'canAbrirCaja',
+      'canCerrarCaja',
       'canViewEmpleados',
       'canManageEmpleados',
       'canViewAsistencia',

@@ -82,8 +82,30 @@ export class PermissionsGuard implements CanActivate {
       roles = userRoles.map(r => r.rol);
     }
 
-    // 5. Calcular permisos basados en los roles usando el servicio centralizado
-    const permissions = this.permissionsService.calculatePermissions(roles);
+    // 4.5. Cargar overrides granulares desde UsuarioSedeRol. Si el usuario
+    //      tiene `puedeAbrirCaja` o `puedeCerrarCaja` en CUALQUIER sede de
+    //      la empresa, le otorgamos el permiso. La validación de que la
+    //      sede específica esté autorizada queda en el service del endpoint.
+    const sedeRoles = await this.prisma.usuarioSedeRol.findMany({
+      where: {
+        usuarioId: user.sub || user.id,
+        sede: { empresaId: tenantId, deletedAt: null },
+        isActive: true,
+        deletedAt: null,
+      },
+      select: { puedeAbrirCaja: true, puedeCerrarCaja: true },
+    });
+
+    const overrides = {
+      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
+      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
+    };
+
+    // 5. Calcular permisos combinando roles + overrides individuales.
+    const permissions = this.permissionsService.calculatePermissions(
+      roles,
+      overrides,
+    );
 
     // 6. Verificar si tiene el permiso requerido
     if (!permissions[requiredPermission]) {

@@ -209,6 +209,18 @@ export class EmpresaPermissionsDto {
   canManageCaja: boolean;
 
   @ApiProperty({
+    description: 'Puede abrir caja (rol CAJERO/ADMIN o flag UsuarioSedeRol.puedeAbrirCaja)',
+    example: true,
+  })
+  canAbrirCaja: boolean;
+
+  @ApiProperty({
+    description: 'Puede cerrar caja (rol CAJERO/ADMIN o flag UsuarioSedeRol.puedeCerrarCaja)',
+    example: true,
+  })
+  canCerrarCaja: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de empleados',
     example: true,
   })

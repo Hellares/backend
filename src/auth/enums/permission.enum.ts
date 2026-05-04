@@ -53,6 +53,11 @@ export enum Permission {
   // Caja
   VIEW_CAJA = 'canViewCaja',
   MANAGE_CAJA = 'canManageCaja',
+  // Permisos granulares de caja: lo conceden ADMIN/CAJERO o los flags
+  // `UsuarioSedeRol.puedeAbrirCaja` / `puedeCerrarCaja` (override por
+  // sede para usuarios sin esos roles, ej. VENDEDOR autorizado).
+  ABRIR_CAJA = 'canAbrirCaja',
+  CERRAR_CAJA = 'canCerrarCaja',
 
   // Otros permisos
   MANAGE_SEDES = 'canManageSedes',

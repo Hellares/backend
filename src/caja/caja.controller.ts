@@ -36,7 +36,7 @@ export class CajaController {
   constructor(private readonly cajaService: CajaService) {}
 
   @Post('abrir')
-  @RequiresPermission(Permission.MANAGE_CAJA)
+  @RequiresPermission(Permission.ABRIR_CAJA)
   @ApiOperation({ summary: 'Abrir una nueva caja' })
   @ApiResponse({ status: 201, description: 'Caja abierta exitosamente' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -98,7 +98,7 @@ export class CajaController {
   }
 
   @Post(':id/cerrar')
-  @RequiresPermission(Permission.MANAGE_CAJA)
+  @RequiresPermission(Permission.CERRAR_CAJA)
   @ApiOperation({ summary: 'Cerrar caja con conteo físico' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async cerrarCaja(
