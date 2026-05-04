@@ -998,6 +998,7 @@ export class EmpresaService {
         puedeAbrirCaja: true,
         puedeCerrarCaja: true,
         accesosRapidosOcultos: true,
+        permisos: true,
       },
     });
     const overrides = {
@@ -1010,8 +1011,15 @@ export class EmpresaService {
     const accesosRapidosOcultos = Array.from(
       new Set(sedeRoles.flatMap((s) => s.accesosRapidosOcultos)),
     );
+    // Permisos granulares (catálogo de strings) consolidados entre sedes.
+    // El frontend usa este array para mostrar UI según capacidades del
+    // usuario. El backend valida vía `PermissionsService.hasGranularPermission`.
+    const granularPermissions = Array.from(
+      new Set(sedeRoles.flatMap((s) => s.permisos)),
+    );
     const permissions = this.calculatePermissions(userRoles, overrides);
     permissions.accesosRapidosOcultos = accesosRapidosOcultos;
+    permissions.granularPermissions = granularPermissions;
 
     // 6. Formatear respuesta
     const empresaInfo: EmpresaInfoDto = {

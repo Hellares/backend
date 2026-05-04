@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Rol } from '@prisma/client';
 import { EmpresaPermissionsDto } from '../../empresa/dto';
+import { GranularPermissionId } from './granular-permissions.catalog';
 
 /**
  * Servicio centralizado para el cálculo de permisos
@@ -189,6 +190,50 @@ export class PermissionsService {
   hasPermission(roles: Rol[], permission: string): boolean {
     const permissions = this.calculatePermissions(roles);
     return permissions[permission] === true;
+  }
+
+  /**
+   * Verifica un permiso GRANULAR (catálogo `granular-permissions.catalog`)
+   * combinando 3 fuentes en orden:
+   *  1. El array `permisos` del `UsuarioSedeRol` (consolidado entre sedes).
+   *  2. Compat con flags legacy: `caja.abrir` ↔ `puedeAbrirCaja`,
+   *     `caja.cerrar` ↔ `puedeCerrarCaja`. Mientras la migración a
+   *     strings esté en progreso, los flags siguen siendo verdad.
+   *  3. SUPER_ADMIN/EMPRESA_ADMIN tienen TODOS los granulares.
+   *
+   * Pensado para usarse desde endpoints que necesiten autorización
+   * por usuario (ej. `if (!hasGranular(...)) throw 403`).
+   */
+  hasGranularPermission(
+    permisos: readonly string[],
+    permId: string,
+    options?: {
+      roles?: Rol[];
+      overrides?: PermissionsOverrides;
+    },
+  ): boolean {
+    // Admin global tiene todos los granulares.
+    if (
+      options?.roles?.includes(Rol.SUPER_ADMIN) ||
+      options?.roles?.includes(Rol.EMPRESA_ADMIN)
+    ) {
+      return true;
+    }
+    // Compat con flags legacy.
+    if (
+      permId === GranularPermissionId.CAJA_ABRIR &&
+      options?.overrides?.puedeAbrirCaja
+    ) {
+      return true;
+    }
+    if (
+      permId === GranularPermissionId.CAJA_CERRAR &&
+      options?.overrides?.puedeCerrarCaja
+    ) {
+      return true;
+    }
+    // Catálogo: presencia explícita en el array.
+    return permisos.includes(permId);
   }
 
   /**

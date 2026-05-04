@@ -86,6 +86,8 @@ export class PermissionsGuard implements CanActivate {
     //      tiene `puedeAbrirCaja` o `puedeCerrarCaja` en CUALQUIER sede de
     //      la empresa, le otorgamos el permiso. La validación de que la
     //      sede específica esté autorizada queda en el service del endpoint.
+    //      También cargamos el array `permisos` (catálogo granular)
+    //      consolidado entre todas las sedes.
     const sedeRoles = await this.prisma.usuarioSedeRol.findMany({
       where: {
         usuarioId: user.sub || user.id,
@@ -93,13 +95,25 @@ export class PermissionsGuard implements CanActivate {
         isActive: true,
         deletedAt: null,
       },
-      select: { puedeAbrirCaja: true, puedeCerrarCaja: true },
+      select: {
+        puedeAbrirCaja: true,
+        puedeCerrarCaja: true,
+        permisos: true,
+      },
     });
 
     const overrides = {
       puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
       puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
     };
+
+    // Unión de permisos granulares entre todas las sedes (deduplicado).
+    // Lo dejamos en el request para que endpoints que validan permisos
+    // granulares no necesiten re-consultar la BD.
+    const granularPermissions = Array.from(
+      new Set(sedeRoles.flatMap((s) => s.permisos)),
+    );
+    request._granularPermissions = granularPermissions;
 
     // 5. Calcular permisos combinando roles + overrides individuales.
     const permissions = this.permissionsService.calculatePermissions(

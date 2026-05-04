@@ -228,6 +228,13 @@ export class EmpresaPermissionsDto {
   accesosRapidosOcultos?: string[];
 
   @ApiProperty({
+    description: 'Permisos granulares del catálogo (UsuarioSedeRol.permisos) consolidados entre las sedes del usuario. Ej: caja.abrir, venta.descuento-libre.',
+    example: ['caja.abrir', 'venta.descuento-libre'],
+    type: [String],
+  })
+  granularPermissions?: string[];
+
+  @ApiProperty({
     description: 'Puede ver la lista de empleados',
     example: true,
   })
