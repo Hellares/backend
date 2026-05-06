@@ -28,6 +28,10 @@ interface ParsedRow {
   precioCosto?: number;
   precioIncluyeIgv: boolean;
   stockInicial?: number;
+  // Precio por mayor (PRECIO_FIJO) — opcional. Si están ambos, se crea
+  // un PrecioNivel asociado al producto.
+  cantidadMinPorMayor?: number;
+  precioPorMayor?: number;
 }
 
 /** Resuelve el "nombre visible" de una EmpresaCategoria / EmpresaMarca / EmpresaUnidadMedida */
@@ -117,6 +121,8 @@ export class ProductoBulkUploadService {
       'Precio Costo',
       'Precio Incluye IGV',
       'Stock Inicial',
+      'Cantidad Min Por Mayor',
+      'Precio Por Mayor (Fijo)',
     ];
 
     const headerRow = sheet.addRow(headers);
@@ -147,6 +153,8 @@ export class ProductoBulkUploadService {
       { width: 15 },
       { width: 20 },
       { width: 14 },
+      { width: 18 }, // M: Cantidad Min Por Mayor
+      { width: 20 }, // N: Precio Por Mayor (Fijo)
     ];
 
     // Fila de ejemplo
@@ -163,6 +171,8 @@ export class ProductoBulkUploadService {
       50,
       'Si',
       10,
+      6,    // M: aplica precio por mayor desde 6 unidades
+      80,   // N: precio por mayor S/ 80 (debe ser < precio venta = 100)
     ]);
 
     exampleRow.eachCell((cell) => {
@@ -414,6 +424,8 @@ export class ProductoBulkUploadService {
       const precioIncluyeIgvRaw = getCellValue(11).toLowerCase();
       const precioIncluyeIgv = precioIncluyeIgvRaw === 'si' || precioIncluyeIgvRaw === 'sí';
       const stockInicial = getNumericValue(12);
+      const cantidadMinPorMayor = getNumericValue(13);
+      const precioPorMayor = getNumericValue(14);
 
       // Fila completamente vacía - saltar
       if (!nombre && !sku && !descripcion && !categoriaNombre) return;
@@ -509,6 +521,73 @@ export class ProductoBulkUploadService {
         addError('Stock Inicial', stockInicialRaw, 'El valor no es un numero valido');
       }
 
+      // Validar precio por mayor (PRECIO_FIJO) — opcional pero ambos campos
+      // van de la mano: si pones uno debes poner el otro.
+      const cantidadMinRaw = getCellValue(13);
+      const precioMayorRaw = getCellValue(14);
+      if (cantidadMinRaw && cantidadMinPorMayor === undefined) {
+        addError(
+          'Cantidad Min Por Mayor',
+          cantidadMinRaw,
+          'El valor no es un numero valido',
+        );
+      }
+      if (precioMayorRaw && precioPorMayor === undefined) {
+        addError(
+          'Precio Por Mayor (Fijo)',
+          precioMayorRaw,
+          'El valor no es un numero valido',
+        );
+      }
+      const tieneCantidad = cantidadMinPorMayor !== undefined;
+      const tienePrecio = precioPorMayor !== undefined;
+      if (tieneCantidad !== tienePrecio) {
+        // Solo uno de los dos fue completado.
+        if (tieneCantidad) {
+          addError(
+            'Precio Por Mayor (Fijo)',
+            '',
+            'Falta el precio por mayor (la cantidad esta llena)',
+          );
+        } else {
+          addError(
+            'Cantidad Min Por Mayor',
+            '',
+            'Falta la cantidad minima (el precio por mayor esta lleno)',
+          );
+        }
+      }
+      if (tieneCantidad && tienePrecio) {
+        if (!Number.isInteger(cantidadMinPorMayor) || cantidadMinPorMayor! < 2) {
+          addError(
+            'Cantidad Min Por Mayor',
+            cantidadMinPorMayor,
+            'Debe ser un entero mayor o igual a 2',
+          );
+        }
+        if (precioPorMayor! <= 0) {
+          addError(
+            'Precio Por Mayor (Fijo)',
+            precioPorMayor,
+            'El precio por mayor debe ser mayor a 0',
+          );
+        }
+        if (precioVenta !== undefined && precioPorMayor! >= precioVenta) {
+          addError(
+            'Precio Por Mayor (Fijo)',
+            precioPorMayor,
+            'Debe ser menor al Precio Venta',
+          );
+        }
+        if (precioVenta === undefined) {
+          addError(
+            'Precio Venta',
+            '',
+            'Para configurar precio por mayor, el Precio Venta es obligatorio',
+          );
+        }
+      }
+
       if (!rowHasError) {
         validRows.push({
           fila: rowNumber,
@@ -524,6 +603,10 @@ export class ProductoBulkUploadService {
           precioCosto,
           precioIncluyeIgv,
           stockInicial: stockInicial !== undefined ? Math.floor(stockInicial) : undefined,
+          cantidadMinPorMayor: cantidadMinPorMayor !== undefined
+            ? Math.floor(cantidadMinPorMayor)
+            : undefined,
+          precioPorMayor,
           categoriaId,
           marcaId,
           unidadId,
@@ -647,6 +730,30 @@ export class ProductoBulkUploadService {
                   },
                 });
               }
+            }
+
+            // Crear PrecioNivel "Por Mayor" si se especificó en el Excel.
+            // Va por producto (no por sede) — el nivel aplica a todas las
+            // sedes donde se vende este producto.
+            if (
+              row.cantidadMinPorMayor !== undefined &&
+              row.precioPorMayor !== undefined
+            ) {
+              await tx.precioNivel.create({
+                data: {
+                  productoId: producto.id,
+                  varianteId: null,
+                  nombre: 'Por Mayor',
+                  cantidadMinima: row.cantidadMinPorMayor,
+                  cantidadMaxima: null,
+                  tipoPrecio: 'PRECIO_FIJO',
+                  precio: new Decimal(row.precioPorMayor),
+                  porcentajeDesc: null,
+                  orden: 0,
+                  isActive: true,
+                  descripcion: 'Creado por carga masiva Excel',
+                },
+              });
             }
           }
         },
