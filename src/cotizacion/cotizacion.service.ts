@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { CompatibilidadService } from '../producto/compatibilidad.service';
+import { PrecioNivelService } from '../producto/precio-nivel.service';
 import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
 import { UpdateEstadoCotizacionDto } from './dto/update-estado-cotizacion.dto';
@@ -25,10 +26,57 @@ export class CotizacionService {
     private readonly compatibilidadService: CompatibilidadService,
     private readonly planLimitsService: PlanLimitsService,
     private readonly notificacionService: NotificacionService,
+    private readonly precioNivelService: PrecioNivelService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(CotizacionService.name);
+  }
+
+  /**
+   * Recalcula `precioUnitario` desde el backend usando los niveles de precio
+   * configurados (PrecioNivel) para evitar manipulación cliente-side.
+   * Mismo patrón que `VentaService.aplicarPreciosBackendNivel`.
+   */
+  private async aplicarPreciosBackendNivel(
+    detalles: CreateCotizacionDetalleDto[],
+    sedeId: string,
+  ): Promise<CreateCotizacionDetalleDto[]> {
+    const result: CreateCotizacionDetalleDto[] = [];
+    for (const d of detalles) {
+      const productoIdParaNivel = d.productoId ?? null;
+      if (!productoIdParaNivel && !d.varianteId) {
+        result.push(d);
+        continue;
+      }
+      try {
+        const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
+          productoIdParaNivel,
+          d.varianteId ?? null,
+          sedeId,
+          d.cantidad,
+        );
+        if (
+          d.precioUnitario != null &&
+          Math.abs(d.precioUnitario - calc.precioUnitario) > 0.01
+        ) {
+          this.logger.warn(
+            `Precio recalculado en backend para item ${d.descripcion}: cliente envió ` +
+              `${d.precioUnitario} pero backend calculó ${calc.precioUnitario}. ` +
+              `Aplicando precio del backend (nivel: ${calc.nivelAplicado}).`,
+          );
+        }
+        result.push({ ...d, precioUnitario: calc.precioUnitario });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `No se pudo recalcular precio para "${d.descripcion}": ${msg}. ` +
+            `Usando precio del cliente como fallback.`,
+        );
+        result.push(d);
+      }
+    }
+    return result;
   }
 
   /**
@@ -49,8 +97,13 @@ export class CotizacionService {
           tx,
         );
 
-      // Calcular totales por linea
-      const detallesCalculados = dto.detalles.map((d, index) =>
+      // Forzar precios del backend (defensa contra manipulación cliente)
+      // y luego calcular totales por línea.
+      const detallesEnforced = await this.aplicarPreciosBackendNivel(
+        dto.detalles,
+        dto.sedeId,
+      );
+      const detallesCalculados = detallesEnforced.map((d, index) =>
         this.calcularDetalle(d, index),
       );
 
@@ -292,7 +345,12 @@ export class CotizacionService {
           where: { cotizacionId: id },
         });
 
-        const detallesCalculados = dto.detalles.map((d, index) =>
+        // Forzar precios del backend (defensa contra manipulación cliente).
+        const detallesEnforced = await this.aplicarPreciosBackendNivel(
+          dto.detalles,
+          cotizacion.sedeId,
+        );
+        const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
         );
 

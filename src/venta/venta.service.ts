@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { CajaService } from '../caja/caja.service';
 import { ProductoComboService } from '../producto/producto-combo.service';
+import { PrecioNivelService } from '../producto/precio-nivel.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -39,10 +40,70 @@ export class VentaService {
     @Inject(forwardRef(() => CajaService)) private readonly cajaService: CajaService,
     private readonly comboService: ProductoComboService,
     private readonly facturacionService: FacturacionService,
+    private readonly precioNivelService: PrecioNivelService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(VentaService.name);
+  }
+
+  /**
+   * Recalcula `precioUnitario` desde el backend usando los niveles de precio
+   * configurados (PrecioNivel) en lugar de confiar en el valor enviado por el
+   * cliente. Esto cierra el vector de manipulación: un cliente comprometido
+   * podría enviar precios alterados, pero el backend siempre forzará el
+   * precio correcto según producto/variante/cantidad/sede.
+   *
+   * Notas:
+   * - Aplica a items con `productoId`, `varianteId` o `comboId` (los combos
+   *   son `Producto`, así que su comboId sirve como productoId para niveles).
+   * - Items que solo son `servicioId` o que no tienen producto se dejan tal
+   *   cual (sin precio de niveles).
+   * - El descuento manual del cajero va en el campo `descuento` aparte —
+   *   no se afecta este recálculo.
+   * - Si el cálculo falla (ej. producto sin precio configurado en sede),
+   *   se respeta el del cliente como fallback y se logea warning.
+   */
+  private async aplicarPreciosBackendNivel(
+    detalles: CreateVentaDetalleDto[],
+    sedeId: string,
+  ): Promise<CreateVentaDetalleDto[]> {
+    const result: CreateVentaDetalleDto[] = [];
+    for (const d of detalles) {
+      const productoIdParaNivel = d.productoId ?? d.comboId ?? null;
+      if (!productoIdParaNivel && !d.varianteId) {
+        // Servicio puro o item sin producto — no aplica niveles.
+        result.push(d);
+        continue;
+      }
+      try {
+        const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
+          productoIdParaNivel,
+          d.varianteId ?? null,
+          sedeId,
+          d.cantidad,
+        );
+        if (
+          d.precioUnitario != null &&
+          Math.abs(d.precioUnitario - calc.precioUnitario) > 0.01
+        ) {
+          this.logger.warn(
+            `Precio recalculado en backend para item ${d.descripcion}: cliente envió ` +
+              `${d.precioUnitario} pero backend calculó ${calc.precioUnitario}. ` +
+              `Aplicando precio del backend (nivel: ${calc.nivelAplicado}).`,
+          );
+        }
+        result.push({ ...d, precioUnitario: calc.precioUnitario });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `No se pudo recalcular precio para "${d.descripcion}": ${msg}. ` +
+            `Usando precio del cliente como fallback.`,
+        );
+        result.push(d);
+      }
+    }
+    return result;
   }
 
   // Include reutilizable para queries
@@ -239,7 +300,12 @@ export class VentaService {
           tx,
         );
 
-      const detallesCalculados = dto.detalles.map((d, index) =>
+      // Forzar precios del backend (defensa contra manipulación cliente).
+      const detallesEnforced = await this.aplicarPreciosBackendNivel(
+        dto.detalles,
+        dto.sedeId,
+      );
+      const detallesCalculados = detallesEnforced.map((d, index) =>
         this.calcularDetalle(d, index),
       );
 
@@ -364,8 +430,13 @@ export class VentaService {
             tx,
           );
 
-        // 2. Calcular detalles
-        const detallesCalculados = dto.detalles.map((d, index) =>
+        // 2. Forzar precios del backend (defensa contra manipulación cliente)
+        //    y luego calcular detalles.
+        const detallesEnforced = await this.aplicarPreciosBackendNivel(
+          dto.detalles,
+          dto.sedeId,
+        );
+        const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
         );
 
@@ -1591,7 +1662,12 @@ export class VentaService {
       if (dto.detalles && dto.detalles.length > 0) {
         await tx.ventaDetalle.deleteMany({ where: { ventaId: id } });
 
-        const detallesCalculados = dto.detalles.map((d, index) =>
+        // Forzar precios del backend (defensa contra manipulación cliente).
+        const detallesEnforced = await this.aplicarPreciosBackendNivel(
+          dto.detalles,
+          venta.sedeId,
+        );
+        const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
         );
 
