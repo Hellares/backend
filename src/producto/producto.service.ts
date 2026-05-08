@@ -491,11 +491,15 @@ export class ProductoService {
     empresaId: string,
   ): Promise<ProductoResponseDto> {
     // 1. Buscar producto usando include clause del CatalogService
+    // NOTA: NO filtrar por `isActive: true` aquí — el detalle del producto
+    // debe permitir ver tanto productos activos como inactivos para que el
+    // admin pueda gestionarlos (reactivarlos, editarlos, eliminarlos). El
+    // único filtro defensivo es `deletedAt: null` (los eliminados se ven
+    // solo desde la página de papelera con `soloEliminados=true`).
     const producto = await this.prisma.producto.findFirst({
       where: {
         id,
         empresaId,
-        isActive: true,
         deletedAt: null,
       },
       include: this.catalogService.buildIncludeClause(true, true, false, true),
@@ -525,9 +529,11 @@ export class ProductoService {
     // 1. Verificar permisos (mantener en Facade)
     await this.verifyUserPermissions(userId, empresaId);
 
-    // 2. Verificar que el producto existe
+    // 2. Verificar que el producto existe (NO filtrar por isActive: el
+    // admin debe poder editar productos inactivos para corregirlos antes
+    // de reactivar. Eliminados sí se excluyen — restaurarlos primero).
     const productoExistente = await this.prisma.producto.findFirst({
-      where: { id, empresaId, isActive: true, deletedAt: null },
+      where: { id, empresaId, deletedAt: null },
     });
 
     if (!productoExistente) {
