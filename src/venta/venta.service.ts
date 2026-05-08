@@ -729,6 +729,7 @@ export class VentaService {
           if (!compMatch || compMatch.cantidad <= 0) continue;
           const cantidadCombos = Number(primerItem.cantidad) / compMatch.cantidad;
           await this.comboService.consumirReservacionCombo(
+            tx,
             origenComboId,
             dto.sedeId,
             cantidadCombos,
@@ -1334,6 +1335,7 @@ export class VentaService {
         if (!compMatch || compMatch.cantidad <= 0) continue;
         const cantidadCombos = Number(primerItem.cantidad) / compMatch.cantidad;
         await this.comboService.consumirReservacionCombo(
+          tx,
           origenComboId,
           cotizacion.sedeId,
           cantidadCombos,
