@@ -302,16 +302,63 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Token inválido o expirado' })
   async verifyEmail(@Param('token') token: string, @Res() res: Response) {
     try {
-      const result = await this.authService.verifyEmail(token);
-
-      // Redirigir al frontend con éxito
-      const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-      return res.redirect(`${frontendUrl}/auth/email-verified?success=true`);
+      await this.authService.verifyEmail(token);
+      return res
+        .status(HttpStatus.OK)
+        .type('text/html; charset=utf-8')
+        .send(this.renderVerificationPage(true));
     } catch (error) {
-      // Redirigir al frontend con error
-      const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-      return res.redirect(`${frontendUrl}/auth/email-verified?success=false&error=${encodeURIComponent((error as any)?.message || 'Error desconocido')}`);
+      const message = (error as any)?.message || 'Token inválido o expirado';
+      return res
+        .status(HttpStatus.BAD_REQUEST)
+        .type('text/html; charset=utf-8')
+        .send(this.renderVerificationPage(false, message));
     }
+  }
+
+  /**
+   * Página HTML inline para el flujo de verificación de email. Pensada para
+   * el cliente móvil (sin frontend web): el usuario hace clic en el link
+   * desde el correo y ve directamente el resultado, con instrucción para
+   * volver a la app. Compacto, sin dependencias externas, mobile-first.
+   */
+  private renderVerificationPage(success: boolean, errorMessage?: string): string {
+    const titulo = success ? '✅ Email verificado' : '⚠️ No se pudo verificar';
+    const colorMain = success ? '#16a34a' : '#dc2626';
+    const colorBg = success ? '#f0fdf4' : '#fef2f2';
+    const mensaje = success
+      ? 'Tu correo quedó verificado. Ya puedes volver a la app de Syncronize y continuar.'
+      : (errorMessage || 'El enlace puede haber expirado o ya se usó.');
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Syncronize · Verificación de email</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f8fafc; margin:0; padding:24px; color:#0f172a; }
+  .card { max-width:420px; margin:32px auto; background:#fff; border-radius:14px; padding:28px; box-shadow:0 4px 24px rgba(0,0,0,.06); text-align:center; }
+  .badge { font-size:48px; line-height:1; margin-bottom:8px; }
+  h1 { font-size:18px; margin:8px 0 12px; color:${colorMain}; }
+  p { font-size:13px; color:#475569; line-height:1.55; }
+  .box { background:${colorBg}; border:1px solid ${colorMain}33; border-radius:10px; padding:12px; margin-top:12px; font-size:12px; color:${colorMain}; }
+  .hint { font-size:11px; color:#94a3b8; margin-top:16px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">${success ? '✅' : '⚠️'}</div>
+    <h1>${titulo}</h1>
+    <p>${mensaje}</p>
+    <div class="box">
+      ${success
+        ? 'Cierra esta pestaña y vuelve a la app. Si ya iniciaste sesión, los cambios se aplican automáticamente.'
+        : 'Si el problema persiste, vuelve a solicitar el envío del correo desde la app.'}
+    </div>
+    <p class="hint">Syncronize · Plataforma SaaS</p>
+  </div>
+</body>
+</html>`;
   }
 
   /**
