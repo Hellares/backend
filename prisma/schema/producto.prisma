@@ -86,6 +86,9 @@ model Producto {
 
   // Relaciones para ventas
   ventaDetalles VentaDetalle[]
+  // Cuando este Producto es un combo, VentaDetalle de componentes vendidos
+  // como parte de este combo (trazabilidad post-venta para reportes).
+  ventaDetallesOrigenCombo VentaDetalle[] @relation("VentaDetalleOrigenCombo")
 
   // Relaciones para módulo de compras
   ordenCompraDetalles OrdenCompraDetalle[]

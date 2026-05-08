@@ -385,6 +385,8 @@ export class VentaService {
               subtotal: d.subtotal,
               total: d.total,
               orden: d.orden,
+              origenComboId: d.origenComboId,
+              origenComboNombre: d.origenComboNombre,
             })),
           },
         },
@@ -559,6 +561,8 @@ export class VentaService {
                 subtotal: d.subtotal,
                 total: d.total,
                 orden: d.orden,
+                origenComboId: d.origenComboId,
+                origenComboNombre: d.origenComboNombre,
               })),
             },
           },
@@ -1689,6 +1693,8 @@ export class VentaService {
             subtotal: d.subtotal,
             total: d.total,
             orden: d.orden,
+            origenComboId: d.origenComboId,
+            origenComboNombre: d.origenComboNombre,
           })),
         });
 
@@ -2338,6 +2344,8 @@ export class VentaService {
       subtotal: Math.round(subtotal * 100) / 100,
       total: Math.round(totalConIcbper * 100) / 100,
       orden: index,
+      origenComboId: dto.origenComboId || null,
+      origenComboNombre: dto.origenComboNombre || null,
     };
   }
 

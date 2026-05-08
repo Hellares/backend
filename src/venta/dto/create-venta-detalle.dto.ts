@@ -75,4 +75,21 @@ export class CreateVentaDetalleDto {
   @Min(0)
   @Type(() => Number)
   icbper?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'ID del combo origen cuando este item es un componente de un combo expandido. ' +
+      'El cliente Flutter expande los combos en items individuales con `productoId`, ' +
+      'pero conserva esta referencia para trazabilidad post-venta (reportes, auditoría).',
+  })
+  @IsOptional()
+  @IsString()
+  origenComboId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Snapshot del nombre del combo origen (no se pierde si el combo se renombra/elimina luego).',
+  })
+  @IsOptional()
+  @IsString()
+  origenComboNombre?: string;
 }

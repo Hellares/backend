@@ -177,19 +177,29 @@ model VentaDetalle {
   // Orden
   orden Int @default(0)
 
+  // Trazabilidad de combo: cuando un VentaDetalle es un componente vendido
+  // como parte de un combo expandido, estos campos identifican el combo
+  // de origen. El combo es un Producto con esCombo=true (la FK reusa la
+  // misma tabla Producto). Snapshot del nombre para no perderlo si luego
+  // se renombra el combo. Null cuando el item se vendió suelto.
+  origenComboId     String?
+  origenComboNombre String? @db.VarChar(120)
+
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  venta    Venta             @relation(fields: [ventaId], references: [id], onDelete: Cascade)
-  producto Producto?         @relation(fields: [productoId], references: [id])
-  variante ProductoVariante? @relation(fields: [varianteId], references: [id])
-  servicio Servicio?         @relation(fields: [servicioId], references: [id])
+  venta       Venta             @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  producto    Producto?         @relation(fields: [productoId], references: [id])
+  variante    ProductoVariante? @relation(fields: [varianteId], references: [id])
+  servicio    Servicio?         @relation(fields: [servicioId], references: [id])
+  origenCombo Producto?         @relation("VentaDetalleOrigenCombo", fields: [origenComboId], references: [id])
 
   @@index([ventaId])
   @@index([productoId])
   @@index([varianteId])
   @@index([servicioId])
+  @@index([origenComboId])
 }
 
 /// Registro de pagos de una venta (soporta pagos parciales/múltiples)
