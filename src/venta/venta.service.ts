@@ -688,7 +688,7 @@ export class VentaService {
           }
         }
 
-        // 4e. Descontar stock de combos
+        // 4e. Descontar stock de combos (items con comboId puro: legacy / B2B).
         const detallesConCombo = detallesCalculados.filter(d => d.comboId && !d.productoId && !d.varianteId);
         for (const detalle of detallesConCombo) {
           await this.comboService.descontarStockCombo(
@@ -696,6 +696,42 @@ export class VentaService {
             dto.sedeId,
             dto.vendedorId || empresaId,
             Number(detalle.cantidad),
+          );
+        }
+
+        // 4f. Consumir reservación cuando los items vienen de un combo
+        // expandido (frontend Venta Rápida envía componentes con productoId
+        // + origenComboId). El stockActual de cada componente ya se
+        // descontó en el flujo 4d; aquí solo liberamos la reservación de
+        // ComboReservacion + stockReservadoCombo. No-op si no había reserva.
+        const detallesPorOrigenCombo = new Map<string, typeof detallesCalculados>();
+        for (const d of detallesCalculados) {
+          const oc = (d as any).origenComboId;
+          if (!oc) continue;
+          if (!detallesPorOrigenCombo.has(oc)) detallesPorOrigenCombo.set(oc, []);
+          detallesPorOrigenCombo.get(oc)!.push(d);
+        }
+        for (const [origenComboId, items] of detallesPorOrigenCombo) {
+          const componentes = await tx.productoCombo.findMany({
+            where: { comboId: origenComboId },
+            select: {
+              cantidad: true,
+              componenteProductoId: true,
+              componenteVarianteId: true,
+            },
+          });
+          // Tomar cualquier item para calcular cuántos combos representa.
+          const primerItem = items[0];
+          const compMatch = componentes.find(c =>
+            (c.componenteProductoId && c.componenteProductoId === primerItem.productoId) ||
+            (c.componenteVarianteId && c.componenteVarianteId === primerItem.varianteId),
+          );
+          if (!compMatch || compMatch.cantidad <= 0) continue;
+          const cantidadCombos = Number(primerItem.cantidad) / compMatch.cantidad;
+          await this.comboService.consumirReservacionCombo(
+            origenComboId,
+            dto.sedeId,
+            cantidadCombos,
           );
         }
 
@@ -1262,7 +1298,7 @@ export class VentaService {
         });
       }
 
-      // 5b. Descontar stock de combos en cotización
+      // 5b. Descontar stock de combos (items con comboId puro)
       const detallesCombo = todosLosDetalles.filter(d => (d as any).comboId && !d.productoId && !d.varianteId);
       for (const detalle of detallesCombo) {
         await this.comboService.descontarStockCombo(
@@ -1270,6 +1306,37 @@ export class VentaService {
           cotizacion.sedeId,
           cotizacion.vendedorId || empresaId,
           Number(detalle.cantidad),
+        );
+      }
+
+      // 5c. Consumir reservación para items expandidos de combo (origenComboId).
+      const detallesPorOrigenCombo = new Map<string, any[]>();
+      for (const d of todosLosDetalles as any[]) {
+        const oc = d.origenComboId;
+        if (!oc) continue;
+        if (!detallesPorOrigenCombo.has(oc)) detallesPorOrigenCombo.set(oc, []);
+        detallesPorOrigenCombo.get(oc)!.push(d);
+      }
+      for (const [origenComboId, items] of detallesPorOrigenCombo) {
+        const componentes = await tx.productoCombo.findMany({
+          where: { comboId: origenComboId },
+          select: {
+            cantidad: true,
+            componenteProductoId: true,
+            componenteVarianteId: true,
+          },
+        });
+        const primerItem = items[0];
+        const compMatch = componentes.find(c =>
+          (c.componenteProductoId && c.componenteProductoId === primerItem.productoId) ||
+          (c.componenteVarianteId && c.componenteVarianteId === primerItem.varianteId),
+        );
+        if (!compMatch || compMatch.cantidad <= 0) continue;
+        const cantidadCombos = Number(primerItem.cantidad) / compMatch.cantidad;
+        await this.comboService.consumirReservacionCombo(
+          origenComboId,
+          cotizacion.sedeId,
+          cantidadCombos,
         );
       }
 

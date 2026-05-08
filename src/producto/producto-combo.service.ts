@@ -1742,6 +1742,98 @@ export class ProductoComboService {
     }
   }
 
+  /**
+   * Consume reservación de combo cuando los componentes se vendieron por
+   * la vía normal (items con productoId, no comboId). El frontend ahora
+   * expande los combos en items individuales con productoId, así que el
+   * flujo de venta descuenta stockActual de cada componente vía
+   * SALIDA_VENTA. Este método complementa: SOLO libera la reservación
+   * (decrementa ComboReservacion.cantidad y stockReservadoCombo de los
+   * componentes) sin volver a tocar stockActual.
+   *
+   * Si no hay reservación previa, es no-op silencioso (puede ocurrir
+   * cuando se vende un combo sin haberlo reservado antes — válido).
+   *
+   * @param comboId   ID del Producto-combo (esCombo=true).
+   * @param sedeId    Sede donde se vende.
+   * @param cantidad  Cantidad de combos vendidos a liberar de la reserva.
+   */
+  async consumirReservacionCombo(
+    comboId: string,
+    sedeId: string,
+    cantidad: number,
+  ): Promise<void> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const reservacion = await tx.comboReservacion.findUnique({
+          where: { comboId_sedeId: { comboId, sedeId } },
+        });
+        const reservado = reservacion?.cantidad ?? 0;
+        if (reservado <= 0) {
+          this.logger.log(
+            `consumirReservacionCombo: combo ${comboId} sin reservación activa en sede ${sedeId}, no-op`,
+          );
+          return;
+        }
+
+        // Capear al stock reservado actual: si por algún motivo se vende
+        // más de lo reservado, libera lo que hay y deja stockReservadoCombo
+        // en 0 — no es error porque el flujo normal ya descontó stockActual.
+        const cantidadLiberar = Math.min(cantidad, reservado);
+
+        const componentes = await tx.productoCombo.findMany({
+          where: { comboId },
+          include: this.componenteInclude(sedeId),
+        });
+
+        for (const componente of componentes) {
+          const stock = componente.componenteVariante
+            ? componente.componenteVariante.stocksPorSede[0]
+            : componente.componenteProducto?.stocksPorSede[0];
+          if (!stock) continue;
+
+          const reservadoCompActual = stock.stockReservadoCombo ?? 0;
+          const aLiberar = Math.min(
+            componente.cantidad * cantidadLiberar,
+            reservadoCompActual,
+          );
+          if (aLiberar <= 0) continue;
+
+          await tx.productoStock.update({
+            where: { id: stock.id },
+            data: { stockReservadoCombo: { decrement: aLiberar } },
+          });
+        }
+
+        const nuevaCantReserva = reservado - cantidadLiberar;
+        if (nuevaCantReserva <= 0) {
+          await tx.comboReservacion.delete({
+            where: { comboId_sedeId: { comboId, sedeId } },
+          });
+        } else {
+          await tx.comboReservacion.update({
+            where: { comboId_sedeId: { comboId, sedeId } },
+            data: { cantidad: nuevaCantReserva },
+          });
+        }
+
+        this.logger.log(
+          `Reservación de combo ${comboId} consumida: -${cantidadLiberar} (de ${reservado} → ${nuevaCantReserva}) en sede ${sedeId}`,
+        );
+      });
+
+      const combo = await this.prisma.producto.findUnique({
+        where: { id: comboId },
+        select: { empresaId: true },
+      });
+      if (combo) await this.cacheService.invalidateProductosLists(combo.empresaId);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al consumir reservación de combo: ${msg}`);
+      throw error;
+    }
+  }
+
   // =====================================================
   // GESTIÓN DE PRECIOS Y OFERTAS DE COMBOS
   // =====================================================
