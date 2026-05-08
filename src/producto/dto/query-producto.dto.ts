@@ -118,6 +118,28 @@ export class QueryProductoDto {
   soloCombos?: boolean;
 
   @ApiPropertyOptional({
+    description:
+      'Listar SOLO productos eliminados (papelera). Cuando true: ' +
+      'deletedAt != null. Cuando false/undefined: comportamiento normal ' +
+      '(deletedAt: null). No combinar con filtros de stock.',
+    example: false,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  soloEliminados?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Filtrar productos por estado activo/inactivo. Si se omite, se ' +
+      'incluyen ambos. true = solo disponibles para venta. false = solo ' +
+      'inactivos pero NO eliminados. Independiente de soloEliminados.',
+    example: true,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  isActive?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Ordenamiento',
     enum: OrdenProducto,
     example: OrdenProducto.NOMBRE_ASC,

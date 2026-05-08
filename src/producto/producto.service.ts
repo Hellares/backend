@@ -875,6 +875,7 @@ export class ProductoService {
 
   /**
    * Eliminar un producto (soft delete)
+   * Acepta producto activo o inactivo, mientras no esté ya eliminado.
    */
   async remove(
     id: string,
@@ -885,14 +886,15 @@ export class ProductoService {
     await this.verifyUserPermissions(userId, empresaId);
 
     const producto = await this.prisma.producto.findFirst({
-      where: { id, empresaId, isActive: true, deletedAt: null },
+      where: { id, empresaId, deletedAt: null },
     });
 
     if (!producto) {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    // Soft delete
+    // Soft delete: marca eliminado y desactiva. Si después se restaura
+    // (restore), recupera isActive=true por defecto.
     await this.prisma.producto.update({
       where: { id },
       data: {
@@ -907,6 +909,101 @@ export class ProductoService {
     await this.invalidateEmpresaStats(empresaId);
 
     return { success: true };
+  }
+
+  /**
+   * Restaurar un producto previamente eliminado (soft-delete reversa).
+   * Pone deletedAt a null y reactiva isActive por defecto. El usuario puede
+   * después desactivarlo manualmente con toggleActive si lo prefiere.
+   */
+  async restore(
+    id: string,
+    empresaId: string,
+    userId: string,
+  ): Promise<{ success: boolean }> {
+    await this.verifyUserPermissions(userId, empresaId);
+
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, empresaId, deletedAt: { not: null } },
+      select: { id: true, sku: true },
+    });
+
+    if (!producto) {
+      throw new NotFoundException(
+        'Producto eliminado no encontrado (puede no existir o no estar en papelera)',
+      );
+    }
+
+    // Validar que el SKU no esté siendo usado por otro producto activo
+    // (puede haber colisión si se reactiva un SKU que se reasignó después).
+    if (producto.sku) {
+      const colision = await this.prisma.producto.findFirst({
+        where: {
+          empresaId,
+          sku: producto.sku,
+          deletedAt: null,
+          NOT: { id },
+        },
+        select: { id: true },
+      });
+      if (colision) {
+        throw new BadRequestException(
+          `No se puede restaurar: el SKU "${producto.sku}" ya está en uso por otro producto activo. Cambia uno de los dos primero.`,
+        );
+      }
+    }
+
+    await this.prisma.producto.update({
+      where: { id },
+      data: {
+        deletedAt: null,
+        isActive: true,
+      },
+    });
+
+    this.logger.log(`Producto restaurado: ${id}`);
+    await this.invalidateEmpresaStats(empresaId);
+    await this.cache.invalidateProductosLists(empresaId);
+
+    return { success: true };
+  }
+
+  /**
+   * Toggle activo/inactivo. Invierte `isActive` sin tocar `deletedAt`.
+   * Si el producto está eliminado (papelera), no permite el toggle —
+   * primero hay que restaurarlo.
+   */
+  async toggleActive(
+    id: string,
+    empresaId: string,
+    userId: string,
+  ): Promise<{ success: boolean; isActive: boolean }> {
+    await this.verifyUserPermissions(userId, empresaId);
+
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, empresaId, deletedAt: null },
+      select: { id: true, isActive: true },
+    });
+
+    if (!producto) {
+      throw new NotFoundException(
+        'Producto no encontrado (puede estar eliminado en papelera — restaurar primero)',
+      );
+    }
+
+    const nuevoEstado = !producto.isActive;
+    await this.prisma.producto.update({
+      where: { id },
+      data: { isActive: nuevoEstado },
+    });
+
+    this.logger.log(
+      `Producto ${id} ${nuevoEstado ? 'activado' : 'desactivado'}`,
+    );
+    await this.invalidateEmpresaStats(empresaId);
+    await this.cache.invalidateProductosLists(empresaId);
+
+    return { success: true, isActive: nuevoEstado };
   }
 
   /**

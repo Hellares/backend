@@ -32,6 +32,10 @@ interface ParsedRow {
   // un PrecioNivel asociado al producto.
   cantidadMinPorMayor?: number;
   precioPorMayor?: number;
+  // Disponible para venta (isActive). Si vacío, default `true`. Si "No"
+  // o "0" o false, el producto se crea inactivo (no aparece en POS / Venta
+  // Rápida hasta activarlo manualmente).
+  disponibleParaVenta: boolean;
 }
 
 /** Resuelve el "nombre visible" de una EmpresaCategoria / EmpresaMarca / EmpresaUnidadMedida */
@@ -123,6 +127,7 @@ export class ProductoBulkUploadService {
       'Stock Inicial',
       'Cantidad Min Por Mayor',
       'Precio Por Mayor (Fijo)',
+      'Disponible para Venta',
     ];
 
     const headerRow = sheet.addRow(headers);
@@ -155,6 +160,7 @@ export class ProductoBulkUploadService {
       { width: 14 },
       { width: 18 }, // M: Cantidad Min Por Mayor
       { width: 20 }, // N: Precio Por Mayor (Fijo)
+      { width: 20 }, // O: Disponible para Venta (Si/No, default Si)
     ];
 
     // Fila de ejemplo
@@ -173,6 +179,7 @@ export class ProductoBulkUploadService {
       10,
       6,    // M: aplica precio por mayor desde 6 unidades
       80,   // N: precio por mayor S/ 80 (debe ser < precio venta = 100)
+      'Si', // O: disponible para venta (Si por defecto)
     ]);
 
     exampleRow.eachCell((cell) => {
@@ -269,6 +276,19 @@ export class ProductoBulkUploadService {
         showErrorMessage: true,
         errorTitle: 'Valor invalido',
         error: 'Seleccione Si o No',
+      };
+    }
+
+    // Data validation para "Disponible para Venta" (columna O) - dropdown Si/No
+    // Si vacío, default Si (disponible). El producto se crea inactivo si pone No.
+    for (let row = 2; row <= validationRows; row++) {
+      sheet.getCell(`O${row}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: ['"Si,No"'],
+        showErrorMessage: true,
+        errorTitle: 'Valor invalido',
+        error: 'Seleccione Si o No (vacio = Si por defecto)',
       };
     }
 
@@ -432,6 +452,15 @@ export class ProductoBulkUploadService {
       const stockInicial = getNumericValue(12);
       const cantidadMinPorMayor = getNumericValue(13);
       const precioPorMayor = getNumericValue(14);
+      // Disponible para venta (columna O). Vacío → true (default).
+      // Acepta "Si"/"Sí"/"true"/"1" como sí; "No"/"false"/"0" como no.
+      const disponibleRaw = getCellValue(15).toLowerCase().trim();
+      const disponibleParaVenta =
+        disponibleRaw === '' ||
+        disponibleRaw === 'si' ||
+        disponibleRaw === 'sí' ||
+        disponibleRaw === 'true' ||
+        disponibleRaw === '1';
 
       // Fila completamente vacía - saltar
       if (!nombre && !sku && !descripcion && !categoriaNombre) return;
@@ -499,6 +528,11 @@ export class ProductoBulkUploadService {
       // Validar "Precio Incluye IGV" solo si se escribió algo
       if (precioIncluyeIgvRaw && precioIncluyeIgvRaw !== 'si' && precioIncluyeIgvRaw !== 'sí' && precioIncluyeIgvRaw !== 'no') {
         addError('Precio Incluye IGV', getCellValue(11), 'El valor debe ser Si o No');
+      }
+      // Validar "Disponible para Venta" solo si se escribió algo
+      const disponibleParsed = ['', 'si', 'sí', 'no', 'true', 'false', '1', '0'];
+      if (disponibleRaw && !disponibleParsed.includes(disponibleRaw)) {
+        addError('Disponible para Venta', getCellValue(15), 'El valor debe ser Si o No (vacio = Si)');
       }
       if (stockInicial !== undefined) {
         if (stockInicial < 0) {
@@ -613,6 +647,7 @@ export class ProductoBulkUploadService {
             ? Math.floor(cantidadMinPorMayor)
             : undefined,
           precioPorMayor,
+          disponibleParaVenta,
           categoriaId,
           marcaId,
           unidadId,
@@ -666,6 +701,10 @@ export class ProductoBulkUploadService {
                 // descripción) antes de exponerlos al público. Activar
                 // visibilidad uno a uno desde el detalle del producto.
                 visibleMarketplace: false,
+                // Disponible para venta (columna O del Excel). Default true
+                // si vacío. Si "No" → producto creado pero inactivo (no
+                // aparece en POS/Venta Rápida hasta activarlo).
+                isActive: row.disponibleParaVenta,
                 destacado: false,
                 tieneVariantes: false,
                 esCombo: false,

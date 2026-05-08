@@ -460,8 +460,17 @@ export class ProductoCatalogService {
   async buildWhereClause(empresaId: string, filters: QueryProductoDto): Promise<Prisma.ProductoWhereInput> {
     const where: Prisma.ProductoWhereInput = {
       empresaId,
-      deletedAt: null,
+      // Por defecto solo no-eliminados. Si soloEliminados=true mostramos
+      // SOLO los soft-deleted (papelera). Si false/undefined, los normales.
+      deletedAt: filters.soloEliminados ? { not: null } : null,
     };
+
+    // Filtro opcional por isActive (disponible para venta). Si no se pasa,
+    // incluye ambos. Permite UI tipo "Mostrar solo activos" / "Solo
+    // inactivos" sin necesidad de ir a la papelera.
+    if (filters.isActive !== undefined) {
+      where.isActive = filters.isActive;
+    }
 
     // Búsqueda por texto — optimizada:
     // 1. Códigos exactos (barcode, sku, codigoEmpresa): búsqueda exacta case-insensitive (usa índice)

@@ -476,6 +476,59 @@ export class ProductoController {
     return await this.productoService.remove(id, empresaId, user.sub);
   }
 
+  @Patch(':id/restaurar')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Restaurar un producto eliminado (papelera)',
+    description:
+      'Pone deletedAt=null y reactiva isActive. Falla si el SKU ya fue ' +
+      'reasignado a otro producto activo (BadRequest). Usado desde la ' +
+      'pantalla de papelera de productos.',
+  })
+  @ApiResponse({ status: 200, description: 'Producto restaurado' })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado en papelera' })
+  @ApiResponse({ status: 400, description: 'SKU en colisión con producto activo' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async restore(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+  ): Promise<{ success: boolean }> {
+    return await this.productoService.restore(id, empresaId, user.sub);
+  }
+
+  @Patch(':id/toggle-active')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Activar/desactivar producto (toggle isActive)',
+    description:
+      'Invierte el flag isActive del producto. No afecta deletedAt. ' +
+      'Producto inactivo NO aparece en POS / Venta Rápida pero sigue ' +
+      'visible en listados de gestión. Si el producto está en papelera ' +
+      '(deletedAt != null), restaurarlo primero.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Producto activado/desactivado. Devuelve isActive resultante.',
+  })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado o en papelera' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async toggleActive(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+  ): Promise<{ success: boolean; isActive: boolean }> {
+    return await this.productoService.toggleActive(id, empresaId, user.sub);
+  }
+
   @Patch(':id/stock')
   @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({
