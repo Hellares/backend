@@ -466,10 +466,13 @@ export class ProductoCatalogService {
     };
 
     // Filtro opcional por isActive (disponible para venta). Si no se pasa,
-    // incluye ambos. Permite UI tipo "Mostrar solo activos" / "Solo
-    // inactivos" sin necesidad de ir a la papelera.
-    if (filters.isActive !== undefined) {
-      where.isActive = filters.isActive;
+    // incluye ambos. El DTO declara isActive como string ("true"/"false")
+    // por el bug de NestJS enableImplicitConversion (Boolean('false') = true);
+    // acá lo interpretamos como boolean.
+    if (filters.isActive === 'true') {
+      where.isActive = true;
+    } else if (filters.isActive === 'false') {
+      where.isActive = false;
     }
 
     // Búsqueda por texto — optimizada:

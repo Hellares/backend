@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsInt, Min, IsBoolean, IsEnum } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, IsBoolean, IsEnum, IsIn } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
 export enum OrdenProducto {
@@ -130,23 +130,17 @@ export class QueryProductoDto {
 
   @ApiPropertyOptional({
     description:
-      'Filtrar productos por estado activo/inactivo. Si se omite, se ' +
-      'incluyen ambos. true = solo disponibles para venta. false = solo ' +
-      'inactivos pero NO eliminados. Independiente de soloEliminados.',
-    example: true,
+      'Filtrar productos por estado activo/inactivo. Acepta "true" o ' +
+      '"false" como string. Si se omite, incluye ambos.',
+    example: 'true',
   })
   @IsOptional()
-  @Transform(({ value }) => {
-    // Distinguir undefined/null/vacío de "false" explícito. El transform
-    // anterior convertía cualquier value distinto de 'true' en false,
-    // incluyendo undefined → siempre filtraba isActive=false aunque no
-    // se pasara el query param.
-    if (value === undefined || value === null || value === '') return undefined;
-    if (value === 'true' || value === true) return true;
-    if (value === 'false' || value === false) return false;
-    return undefined;
-  })
-  isActive?: boolean;
+  @IsIn(['true', 'false'])
+  // Nota: declarado como string (no boolean) porque NestJS tiene
+  // `enableImplicitConversion: true` en ValidationPipe, que ejecuta
+  // `Boolean('false')` → `true` antes de cualquier @Transform. El
+  // service interpreta el string en `buildWhereClause`.
+  isActive?: string;
 
   @ApiPropertyOptional({
     description: 'Ordenamiento',
