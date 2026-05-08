@@ -89,6 +89,7 @@ export class CrearStockDto {
   })
   @IsOptional()
   @IsNumber()
+  @Min(0, { message: 'El precio no puede ser negativo' })
   @Type(() => Number)
   precio?: number;
 
@@ -99,6 +100,7 @@ export class CrearStockDto {
   })
   @IsOptional()
   @IsNumber()
+  @Min(0, { message: 'El precio de costo no puede ser negativo' })
   @Type(() => Number)
   precioCosto?: number;
 
@@ -108,6 +110,7 @@ export class CrearStockDto {
   })
   @IsOptional()
   @IsNumber()
+  @Min(0, { message: 'El precio de oferta no puede ser negativo' })
   @Type(() => Number)
   precioOferta?: number;
 

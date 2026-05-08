@@ -323,8 +323,14 @@ export class ProductoBulkUploadService {
           unidadMaestra: { select: { nombre: true } },
         },
       }),
+      // Pre-cargar SKUs existentes (incluye soft-deleted) para detectar
+      // colisiones antes de intentar el insert. El @@unique([empresaId, sku])
+      // de Prisma aplica a TODAS las filas, incluyendo deletedAt != null;
+      // si filtráramos solo isActive=true, intentaríamos crear y Prisma
+      // fallaría con error críptico de unique constraint sin mensaje claro
+      // al usuario.
       this.prisma.producto.findMany({
-        where: { empresaId, isActive: true, deletedAt: null, sku: { not: null } },
+        where: { empresaId, sku: { not: null } },
         select: { sku: true },
       }),
     ]);

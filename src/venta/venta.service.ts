@@ -106,6 +106,106 @@ export class VentaService {
     return result;
   }
 
+  /**
+   * Defensa multi-tenant: valida que todos los IDs externos del DTO
+   * (sedeId, vendedorId, clienteId, clienteEmpresaId, productoId,
+   * varianteId, comboId, origenComboId) pertenezcan a `empresaId`.
+   *
+   * Las queries de lectura ya filtran por `empresaId` (clientes, productos,
+   * etc.), pero el flujo de creación de venta confía en los IDs del DTO al
+   * persistir. Sin esta validación un cliente comprometido podría:
+   * - Crear venta en sede de otra empresa.
+   * - Asignar venta a un vendedor de otra empresa.
+   * - Vender productos de otra empresa (ID inyectado en detalles).
+   *
+   * Se hacen 5 queries batch (paralelas) — costo bajo. Falla early con
+   * BadRequest si cualquier ID no pertenece.
+   */
+  private async _validarPertenenciaTenant(
+    empresaId: string,
+    dto: { sedeId: string; vendedorId?: string; clienteId?: string; clienteEmpresaId?: string; detalles: any[] },
+    canalVenta: string,
+  ): Promise<void> {
+    // 1. Sede pertenece a la empresa.
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: dto.sedeId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!sede) {
+      throw new BadRequestException('La sede no pertenece a la empresa');
+    }
+
+    // 2. Vendedor (si está set) tiene rol activo en la empresa.
+    if (dto.vendedorId) {
+      const vendedor = await this.prisma.empresaUsuarioRol.findFirst({
+        where: { usuarioId: dto.vendedorId, empresaId, isActive: true },
+        select: { id: true },
+      });
+      if (!vendedor) {
+        throw new BadRequestException('El vendedor no pertenece a la empresa');
+      }
+    }
+
+    // 3. Cliente persona (EmpresaPersona) — solo si NO es genérico/ONLINE.
+    // El genérico se resuelve internamente con clienteId que ya pertenece al tenant.
+    if (dto.clienteId && canalVenta !== 'ONLINE') {
+      const cliente = await this.prisma.empresaPersona.findFirst({
+        where: { id: dto.clienteId, empresaId },
+        select: { id: true },
+      });
+      if (!cliente) {
+        throw new BadRequestException('El cliente no pertenece a la empresa');
+      }
+    }
+
+    // 4. Cliente empresa B2B (ClienteEmpresa).
+    if (dto.clienteEmpresaId) {
+      const clienteEmp = await this.prisma.clienteEmpresa.findFirst({
+        where: { id: dto.clienteEmpresaId, empresaId },
+        select: { id: true },
+      });
+      if (!clienteEmp) {
+        throw new BadRequestException('El cliente B2B no pertenece a la empresa');
+      }
+    }
+
+    // 5. Productos / combos / variantes / origenCombos en una sola query batch.
+    // Producto y combo viven en la misma tabla (esCombo distingue), origenComboId
+    // referencia a un Producto-combo, así que todos van al mismo set.
+    const productoIds = new Set<string>();
+    const varianteIds = new Set<string>();
+    for (const d of dto.detalles ?? []) {
+      if (d.productoId) productoIds.add(d.productoId);
+      if (d.comboId) productoIds.add(d.comboId);
+      if (d.origenComboId) productoIds.add(d.origenComboId);
+      if (d.varianteId) varianteIds.add(d.varianteId);
+    }
+
+    if (productoIds.size > 0) {
+      const productos = await this.prisma.producto.findMany({
+        where: { id: { in: [...productoIds] }, empresaId },
+        select: { id: true },
+      });
+      if (productos.length !== productoIds.size) {
+        throw new BadRequestException(
+          'Algún producto/combo del detalle no pertenece a la empresa',
+        );
+      }
+    }
+
+    if (varianteIds.size > 0) {
+      const variantes = await this.prisma.productoVariante.findMany({
+        where: { id: { in: [...varianteIds] }, empresaId },
+        select: { id: true },
+      });
+      if (variantes.length !== varianteIds.size) {
+        throw new BadRequestException(
+          'Alguna variante del detalle no pertenece a la empresa',
+        );
+      }
+    }
+  }
+
   // Include reutilizable para queries
   private getInclude() {
     return {
@@ -421,6 +521,12 @@ export class VentaService {
         );
       }
     }
+
+    // Defensa multi-tenant: validar que TODOS los IDs del DTO pertenezcan
+    // a la empresa del header `x-tenant-id`. El cliente comprometido podría
+    // inyectar IDs de otro tenant; las queries de lectura ya filtran por
+    // empresaId pero las inserciones de detalle confían en los IDs del DTO.
+    await this._validarPertenenciaTenant(empresaId, dto, canalVenta);
 
     const result = await this.prisma.$transaction(
       async (tx) => {

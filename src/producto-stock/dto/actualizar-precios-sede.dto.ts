@@ -37,6 +37,7 @@ export class ActualizarPreciosSedeDto {
   })
   @IsOptional()
   @IsNumber()
+  @Min(0, { message: 'El precio no puede ser negativo' })
   @Type(() => Number)
   precio?: number | null;
 
@@ -47,6 +48,7 @@ export class ActualizarPreciosSedeDto {
   })
   @IsOptional()
   @IsNumber()
+  @Min(0, { message: 'El precio de costo no puede ser negativo' })
   @Type(() => Number)
   precioCosto?: number | null;
 
@@ -56,6 +58,7 @@ export class ActualizarPreciosSedeDto {
   })
   @IsOptional()
   @IsNumber()
+  @Min(0, { message: 'El precio de oferta no puede ser negativo' })
   @Type(() => Number)
   precioOferta?: number | null;
 
