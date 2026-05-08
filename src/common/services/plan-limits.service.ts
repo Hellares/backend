@@ -370,9 +370,16 @@ export class PlanLimitsService {
       }),
     ]);
 
-    const almacenamientoUsadoMB = Math.round(
-      Number(storageResult._sum.tamanoBytes || 0) / (1024 * 1024),
+    // Mantenemos actualMB con ceil (no round) para no reportar 0 cuando hay
+    // tráfico real bajo el umbral de 0.5 MB. Además exponemos actualBytes
+    // crudo para que clientes puedan formatear KB/MB/GB con precisión.
+    const almacenamientoUsadoBytes = Number(
+      storageResult._sum.tamanoBytes || 0,
     );
+    const almacenamientoUsadoMB =
+      almacenamientoUsadoBytes > 0
+        ? Math.max(1, Math.ceil(almacenamientoUsadoBytes / (1024 * 1024)))
+        : 0;
 
     return {
       plan: empresa.planSuscripcion.nombre,
@@ -430,6 +437,7 @@ export class PlanLimitsService {
         almacenamiento: {
           limiteMB: empresa.planSuscripcion.limiteAlmacenamientoMB,
           actualMB: almacenamientoUsadoMB,
+          actualBytes: almacenamientoUsadoBytes,
           disponibleMB:
             empresa.planSuscripcion.limiteAlmacenamientoMB !== null
               ? empresa.planSuscripcion.limiteAlmacenamientoMB - almacenamientoUsadoMB
