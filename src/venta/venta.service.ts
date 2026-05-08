@@ -184,23 +184,64 @@ export class VentaService {
     if (productoIds.size > 0) {
       const productos = await this.prisma.producto.findMany({
         where: { id: { in: [...productoIds] }, empresaId },
-        select: { id: true },
+        select: { id: true, nombre: true, isActive: true, deletedAt: true },
       });
+
+      // Detectar IDs faltantes (no pertenecen a la empresa o no existen).
       if (productos.length !== productoIds.size) {
         throw new BadRequestException(
-          'Algún producto/combo del detalle no pertenece a la empresa',
+          'Algún producto/combo del detalle no pertenece a la empresa o no existe',
+        );
+      }
+
+      // Detectar productos eliminados (en papelera).
+      const eliminados = productos.filter((p) => p.deletedAt !== null);
+      if (eliminados.length > 0) {
+        throw new BadRequestException(
+          `Producto(s) eliminado(s) en el detalle: ${eliminados
+            .map((p) => `"${p.nombre}"`)
+            .join(', ')}. Restáuralos desde Productos eliminados antes de vender.`,
+        );
+      }
+
+      // Detectar productos inactivos (no disponibles para venta).
+      const inactivos = productos.filter((p) => !p.isActive);
+      if (inactivos.length > 0) {
+        throw new BadRequestException(
+          `Producto(s) no disponible(s) para venta: ${inactivos
+            .map((p) => `"${p.nombre}"`)
+            .join(', ')}. Activálos desde el detalle del producto.`,
         );
       }
     }
 
     if (varianteIds.size > 0) {
+      // ProductoVariante también tiene isActive + deletedAt; aplicamos las
+      // mismas reglas. Si el producto padre está inactivo/eliminado, ya falló
+      // arriba (se incluye en productoIds vía el detalle del frontend).
       const variantes = await this.prisma.productoVariante.findMany({
         where: { id: { in: [...varianteIds] }, empresaId },
-        select: { id: true },
+        select: { id: true, nombre: true, isActive: true, deletedAt: true },
       });
       if (variantes.length !== varianteIds.size) {
         throw new BadRequestException(
-          'Alguna variante del detalle no pertenece a la empresa',
+          'Alguna variante del detalle no pertenece a la empresa o no existe',
+        );
+      }
+      const elimVar = variantes.filter((v) => v.deletedAt !== null);
+      if (elimVar.length > 0) {
+        throw new BadRequestException(
+          `Variante(s) eliminada(s) en el detalle: ${elimVar
+            .map((v) => `"${v.nombre}"`)
+            .join(', ')}.`,
+        );
+      }
+      const inactVar = variantes.filter((v) => !v.isActive);
+      if (inactVar.length > 0) {
+        throw new BadRequestException(
+          `Variante(s) no disponible(s): ${inactVar
+            .map((v) => `"${v.nombre}"`)
+            .join(', ')}.`,
         );
       }
     }
