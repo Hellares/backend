@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Put,
+  Patch,
   Body,
   Get,
   Delete,
@@ -38,6 +39,7 @@ import { GoogleAuthDto } from './dto/google-auth.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
 import { LinkAccountDto } from './dto/link-account.dto';
+import { UpdateEmailDto } from './dto/update-email.dto';
 import { AutorizarOperacionDto } from './dto/autorizar-operacion.dto';
 
 @ApiTags('Autenticación')
@@ -513,6 +515,31 @@ export class AuthController {
     @Body() setPasswordDto: SetPasswordDto,
   ) {
     return this.authService.setPassword(user.sub, setPasswordDto.password);
+  }
+
+  /**
+   * Agregar o cambiar el email del usuario autenticado.
+   * Pensado para cuentas DNI-only que quieren agregar email para luego
+   * vincular login Google. El nuevo email queda con `emailVerificado=false`
+   * y se envía un correo de verificación.
+   */
+  @Patch('email')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Agregar o cambiar el email de la cuenta',
+    description:
+      'Reemplaza el email del usuario autenticado por uno nuevo. El email queda no verificado hasta que el dueño confirma con el link enviado.',
+  })
+  @ApiResponse({ status: 200, description: 'Email actualizado, verificación enviada' })
+  @ApiResponse({ status: 400, description: 'Email inválido' })
+  @ApiResponse({ status: 409, description: 'Email ya registrado en otra cuenta' })
+  async updateEmail(
+    @CurrentUser() user: any,
+    @Body() updateEmailDto: UpdateEmailDto,
+  ) {
+    return this.authService.updateEmail(user.sub, updateEmailDto.email);
   }
 
   /**

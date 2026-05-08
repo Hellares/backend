@@ -2250,6 +2250,121 @@ export class AuthService {
     };
   }
 
+  /**
+   * Agregar o cambiar el email del usuario autenticado.
+   *
+   * Casos de uso:
+   * - Cuenta DNI-only (email=null) que quiere agregar un email para luego
+   *   poder vincular login Google.
+   * - Usuario que cambió de proveedor de correo y necesita actualizar.
+   *
+   * Reglas:
+   * - El nuevo email no puede estar ocupado por otro Usuario (case-insensitive).
+   * - El nuevo email queda con `emailVerificado=false`.
+   * - Se envía email de verificación a la nueva dirección.
+   * - Persona.email se sincroniza si la persona no tiene otra cuenta colgando.
+   * - Si el email es exactamente el mismo que el actual: no-op idempotente.
+   */
+  async updateEmail(userId: string, email: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      include: { persona: true },
+    });
+
+    if (!usuario || !usuario.isActive) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // No-op si ya está usando ese mismo email.
+    if (usuario.email && usuario.email.toLowerCase() === normalizedEmail) {
+      return {
+        success: true,
+        message: 'Tu cuenta ya tiene ese email asociado.',
+        emailVerificado: usuario.emailVerificado,
+      };
+    }
+
+    // El email no puede pertenecer a otro Usuario.
+    const conflict = await this.prisma.usuario.findFirst({
+      where: {
+        email: { equals: normalizedEmail, mode: 'insensitive' },
+        NOT: { id: usuario.id },
+      },
+      select: { id: true },
+    });
+    if (conflict) {
+      throw new ConflictException('Ese email ya está registrado en otra cuenta');
+    }
+
+    const verificationToken = uuidv4();
+    const verificationExpiration = new Date(
+      Date.now() + 24 * 60 * 60 * 1000,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.usuario.update({
+        where: { id: usuario.id },
+        data: {
+          email: normalizedEmail,
+          emailVerificado: false,
+          emailVerificationToken: verificationToken,
+          emailVerificationExpiracion: verificationExpiration,
+        },
+      });
+
+      // Sincronizar Persona.email solo si la persona NO tiene otro Usuario
+      // distinto colgando (caso edge: una persona con varios usuarios). En
+      // duda, dejamos Persona.email tal cual y sólo actualizamos Usuario.
+      if (usuario.persona) {
+        const otrosUsuarios = await tx.usuario.count({
+          where: {
+            personaId: usuario.persona.id,
+            NOT: { id: usuario.id },
+          },
+        });
+        if (otrosUsuarios === 0) {
+          await tx.persona.update({
+            where: { id: usuario.persona.id },
+            data: { email: normalizedEmail },
+          });
+        }
+      }
+    });
+
+    // Enviar email de verificación a la nueva dirección.
+    try {
+      await this.emailService.sendVerificationEmail(
+        normalizedEmail,
+        verificationToken,
+        usuario.persona?.nombres || 'Usuario',
+      );
+    } catch (error: any) {
+      this.logger.error(
+        'Failed to send verification email after email update',
+        error?.stack,
+        { userId: usuario.id, email: normalizedEmail },
+      );
+      // No revertimos la actualización: el usuario puede pedir reenvío.
+    }
+
+    this.logger.info('Email updated for user', {
+      userId: usuario.id,
+      previousEmail: usuario.email,
+      newEmail: normalizedEmail,
+      changeType: 'email_update',
+    });
+
+    return {
+      success: true,
+      message:
+        'Email actualizado. Te enviamos un correo de verificación a la nueva dirección.',
+      emailVerificado: false,
+      email: normalizedEmail,
+    };
+  }
+
   private buildUserResponse(usuario: any, extra?: Record<string, any>) {
     const persona = usuario.persona;
     const perfilCompleto = !!(persona?.dni && (persona?.telefono || usuario.telefono) && persona?.direccion);

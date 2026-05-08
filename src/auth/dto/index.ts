@@ -11,3 +11,4 @@ export * from './switch-tenant.dto';
 export * from './responses.dto';
 export * from './update-profile.dto';
 export * from './link-account.dto';
+export * from './update-email.dto';
