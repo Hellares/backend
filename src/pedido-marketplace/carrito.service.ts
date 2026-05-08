@@ -3,8 +3,27 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { TipoPrecioNivel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgregarCarritoDto } from './dto/carrito.dto';
+
+interface NivelLite {
+  id: string;
+  nombre: string;
+  cantidadMinima: number;
+  cantidadMaxima: number | null;
+  tipoPrecio: TipoPrecioNivel;
+  precio: number | null;
+  porcentajeDesc: number | null;
+}
+
+interface PrecioCalculado {
+  precioUnitario: number;
+  precioBase: number;
+  precioOferta: number | null;
+  nivelAplicado: string | null;
+  descuentoNivelPct: number | null;
+}
 
 @Injectable()
 export class CarritoService {
@@ -20,6 +39,86 @@ export class CarritoService {
       stock.stockActual - stock.stockReservado
         - stock.stockReservadoVenta - stock.stockDanado - stock.stockEnGarantia,
     );
+  }
+
+  /**
+   * Calcular precio efectivo aplicando: min(precioBase, precioOferta activa, precio con nivel).
+   *
+   * Reglas:
+   * - El nivel se aplica sobre `precioBase` (no sobre oferta), igual que VentaService.
+   * - Gana el menor entre los 3 candidatos. La oferta NO se acumula con el nivel.
+   * - Etiqueta: si nivel gana o empata con oferta → nombre del nivel (más informativo).
+   *   Si oferta gana → 'Oferta'. Si nada gana → null.
+   */
+  private aplicarNivel(
+    niveles: NivelLite[],
+    cantidad: number,
+    precioBase: number,
+    precioOfertaActiva: number | null,
+  ): PrecioCalculado {
+    // Buscar nivel aplicable más específico (mayor cantidadMinima ≤ cantidad)
+    const aplicable = niveles
+      .filter(
+        (n) =>
+          n.cantidadMinima <= cantidad &&
+          (n.cantidadMaxima == null || n.cantidadMaxima >= cantidad),
+      )
+      .sort((a, b) => b.cantidadMinima - a.cantidadMinima)[0];
+
+    let precioConNivel: number | null = null;
+    let descuentoNivelPct: number | null = null;
+    if (aplicable && precioBase > 0) {
+      if (aplicable.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO && aplicable.precio != null) {
+        precioConNivel = aplicable.precio;
+        descuentoNivelPct =
+          ((precioBase - precioConNivel) / precioBase) * 100;
+      } else if (
+        aplicable.tipoPrecio === TipoPrecioNivel.PORCENTAJE_DESCUENTO &&
+        aplicable.porcentajeDesc != null
+      ) {
+        descuentoNivelPct = aplicable.porcentajeDesc;
+        precioConNivel = precioBase * (1 - descuentoNivelPct / 100);
+      }
+    }
+
+    // Comparar candidatos y elegir el menor
+    const candidatos: Array<{ precio: number; tipo: 'base' | 'oferta' | 'nivel' }> = [
+      { precio: precioBase, tipo: 'base' },
+    ];
+    if (precioOfertaActiva != null) {
+      candidatos.push({ precio: precioOfertaActiva, tipo: 'oferta' });
+    }
+    if (precioConNivel != null) {
+      candidatos.push({ precio: precioConNivel, tipo: 'nivel' });
+    }
+    candidatos.sort((a, b) => a.precio - b.precio);
+    const ganador = candidatos[0];
+
+    // Etiqueta: empate oferta-nivel prioriza nivel (info más útil "compra X+")
+    let nivelAplicado: string | null = null;
+    if (ganador.tipo === 'nivel') {
+      nivelAplicado = aplicable!.nombre;
+    } else if (
+      ganador.tipo === 'oferta' &&
+      precioConNivel != null &&
+      Math.abs(precioConNivel - ganador.precio) < 0.001
+    ) {
+      // empate: prioriza nivel
+      nivelAplicado = aplicable!.nombre;
+    } else if (ganador.tipo === 'oferta') {
+      nivelAplicado = 'Oferta';
+    }
+
+    return {
+      precioUnitario: Math.round(ganador.precio * 100) / 100,
+      precioBase,
+      precioOferta: precioOfertaActiva,
+      nivelAplicado,
+      descuentoNivelPct:
+        descuentoNivelPct != null && ganador.tipo === 'nivel'
+          ? Math.round(descuentoNivelPct * 100) / 100
+          : null,
+    };
   }
 
   /**
@@ -64,12 +163,12 @@ export class CarritoService {
       return { empresas: [], totalItems: 0, totalCantidad: 0, total: 0 };
     }
 
-    // Batch: obtener todos los stocks e imágenes en 2 queries
+    // Batch: obtener todos los stocks, imágenes y niveles de precio en 3 queries
     const productoIds = items.filter(i => !i.varianteId).map(i => i.productoId);
     const varianteIds = items.filter(i => i.varianteId).map(i => i.varianteId!);
     const allEntityIds = [...new Set([...productoIds, ...varianteIds])];
 
-    const [allStocks, allImagenes] = await Promise.all([
+    const [allStocks, allImagenes, allNiveles] = await Promise.all([
       this.prisma.productoStock.findMany({
         where: {
           OR: [
@@ -104,6 +203,26 @@ export class CarritoService {
         select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
         orderBy: { orden: 'asc' },
       }),
+      this.prisma.precioNivel.findMany({
+        where: {
+          isActive: true,
+          OR: [
+            ...(productoIds.length > 0 ? [{ productoId: { in: productoIds } }] : []),
+            ...(varianteIds.length > 0 ? [{ varianteId: { in: varianteIds } }] : []),
+          ],
+        },
+        select: {
+          id: true,
+          productoId: true,
+          varianteId: true,
+          nombre: true,
+          cantidadMinima: true,
+          cantidadMaxima: true,
+          tipoPrecio: true,
+          precio: true,
+          porcentajeDesc: true,
+        },
+      }),
     ]);
 
     // Crear lookup maps para O(1)
@@ -121,21 +240,46 @@ export class CarritoService {
       }
     }
 
+    // Lookup de niveles agrupados por productoId/varianteId
+    const nivelesMap = new Map<string, NivelLite[]>();
+    for (const n of allNiveles) {
+      const key = n.varianteId ?? n.productoId;
+      if (!key) continue;
+      const lite: NivelLite = {
+        id: n.id,
+        nombre: n.nombre,
+        cantidadMinima: n.cantidadMinima,
+        cantidadMaxima: n.cantidadMaxima,
+        tipoPrecio: n.tipoPrecio,
+        precio: n.precio != null ? Number(n.precio) : null,
+        porcentajeDesc: n.porcentajeDesc != null ? Number(n.porcentajeDesc) : null,
+      };
+      if (!nivelesMap.has(key)) nivelesMap.set(key, []);
+      nivelesMap.get(key)!.push(lite);
+    }
+
     // Enriquecer items sin queries adicionales
     const now = new Date();
     const enrichedItems = items.map((item) => {
       const lookupKey = item.varianteId ?? item.productoId;
       const stock = stockMap.get(lookupKey);
       const imagen = imageMap.get(lookupKey);
+      const niveles = nivelesMap.get(lookupKey) ?? [];
 
       const ofertaActiva = stock?.enOferta
         && stock.precioOferta
         && (!stock.fechaInicioOferta || stock.fechaInicioOferta <= now)
         && (!stock.fechaFinOferta || stock.fechaFinOferta >= now);
 
-      const precioUnitario = ofertaActiva
-        ? Number(stock.precioOferta)
-        : stock?.precio ? Number(stock.precio) : 0;
+      const precioBase = stock?.precio ? Number(stock.precio) : 0;
+      const precioOfertaActiva = ofertaActiva ? Number(stock.precioOferta) : null;
+
+      const calc = this.aplicarNivel(
+        niveles,
+        item.cantidad,
+        precioBase,
+        precioOfertaActiva,
+      );
 
       const stockDisponible = this.calcularDisponible(stock);
       const productoActivo = item.producto.isActive && item.producto.visibleMarketplace;
@@ -148,10 +292,13 @@ export class CarritoService {
         cantidad: item.cantidad,
         productoNombre: item.producto.nombre,
         varianteNombre: item.variante?.nombre ?? null,
-        precioUnitario,
-        precioOferta: ofertaActiva ? Number(stock.precioOferta) : null,
-        precioNormal: stock?.precio ? Number(stock.precio) : 0,
-        subtotal: precioUnitario * item.cantidad,
+        precioUnitario: calc.precioUnitario,
+        precioOferta: precioOfertaActiva,
+        precioNormal: precioBase,
+        precioBase,
+        nivelAplicado: calc.nivelAplicado,
+        descuentoNivelPct: calc.descuentoNivelPct,
+        subtotal: Math.round(calc.precioUnitario * item.cantidad * 100) / 100,
         imagenUrl: imagen?.urlThumbnail ?? imagen?.url ?? null,
         thumbnailUrl: imagen?.urlThumbnail ?? null,
         stockDisponible,

@@ -28,9 +28,15 @@ export class PedidoMarketplaceService {
 
   /**
    * Checkout: crear pedidos desde el carrito (1 por empresa)
+   *
+   * Seguridad de precios: el `precioUnitario` y `subtotal` de cada item se
+   * toman de `carritoService.getCarrito()`, que recalcula desde el backend
+   * aplicando `min(precioBase, precioOferta activa, precio con PrecioNivel)`.
+   * El cliente NUNCA envía precios al checkout — el DTO solo trae
+   * dirección/método de pago/notas. No hay vector de manipulación.
    */
   async checkout(usuarioId: string, dto: CheckoutDto) {
-    // 1. Obtener carrito enriquecido
+    // 1. Obtener carrito enriquecido (precios forzados por backend)
     const carrito = await this.carritoService.getCarrito(usuarioId);
 
     if (carrito.totalItems === 0) {
