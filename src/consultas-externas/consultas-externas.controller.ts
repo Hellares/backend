@@ -1,4 +1,5 @@
 import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards';
 import { ConsultasExternasService } from './consultas-externas.service';
@@ -8,14 +9,17 @@ import { ConsultaLicenciaResponseDto } from './dto/consulta-licencia-response.dt
 import { ConsultaPlacaResponseDto } from './dto/consulta-placa-response.dto';
 import { TipoCambioResponseDto } from './dto/tipo-cambio-response.dto';
 
+// Nota: el guard JWT se aplica método por método porque `consultarDni` se
+// expone público (con throttling) para que el form de registro pueda
+// autocompletar datos desde RENIEC sin requerir sesión.
 @ApiTags('Consultas Externas')
 @Controller('consultas')
-@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class ConsultasExternasController {
   constructor(private readonly consultasService: ConsultasExternasService) {}
 
   @Get('ruc/:ruc')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Consultar datos de empresa por RUC (SUNAT)' })
   @ApiParam({ name: 'ruc', description: 'RUC de 11 dígitos', example: '20552103816' })
   @ApiResponse({ status: 200, description: 'Datos del contribuyente', type: ConsultaRucResponseDto })
@@ -25,17 +29,22 @@ export class ConsultasExternasController {
     return this.consultasService.consultarRuc(ruc);
   }
 
+  // Público + throttled: necesario en la pantalla de registro para
+  // autocompletar nombres/apellidos antes de que exista sesión.
   @Get('dni/:dni')
+  @UseGuards(ThrottlerGuard)
   @ApiOperation({ summary: 'Consultar datos de persona por DNI (RENIEC)' })
   @ApiParam({ name: 'dni', description: 'DNI de 8 dígitos', example: '27427864' })
   @ApiResponse({ status: 200, description: 'Datos de la persona', type: ConsultaDniResponseDto })
   @ApiResponse({ status: 400, description: 'DNI inválido o no encontrado' })
+  @ApiResponse({ status: 429, description: 'Demasiadas consultas. Intenta más tarde.' })
   @ApiResponse({ status: 503, description: 'Servicio de consulta no disponible' })
   async consultarDni(@Param('dni') dni: string): Promise<ConsultaDniResponseDto> {
     return this.consultasService.consultarDni(dni);
   }
 
   @Get('licencia/:dni')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Consultar licencia de conducir por DNI' })
   @ApiParam({ name: 'dni', description: 'DNI de 8 dígitos del conductor', example: '41410641' })
   @ApiResponse({ status: 200, description: 'Datos de la licencia', type: ConsultaLicenciaResponseDto })
@@ -45,6 +54,7 @@ export class ConsultasExternasController {
   }
 
   @Get('placa/:placa')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Consultar datos de vehiculo por placa' })
   @ApiParam({ name: 'placa', description: 'Numero de placa', example: 'T7R831' })
   @ApiResponse({ status: 200, description: 'Datos del vehiculo', type: ConsultaPlacaResponseDto })
@@ -54,6 +64,7 @@ export class ConsultasExternasController {
   }
 
   @Get('tipo-cambio')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Obtener tipo de cambio del dia (USD/PEN)' })
   @ApiResponse({ status: 200, description: 'Tipo de cambio', type: TipoCambioResponseDto })
   @ApiResponse({ status: 503, description: 'Servicio no disponible' })
