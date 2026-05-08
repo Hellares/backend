@@ -2400,6 +2400,17 @@ export class ProductoComboService {
       ? Number(componente.precioEnCombo)
       : undefined;
 
+    // Helper local para extraer info de oferta del stock del componente.
+    // El precio del combo se calcula sobre el precio regular (no oferta), pero
+    // el cliente Flutter necesita esta info para advertir al cajero cuando un
+    // componente tiene oferta activa (caso en que el combo quizá ya no convenga).
+    const ofertaInfo = (stock: any) => ({
+      enOferta: stock?.enOferta ?? false,
+      precioOferta: stock?.precioOferta ? Number(stock.precioOferta) : null,
+      fechaInicioOferta: stock?.fechaInicioOferta ?? null,
+      fechaFinOferta: stock?.fechaFinOferta ?? null,
+    });
+
     if (componente.componenteVariante) {
       const variante = componente.componenteVariante;
       const producto = variante.producto;
@@ -2415,6 +2426,7 @@ export class ProductoComboService {
         esVariante: true,
         productoNombre: producto?.nombre,
         varianteNombre: variante.nombre,
+        ...ofertaInfo(stock),
       };
     } else if (componente.componenteProducto) {
       const stock = componente.componenteProducto.stocksPorSede?.[0];
@@ -2427,6 +2439,7 @@ export class ProductoComboService {
         precioEnCombo,
         stock: this.getStockDisponibleReal(stock),
         esVariante: false,
+        ...ofertaInfo(stock),
       };
     }
     return undefined;
