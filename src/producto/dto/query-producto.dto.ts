@@ -136,7 +136,16 @@ export class QueryProductoDto {
     example: true,
   })
   @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @Transform(({ value }) => {
+    // Distinguir undefined/null/vacío de "false" explícito. El transform
+    // anterior convertía cualquier value distinto de 'true' en false,
+    // incluyendo undefined → siempre filtraba isActive=false aunque no
+    // se pasara el query param.
+    if (value === undefined || value === null || value === '') return undefined;
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
   isActive?: boolean;
 
   @ApiPropertyOptional({
