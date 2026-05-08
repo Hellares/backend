@@ -661,7 +661,11 @@ export class ProductoBulkUploadService {
                 empresaMarcaId: row.marcaId || null,
                 unidadMedidaId: row.unidadId || null,
                 peso: row.peso ?? null,
-                visibleMarketplace: true,
+                // Por defecto NO visible en marketplace al subir por bulk:
+                // el usuario revisa los productos primero (precio, imágenes,
+                // descripción) antes de exponerlos al público. Activar
+                // visibilidad uno a uno desde el detalle del producto.
+                visibleMarketplace: false,
                 destacado: false,
                 tieneVariantes: false,
                 esCombo: false,
