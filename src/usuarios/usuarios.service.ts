@@ -693,7 +693,6 @@ export class UsuariosService {
     // Construir condiciones WHERE
     const where: any = {
       empresaId,
-      deletedAt: null,
       // Excluir clientes — solo mostrar staff/empleados
       rol: { not: Rol.CLIENTE },
     };
@@ -703,12 +702,20 @@ export class UsuariosService {
       where.rol = rol;
     }
 
-    // Filtro por estado
-    if (isActive !== undefined) {
-      where.usuario = {
-        ...where.usuario,
-        isActive,
-      };
+    // Filtro por estado:
+    // - undefined (sin filtro): solo activos no soft-deleted (default).
+    // - true: idem (solo activos).
+    // - false: solo inactivos = soft-deleted O Usuario.isActive=false.
+    //   Necesario para que el panel pueda listar empleados desactivados
+    //   y reactivarlos.
+    if (isActive === false) {
+      where.OR = [
+        { deletedAt: { not: null } },
+        { usuario: { isActive: false } },
+      ];
+    } else {
+      where.deletedAt = null;
+      where.usuario = { isActive: true };
     }
 
     // Filtro por búsqueda (nombre, dni, telefono, email)
@@ -1163,6 +1170,84 @@ export class UsuariosService {
 
     return {
       mensaje: 'Usuario desactivado exitosamente de la empresa',
+    };
+  }
+
+  /**
+   * Reactivar un usuario previamente desactivado en una empresa.
+   * Revierte el soft-delete: pone `deletedAt=null`, `estado=ACTIVO` y
+   * reactiva las UsuarioSedeRol que se habían soft-deleted en la misma
+   * empresa. El usuario podrá iniciar sesión nuevamente.
+   */
+  async reactivarUsuario(
+    empresaId: string,
+    usuarioId: string,
+    modificadoPor?: string,
+  ): Promise<{ mensaje: string }> {
+    // Buscar el EmpresaUsuarioRol incluso si está soft-deleted
+    const empresaUsuario = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        usuarioId,
+        empresaId,
+      },
+    });
+
+    if (!empresaUsuario) {
+      throw new NotFoundException('Usuario no encontrado en esta empresa');
+    }
+
+    if (empresaUsuario.deletedAt === null && empresaUsuario.estado === 'ACTIVO') {
+      throw new BadRequestException('El usuario ya está activo en esta empresa');
+    }
+
+    // Reactivar en transacción
+    await this.prisma.$transaction(async (prisma) => {
+      // Restaurar EmpresaUsuarioRol
+      await prisma.empresaUsuarioRol.update({
+        where: { id: empresaUsuario.id },
+        data: {
+          deletedAt: null,
+          estado: 'ACTIVO',
+          modificadoPor,
+        },
+      });
+
+      // Restaurar UsuarioSedeRol soft-deleted que pertenecen a sedes de esta empresa
+      const sedes = await prisma.usuarioSedeRol.findMany({
+        where: {
+          usuarioId,
+          deletedAt: { not: null },
+        },
+        include: {
+          sede: { select: { empresaId: true } },
+        },
+      });
+
+      const sedesEmpresa = sedes
+        .filter((s) => s.sede.empresaId === empresaId)
+        .map((s) => s.id);
+
+      if (sedesEmpresa.length > 0) {
+        await prisma.usuarioSedeRol.updateMany({
+          where: { id: { in: sedesEmpresa } },
+          data: {
+            deletedAt: null,
+            isActive: true,
+            modificadoPor,
+          },
+        });
+      }
+    });
+
+    // Invalidar caché de tenant access para que el guard vuelva a permitir
+    await this.cache.invalidateTenantAccess(usuarioId, empresaId);
+
+    this.logger.log(
+      `Usuario ${usuarioId} reactivado en empresa ${empresaId} por usuario ${modificadoPor}`,
+    );
+
+    return {
+      mensaje: 'Usuario reactivado exitosamente en la empresa',
     };
   }
 }

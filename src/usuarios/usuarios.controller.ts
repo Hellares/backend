@@ -205,4 +205,43 @@ export class UsuariosController {
   ): Promise<{ mensaje: string }> {
     return this.usuariosService.desactivarUsuario(empresaId, id, user.sub);
   }
+
+  /**
+   * POST /usuarios/:id/reactivar
+   * Reactivar un usuario previamente desactivado en la empresa
+   */
+  @Post(':id/reactivar')
+  @RequiresPermission(Permission.MANAGE_USERS)
+  @ApiOperation({
+    summary: 'Reactivar un usuario/trabajador previamente desactivado',
+    description:
+      'Revierte el soft delete: deja al usuario y sus sedes en estado ACTIVO de nuevo',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Usuario reactivado exitosamente',
+    schema: {
+      type: 'object',
+      properties: {
+        mensaje: {
+          type: 'string',
+          example: 'Usuario reactivado exitosamente en la empresa',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'El usuario ya está activo' })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa',
+    required: true,
+  })
+  async reactivarUsuario(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+  ): Promise<{ mensaje: string }> {
+    return this.usuariosService.reactivarUsuario(empresaId, id, user.sub);
+  }
 }
