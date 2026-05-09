@@ -702,13 +702,14 @@ export class UsuariosService {
       where.rol = rol;
     }
 
-    // Filtro por estado:
-    // - undefined (sin filtro): solo activos no soft-deleted (default).
-    // - true: idem (solo activos).
-    // - false: solo inactivos = soft-deleted O Usuario.isActive=false.
-    //   Necesario para que el panel pueda listar empleados desactivados
-    //   y reactivarlos.
-    if (isActive === false) {
+    // Filtro por estado: el DTO recibe `isActive` como STRING porque
+    // NestJS tiene enableImplicitConversion=true que rompe el cast a
+    // boolean (Boolean('false') === true).
+    // - 'false': solo inactivos = soft-deleted O Usuario.isActive=false.
+    //   Necesario para que el panel liste empleados desactivados y
+    //   pueda reactivarlos.
+    // - 'true' o ausente: solo activos no soft-deleted (default).
+    if (isActive === 'false') {
       where.OR = [
         { deletedAt: { not: null } },
         { usuario: { isActive: false } },

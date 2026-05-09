@@ -5,10 +5,10 @@ import {
   IsInt,
   Min,
   Max,
-  IsBoolean,
+  IsIn,
   IsEnum,
 } from 'class-validator';
-import { Type, Transform } from 'class-transformer';
+import { Type } from 'class-transformer';
 import { Rol } from '@prisma/client';
 
 export enum OrdenUsuario {
@@ -52,21 +52,17 @@ export class QueryUsuarioDto {
 
   @ApiPropertyOptional({
     description:
-      'Filtrar por estado: true=solo activos, false=solo inactivos (soft-deleted o Usuario.isActive=false), omitir=todos',
-    example: true,
+      'Filtrar por estado: "true"=solo activos, "false"=solo inactivos ' +
+      '(soft-deleted o Usuario.isActive=false), omitir=solo activos.',
+    example: 'true',
   })
   @IsOptional()
-  // No usar `@Type(() => Boolean)`: Boolean("false") devuelve true porque
-  // "false" es un string no vacío. Transform manual preserva undefined
-  // y mapea solo los strings/booleans esperados.
-  @Transform(({ value }) => {
-    if (value === undefined || value === null || value === '') return undefined;
-    if (value === 'true' || value === true) return true;
-    if (value === 'false' || value === false) return false;
-    return value;
-  })
-  @IsBoolean()
-  isActive?: boolean;
+  @IsIn(['true', 'false'])
+  // Declarado como string (no boolean) porque NestJS tiene
+  // `enableImplicitConversion: true` en ValidationPipe global, que
+  // ejecuta `Boolean('false')` → `true` antes de cualquier @Transform.
+  // El service interpreta el string en `obtenerUsuarios`.
+  isActive?: string;
 
   @ApiPropertyOptional({
     description: 'Filtrar por rol en la empresa',
