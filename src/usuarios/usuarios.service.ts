@@ -587,11 +587,13 @@ export class UsuariosService {
     usuarioId: string,
     empresaId: string,
   ): Promise<UsuarioResponseDto> {
+    // No filtrar por `deletedAt: null` aquí: el panel necesita poder
+    // ver los detalles de un usuario desactivado para poder mostrarle
+    // al admin el botón "Reactivar".
     const empresaUsuario = await this.prisma.empresaUsuarioRol.findFirst({
       where: {
         usuarioId,
         empresaId,
-        deletedAt: null,
       },
       include: {
         usuario: {
@@ -654,7 +656,12 @@ export class UsuariosService {
       departamento: persona.departamento || undefined,
       rolEnEmpresa: empresaUsuario.rol,
       rolGlobal: usuario.rolGlobal || undefined,
-      isActive: usuario.isActive,
+      // `isActive` refleja estado del usuario EN ESTA EMPRESA (vínculo
+      // no soft-deleted + estado ACTIVO + Usuario global activo).
+      isActive:
+        empresaUsuario.deletedAt === null &&
+        empresaUsuario.estado === 'ACTIVO' &&
+        usuario.isActive === true,
       emailVerificado: usuario.emailVerificado,
       telefonoVerificado: usuario.telefonoVerificado,
       dniVerificado: usuario.dniVerificado,
@@ -705,18 +712,18 @@ export class UsuariosService {
     // Filtro por estado: el DTO recibe `isActive` como STRING porque
     // NestJS tiene enableImplicitConversion=true que rompe el cast a
     // boolean (Boolean('false') === true).
+    // - 'true': solo activos en la empresa (no soft-deleted, estado=ACTIVO).
     // - 'false': solo inactivos = soft-deleted O Usuario.isActive=false.
-    //   Necesario para que el panel liste empleados desactivados y
-    //   pueda reactivarlos.
-    // - 'true' o ausente: solo activos no soft-deleted (default).
-    if (isActive === 'false') {
+    // - undefined: TODOS (sin filtro de estado). El cliente decide
+    //   cuándo enviar 'true' por default; aquí no asumimos nada.
+    if (isActive === 'true') {
+      where.deletedAt = null;
+      where.usuario = { isActive: true };
+    } else if (isActive === 'false') {
       where.OR = [
         { deletedAt: { not: null } },
         { usuario: { isActive: false } },
       ];
-    } else {
-      where.deletedAt = null;
-      where.usuario = { isActive: true };
     }
 
     // Filtro por búsqueda (nombre, dni, telefono, email)
@@ -834,7 +841,14 @@ export class UsuariosService {
         departamento: persona.departamento || undefined,
         rolEnEmpresa: eu.rol,
         rolGlobal: usuario.rolGlobal || undefined,
-        isActive: usuario.isActive,
+        // `isActive` refleja el estado del usuario EN ESTA EMPRESA, no
+        // el flag global de Usuario. Activo = vínculo no soft-deleted +
+        // estado ACTIVO + Usuario global no deshabilitado por super
+        // admin. Esto es lo que el panel de empresa muestra y filtra.
+        isActive:
+          eu.deletedAt === null &&
+          eu.estado === 'ACTIVO' &&
+          usuario.isActive === true,
         emailVerificado: usuario.emailVerificado,
         telefonoVerificado: usuario.telefonoVerificado,
         dniVerificado: usuario.dniVerificado,
