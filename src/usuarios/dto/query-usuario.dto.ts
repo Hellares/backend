@@ -8,7 +8,7 @@ import {
   IsBoolean,
   IsEnum,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import { Rol } from '@prisma/client';
 
 export enum OrdenUsuario {
@@ -51,12 +51,21 @@ export class QueryUsuarioDto {
   search?: string;
 
   @ApiPropertyOptional({
-    description: 'Filtrar solo usuarios activos',
+    description:
+      'Filtrar por estado: true=solo activos, false=solo inactivos (soft-deleted o Usuario.isActive=false), omitir=todos',
     example: true,
   })
   @IsOptional()
+  // No usar `@Type(() => Boolean)`: Boolean("false") devuelve true porque
+  // "false" es un string no vacío. Transform manual preserva undefined
+  // y mapea solo los strings/booleans esperados.
+  @Transform(({ value }) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return value;
+  })
   @IsBoolean()
-  @Type(() => Boolean)
   isActive?: boolean;
 
   @ApiPropertyOptional({
