@@ -23,6 +23,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    // Rechazar tokens sin sessionId. Todos los tokens emitidos por
+    // generateTokens lo incluyen — un payload sin sessionId solo puede
+    // ser un token muy viejo o forjado. Antes había un fallback que
+    // saltaba la validación de sesión y blacklist; eliminado.
+    if (!payload.sessionId) {
+      throw new UnauthorizedException(
+        'Token inválido. Por favor, inicia sesión nuevamente.',
+      );
+    }
+
     // Verificar que el usuario siga activo. Cierra la ventana donde un
     // admin desactiva un usuario pero su access token sigue vivo hasta
     // expirar. Cache de 30s evita SELECT por request.
@@ -31,44 +41,30 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Cuenta desactivada. Contacta al administrador.');
     }
 
-    // Validar que la sesión esté activa si existe sessionId
-    if (payload.sessionId) {
-      // Verificar si la sesión está en blacklist
-      const isBlacklisted = await this.sessionService.isSessionBlacklisted(payload.sessionId);
-      if (isBlacklisted) {
-        throw new UnauthorizedException('Sesión revocada. Por favor, inicia sesión nuevamente.');
-      }
-
-      // Verificar que la sesión exista y esté activa
-      const session = await this.sessionService.getSession(payload.sessionId);
-      if (!session || !session.isActive) {
-        throw new UnauthorizedException('Sesión inválida o expirada. Por favor, inicia sesión nuevamente.');
-      }
-
-      // Usar datos de tenant de la sesión Redis (se actualizan en switch-tenant)
-      // con fallback al JWT payload para compatibilidad con tokens sin sesión
-      return {
-        ...payload,
-        id: payload.sub,
-        userId: payload.sub,
-        rolGlobal: payload.rolGlobal,
-        empresaId: session.tenantId || payload.tenantId,
-        tenantId: session.tenantId || payload.tenantId,
-        tenantRole: session.tenantRole || payload.tenantRole,
-        tenantName: session.tenantName || payload.tenantName,
-        tenantRoles: session.tenantRoles || payload.tenantRoles,
-        roles: session.tenantRoles || payload.tenantRoles || [],
-      };
+    // Verificar si la sesión está en blacklist
+    const isBlacklisted = await this.sessionService.isSessionBlacklisted(payload.sessionId);
+    if (isBlacklisted) {
+      throw new UnauthorizedException('Sesión revocada. Por favor, inicia sesión nuevamente.');
     }
 
-    // Sin sessionId: usar datos del JWT payload (compatibilidad)
+    // Verificar que la sesión exista y esté activa
+    const session = await this.sessionService.getSession(payload.sessionId);
+    if (!session || !session.isActive) {
+      throw new UnauthorizedException('Sesión inválida o expirada. Por favor, inicia sesión nuevamente.');
+    }
+
+    // Usar datos de tenant de la sesión Redis (se actualizan en switch-tenant)
     return {
       ...payload,
       id: payload.sub,
       userId: payload.sub,
       rolGlobal: payload.rolGlobal,
-      empresaId: payload.tenantId,
-      roles: payload.tenantRoles || [],
+      empresaId: session.tenantId || payload.tenantId,
+      tenantId: session.tenantId || payload.tenantId,
+      tenantRole: session.tenantRole || payload.tenantRole,
+      tenantName: session.tenantName || payload.tenantName,
+      tenantRoles: session.tenantRoles || payload.tenantRoles,
+      roles: session.tenantRoles || payload.tenantRoles || [],
     };
   }
 }

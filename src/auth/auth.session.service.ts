@@ -113,13 +113,19 @@ export class AuthSessionService {
       const timeSinceLastUpdate = now - session.lastAccessAt.getTime();
 
       if (timeSinceLastUpdate > AuthSessionService.LAST_ACCESS_UPDATE_INTERVAL) {
+        // Sliding window: extender expiresAt 7 días desde ahora.
+        // Antes el TTL solo decrementaba sin renovarse, deslogueando
+        // a usuarios activos al octavo día. Ahora si el user usa la
+        // app cada N días (N < 7), la sesión nunca caduca por inacción.
+        const sevenDaysSec = 7 * 24 * 60 * 60;
         session.lastAccessAt = new Date(now);
-        const ttl = Math.floor((session.expiresAt.getTime() - now) / 1000);
-        if (ttl > 0) {
-          // Escritura asíncrona sin esperar — no bloquea el request
-          this.redisService.setex(sessionKey, ttl, JSON.stringify(session))
-            .catch(() => {}); // Ignorar errores de actualización de lastAccess
-        }
+        session.expiresAt = new Date(now + sevenDaysSec * 1000);
+        // Escritura asíncrona sin esperar — no bloquea el request
+        this.redisService.setex(sessionKey, sevenDaysSec, JSON.stringify(session))
+          .catch(() => {});
+        // Renovar también el TTL del set user_sessions:${userId}
+        this.redisService.expire(`user_sessions:${session.userId}`, sevenDaysSec)
+          .catch(() => {});
       }
 
       return session;
@@ -329,6 +335,30 @@ export class AuthSessionService {
     }
 
     return false;
+  }
+
+  /**
+   * Agrega un refresh token a una blacklist con TTL específico.
+   * Usado por `auth.service.refreshToken` para detectar reutilización
+   * (replay attacks). Se prefiere este método público sobre acceder
+   * directo a `redisService` por reflection privada.
+   */
+  async addToTokenBlacklist(
+    tokenHash: string,
+    ttlSeconds: number,
+  ): Promise<void> {
+    const key = `used_refresh_token:${tokenHash}`;
+    await this.redisService.setex(key, ttlSeconds, 'used');
+  }
+
+  /**
+   * Verifica si un refresh token está en la blacklist de tokens usados.
+   * Devuelve true si fue usado previamente (intento de replay).
+   */
+  async isTokenBlacklisted(tokenHash: string): Promise<boolean> {
+    const key = `used_refresh_token:${tokenHash}`;
+    const value = await this.redisService.get(key);
+    return value !== null;
   }
 
   /**

@@ -1256,6 +1256,10 @@ export class UsuariosService {
 
     // Invalidar caché de tenant access para que el guard vuelva a permitir
     await this.cache.invalidateTenantAccess(usuarioId, empresaId);
+    // Invalidar cache `user:active:` por si tenía el valor `0` cacheado
+    // de un intento previo: si el usuario fue desactivado y reactivado
+    // dentro de 30s, el JwtStrategy seguiría viéndolo inactivo.
+    await this.authSessionService.invalidateUserActiveCache(usuarioId);
 
     this.logger.log(
       `Usuario ${usuarioId} reactivado en empresa ${empresaId} por usuario ${modificadoPor}`,

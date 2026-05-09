@@ -670,9 +670,9 @@ export class AuthService {
       // ROTACIÓN DE REFRESH TOKEN:
       // Agregar el refresh token anterior a la blacklist para evitar reutilización
       if (payload.sessionId) {
-        const oldTokenKey = `used_refresh_token:${refreshToken.substring(0, 32)}`;
-        const expirySeconds = 7 * 24 * 60 * 60; // 7 días (mismo tiempo que el refresh token)
-        await this.sessionService['redisService'].setex(oldTokenKey, expirySeconds, 'used');
+        const tokenHash = refreshToken.substring(0, 32);
+        const expirySeconds = 7 * 24 * 60 * 60; // 7 días
+        await this.sessionService.addToTokenBlacklist(tokenHash, expirySeconds);
       }
 
       // Generar NUEVOS tokens (incluyendo nuevo refresh token)
@@ -736,8 +736,8 @@ export class AuthService {
     } catch (error: any) {
       // Verificar si el refresh token ya fue usado (prevenir replay attacks)
       if (refreshToken && error?.name !== 'TokenExpiredError') {
-        const tokenKey = `used_refresh_token:${refreshToken.substring(0, 32)}`;
-        const wasUsed = await this.sessionService['redisService'].get(tokenKey);
+        const tokenHash = refreshToken.substring(0, 32);
+        const wasUsed = await this.sessionService.isTokenBlacklisted(tokenHash);
         if (wasUsed) {
           this.logger.warn('Intento de reutilizar refresh token', { token: refreshToken.substring(0, 20) });
           throw new UnauthorizedException('Refresh token ya fue utilizado. Por seguridad, por favor inicia sesión nuevamente.');

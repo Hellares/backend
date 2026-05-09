@@ -27,23 +27,25 @@ export class AuthSecurityService {
     const key = `failed_attempts:${type}:${identifier}`;
     const maxAttempts = this.configService.get('MAX_LOGIN_ATTEMPTS', 5);
     const lockoutMinutes = this.configService.get('LOCKOUT_DURATION_MINUTES', 15);
-    const lockoutDuration = lockoutMinutes * 60 * 1000; // Convertir a milisegundos
+    const lockoutDurationMs = lockoutMinutes * 60 * 1000;
+    const lockoutDurationSec = lockoutMinutes * 60;
 
-    const current = await this.redisService.get(key);
-    let attempts = current ? parseInt(current, 10) : 0;
-    attempts++;
+    // INCR atómico: evita race condition de get→parseInt→++→setex que
+    // bajo concurrencia podía contar 5 intentos simultáneos como 1.
+    // Solo seteamos TTL en el primer intento (cuando attempts === 1).
+    const attempts = await this.redisService.incr(key);
+    if (attempts === 1) {
+      await this.redisService.expire(key, lockoutDurationSec);
+    }
 
     const now = new Date();
     const isLocked = attempts >= maxAttempts;
-    const lockUntil = isLocked ? new Date(now.getTime() + lockoutDuration) : undefined;
-
-    // Guardar intentos fallidos
-    await this.redisService.setex(key, lockoutDuration, attempts.toString());
+    const lockUntil = isLocked ? new Date(now.getTime() + lockoutDurationMs) : undefined;
 
     // Si está bloqueado, guardar timestamp de desbloqueo
     if (isLocked) {
       const lockKey = `lock:${type}:${identifier}`;
-      await this.redisService.setex(lockKey, lockoutDuration, lockUntil!.toISOString());
+      await this.redisService.setex(lockKey, lockoutDurationMs, lockUntil!.toISOString());
     }
 
     this.logger.warn(
