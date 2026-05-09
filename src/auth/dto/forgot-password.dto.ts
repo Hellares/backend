@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, MaxLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ForgotPasswordDto {
   @IsEmail()
@@ -6,7 +6,10 @@ export class ForgotPasswordDto {
   @MaxLength(255)
   email: string;
 
-  @IsNotEmpty()
+  // Multi-tenant: opcional. Si se envía, identifica la empresa para
+  // personalizar el correo (logo, colores). Sin él, va el branding default.
+  @IsOptional()
+  @IsString()
   @MaxLength(255)
-  subdominioEmpresa?: string; // Para identificar la empresa en multi-tenant
+  subdominioEmpresa?: string;
 }
