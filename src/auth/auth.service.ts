@@ -1255,6 +1255,14 @@ export class AuthService {
       let usuario;
 
       if (authProvider) {
+        // Si el AuthProvider está desactivado, no permitir login con esta cuenta Google
+        // (caso típico: usuario revocó la vinculación o admin la desactivó tras un cambio de email).
+        if (!authProvider.isActive) {
+          throw new UnauthorizedException(
+            'Esta cuenta de Google ya no está vinculada. Inicia sesión con tu método actual.',
+          );
+        }
+
         // Usuario ya existe con Google OAuth
         usuario = authProvider.usuario;
 
@@ -2366,6 +2374,17 @@ export class AuthService {
           emailVerificationToken: verificationToken,
           emailVerificationExpiracion: verificationExpiration,
         },
+      });
+
+      // Sincronizar AuthProvider.email para providers que reflejan el email del
+      // Usuario (PASSWORD). Los GOOGLE.email NO se tocan: representan la cuenta
+      // Gmail vinculada y son independientes del email del Usuario.
+      await tx.authProvider.updateMany({
+        where: {
+          userId: usuario.id,
+          provider: 'PASSWORD',
+        },
+        data: { email: normalizedEmail },
       });
 
       // Sincronizar Persona.email solo si la persona NO tiene otro Usuario
