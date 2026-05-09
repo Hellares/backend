@@ -293,6 +293,28 @@ export class AuthController {
   }
 
   /**
+   * Página HTML inline para restablecer contraseña. El link del correo
+   * apunta aquí. Renderiza un mini-formulario que postea al endpoint API.
+   * Mismo enfoque que verify-email: sin frontend web propio.
+   */
+  @Get('reset-password')
+  @Public()
+  @ApiOperation({ summary: 'Página HTML inline para restablecer contraseña' })
+  async resetPasswordPage(@Request() req: any, @Res() res: Response) {
+    const token = (req.query?.token as string) || '';
+    if (!token) {
+      return res
+        .status(HttpStatus.BAD_REQUEST)
+        .type('text/html; charset=utf-8')
+        .send(this.renderResetResultPage(false, 'Falta el token en el enlace.'));
+    }
+    return res
+      .status(HttpStatus.OK)
+      .type('text/html; charset=utf-8')
+      .send(this.renderResetForm(token));
+  }
+
+  /**
    * Verificar email
    */
   @Get('verify-email/:token')
@@ -359,6 +381,115 @@ export class AuthController {
   </div>
 </body>
 </html>`;
+  }
+
+  /**
+   * Página HTML inline con un formulario para restablecer contraseña.
+   * El form postea a este mismo controlador (POST /auth/reset-password) vía
+   * fetch JSON y muestra el resultado sin recargar.
+   */
+  private renderResetForm(token: string): string {
+    const safeToken = token.replace(/"/g, '&quot;');
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Syncronize · Restablecer contraseña</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f8fafc; margin:0; padding:24px; color:#0f172a; }
+  .card { max-width:420px; margin:32px auto; background:#fff; border-radius:14px; padding:24px; box-shadow:0 4px 24px rgba(0,0,0,.06); }
+  h1 { font-size:18px; margin:0 0 4px; color:#075DB3; text-align:center; }
+  .sub { font-size:12px; color:#475569; text-align:center; margin:0 0 18px; }
+  label { display:block; font-size:12px; color:#334155; margin:10px 0 4px; }
+  input { width:100%; box-sizing:border-box; padding:10px 12px; font-size:14px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; }
+  input:focus { outline:none; border-color:#075DB3; box-shadow:0 0 0 2px #075DB322; }
+  button { width:100%; margin-top:16px; padding:11px 12px; font-size:14px; font-weight:600; color:#fff; background:#075DB3; border:0; border-radius:10px; cursor:pointer; }
+  button[disabled] { opacity:.6; cursor:not-allowed; }
+  .reqs { background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px 12px; margin-top:14px; font-size:11px; color:#1e3a8a; }
+  .reqs li { margin-left:14px; }
+  .alert { margin-top:14px; padding:10px 12px; border-radius:10px; font-size:12px; display:none; }
+  .alert.ok { background:#f0fdf4; border:1px solid #86efac; color:#15803d; }
+  .alert.err { background:#fef2f2; border:1px solid #fca5a5; color:#b91c1c; }
+  .hint { text-align:center; font-size:11px; color:#94a3b8; margin-top:18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Restablecer contraseña</h1>
+    <p class="sub">Crea una nueva contraseña para tu cuenta.</p>
+    <form id="f">
+      <label for="p1">Nueva contraseña</label>
+      <input id="p1" type="password" autocomplete="new-password" required minlength="8" />
+      <label for="p2">Confirmar contraseña</label>
+      <input id="p2" type="password" autocomplete="new-password" required minlength="8" />
+      <div class="reqs">
+        <strong>Requisitos:</strong>
+        <ul>
+          <li>Mínimo 8 caracteres</li>
+          <li>Una mayúscula y una minúscula</li>
+          <li>Un número y un carácter especial (@$!%*?&)</li>
+        </ul>
+      </div>
+      <button id="b" type="submit">Cambiar contraseña</button>
+      <div id="msg" class="alert"></div>
+    </form>
+    <p class="hint">Syncronize · Plataforma SaaS</p>
+  </div>
+<script>
+  (function(){
+    var TOKEN = "${safeToken}";
+    var f = document.getElementById('f');
+    var b = document.getElementById('b');
+    var msg = document.getElementById('msg');
+    function show(kind, text){
+      msg.style.display='block';
+      msg.className='alert '+(kind==='ok'?'ok':'err');
+      msg.textContent=text;
+    }
+    f.addEventListener('submit', function(e){
+      e.preventDefault();
+      var p1 = document.getElementById('p1').value;
+      var p2 = document.getElementById('p2').value;
+      if (p1 !== p2) { show('err','Las contraseñas no coinciden.'); return; }
+      b.disabled = true; b.textContent = 'Enviando...';
+      fetch('/auth/reset-password', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ resetToken: TOKEN, newPassword: p1, confirmPassword: p2 })
+      }).then(function(r){ return r.json().then(function(d){ return { ok:r.ok, body:d }; }); })
+        .then(function(res){
+          if (res.ok) {
+            f.style.display='none';
+            show('ok','Contraseña actualizada. Ya puedes iniciar sesión en la app con la nueva contraseña.');
+          } else {
+            var m = (res.body && (res.body.message || res.body.error)) || 'No se pudo cambiar la contraseña.';
+            if (Array.isArray(m)) m = m.join(' · ');
+            show('err', m);
+            b.disabled = false; b.textContent = 'Cambiar contraseña';
+          }
+        }).catch(function(){
+          show('err','Error de red. Intenta de nuevo.');
+          b.disabled = false; b.textContent = 'Cambiar contraseña';
+        });
+    });
+  })();
+</script>
+</body>
+</html>`;
+  }
+
+  private renderResetResultPage(success: boolean, message: string): string {
+    const colorMain = success ? '#16a34a' : '#dc2626';
+    const colorBg = success ? '#f0fdf4' : '#fef2f2';
+    return `<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Syncronize</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8fafc;margin:0;padding:24px}
+.card{max-width:420px;margin:32px auto;background:#fff;border-radius:14px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,.06);text-align:center}
+h1{font-size:18px;color:${colorMain}} .box{background:${colorBg};border:1px solid ${colorMain}33;border-radius:10px;padding:12px;font-size:12px;color:${colorMain}}</style></head>
+<body><div class="card"><div style="font-size:48px">${success ? '✅' : '⚠️'}</div><h1>${success ? 'Listo' : 'Enlace inválido'}</h1>
+<div class="box">${message}</div></div></body></html>`;
   }
 
   /**
@@ -586,7 +717,11 @@ export class AuthController {
     @CurrentUser() user: any,
     @Body() updateEmailDto: UpdateEmailDto,
   ) {
-    return this.authService.updateEmail(user.sub, updateEmailDto.email);
+    return this.authService.updateEmail(
+      user.sub,
+      updateEmailDto.email,
+      updateEmailDto.currentPassword,
+    );
   }
 
   /**

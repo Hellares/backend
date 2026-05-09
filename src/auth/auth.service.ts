@@ -2294,7 +2294,7 @@ export class AuthService {
    * - Persona.email se sincroniza si la persona no tiene otra cuenta colgando.
    * - Si el email es exactamente el mismo que el actual: no-op idempotente.
    */
-  async updateEmail(userId: string, email: string) {
+  async updateEmail(userId: string, email: string, currentPassword?: string) {
     const normalizedEmail = email.trim().toLowerCase();
 
     const usuario = await this.prisma.usuario.findUnique({
@@ -2313,6 +2313,22 @@ export class AuthService {
         message: 'Tu cuenta ya tiene ese email asociado.',
         emailVerificado: usuario.emailVerificado,
       };
+    }
+
+    // Hardening: si la cuenta tiene contraseña configurada, exigirla
+    // antes de cambiar el email. Cuentas Google-only o DNI-only sin
+    // password (passwordHash == null) están exentas — su factor de
+    // autenticación es OAuth o el código DNI, ya validado por el JWT.
+    if (usuario.passwordHash) {
+      if (!currentPassword || currentPassword.length === 0) {
+        throw new BadRequestException(
+          'Ingresa tu contraseña actual para confirmar el cambio de email.',
+        );
+      }
+      const ok = await bcrypt.compare(currentPassword, usuario.passwordHash);
+      if (!ok) {
+        throw new UnauthorizedException('Contraseña actual incorrecta.');
+      }
     }
 
     // El email no puede pertenecer a otro Usuario.
@@ -2376,6 +2392,23 @@ export class AuthService {
         { userId: usuario.id, email: normalizedEmail },
       );
       // No revertimos la actualización: el usuario puede pedir reenvío.
+    }
+
+    // Notificar al email anterior (si existe) para que el dueño
+    // legítimo pueda detectar un cambio no autorizado. Best-effort.
+    if (usuario.email) {
+      try {
+        await this.emailService.sendEmailChangedNotification(
+          usuario.email,
+          normalizedEmail,
+          usuario.persona?.nombres || 'Usuario',
+        );
+      } catch (error: any) {
+        this.logger.warn(
+          'Failed to send email-change notification to previous email',
+          { userId: usuario.id, previousEmail: usuario.email, error: error?.message },
+        );
+      }
     }
 
     this.logger.info('Email updated for user', {

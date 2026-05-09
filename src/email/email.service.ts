@@ -266,9 +266,11 @@ Si no solicitaste este registro, ignora este mensaje.
    * Enviar email de recuperación de contraseña
    */
   async sendPasswordResetEmail(email: string, resetToken: string, nombres: string): Promise<boolean> {
-    // Para reset de contraseña, sí queremos que vaya al frontend con el formulario
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-    const resetUrl = `${frontendUrl}/auth/reset-password?token=${resetToken}`;
+    // Sin frontend web propio: el link apunta a la página HTML inline servida
+    // por el backend (`GET /auth/reset-password`), que contiene el formulario
+    // y llama al POST /auth/reset-password. Mismo patrón que verify-email.
+    const backendUrl = this.configService.get<string>('BACKEND_URL', 'http://localhost:3000');
+    const resetUrl = `${backendUrl}/auth/reset-password?token=${resetToken}`;
 
     const html = `
       <!DOCTYPE html>
@@ -367,6 +369,78 @@ Si no solicitaste este cambio, ignora este mensaje. Tu contraseña no será modi
       html,
       text,
     });
+  }
+
+  /**
+   * Notificación al email anterior cuando el usuario cambia su email.
+   * Permite que el dueño legítimo detecte un cambio que él no hizo y
+   * actúe rápido (recuperar contraseña, contactar soporte). El correo
+   * sale al `previousEmail`, no al nuevo.
+   */
+  async sendEmailChangedNotification(
+    previousEmail: string,
+    newEmail: string,
+    nombres: string,
+  ): Promise<boolean> {
+    const maskedNew = this.maskEmail(newEmail);
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: Arial, sans-serif; color: #333; line-height: 1.55; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background:#0f172a; color:#fff; padding:18px; border-radius:6px 6px 0 0; text-align:center; }
+            .content { background:#f9fafb; padding:24px; border-radius: 0 0 6px 6px; }
+            .alert { background:#fef3c7; border-left:4px solid #f59e0b; padding:12px; margin:14px 0; font-size:13px; }
+            .footer { text-align:center; margin-top:18px; color:#64748b; font-size:12px; }
+            .new { font-family: monospace; background:#fff; padding:6px 10px; border:1px dashed #cbd5e1; border-radius:6px; display:inline-block; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header"><h2 style="margin:0">Cambio de email en tu cuenta</h2></div>
+            <div class="content">
+              <p>Hola <strong>${nombres}</strong>,</p>
+              <p>Te avisamos que el email de inicio de sesión de tu cuenta de Syncronize fue cambiado.</p>
+              <p>Nuevo email: <span class="new">${maskedNew}</span></p>
+              <div class="alert">
+                <strong>¿No fuiste tú?</strong> Cambia tu contraseña inmediatamente y contacta a soporte. Mientras el nuevo email no esté verificado, este correo sigue siendo el contacto principal de tu cuenta.
+              </div>
+              <p style="font-size:12px; color:#475569;">Este es un mensaje informativo. No respondas a este correo.</p>
+            </div>
+            <div class="footer">Syncronize · Plataforma SaaS</div>
+          </div>
+        </body>
+      </html>
+    `;
+    const text = `Hola ${nombres},
+
+El email de inicio de sesión de tu cuenta de Syncronize fue cambiado.
+Nuevo email: ${maskedNew}
+
+Si no fuiste tú, cambia tu contraseña y contacta a soporte de inmediato.
+
+Syncronize`;
+    return this.sendEmail({
+      to: previousEmail,
+      subject: '⚠️ Tu email fue cambiado en Syncronize',
+      html,
+      text,
+    });
+  }
+
+  /**
+   * Oculta parcialmente un email para mostrarlo en notificaciones de
+   * seguridad sin filtrar el destino completo. Ej: "fulano@gmail.com" →
+   * "f****o@gmail.com".
+   */
+  private maskEmail(email: string): string {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return email;
+    if (local.length <= 2) return `${local[0]}*@${domain}`;
+    return `${local[0]}${'*'.repeat(Math.max(1, local.length - 2))}${local[local.length - 1]}@${domain}`;
   }
 
   /**
