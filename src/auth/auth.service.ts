@@ -1285,7 +1285,36 @@ export class AuthService {
         });
 
         if (existingUser) {
-          // Vincular cuenta existente con Google
+          // Defensa contra hijack silencioso: si la cuenta YA tiene una cuenta Google
+          // distinta vinculada y activa, NO auto-vincular esta segunda. Caso real:
+          // un usuario hizo updateEmail al email de otra Gmail suya y volvió a entrar
+          // con esa otra Google — antes el sistema vinculaba automáticamente y ambas
+          // cuentas Gmail terminaban autenticando al mismo Usuario. El linking
+          // explícito sigue disponible vía POST /auth/link-account.
+          const existingGoogleActive = await this.prisma.authProvider.findFirst({
+            where: {
+              userId: existingUser.id,
+              provider: 'GOOGLE',
+              isActive: true,
+            },
+          });
+
+          if (existingGoogleActive) {
+            this.logger.warn('Blocked auto-link: user already has an active Google provider', {
+              userId: existingUser.id,
+              existingGoogleSub: existingGoogleActive.providerId,
+              attemptedGoogleSub: googleId,
+              attemptedEmail: email,
+            });
+            throw new ConflictException(
+              'Esta cuenta ya tiene una cuenta de Google distinta vinculada. ' +
+              'Inicia sesión con esa cuenta de Google o desvincúlala desde Configuración antes de vincular otra.',
+            );
+          }
+
+          // OK: el Usuario no tiene Google activo todavía. Vincular esta cuenta
+          // como primer método Google (típico: usuario registrado con password
+          // que ahora quiere agregar Google sign-in).
           usuario = existingUser;
 
           // Crear AuthProvider para vincular Google
