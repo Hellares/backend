@@ -252,10 +252,17 @@ export class AuthService {
    * Login de usuario
    */
   async login(loginDto: LoginDto, request?: any) {
-    const { credencial, password, subdominioEmpresa, rol: rolSeleccionado, loginMode } = loginDto;
+    const { credencial: rawCredencial, password, subdominioEmpresa, rol: rolSeleccionado, loginMode } = loginDto;
 
-    // Detectar tipo de credencial
-    const tipoCredencial = this.detectarTipoCredencial(credencial);
+    // Detectar tipo de credencial sobre el valor recortado
+    const trimmedCredencial = rawCredencial.trim();
+    const tipoCredencial = this.detectarTipoCredencial(trimmedCredencial);
+
+    // Normalizar email a lowercase para que lookup, lockout y audit log sean consistentes.
+    // Sin esto, `Mathidev@x.com` y `mathidev@x.com` cuentan como cuentas distintas en el lockout.
+    const credencial = tipoCredencial === 'EMAIL'
+      ? trimmedCredencial.toLowerCase()
+      : trimmedCredencial;
 
     // Obtener IP del cliente para lockout combinado credencial+IP
     const clientInfo = request ? this.securityService.getClientInfo(request) : {
@@ -1824,15 +1831,18 @@ export class AuthService {
    * Útil para el frontend: saber si mostrar campo de contraseña o botón de Google
    */
   async checkAuthMethods(email: string) {
+    // Normalizar email para que el lookup sea consistente con login (`Mathidev@…` ≡ `mathidev@…`)
+    const normalizedEmail = email.trim().toLowerCase();
+
     // Buscar usuario por email
     const usuario = await this.prisma.usuario.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
     });
 
     if (!usuario) {
       // No revelar si el email existe o no por seguridad
       return {
-        email,
+        email: normalizedEmail,
         exists: false,
         methods: [],
       };
@@ -1852,7 +1862,7 @@ export class AuthService {
     const availableMethods = authProviders.map(ap => ap.provider);
 
     return {
-      email,
+      email: normalizedEmail,
       exists: true,
       methods: availableMethods, // Ej: ['PASSWORD', 'GOOGLE']
       authMethodsCount: usuario.authMethodsCount,
