@@ -16,6 +16,7 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { RedisService } from '../redis/redis.service';
 import { ConfigService } from '@nestjs/config';
 import { EstadoSuscripcion, PeriodoSuscripcion, EstadoPagoSuscripcion, TipoNotificacion } from '@prisma/client';
+import { AuthSessionService } from '../auth/auth.session.service';
 
 @Injectable()
 export class AdminService {
@@ -26,6 +27,7 @@ export class AdminService {
     private notificacionService: NotificacionService,
     private redisService: RedisService,
     private configService: ConfigService,
+    private authSessionService: AuthSessionService,
   ) {
     this.logger.setContext(AdminService.name);
   }
@@ -573,6 +575,15 @@ export class AdminService {
       where: { id },
       data: { isActive: dto.isActive },
     });
+
+    // Invalidar cache de isActive y, si se desactiva, revocar todas las
+    // sesiones para corte inmediato. Sin esto, el JwtStrategy seguiría
+    // viendo al usuario como activo hasta que expire su cache (30s) y
+    // sus sesiones Redis seguirían vivas hasta el TTL.
+    await this.authSessionService.invalidateUserActiveCache(id);
+    if (dto.isActive === false) {
+      await this.authSessionService.revokeAllUserSessions(id);
+    }
 
     this.logger.log(`Usuario ${id} ${dto.isActive ? 'desbloqueado' : 'bloqueado'} por admin`, {
       motivo: dto.motivo,

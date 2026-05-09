@@ -16,6 +16,7 @@ import * as bcrypt from 'bcryptjs';
 import { Rol, SedeRole } from '@prisma/client';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CacheService } from '../redis/cache.service';
+import { AuthSessionService } from '../auth/auth.session.service';
 
 @Injectable()
 export class UsuariosService {
@@ -26,6 +27,7 @@ export class UsuariosService {
     private planLimitsService: PlanLimitsService,
     private cache: CacheService,
     loggerService: AppLoggerService,
+    private authSessionService: AuthSessionService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(UsuariosService.name);
@@ -1146,8 +1148,17 @@ export class UsuariosService {
     // Invalidar caché de acceso (usuario ya no tiene acceso)
     await this.cache.invalidateTenantAccess(usuarioId, empresaId);
 
+    // Cerrar sesiones del empleado en esta empresa para corte inmediato.
+    // Sólo revocamos las sesiones cuyo `tenantId` coincide: si el usuario
+    // está activo en otra empresa, esas sesiones siguen vivas.
+    const sesionesRevocadas =
+      await this.authSessionService.revokeUserSessionsByTenant(
+        usuarioId,
+        empresaId,
+      );
+
     this.logger.log(
-      `Usuario ${usuarioId} desactivado en empresa ${empresaId} por usuario ${modificadoPor}`,
+      `Usuario ${usuarioId} desactivado en empresa ${empresaId} por usuario ${modificadoPor}. Sesiones revocadas: ${sesionesRevocadas}`,
     );
 
     return {

@@ -230,6 +230,34 @@ export class AuthSessionService {
   }
 
   /**
+   * Revocar las sesiones del usuario que pertenecen a un tenant
+   * específico. Útil cuando un admin desactiva a un empleado de UNA
+   * empresa pero el empleado podría seguir activo en otras: solo
+   * cerramos las sesiones del tenant afectado, no todas.
+   *
+   * Devuelve la cantidad de sesiones revocadas.
+   */
+  async revokeUserSessionsByTenant(
+    userId: string,
+    tenantId: string,
+  ): Promise<number> {
+    const userSessionsKey = `user_sessions:${userId}`;
+    const sessionIds = await this.redisService.smembers(userSessionsKey);
+    let revokedCount = 0;
+
+    for (const sessionId of sessionIds) {
+      const session = await this.getSession(sessionId);
+      if (session && session.tenantId === tenantId) {
+        if (await this.revokeSession(sessionId, userId)) {
+          revokedCount++;
+        }
+      }
+    }
+
+    return revokedCount;
+  }
+
+  /**
    * Eliminar sesión (limpieza interna)
    */
   private async removeSession(sessionId: string): Promise<void> {
@@ -301,5 +329,45 @@ export class AuthSessionService {
     }
 
     return false;
+  }
+
+  /**
+   * Verifica si un usuario está activo (`isActive=true`) consultando un
+   * cache de 30s en Redis para no penalizar cada request protegida con
+   * un SELECT. Llamado desde `JwtStrategy.validate` para cerrar la
+   * ventana donde un usuario desactivado por admin sigue accediendo
+   * con un access token vivo. La cache expira sola en 30s; los flujos
+   * que desactivan usuarios deben llamar `invalidateUserActiveCache`
+   * para corte inmediato + `revokeAllUserSessions` para cerrar sesiones
+   * abiertas.
+   *
+   * Valor "1" = activo, "0" = inactivo. Se cachean ambos para evitar
+   * martillar la BD si un atacante hace requests con el token de un
+   * usuario ya desactivado.
+   */
+  async isUserActive(userId: string): Promise<boolean> {
+    const cacheKey = `user:active:${userId}`;
+    const cached = await this.redisService.get(cacheKey);
+    if (cached !== null) {
+      return cached === '1';
+    }
+
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      select: { isActive: true },
+    });
+
+    const isActive = usuario?.isActive === true;
+    await this.redisService.setex(cacheKey, 30, isActive ? '1' : '0');
+    return isActive;
+  }
+
+  /**
+   * Invalida la cache de `isUserActive` de un usuario. Llamar al
+   * desactivar/reactivar manualmente para que el siguiente request
+   * vea el cambio sin esperar los 30s de TTL.
+   */
+  async invalidateUserActiveCache(userId: string): Promise<void> {
+    await this.redisService.del(`user:active:${userId}`);
   }
 }

@@ -23,6 +23,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    // Verificar que el usuario siga activo. Cierra la ventana donde un
+    // admin desactiva un usuario pero su access token sigue vivo hasta
+    // expirar. Cache de 30s evita SELECT por request.
+    const isUserActive = await this.sessionService.isUserActive(payload.sub);
+    if (!isUserActive) {
+      throw new UnauthorizedException('Cuenta desactivada. Contacta al administrador.');
+    }
+
     // Validar que la sesión esté activa si existe sessionId
     if (payload.sessionId) {
       // Verificar si la sesión está en blacklist
