@@ -23,84 +23,152 @@ export class AuthSecurityService {
     this.logger.setContext(AuthSecurityService.name);
   }
 
-  async recordFailedAttempt(identifier: string, type: 'login' | 'password_reset' = 'login'): Promise<FailedAttempt> {
-    const key = `failed_attempts:${type}:${identifier}`;
-    const maxAttempts = this.configService.get('MAX_LOGIN_ATTEMPTS', 5);
+  /**
+   * Registra un intento fallido. Si se pasa `ip`, mantiene un segundo
+   * contador `failed_attempts:ip:${ip}:${identifier}` con un umbral
+   * más permisivo (10 vs 5 por credencial).
+   *
+   * Lockout dispara si CUALQUIERA de los dos contadores supera su
+   * umbral. Esto mitiga:
+   *  - Brute force distribuido: muchas IPs probando 1 password contra
+   *    1 cuenta — cae por el contador por credencial.
+   *  - Ataque de bloqueo (DoS): 1 atacante intenta bloquear cuentas
+   *    ajenas con 5 intentos fallidos — el contador por IP+credencial
+   *    también lo cuenta, pero el legítimo usando OTRA IP no se ve
+   *    afectado por esta segunda métrica.
+   */
+  async recordFailedAttempt(
+    identifier: string,
+    type: 'login' | 'password_reset' = 'login',
+    ip?: string,
+  ): Promise<FailedAttempt> {
+    const credKey = `failed_attempts:${type}:${identifier}`;
+    const maxAttemptsCred = this.configService.get('MAX_LOGIN_ATTEMPTS', 5);
+    const maxAttemptsIp = this.configService.get('MAX_LOGIN_ATTEMPTS_IP', 10);
     const lockoutMinutes = this.configService.get('LOCKOUT_DURATION_MINUTES', 15);
     const lockoutDurationMs = lockoutMinutes * 60 * 1000;
     const lockoutDurationSec = lockoutMinutes * 60;
 
-    // INCR atómico: evita race condition de get→parseInt→++→setex que
-    // bajo concurrencia podía contar 5 intentos simultáneos como 1.
-    // Solo seteamos TTL en el primer intento (cuando attempts === 1).
-    const attempts = await this.redisService.incr(key);
-    if (attempts === 1) {
-      await this.redisService.expire(key, lockoutDurationSec);
+    // Contador por credencial (atómico).
+    const credAttempts = await this.redisService.incr(credKey);
+    if (credAttempts === 1) {
+      await this.redisService.expire(credKey, lockoutDurationSec);
     }
 
+    // Contador opcional por IP+credencial (atómico).
+    let ipAttempts = 0;
+    if (ip) {
+      const ipKey = `failed_attempts:${type}:ip:${ip}:${identifier}`;
+      ipAttempts = await this.redisService.incr(ipKey);
+      if (ipAttempts === 1) {
+        await this.redisService.expire(ipKey, lockoutDurationSec);
+      }
+    }
+
+    const credLocked = credAttempts >= maxAttemptsCred;
+    const ipLocked = ip ? ipAttempts >= maxAttemptsIp : false;
+    const isLocked = credLocked || ipLocked;
     const now = new Date();
-    const isLocked = attempts >= maxAttempts;
     const lockUntil = isLocked ? new Date(now.getTime() + lockoutDurationMs) : undefined;
 
-    // Si está bloqueado, guardar timestamp de desbloqueo
-    if (isLocked) {
+    if (credLocked) {
       const lockKey = `lock:${type}:${identifier}`;
+      await this.redisService.setex(lockKey, lockoutDurationMs, lockUntil!.toISOString());
+    }
+    if (ipLocked && ip) {
+      const lockKey = `lock:${type}:ip:${ip}:${identifier}`;
       await this.redisService.setex(lockKey, lockoutDurationMs, lockUntil!.toISOString());
     }
 
     this.logger.warn(
-      `Failed ${type} attempt: ${attempts}/${maxAttempts} (locked: ${isLocked}) for ${identifier}`,
+      `Failed ${type} attempt: cred=${credAttempts}/${maxAttemptsCred} ip=${ipAttempts}/${maxAttemptsIp} (locked: ${isLocked}) for ${identifier}${ip ? ' from ' + ip : ''}`,
       {
         identifier,
-        attempts,
-        maxAttempts,
+        ip,
+        credAttempts,
+        ipAttempts,
         isLocked,
         type,
       }
     );
 
     return {
-      attempts,
+      attempts: Math.max(credAttempts, ipAttempts),
       lastAttempt: now,
       isLocked,
       lockUntil,
     };
   }
 
-  async clearFailedAttempts(identifier: string, type: 'login' | 'password_reset' = 'login'): Promise<void> {
-    const key = `failed_attempts:${type}:${identifier}`;
-    const lockKey = `lock:${type}:${identifier}`;
+  async clearFailedAttempts(
+    identifier: string,
+    type: 'login' | 'password_reset' = 'login',
+    ip?: string,
+  ): Promise<void> {
+    const credKey = `failed_attempts:${type}:${identifier}`;
+    const credLockKey = `lock:${type}:${identifier}`;
 
-    await Promise.all([
-      this.redisService.del(key),
-      this.redisService.del(lockKey),
-    ]);
+    const promises: Promise<any>[] = [
+      this.redisService.del(credKey),
+      this.redisService.del(credLockKey),
+    ];
+
+    if (ip) {
+      const ipKey = `failed_attempts:${type}:ip:${ip}:${identifier}`;
+      const ipLockKey = `lock:${type}:ip:${ip}:${identifier}`;
+      promises.push(
+        this.redisService.del(ipKey),
+        this.redisService.del(ipLockKey),
+      );
+    }
+
+    await Promise.all(promises);
   }
 
-  async isLockedOut(identifier: string, type: 'login' | 'password_reset' = 'login'): Promise<{
+  /**
+   * Devuelve true si CUALQUIERA de los locks (por credencial o por
+   * IP+credencial) está activo. Si ambos están activos, devuelve el
+   * que tenga más tiempo restante.
+   */
+  async isLockedOut(
+    identifier: string,
+    type: 'login' | 'password_reset' = 'login',
+    ip?: string,
+  ): Promise<{
     isLocked: boolean;
     remainingTime?: number;
   }> {
-    const lockKey = `lock:${type}:${identifier}`;
-    const lockData = await this.redisService.get(lockKey);
+    const credLockKey = `lock:${type}:${identifier}`;
+    const ipLockKey = ip ? `lock:${type}:ip:${ip}:${identifier}` : null;
 
-    if (!lockData) {
-      return { isLocked: false };
+    const [credLockData, ipLockData] = await Promise.all([
+      this.redisService.get(credLockKey),
+      ipLockKey ? this.redisService.get(ipLockKey) : Promise.resolve(null),
+    ]);
+
+    const now = new Date();
+    let maxRemaining = 0;
+    let anyActive = false;
+
+    for (const data of [credLockData, ipLockData]) {
+      if (!data) continue;
+      const lockUntil = new Date(data);
+      const remaining = lockUntil.getTime() - now.getTime();
+      if (remaining > 0) {
+        anyActive = true;
+        if (remaining > maxRemaining) maxRemaining = remaining;
+      }
     }
 
-    const lockUntil = new Date(lockData);
-    const now = new Date();
-    const remainingTime = lockUntil.getTime() - now.getTime();
-
-    if (remainingTime <= 0) {
-      // El lockout expiró, limpiar
-      await this.clearFailedAttempts(identifier, type);
+    if (!anyActive) {
+      // Ambos locks expiraron o no existen — limpiar contadores
+      await this.clearFailedAttempts(identifier, type, ip);
       return { isLocked: false };
     }
 
     return {
       isLocked: true,
-      remainingTime: Math.ceil(remainingTime / 1000), // Retornar en segundos
+      remainingTime: Math.ceil(maxRemaining / 1000),
     };
   }
 

@@ -257,8 +257,16 @@ export class AuthService {
     // Detectar tipo de credencial
     const tipoCredencial = this.detectarTipoCredencial(credencial);
 
-    // Verificar si la cuenta está bloqueada
-    const lockStatus = await this.securityService.isLockedOut(credencial, 'login');
+    // Obtener IP del cliente para lockout combinado credencial+IP
+    const clientInfo = request ? this.securityService.getClientInfo(request) : {
+      ip: '127.0.0.1',
+      userAgent: 'Unknown Device',
+      device: 'API Login',
+      platform: 'Unknown'
+    };
+
+    // Verificar si la cuenta está bloqueada (por credencial o IP+credencial)
+    const lockStatus = await this.securityService.isLockedOut(credencial, 'login', clientInfo.ip);
     if (lockStatus.isLocked) {
       throw new UnauthorizedException(
         `Cuenta bloqueada. Intente nuevamente en ${Math.ceil((lockStatus.remainingTime || 0) / 60)} minutos.`
@@ -301,17 +309,9 @@ export class AuthService {
       });
     }
 
-    // Obtener información real del cliente (mover antes de su uso)
-    const clientInfo = request ? this.securityService.getClientInfo(request) : {
-      ip: '127.0.0.1',
-      userAgent: 'Unknown Device',
-      device: 'API Login',
-      platform: 'Unknown'
-    };
-
     if (!usuario || !usuario.isActive) {
       // Registrar intento fallido
-      await this.securityService.recordFailedAttempt(credencial, 'login');
+      await this.securityService.recordFailedAttempt(credencial, 'login', clientInfo.ip);
 
       // Log de auditoría para intento fallido
       this.auditLogger.logUserLogin(
@@ -336,7 +336,7 @@ export class AuthService {
 
     if (!passwordProvider || !usuario.passwordHash) {
       // Registrar intento fallido
-      await this.securityService.recordFailedAttempt(credencial, 'login');
+      await this.securityService.recordFailedAttempt(credencial, 'login', clientInfo.ip);
 
       // Log de auditoría para método no disponible
       this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', false, 'Password login not available for this account');
@@ -348,7 +348,7 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, usuario.passwordHash);
     if (!isPasswordValid) {
       // Registrar intento fallido
-      await this.securityService.recordFailedAttempt(credencial, 'login');
+      await this.securityService.recordFailedAttempt(credencial, 'login', clientInfo.ip);
 
       // Log de auditoría para contraseña incorrecta
       this.auditLogger.logUserLogin(usuario.id, credencial, clientInfo?.ip || 'unknown', false, 'Invalid password');
@@ -388,7 +388,7 @@ export class AuthService {
       });
 
       // Limpiar intentos fallidos
-      await this.securityService.clearFailedAttempts(credencial, 'login');
+      await this.securityService.clearFailedAttempts(credencial, 'login', clientInfo.ip);
 
       // Actualizar último login
       await this.prisma.usuario.update({
@@ -442,7 +442,7 @@ export class AuthService {
         });
 
         // Limpiar intentos fallidos
-        await this.securityService.clearFailedAttempts(credencial, 'login');
+        await this.securityService.clearFailedAttempts(credencial, 'login', clientInfo.ip);
 
         // Actualizar último login
         await this.prisma.usuario.update({
@@ -487,7 +487,7 @@ export class AuthService {
         );
 
         // Limpiar intentos fallidos
-        await this.securityService.clearFailedAttempts(credencial, 'login');
+        await this.securityService.clearFailedAttempts(credencial, 'login', clientInfo.ip);
 
         // Actualizar último login
         await this.prisma.usuario.update({
@@ -594,7 +594,7 @@ export class AuthService {
     }
 
     // Limpiar intentos fallidos exitosamente
-    await this.securityService.clearFailedAttempts(credencial, 'login');
+    await this.securityService.clearFailedAttempts(credencial, 'login', clientInfo.ip);
 
     // Actualizar último login
     await this.prisma.usuario.update({
