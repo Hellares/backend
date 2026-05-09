@@ -267,10 +267,11 @@ Si no solicitaste este registro, ignora este mensaje.
    */
   async sendPasswordResetEmail(email: string, resetToken: string, nombres: string): Promise<boolean> {
     // Sin frontend web propio: el link apunta a la página HTML inline servida
-    // por el backend (`GET /auth/reset-password`), que contiene el formulario
-    // y llama al POST /auth/reset-password. Mismo patrón que verify-email.
+    // por el backend (`GET /api/auth/reset-password`), que contiene el form
+    // y postea al POST /api/auth/reset-password. Mismo patrón que verify-email.
+    // El prefix /api viene de app.setGlobalPrefix('api') en main.ts.
     const backendUrl = this.configService.get<string>('BACKEND_URL', 'http://localhost:3000');
-    const resetUrl = `${backendUrl}/auth/reset-password?token=${resetToken}`;
+    const resetUrl = `${backendUrl}/api/auth/reset-password?token=${resetToken}`;
 
     const html = `
       <!DOCTYPE html>

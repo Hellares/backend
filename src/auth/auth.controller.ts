@@ -453,7 +453,7 @@ export class AuthController {
       var p2 = document.getElementById('p2').value;
       if (p1 !== p2) { show('err','Las contraseñas no coinciden.'); return; }
       b.disabled = true; b.textContent = 'Enviando...';
-      fetch('/auth/reset-password', {
+      fetch('/api/auth/reset-password', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ resetToken: TOKEN, newPassword: p1, confirmPassword: p2 })
