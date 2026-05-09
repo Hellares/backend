@@ -1169,15 +1169,14 @@ export class AuthService {
       },
     });
 
-    // Revocar todas las sesiones EXCEPTO la actual
-    if (currentSessionId) {
-      const revokedCount = await this.sessionService.revokeAllOtherSessions(userId, currentSessionId);
-      this.logger.info('Other sessions revoked after password change', {
-        userId,
-        currentSessionId,
-        revokedCount,
-      });
-    }
+    // Revocar TODAS las sesiones, incluida la actual. Forzamos re-login
+    // para que el usuario use la nueva contraseña explícitamente y la app
+    // descarte cualquier estado en memoria asociado al token viejo.
+    const revokedCount = await this.sessionService.revokeAllUserSessions(userId);
+    this.logger.info('All sessions revoked after password change', {
+      userId,
+      revokedCount,
+    });
 
     // Log de auditoría
     this.auditLogger.logPasswordChanged(userId, usuario.email || usuario.id, userId);
@@ -2411,6 +2410,16 @@ export class AuthService {
       }
     }
 
+    // Revocar TODAS las sesiones, incluida la actual. El email es parte
+    // del payload visible del usuario (login, recuperación, contacto), por
+    // lo que tras un cambio queremos que el usuario re-autentique para
+    // que la app rehidrate su estado con el nuevo email + emailVerificado=false.
+    const revokedCount = await this.sessionService.revokeAllUserSessions(usuario.id);
+    this.logger.info('All sessions revoked after email update', {
+      userId: usuario.id,
+      revokedCount,
+    });
+
     this.logger.info('Email updated for user', {
       userId: usuario.id,
       previousEmail: usuario.email,
@@ -2421,9 +2430,10 @@ export class AuthService {
     return {
       success: true,
       message:
-        'Email actualizado. Te enviamos un correo de verificación a la nueva dirección.',
+        'Email actualizado. Te enviamos un correo de verificación a la nueva dirección. Vuelve a iniciar sesión.',
       emailVerificado: false,
       email: normalizedEmail,
+      sessionsRevoked: true,
     };
   }
 
