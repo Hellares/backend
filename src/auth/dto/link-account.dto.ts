@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, Matches, MinLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class LinkAccountDto {
@@ -18,4 +18,15 @@ export class LinkAccountDto {
   @IsString()
   @IsNotEmpty()
   targetPersonaId: string;
+
+  @ApiProperty({
+    description:
+      'Contraseña actual de la cuenta destino. Requerida para probar ' +
+      'que el usuario es dueño de esa cuenta antes de vincular.',
+    example: 'MiPassword123',
+  })
+  @IsString()
+  @IsNotEmpty({ message: 'La contraseña de la cuenta destino es requerida' })
+  @MinLength(6)
+  targetPassword: string;
 }

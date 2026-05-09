@@ -1989,7 +1989,11 @@ export class AuthService {
    * Vincula la cuenta actual (Google) con una cuenta existente (DNI)
    * Mueve el AuthProvider de Google al usuario original y elimina el duplicado
    */
-  async linkAccount(currentUserId: string, dto: { dni: string; targetPersonaId: string }, request?: any) {
+  async linkAccount(
+    currentUserId: string,
+    dto: { dni: string; targetPersonaId: string; targetPassword: string },
+    request?: any,
+  ) {
     // 1. Cargar ambas cuentas
     const currentUser = await this.prisma.usuario.findUnique({
       where: { id: currentUserId },
@@ -2022,6 +2026,31 @@ export class AuthService {
 
     if (!targetUser.isActive) {
       throw new BadRequestException('La cuenta destino está desactivada');
+    }
+
+    // 2.5 Probar control sobre la cuenta destino: si tiene password,
+    // validar contra bcrypt. Si la cuenta destino es DNI-only sin
+    // password (passwordHash=null), rechazar y pedir al dueño que
+    // primero establezca una. Sin esto, cualquiera con login Google
+    // que conozca el DNI ajeno podía adueñarse de esa cuenta.
+    if (!targetUser.passwordHash) {
+      throw new BadRequestException(
+        'La cuenta destino no tiene contraseña configurada. Pídele al dueño que establezca una desde Seguridad de la cuenta antes de vincular.',
+      );
+    }
+    const isPasswordValid = await bcrypt.compare(
+      dto.targetPassword,
+      targetUser.passwordHash,
+    );
+    if (!isPasswordValid) {
+      this.logger.warn('Intento de link-account con password inválido', {
+        currentUserId,
+        targetUserId: targetUser.id,
+        dni: dto.dni,
+      });
+      throw new UnauthorizedException(
+        'Contraseña incorrecta para la cuenta destino',
+      );
     }
 
     // Verificar que el usuario actual tiene Google
