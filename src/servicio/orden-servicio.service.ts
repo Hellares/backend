@@ -208,6 +208,7 @@ export class OrdenServicioService {
       await this.validateDatosPersonalizados(
         dto.empresaId,
         dto.datosPersonalizados,
+        dto.servicioId,
       );
     }
 
@@ -771,12 +772,33 @@ export class OrdenServicioService {
   private async validateDatosPersonalizados(
     empresaId: string,
     datos: Record<string, any>,
+    servicioId?: string,
   ) {
+    // Resolver la plantilla del servicio (si tiene una asignada). Cada
+    // plantilla agrupa sus propios campos requeridos (ej. una plantilla
+    // CELULAR pide "Marca del celular", una LAPTOP pide otros). Sin este
+    // filtro el backend exigía TODOS los campos requeridos de todas las
+    // plantillas de la empresa, lo cual rompe cuando hay >1 plantilla.
+    let plantillaId: string | null = null;
+    if (servicioId) {
+      const servicio = await this.prisma.servicio.findUnique({
+        where: { id: servicioId },
+        select: { plantillaServicioId: true },
+      });
+      plantillaId = servicio?.plantillaServicioId ?? null;
+    }
+
+    // Campos requeridos aplicables:
+    // - Globales (`plantillaId = null`): siempre se validan.
+    // - De la plantilla del servicio actual (si hay): se suman.
     const campos = await this.prisma.configuracionCamposServicio.findMany({
       where: {
         empresaId,
         isActive: true,
         esRequerido: true,
+        OR: plantillaId
+            ? [{ plantillaId: null }, { plantillaId }]
+            : [{ plantillaId: null }],
       },
     });
 
