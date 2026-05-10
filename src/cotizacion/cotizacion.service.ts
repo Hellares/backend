@@ -237,8 +237,14 @@ export class CotizacionService {
   ) {
     const where: Prisma.CotizacionWhereInput = { empresaId };
 
-    // Vendedor solo ve sus propias cotizaciones
-    if (filtros?.userRole === Rol.VENDEDOR && filtros?.userId) {
+    // VENDEDOR y CAJERO solo ven sus propias cotizaciones (las que ellos
+    // emitieron). Roles administrativos (SUPER_ADMIN, EMPRESA_ADMIN, etc.)
+    // ven todas las cotizaciones del tenant.
+    if (
+      filtros?.userId &&
+      (filtros?.userRole === Rol.VENDEDOR ||
+        filtros?.userRole === Rol.CAJERO)
+    ) {
       where.vendedorId = filtros.userId;
     }
 
@@ -755,8 +761,8 @@ export class CotizacionService {
     };
     if (sedeId) where.sedeId = sedeId;
 
-    // Vendedor solo ve sus propias cotizaciones en la cola
-    if (userRole === Rol.VENDEDOR && userId) {
+    // VENDEDOR y CAJERO solo ven sus propias cotizaciones en la cola POS.
+    if (userId && (userRole === Rol.VENDEDOR || userRole === Rol.CAJERO)) {
       where.vendedorId = userId;
     }
 
