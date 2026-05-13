@@ -208,6 +208,7 @@ export class CotizacionService {
           vendedor: {
             select: {
               id: true,
+              aliasTicket: true,
               persona: { select: { nombres: true, apellidos: true } },
             },
           },
@@ -279,6 +280,7 @@ export class CotizacionService {
         vendedor: {
           select: {
             id: true,
+            aliasTicket: true,
             persona: { select: { nombres: true, apellidos: true } },
           },
         },
@@ -313,6 +315,7 @@ export class CotizacionService {
         vendedor: {
           select: {
             id: true,
+            aliasTicket: true,
             persona: { select: { nombres: true, apellidos: true } },
           },
         },
@@ -435,6 +438,7 @@ export class CotizacionService {
             vendedor: {
               select: {
                 id: true,
+                aliasTicket: true,
                 persona: { select: { nombres: true, apellidos: true } },
               },
             },
@@ -476,6 +480,7 @@ export class CotizacionService {
           vendedor: {
             select: {
               id: true,
+              aliasTicket: true,
               persona: { select: { nombres: true, apellidos: true } },
             },
           },
@@ -519,6 +524,7 @@ export class CotizacionService {
         vendedor: {
           select: {
             id: true,
+            aliasTicket: true,
             persona: { select: { nombres: true, apellidos: true } },
           },
         },
@@ -654,6 +660,7 @@ export class CotizacionService {
           vendedor: {
             select: {
               id: true,
+              aliasTicket: true,
               persona: { select: { nombres: true, apellidos: true } },
             },
           },
@@ -775,7 +782,10 @@ export class CotizacionService {
           include: { persona: { select: { nombres: true, apellidos: true } } },
         },
         vendedor: {
-          select: { persona: { select: { nombres: true, apellidos: true } } },
+          select: {
+            aliasTicket: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
         },
         detalles: {
           include: {

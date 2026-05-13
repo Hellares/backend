@@ -27,6 +27,9 @@ export class UsuarioResponseDto {
   @ApiPropertyOptional()
   telefono?: string;
 
+  @ApiPropertyOptional({ description: 'Nombre corto mostrado en tickets' })
+  aliasTicket?: string;
+
   @ApiPropertyOptional()
   direccion?: string;
 

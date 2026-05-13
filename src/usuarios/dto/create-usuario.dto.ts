@@ -102,4 +102,12 @@ export class CreateUsuarioDto {
   @IsString()
   @IsOptional()
   notas?: string;
+
+  /// Nombre corto que se muestra en tickets (venta, cotización, orden
+  /// de servicio) en lugar del nombre completo del usuario. Si vacío,
+  /// se imprime "${nombres} ${apellidos}".
+  @IsOptional()
+  @IsString()
+  @MaxLength(30, { message: 'El alias no puede superar 30 caracteres' })
+  aliasTicket?: string;
 }

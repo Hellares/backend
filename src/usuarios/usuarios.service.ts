@@ -389,6 +389,7 @@ export class UsuariosService {
           emailVerificado: email ? false : true,
           telefonoVerificado: false,
           dniVerificado: false,
+          aliasTicket: createUsuarioDto.aliasTicket || null,
         },
       });
 
@@ -502,6 +503,7 @@ export class UsuariosService {
           emailVerificado: personaData.email ? false : true,
           telefonoVerificado: false,
           dniVerificado: false,
+          aliasTicket: createUsuarioDto.aliasTicket || null,
         },
       });
 
@@ -650,6 +652,7 @@ export class UsuariosService {
       nombreCompleto: `${persona.nombres} ${persona.apellidos}`,
       email: persona.email || usuario.email || undefined,
       telefono: persona.telefono || usuario.telefono || undefined,
+      aliasTicket: usuario.aliasTicket || undefined,
       direccion: persona.direccion || undefined,
       distrito: persona.distrito || undefined,
       provincia: persona.provincia || undefined,
@@ -935,6 +938,7 @@ export class UsuariosService {
       limiteCreditoVenta,
       permisos,
       accesosRapidosOcultos,
+      aliasTicket,
     } = updateUsuarioDto;
 
     // Validar email único (si está cambiando)
@@ -986,12 +990,17 @@ export class UsuariosService {
       }
 
       // Actualizar datos del usuario
-      if (email || telefono) {
+      // `aliasTicket === ''` se interpreta como "borrar alias" → guardar null
+      // para que el ticket vuelva al nombre completo de la persona.
+      if (email || telefono || aliasTicket !== undefined) {
         await prisma.usuario.update({
           where: { id: usuarioId },
           data: {
             ...(email && { email }),
             ...(telefono && { telefono }),
+            ...(aliasTicket !== undefined && {
+              aliasTicket: aliasTicket === '' ? null : aliasTicket,
+            }),
           },
         });
       }

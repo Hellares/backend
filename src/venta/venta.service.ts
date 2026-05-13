@@ -279,12 +279,14 @@ export class VentaService {
       vendedor: {
         select: {
           id: true,
+          aliasTicket: true,
           persona: { select: { nombres: true, apellidos: true } },
         },
       },
       cajero: {
         select: {
           id: true,
+          aliasTicket: true,
           persona: { select: { nombres: true, apellidos: true } },
         },
       },
@@ -326,6 +328,7 @@ export class VentaService {
       vendedor: {
         select: {
           id: true,
+          aliasTicket: true,
           persona: { select: { nombres: true, apellidos: true } },
         },
       },

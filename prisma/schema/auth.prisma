@@ -64,6 +64,11 @@ model Usuario {
   // Sede por defecto (última sede accedida o asignada)
   sedeDefaultId String? // ID de la sede por defecto para este usuario
 
+  /// Nombre corto mostrado al cliente en tickets (venta, cotización,
+  /// orden de servicio). Si es null, se muestra el nombre completo de
+  /// la persona. Ejemplos: "JP", "Caja 1", "Juana".
+  aliasTicket String?
+
   creadoEn                DateTime                      @default(now())
   actualizadoEn           DateTime                      @updatedAt
   authProviders           AuthProvider[]
