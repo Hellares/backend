@@ -152,4 +152,55 @@ export class FirebaseAdminService implements OnModuleInit {
 
     return failedTokens;
   }
+
+  /// Envía un mensaje **data-only** (sin notificación visible) a todos los
+  /// dispositivos suscritos a un topic. Usado para invalidación de cache
+  /// en tiempo real (precio, stock, niveles).
+  ///
+  /// Por qué data-only:
+  /// - El cajero NO debe ver una notificación push por cada cambio de
+  ///   stock — sería ruido constante.
+  /// - El cliente Flutter procesa el `data` en `onMessage` (foreground) y
+  ///   `onBackgroundMessage` (background) sin mostrar nada al usuario.
+  ///
+  /// Por qué priority 'high':
+  /// - Sin priority high, Android puede retrasar data-only en Doze mode
+  ///   varios minutos. Con high se entrega inmediatamente.
+  /// - FCM facturará igual; no hay costo extra por priority high.
+  ///
+  /// La función devuelve el id del mensaje o null en caso de error
+  /// (no lanza para no romper transacciones que ya commitearon).
+  async sendDataToTopic(
+    topic: string,
+    data: Record<string, string>,
+  ): Promise<string | null> {
+    try {
+      const message: admin.messaging.Message = {
+        topic,
+        data,
+        android: {
+          priority: 'high',
+        },
+        apns: {
+          headers: {
+            // Equivalente a priority high en iOS — data-only background.
+            'apns-priority': '5',
+            'apns-push-type': 'background',
+          },
+          payload: {
+            aps: {
+              contentAvailable: true,
+            },
+          },
+        },
+      };
+      const response = await admin.messaging().send(message);
+      return response;
+    } catch (error: any) {
+      console.error(
+        `[Firebase] Error sending data to topic ${topic}: ${error.message}`,
+      );
+      return null;
+    }
+  }
 }

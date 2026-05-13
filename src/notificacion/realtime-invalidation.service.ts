@@ -1,0 +1,123 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { FirebaseAdminService } from './firebase-admin.service';
+
+/**
+ * Servicio de invalidación de cache en tiempo real vía FCM data-only.
+ *
+ * Cuando el admin cambia precio, stock o un nivel de precio (Por Mayor,
+ * etc.), todos los cajeros conectados a esa empresa reciben un mensaje
+ * silencioso por FCM y refrescan su catálogo local. Sin esto, el cajero
+ * vería datos viejos hasta el próximo pull-to-refresh manual (o hasta
+ * que intente cobrar y reciba un 409 PRECIO_DESACTUALIZADO /
+ * STOCK_INSUFICIENTE).
+ *
+ * El cliente Flutter se suscribe al topic `empresa-${empresaId}` al
+ * hacer switch-tenant. Acá enviamos a ese topic.
+ *
+ * Defensa en capas:
+ * 1. Este servicio (FCM ~1-3s) → refresh visual sin que el cajero haga nada.
+ * 2. Rechazo server-side 409 (atómico) → captura los casos que FCM perdió.
+ * 3. Dialog del cliente → resolución amigable.
+ *
+ * **Fire-and-forget**: ninguna de las llamadas a este servicio debe
+ * romper el flujo principal (la venta, la actualización de precio, etc.).
+ * Si FCM falla, se loguea y se sigue. El sistema queda correcto aunque
+ * FCM no entregue.
+ */
+@Injectable()
+export class RealtimeInvalidationService {
+  private readonly logger = new Logger(RealtimeInvalidationService.name);
+
+  constructor(private readonly firebase: FirebaseAdminService) {}
+
+  /// Topic al que se suscriben todos los clientes de una empresa.
+  private topicForEmpresa(empresaId: string): string {
+    return `empresa-${empresaId}`;
+  }
+
+  /// Sanitiza valores para FCM data: solo acepta strings. Convierte
+  /// nulls/undefined a string vacío para no romper el envelope.
+  private toStringMap(
+    obj: Record<string, string | null | undefined>,
+  ): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (v != null) out[k] = String(v);
+    }
+    return out;
+  }
+
+  /// Precio (base o por nivel) o ambos campos relacionados cambiaron
+  /// para un producto/sede. Cliente debe invalidar cache de niveles
+  /// + refrescar el item en el catálogo.
+  notifyPrecioCambiado(args: {
+    empresaId: string;
+    productoId?: string | null;
+    varianteId?: string | null;
+    sedeId?: string | null;
+  }): void {
+    // Fire-and-forget: no await
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'PRECIO_CAMBIADO',
+          empresaId: args.empresaId,
+          productoId: args.productoId,
+          varianteId: args.varianteId,
+          sedeId: args.sedeId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`PRECIO_CAMBIADO send failed: ${err?.message}`);
+      });
+  }
+
+  /// El stock disponible de un producto/sede cambió (venta, transferencia,
+  /// merma, ajuste manual). Cliente debe refrescar el item en el catálogo.
+  notifyStockCambiado(args: {
+    empresaId: string;
+    productoId?: string | null;
+    varianteId?: string | null;
+    sedeId?: string | null;
+  }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'STOCK_CAMBIADO',
+          empresaId: args.empresaId,
+          productoId: args.productoId,
+          varianteId: args.varianteId,
+          sedeId: args.sedeId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`STOCK_CAMBIADO send failed: ${err?.message}`);
+      });
+  }
+
+  /// Los niveles de precio (Por Mayor, Distribuidor, etc.) de un producto
+  /// fueron creados/modificados/eliminados. Cliente debe invalidar el
+  /// cache local de niveles para que el próximo cálculo en carrito use
+  /// la config actual.
+  notifyNivelesCambiados(args: {
+    empresaId: string;
+    productoId?: string | null;
+    varianteId?: string | null;
+  }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'NIVELES_CAMBIADOS',
+          empresaId: args.empresaId,
+          productoId: args.productoId,
+          varianteId: args.varianteId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`NIVELES_CAMBIADOS send failed: ${err?.message}`);
+      });
+  }
+}

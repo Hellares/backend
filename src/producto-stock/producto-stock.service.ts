@@ -13,6 +13,7 @@ import { ActualizarPreciosSedeDto } from './dto/actualizar-precios-sede.dto';
 import { QueryHistorialPreciosDto } from './dto/query-historial-precios.dto';
 import { Prisma, TipoCambioPrecio } from '@prisma/client';
 import { PromocionService } from '../promocion/promocion.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import * as ExcelJS from 'exceljs';
 import { Response } from 'express';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
@@ -29,6 +30,7 @@ export class ProductoStockService {
     private readonly prisma: PrismaService,
     private readonly cacheService: CacheService,
     private readonly promocionService: PromocionService,
+    private readonly realtimeInvalidation: RealtimeInvalidationService,
   ) {}
 
   /**
@@ -306,6 +308,15 @@ export class ProductoStockService {
 
     // Invalidar cache de productos después de ajustar stock
     await this.invalidateProductCache(empresaId);
+
+    // Notificar realtime: los cajeros con app abierta verán el nuevo
+    // stock en sus cards en <3s sin pull-to-refresh manual.
+    this.realtimeInvalidation.notifyStockCambiado({
+      empresaId,
+      productoId: result.productoId,
+      varianteId: result.varianteId,
+      sedeId: result.sedeId,
+    });
 
     return result;
   }
@@ -758,6 +769,17 @@ export class ProductoStockService {
 
     // Invalidar cache de productos después de actualizar precios
     await this.invalidateProductCache(empresaId);
+
+    // Notificar a clientes conectados vía FCM data-only para que invaliden
+    // su cache local y refresquen el item. Defensa en capas: si FCM falla
+    // o llega tarde, el 409 PRECIO_DESACTUALIZADO al cobrar sigue
+    // protegiendo contra cobro a precio viejo.
+    this.realtimeInvalidation.notifyPrecioCambiado({
+      empresaId,
+      productoId: stock.productoId,
+      varianteId: stock.varianteId,
+      sedeId: stock.sedeId,
+    });
 
     return result;
   }

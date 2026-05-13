@@ -9,6 +9,7 @@ import {
 import { CajaService } from '../caja/caja.service';
 import { ProductoComboService } from '../producto/producto-combo.service';
 import { PrecioNivelService } from '../producto/precio-nivel.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -42,6 +43,7 @@ export class VentaService {
     private readonly comboService: ProductoComboService,
     private readonly facturacionService: FacturacionService,
     private readonly precioNivelService: PrecioNivelService,
+    private readonly realtimeInvalidation: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -1196,6 +1198,30 @@ export class VentaService {
     );
 
     await this.invalidateProductCache(empresaId);
+
+    // Notificar realtime — los cajeros de la empresa ven el stock
+    // actualizado en sus cards en <3s. Enviamos un solo evento por
+    // sede afectada para no spamear el topic (típicamente todos los
+    // items vienen de la misma sede de venta).
+    try {
+      const productosNotificados = new Set<string>();
+      for (const detalle of result.venta.detalles ?? []) {
+        // El campo `productoId` puede venir como string en el response.
+        const productoId = (detalle as any).productoId as string | null;
+        const varianteId = (detalle as any).varianteId as string | null;
+        const key = `${productoId ?? ''}::${varianteId ?? ''}`;
+        if (productosNotificados.has(key)) continue;
+        productosNotificados.add(key);
+        this.realtimeInvalidation.notifyStockCambiado({
+          empresaId,
+          productoId,
+          varianteId,
+          sedeId: dto.sedeId,
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(`Realtime notify falló (no crítico): ${err?.message ?? err}`);
+    }
 
     // Fire-after-commit: enviar comprobante a Nubefact (no bloquea la venta)
     if (result.comprobanteIdGenerado) {

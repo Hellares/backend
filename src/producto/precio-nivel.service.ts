@@ -10,6 +10,7 @@ import { CreatePrecioNivelDto } from './dto/create-precio-nivel.dto';
 import { UpdatePrecioNivelDto } from './dto/update-precio-nivel.dto';
 import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
 import { TipoPrecioNivel, Prisma } from '@prisma/client';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 
 // Usar Prisma.Decimal para los valores decimales
 const Decimal = Prisma.Decimal;
@@ -21,6 +22,7 @@ export class PrecioNivelService {
   constructor(
     private readonly prisma: PrismaService,
     loggerService: AppLoggerService,
+    private readonly realtimeInvalidation: RealtimeInvalidationService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(PrecioNivelService.name);
@@ -134,6 +136,14 @@ export class PrecioNivelService {
 
     this.logger.info('Precio nivel created successfully', {
       id: precioNivel.id,
+    });
+
+    // Notificar realtime: clientes con app abierta invalidan su cache
+    // de niveles para este producto y vuelven a fetchearlos.
+    this.realtimeInvalidation.notifyNivelesCambiados({
+      empresaId,
+      productoId: precioNivel.productoId,
+      varianteId: precioNivel.varianteId,
     });
 
     return this.mapToResponseDto(precioNivel);
@@ -268,6 +278,11 @@ export class PrecioNivelService {
 
     this.logger.info('Precio nivel updated successfully', { id });
 
+    // Notificar realtime. El nivel está vinculado a un producto o variante;
+    // resolvemos el empresaId por la entidad asociada para enviar al
+    // topic correcto.
+    await this._notifyNivelChange(updated.productoId, updated.varianteId);
+
     return this.mapToResponseDto(updated);
   }
 
@@ -291,6 +306,43 @@ export class PrecioNivelService {
     });
 
     this.logger.info('Precio nivel removed successfully', { id });
+
+    // Notificar realtime.
+    await this._notifyNivelChange(nivel.productoId, nivel.varianteId);
+  }
+
+  /// Resuelve el `empresaId` de un producto/variante y emite el evento
+  /// realtime `NIVELES_CAMBIADOS`. Si no se puede resolver (datos
+  /// inconsistentes), simplemente no se emite — el rechazo 409 al cobrar
+  /// sigue cubriendo el caso.
+  private async _notifyNivelChange(
+    productoId: string | null,
+    varianteId: string | null,
+  ): Promise<void> {
+    try {
+      let empresaId: string | null = null;
+      if (productoId) {
+        const p = await this.prisma.producto.findUnique({
+          where: { id: productoId },
+          select: { empresaId: true },
+        });
+        empresaId = p?.empresaId ?? null;
+      } else if (varianteId) {
+        const v = await this.prisma.productoVariante.findUnique({
+          where: { id: varianteId },
+          select: { empresaId: true },
+        });
+        empresaId = v?.empresaId ?? null;
+      }
+      if (!empresaId) return;
+      this.realtimeInvalidation.notifyNivelesCambiados({
+        empresaId,
+        productoId,
+        varianteId,
+      });
+    } catch (err) {
+      // Silencioso — fire-and-forget.
+    }
   }
 
   /**
