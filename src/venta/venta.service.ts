@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   Inject,
   forwardRef,
 } from '@nestjs/common';
@@ -69,6 +70,23 @@ export class VentaService {
     sedeId: string,
   ): Promise<CreateVentaDetalleDto[]> {
     const result: CreateVentaDetalleDto[] = [];
+
+    /// Divergencias entre el precio que el cliente envió y el que el backend
+    /// calcula. Si después del loop hay alguna, abortamos la venta con 409
+    /// para que el cajero refresque y reintente. Esto cierra la discrepancia
+    /// silenciosa de caja: antes el backend "corregía" el precio en el
+    /// fondo y la diferencia salía a flote recién en el cierre de caja.
+    const divergencias: Array<{
+      descripcion: string;
+      productoId?: string;
+      varianteId?: string;
+      comboId?: string;
+      cantidad: number;
+      precioCliente: number;
+      precioServer: number;
+      nivelAplicado: string | null;
+    }> = [];
+
     for (const d of detalles) {
       const productoIdParaNivel = d.productoId ?? d.comboId ?? null;
       if (!productoIdParaNivel && !d.varianteId) {
@@ -87,14 +105,22 @@ export class VentaService {
           d.precioUnitario != null &&
           Math.abs(d.precioUnitario - calc.precioUnitario) > 0.01
         ) {
-          this.logger.warn(
-            `Precio recalculado en backend para item ${d.descripcion}: cliente envió ` +
-              `${d.precioUnitario} pero backend calculó ${calc.precioUnitario}. ` +
-              `Aplicando precio del backend (nivel: ${calc.nivelAplicado}).`,
-          );
+          divergencias.push({
+            descripcion: d.descripcion,
+            productoId: d.productoId,
+            varianteId: d.varianteId,
+            comboId: d.comboId,
+            cantidad: d.cantidad,
+            precioCliente: d.precioUnitario,
+            precioServer: calc.precioUnitario,
+            nivelAplicado: calc.nivelAplicado ?? null,
+          });
         }
         result.push({ ...d, precioUnitario: calc.precioUnitario });
       } catch (err) {
+        // Producto sin precio configurado en sede, etc. — caso edge donde el
+        // cliente envía un precio "razonable" y el backend no puede recalcular.
+        // Mantener fallback para no bloquear ventas legítimas.
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(
           `No se pudo recalcular precio para "${d.descripcion}": ${msg}. ` +
@@ -103,6 +129,23 @@ export class VentaService {
         result.push(d);
       }
     }
+
+    if (divergencias.length > 0) {
+      // 409 Conflict: el cliente está fuera de sincronía con el catálogo.
+      // El body estructurado permite al Flutter mostrar un dialog con la
+      // lista de productos afectados y los precios viejo vs nuevo.
+      throw new ConflictException({
+        code: 'PRECIO_DESACTUALIZADO',
+        message: divergencias.length === 1
+          ? `El precio de "${divergencias[0].descripcion}" cambió de S/ ` +
+            `${divergencias[0].precioCliente.toFixed(2)} a S/ ` +
+            `${divergencias[0].precioServer.toFixed(2)}. Refrescá el carrito y volvé a intentar.`
+          : `${divergencias.length} productos tienen precios desactualizados. ` +
+            `Refrescá el carrito y volvé a intentar.`,
+        divergencias,
+      });
+    }
+
     return result;
   }
 
