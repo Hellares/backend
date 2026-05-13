@@ -91,12 +91,13 @@ export class CacheService {
 
   /**
    * Generar clave de cache para lista de productos
-   * Usa hash de filtros para crear clave única por combinación de filtros
+   * Usa hash de filtros normalizado (keys ordenadas + undefined omitidos)
+   * para que `{page:1, search:'a'}` y `{search:'a', page:1}` produzcan la
+   * misma clave — sin esto el hit rate dependería del orden de propiedades
+   * en el DTO, que cambia entre clientes y versiones.
    */
   getProductosListKey(empresaId: string, filtros: any): string {
-    // Crear hash simple de los filtros para la clave
-    const filtrosString = JSON.stringify(filtros);
-    const hash = this.simpleHash(filtrosString);
+    const hash = this.simpleHash(this.stableStringify(filtros));
     return `productos:empresa:${empresaId}:${hash}`;
   }
 
@@ -172,6 +173,31 @@ export class CacheService {
       this.invalidatePattern(`tenant_access:*:${empresaId}`),
       this.invalidatePattern(`context:empresa:${empresaId}:user:*`),
     ]);
+  }
+
+  /**
+   * Serializa un objeto en forma estable: keys ordenadas alfabéticamente y
+   * propiedades `undefined` omitidas. Necesario porque `JSON.stringify` usa
+   * el orden de inserción, lo que rompe hits de cache cuando el DTO llega
+   * con propiedades en distinto orden.
+   */
+  private stableStringify(value: any): string {
+    if (value === null || typeof value !== 'object') {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return '[' + value.map((v) => this.stableStringify(v)).join(',') + ']';
+    }
+    const keys = Object.keys(value)
+      .filter((k) => value[k] !== undefined)
+      .sort();
+    return (
+      '{' +
+      keys
+        .map((k) => JSON.stringify(k) + ':' + this.stableStringify(value[k]))
+        .join(',') +
+      '}'
+    );
   }
 
   /**
