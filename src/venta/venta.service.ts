@@ -817,8 +817,26 @@ export class VentaService {
               lockedMap.set(row.id, row);
             }
 
-            // 4c. Validar stock y preparar updates + movimientos
-            const movimientosData: Array<any> = [];
+            // 4c. Validar stock — agrupar divergencias antes de cualquier
+            // update. Si hay 3 productos sin stock, mostramos los 3 al
+            // cajero (no solo el primero como antes con BadRequestException).
+            type StockDivergencia = {
+              productoId: string | null;
+              varianteId: string | null;
+              comboId: string | null;
+              descripcion: string;
+              cantidadSolicitada: number;
+              stockDisponible: number;
+            };
+            const stockDivergencias: StockDivergencia[] = [];
+            type PendingUpdate = {
+              productoStockId: string;
+              stockAnterior: number;
+              nuevoStock: number;
+              cantidad: number;
+              descripcion: string;
+            };
+            const pendingUpdates: PendingUpdate[] = [];
 
             for (const detalle of detallesConProducto) {
               // Para variantes: buscar por "_varianteId" (productoId es null en stock)
@@ -845,36 +863,67 @@ export class VentaService {
                 locked.stockEnGarantia;
 
               if (cantidad > stockDisponible) {
-                throw new BadRequestException(
-                  `Stock insuficiente para "${detalle.descripcion}". Disponible: ${stockDisponible}, Requerido: ${cantidad}`,
-                );
+                stockDivergencias.push({
+                  productoId: detalle.productoId ?? null,
+                  varianteId: detalle.varianteId ?? null,
+                  comboId: detalle.comboId ?? null,
+                  descripcion: detalle.descripcion,
+                  cantidadSolicitada: cantidad,
+                  stockDisponible,
+                });
+                continue;
               }
 
-              const nuevoStock = stockAnterior - cantidad;
-
-              // Update stock individual (necesario por atomicidad por row)
-              await tx.productoStock.update({
-                where: { id: productoStock.id },
-                data: { stockActual: nuevoStock },
+              pendingUpdates.push({
+                productoStockId: productoStock.id,
+                stockAnterior,
+                nuevoStock: stockAnterior - cantidad,
+                cantidad,
+                descripcion: detalle.descripcion,
               });
+            }
 
+            // Si alguno no tiene stock suficiente, abortar TODO con info
+            // estructurada. El cliente atrapa el 409 STOCK_INSUFICIENTE
+            // y muestra un dialog con los productos afectados + "Ajustar
+            // al disponible" como acción rápida (mismo patrón que
+            // PRECIO_DESACTUALIZADO).
+            if (stockDivergencias.length > 0) {
+              throw new ConflictException({
+                code: 'STOCK_INSUFICIENTE',
+                message: stockDivergencias.length === 1
+                  ? `Stock insuficiente para "${stockDivergencias[0].descripcion}". ` +
+                    `Disponible: ${stockDivergencias[0].stockDisponible}, ` +
+                    `Requerido: ${stockDivergencias[0].cantidadSolicitada}.`
+                  : `${stockDivergencias.length} productos con stock insuficiente. ` +
+                    `Ajustá las cantidades y volvé a intentar.`,
+                divergencias: stockDivergencias,
+              });
+            }
+
+            // 4d. Aplicar updates + movimientos en batch.
+            const movimientosData: Array<any> = [];
+            for (const u of pendingUpdates) {
+              await tx.productoStock.update({
+                where: { id: u.productoStockId },
+                data: { stockActual: u.nuevoStock },
+              });
               movimientosData.push({
                 sedeId: dto.sedeId,
                 empresaId,
-                productoStockId: productoStock.id,
+                productoStockId: u.productoStockId,
                 tipo: TipoMovimientoStock.SALIDA_VENTA,
                 tipoDocumento: 'VENTA',
                 numeroDocumento: codigoVenta,
-                cantidadAnterior: stockAnterior,
-                cantidad: -cantidad,
-                cantidadNueva: nuevoStock,
-                motivo: `Venta POS ${codigoVenta} - ${detalle.descripcion}`,
+                cantidadAnterior: u.stockAnterior,
+                cantidad: -u.cantidad,
+                cantidadNueva: u.nuevoStock,
+                motivo: `Venta POS ${codigoVenta} - ${u.descripcion}`,
                 ventaId: venta.id,
                 usuarioId: cajeroId,
               });
             }
 
-            // 4d. Crear todos los movimientos de stock en batch
             if (movimientosData.length > 0) {
               await tx.movimientoStock.createMany({ data: movimientosData });
             }
