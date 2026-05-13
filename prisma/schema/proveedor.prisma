@@ -95,6 +95,9 @@ model Proveedor {
   @@unique([empresaId, codigo])
   @@unique([empresaId, numeroDocumento])
   @@index([empresaId, isActive])
+  // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
+  @@index([nombre(ops: raw("gin_trgm_ops"))], type: Gin, map: "Proveedor_nombre_trgm_idx")
+  @@index([numeroDocumento(ops: raw("gin_trgm_ops"))], type: Gin, map: "Proveedor_numeroDocumento_trgm_idx")
 }
 
 /// Contactos adicionales del proveedor

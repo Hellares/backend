@@ -79,6 +79,8 @@ model Servicio {
   @@index([ordenMarketplace])
   @@index([enOferta])
   @@index([fechaFinOferta])
+  // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
+  @@index([nombre(ops: raw("gin_trgm_ops"))], type: Gin, map: "Servicio_nombre_trgm_idx")
 }
 
 model ConfiguracionCamposServicio {

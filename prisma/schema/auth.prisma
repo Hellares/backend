@@ -29,6 +29,12 @@ model Persona {
   @@index([esProveedor])
   @@index([esUsuario])
   @@index([deletedAt])
+  // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
+  @@index([nombres(ops: raw("gin_trgm_ops"))], type: Gin, map: "Persona_nombres_trgm_idx")
+  @@index([apellidos(ops: raw("gin_trgm_ops"))], type: Gin, map: "Persona_apellidos_trgm_idx")
+  @@index([dni(ops: raw("gin_trgm_ops"))], type: Gin, map: "Persona_dni_trgm_idx")
+  @@index([telefono(ops: raw("gin_trgm_ops"))], type: Gin, map: "Persona_telefono_trgm_idx")
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin, map: "Persona_email_trgm_idx")
 }
 
 model Usuario {

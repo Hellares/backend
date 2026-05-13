@@ -92,6 +92,9 @@ model OrdenCompra {
   @@index([empresaId, proveedorId])
   @@index([empresaId, estado, creadoEn(sort: Desc)])
   @@index([creadoEn])
+  // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
+  @@index([nombreProveedor(ops: raw("gin_trgm_ops"))], type: Gin, map: "OrdenCompra_nombreProveedor_trgm_idx")
+  @@index([codigo(ops: raw("gin_trgm_ops"))], type: Gin, map: "OrdenCompra_codigo_trgm_idx")
 }
 
 /// Detalle de una Orden de Compra
@@ -210,6 +213,9 @@ model Compra {
   @@index([empresaId, estado, creadoEn(sort: Desc)])
   @@index([ordenCompraId])
   @@index([creadoEn])
+  // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
+  @@index([nombreProveedor(ops: raw("gin_trgm_ops"))], type: Gin, map: "Compra_nombreProveedor_trgm_idx")
+  @@index([codigo(ops: raw("gin_trgm_ops"))], type: Gin, map: "Compra_codigo_trgm_idx")
 }
 
 /// Detalle de una Compra
@@ -318,6 +324,13 @@ model Lote {
   @@index([sedeId])
   @@index([compraId])
   @@index([proveedorId])
+  // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
+  // NOTA: Lote_nombreProveedor_trgm_idx y Lote_numeroLote_trgm_idx existen
+  // en la BD como índices parciales (WHERE col IS NOT NULL). Prisma 7 no
+  // soporta WHERE en @@index, así que se mantienen vía SQL crudo en la
+  // migración `20260512000000_restore_trigram_indexes`. Riesgo conocido:
+  // un `prisma migrate dev` puede dropearlos otra vez.
+  @@index([codigo(ops: raw("gin_trgm_ops"))], type: Gin, map: "Lote_codigo_trgm_idx")
 }
 
 /// Pagos realizados a proveedores por compras
