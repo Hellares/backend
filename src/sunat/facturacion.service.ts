@@ -106,6 +106,7 @@ export class FacturacionService {
             where: { id: sedeId, empresaId },
             select: {
               rucSede: true, razonSocialSede: true, direccionFiscalSede: true,
+              direccion: true,
               proveedorActivo: true, proveedorRuta: true, proveedorToken: true, proveedorConfig: true,
               facturacionActiva: true,
               resolucionSunat: true, telefono: true, email: true,
@@ -127,9 +128,13 @@ export class FacturacionService {
 
     return {
       // Identidad fiscal: Sede override > Empresa (fuente primaria)
+      // Dirección: si la sede no tiene direccionFiscalSede registrada para SUNAT,
+      // caemos a su dirección operativa (lo que el usuario llena más seguido en
+      // "Dirección") antes de llegar al fallback empresa. Para anexos SUNAT con
+      // RUC propio se debe llenar direccionFiscalSede explícitamente.
       ruc:              sede?.rucSede              ?? empresa?.ruc            ?? null,
       razonSocial:      sede?.razonSocialSede      ?? empresa?.razonSocial   ?? null,
-      direccionFiscal:  sede?.direccionFiscalSede   ?? empresa?.direccionFiscal ?? null,
+      direccionFiscal:  sede?.direccionFiscalSede  ?? sede?.direccion        ?? empresa?.direccionFiscal ?? null,
       // Marca: ConfigDocumentos > Empresa.nombre
       nombreComercial:  configDoc?.nombreComercial  ?? empresa?.nombre        ?? null,
       // Logo: ConfigDocumentos > Empresa
