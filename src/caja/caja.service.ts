@@ -36,19 +36,28 @@ export class CajaService {
    */
   async abrirCaja(empresaId: string, usuarioId: string, dto: AbrirCajaDto) {
     return this.prisma.$transaction(async (tx) => {
+      // Política: 1 caja activa por cajero en TODA la empresa (no por sede).
+      // Si el cajero se mueve a otra sede, primero debe cerrar la actual.
+      // Sin esto, un mismo user podía tener cajas abiertas en sede A y B
+      // simultáneamente, y getCajaActiva (que no filtra por sede) devolvía
+      // "la primera" → ventas iban a la caja equivocada al cerrar.
       const cajaExistente = await tx.caja.findFirst({
         where: {
           empresaId,
           usuarioId,
-          sedeId: dto.sedeId,
           estado: EstadoCaja.ABIERTA,
         },
-        select: { id: true },
+        select: {
+          id: true,
+          codigo: true,
+          sede: { select: { nombre: true } },
+        },
       });
 
       if (cajaExistente) {
         throw new BadRequestException(
-          'Ya tienes una caja abierta en esta sede. Ciérrala antes de abrir otra.',
+          `Ya tienes una caja abierta (${cajaExistente.codigo} en sede ${cajaExistente.sede?.nombre ?? 'desconocida'}). ` +
+            'Ciérrala antes de abrir una nueva.',
         );
       }
 
