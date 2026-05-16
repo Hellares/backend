@@ -48,6 +48,7 @@ import { PrestamoModule } from './prestamo/prestamo.module';
 import { LibroContableModule } from './libro-contable/libro-contable.module';
 import { FlujoProyectadoModule } from './flujo-proyectado/flujo-proyectado.module';
 import { CajaChicaModule } from './caja-chica/caja-chica.module';
+import { GastosRecurrentesModule } from './gastos-recurrentes/gastos-recurrentes.module';
 import { CategoriaGastoModule } from './categoria-gasto/categoria-gasto.module';
 import { MetaFinancieraModule } from './meta-financiera/meta-financiera.module';
 import { ReportesFinancierosModule } from './reportes-financieros/reportes-financieros.module';
@@ -119,6 +120,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     SolicitudCotizacionModule,
     CajaModule,
     CajaChicaModule,
+    GastosRecurrentesModule,
     CuentasPorCobrarModule,
     CuentasPorPagarModule,
     EmpresaBancoModule,

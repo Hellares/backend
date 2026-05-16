@@ -281,4 +281,16 @@ export class EmpresaPermissionsDto {
     example: true,
   })
   canApprovePlanilla: boolean;
+
+  @ApiProperty({
+    description: 'Puede ver gastos recurrentes (luz, agua, alquiler, etc.)',
+    example: true,
+  })
+  canViewGastosRecurrentes: boolean;
+
+  @ApiProperty({
+    description: 'Puede gestionar gastos recurrentes (crear, editar, marcar pagado)',
+    example: true,
+  })
+  canManageGastosRecurrentes: boolean;
 }

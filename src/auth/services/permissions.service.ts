@@ -177,6 +177,12 @@ export class PermissionsService {
       // ==================== RRHH - APROBACIONES ====================
       canApproveIncidencias: isAnyAdmin,
       canApprovePlanilla: isAdmin,
+
+      // ==================== GASTOS RECURRENTES ====================
+      canViewGastosRecurrentes:
+        isAnyAdmin || isContador || isViewer,
+      canManageGastosRecurrentes:
+        isAnyAdmin || isContador,
     };
   }
 
@@ -286,6 +292,8 @@ export class PermissionsService {
       'canManagePlanilla',
       'canApproveIncidencias',
       'canApprovePlanilla',
+      'canViewGastosRecurrentes',
+      'canManageGastosRecurrentes',
     ];
   }
 }

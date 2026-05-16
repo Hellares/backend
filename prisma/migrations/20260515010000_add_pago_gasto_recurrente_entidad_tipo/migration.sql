@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "EntidadTipo" ADD VALUE 'PAGO_GASTO_RECURRENTE';

@@ -84,4 +84,8 @@ export enum Permission {
   // RRHH - Aprobaciones
   APPROVE_INCIDENCIAS = 'canApproveIncidencias',
   APPROVE_PLANILLA = 'canApprovePlanilla',
+
+  // Gastos Recurrentes
+  VIEW_GASTOS_RECURRENTES = 'canViewGastosRecurrentes',
+  MANAGE_GASTOS_RECURRENTES = 'canManageGastosRecurrentes',
 }

@@ -22,11 +22,12 @@ export class LibroContableService {
     const fechaInicio = new Date(anio, mes - 1, 1);
     const fechaFin = new Date(anio, mes, 0, 23, 59, 59, 999);
 
-    const [ventas, compras, movimientosCaja, pagosPrestamo] = await Promise.all([
+    const [ventas, compras, movimientosCaja, pagosPrestamo, pagosGastoRecurrenteBanco] = await Promise.all([
       this._getVentas(empresaId, fechaInicio, fechaFin),
       this._getCompras(empresaId, fechaInicio, fechaFin),
       this._getMovimientosCaja(empresaId, fechaInicio, fechaFin),
       this._getPagosPrestamo(empresaId, fechaInicio, fechaFin),
+      this._getPagosGastoRecurrenteBanco(empresaId, fechaInicio, fechaFin),
     ]);
 
     // Unificar en lista de asientos
@@ -35,6 +36,7 @@ export class LibroContableService {
       ...compras,
       ...movimientosCaja,
       ...pagosPrestamo,
+      ...pagosGastoRecurrenteBanco,
     ];
 
     // Ordenar cronologicamente
@@ -217,6 +219,41 @@ export class LibroContableService {
       descripcion: `Pago prestamo ${p.prestamo.tipo} - ${p.prestamo.entidadPrestamo}`,
       monto: Number(p.monto),
       referencia: p.referencia,
+      saldoAcumulado: 0,
+    }));
+  }
+
+  /**
+   * Pagos de gastos recurrentes pagados por BANCO. Los pagos por CAJA ya entran
+   * vía _getMovimientosCaja porque crean MovimientoCaja con categoría
+   * GASTO_OPERATIVO. Sin esto, el libro contable subestimaría los egresos
+   * pagados por transferencia bancaria.
+   */
+  private async _getPagosGastoRecurrenteBanco(
+    empresaId: string,
+    desde: Date,
+    hasta: Date,
+  ): Promise<AsientoContable[]> {
+    const pagos = await this.prisma.pagoGastoRecurrente.findMany({
+      where: {
+        empresaId,
+        fuente: 'BANCO',
+        fechaPago: { gte: desde, lte: hasta },
+      },
+      include: {
+        gastoRecurrente: { select: { nombre: true } },
+        banco: { select: { nombreBanco: true } },
+      },
+      orderBy: { fechaPago: 'asc' },
+    });
+
+    return pagos.map((p) => ({
+      fecha: p.fechaPago,
+      tipo: 'EGRESO' as const,
+      categoria: 'GASTO_RECURRENTE_BANCO',
+      descripcion: `${p.gastoRecurrente.nombre} (${p.periodo}) — ${p.banco?.nombreBanco ?? 'banco'}`,
+      monto: Number(p.montoReal),
+      referencia: p.id,
       saldoAcumulado: 0,
     }));
   }

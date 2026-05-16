@@ -12,7 +12,7 @@ export class ResumenFinancieroService {
     const fechaDesde = periodo?.fechaDesde ? new Date(periodo.fechaDesde) : this._inicioMes();
     const fechaHasta = periodo?.fechaHasta ? new Date(periodo.fechaHasta) : new Date();
 
-    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, prestamos, otrosMovimientos, agentes] = await Promise.all([
+    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, prestamos, otrosMovimientos, gastosRecurrentesBanco, agentes] = await Promise.all([
       this._resumenVentas(empresaId, fechaDesde, fechaHasta),
       this._resumenCompras(empresaId, fechaDesde, fechaHasta),
       this._resumenPedidosMarketplace(empresaId, fechaDesde, fechaHasta),
@@ -22,11 +22,15 @@ export class ResumenFinancieroService {
       this._resumenBancos(empresaId),
       this._resumenPrestamos(empresaId),
       this._resumenOtrosMovimientos(empresaId, fechaDesde, fechaHasta),
+      this._resumenGastosRecurrentesBanco(empresaId, fechaDesde, fechaHasta),
       this._resumenAgentes(empresaId, fechaDesde, fechaHasta),
     ]);
 
     const totalIngresos = ventas.totalCobrado + pedidosMarketplace.totalValidado + otrosMovimientos.totalOtrosIngresos;
-    const totalEgresos = compras.totalPagado + prestamos.totalPagadoPeriodo + otrosMovimientos.totalOtrosEgresos;
+    // Los pagos de gasto recurrente con fuente=CAJA ya están en otrosMovimientos
+    // (entran por MovimientoCaja con categoría GASTO_OPERATIVO). Aquí sumamos solo
+    // los pagos con fuente=BANCO que NO generan MovimientoCaja.
+    const totalEgresos = compras.totalPagado + prestamos.totalPagadoPeriodo + otrosMovimientos.totalOtrosEgresos + gastosRecurrentesBanco.totalPagosBanco;
     const flujoNeto = totalIngresos - totalEgresos;
 
     return {
@@ -45,6 +49,7 @@ export class ResumenFinancieroService {
       bancos,
       prestamos,
       otrosMovimientos,
+      gastosRecurrentesBanco,
       agentes,
     };
   }
@@ -231,14 +236,25 @@ export class ResumenFinancieroService {
     const desde = fechaDesde ? new Date(fechaDesde) : this._inicioMes();
     const hasta = fechaHasta ? new Date(fechaHasta) : new Date();
 
-    const movimientos = await this.prisma.movimientoCaja.findMany({
-      where: {
-        empresaId,
-        fechaMovimiento: { gte: desde, lte: hasta },
-      },
-      select: { tipo: true, monto: true, fechaMovimiento: true },
-      orderBy: { fechaMovimiento: 'asc' },
-    });
+    const [movimientos, pagosBanco] = await Promise.all([
+      this.prisma.movimientoCaja.findMany({
+        where: {
+          empresaId,
+          fechaMovimiento: { gte: desde, lte: hasta },
+        },
+        select: { tipo: true, monto: true, fechaMovimiento: true },
+        orderBy: { fechaMovimiento: 'asc' },
+      }),
+      // Pagos de gasto recurrente por BANCO (no generan MovimientoCaja)
+      this.prisma.pagoGastoRecurrente.findMany({
+        where: {
+          empresaId,
+          fuente: 'BANCO',
+          fechaPago: { gte: desde, lte: hasta },
+        },
+        select: { montoReal: true, fechaPago: true },
+      }),
+    ]);
 
     // Agrupar por día
     const porDia = new Map<string, { fecha: string; ingresos: number; egresos: number }>();
@@ -251,6 +267,14 @@ export class ResumenFinancieroService {
       const d = porDia.get(dia)!;
       if (m.tipo === 'INGRESO') d.ingresos += Number(m.monto);
       else d.egresos += Number(m.monto);
+    }
+
+    for (const p of pagosBanco) {
+      const dia = p.fechaPago.toISOString().split('T')[0];
+      if (!porDia.has(dia)) {
+        porDia.set(dia, { fecha: dia, ingresos: 0, egresos: 0 });
+      }
+      porDia.get(dia)!.egresos += Number(p.montoReal);
     }
 
     // Llenar días sin movimientos
@@ -354,6 +378,46 @@ export class ResumenFinancieroService {
       cantidadDepositos: depositos.length,
       cantidadRetiros: retiros.length,
       comisionesGanadas: Math.round(operaciones.reduce((s, o) => s + Number(o.comision), 0) * 100) / 100,
+    };
+  }
+
+  /**
+   * Pagos de gastos recurrentes con fuente=BANCO en el período.
+   * NO genera MovimientoCaja (solo decrementa EmpresaBanco.saldoActual), así
+   * que sin este resumen los reportes de egresos del mes se quedarían cortos.
+   * Los pagos con fuente=CAJA ya entran vía MovimientoCaja en _resumenOtrosMovimientos.
+   */
+  private async _resumenGastosRecurrentesBanco(empresaId: string, desde: Date, hasta: Date) {
+    const pagos = await this.prisma.pagoGastoRecurrente.findMany({
+      where: {
+        empresaId,
+        fuente: 'BANCO',
+        fechaPago: { gte: desde, lte: hasta },
+      },
+      select: {
+        montoReal: true,
+        gastoRecurrente: {
+          select: {
+            categoriaGasto: { select: { nombre: true } },
+          },
+        },
+      },
+    });
+
+    let totalPagosBanco = 0;
+    const porCategoria: Record<string, number> = {};
+
+    for (const p of pagos) {
+      const monto = Number(p.montoReal);
+      totalPagosBanco += monto;
+      const cat = p.gastoRecurrente.categoriaGasto.nombre;
+      porCategoria[cat] = (porCategoria[cat] ?? 0) + monto;
+    }
+
+    return {
+      cantidad: pagos.length,
+      totalPagosBanco: Math.round(totalPagosBanco * 100) / 100,
+      porCategoria,
     };
   }
 
