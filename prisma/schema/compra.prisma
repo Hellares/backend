@@ -31,9 +31,9 @@ enum EstadoLote {
 /// Orden de Compra a proveedor (PO)
 /// Documento que formaliza el pedido de mercancía a un proveedor
 model OrdenCompra {
-  id         String @id @default(cuid())
-  empresaId  String
-  sedeId     String
+  id          String @id @default(cuid())
+  empresaId   String
+  sedeId      String
   proveedorId String
 
   // Identificación
@@ -51,7 +51,7 @@ model OrdenCompra {
   diasCredito  Int?
 
   // Moneda
-  moneda     String  @default("PEN")
+  moneda     String   @default("PEN")
   tipoCambio Decimal? @db.Decimal(10, 4)
 
   // Montos calculados
@@ -80,9 +80,9 @@ model OrdenCompra {
   actualizadoEn  DateTime @updatedAt
 
   // Relaciones
-  empresa   Empresa    @relation(fields: [empresaId], references: [id])
-  sede      Sede       @relation(fields: [sedeId], references: [id])
-  proveedor Proveedor  @relation(fields: [proveedorId], references: [id])
+  empresa   Empresa              @relation(fields: [empresaId], references: [id])
+  sede      Sede                 @relation(fields: [sedeId], references: [id])
+  proveedor Proveedor            @relation(fields: [proveedorId], references: [id])
   detalles  OrdenCompraDetalle[]
   compras   Compra[]
 
@@ -99,10 +99,10 @@ model OrdenCompra {
 
 /// Detalle de una Orden de Compra
 model OrdenCompraDetalle {
-  id             String  @id @default(cuid())
-  ordenCompraId  String
-  productoId     String?
-  varianteId     String?
+  id            String  @id @default(cuid())
+  ordenCompraId String
+  productoId    String?
+  varianteId    String?
 
   // Descripción y cantidades
   descripcion    String
@@ -126,8 +126,8 @@ model OrdenCompraDetalle {
   orden Int @default(0)
 
   // Relaciones
-  ordenCompra    OrdenCompra     @relation(fields: [ordenCompraId], references: [id], onDelete: Cascade)
-  producto       Producto?       @relation(fields: [productoId], references: [id])
+  ordenCompra    OrdenCompra       @relation(fields: [ordenCompraId], references: [id], onDelete: Cascade)
+  producto       Producto?         @relation(fields: [productoId], references: [id])
   variante       ProductoVariante? @relation(fields: [varianteId], references: [id])
   compraDetalles CompraDetalle[]
 
@@ -161,12 +161,12 @@ model Compra {
   numeroDocumentoProveedor String?
 
   // Términos comerciales
-  terminosPago          TerminosPago?
-  diasCredito           Int?
-  fechaVencimientoPago  DateTime?
+  terminosPago         TerminosPago?
+  diasCredito          Int?
+  fechaVencimientoPago DateTime?
 
   // Moneda
-  moneda     String  @default("PEN")
+  moneda     String   @default("PEN")
   tipoCambio Decimal? @db.Decimal(10, 4)
 
   // Montos calculados
@@ -193,15 +193,15 @@ model Compra {
   actualizadoEn  DateTime  @updatedAt
 
   // Relaciones
-  empresa      Empresa          @relation(fields: [empresaId], references: [id])
-  sede         Sede             @relation(fields: [sedeId], references: [id])
-  proveedor    Proveedor        @relation(fields: [proveedorId], references: [id])
-  ordenCompra  OrdenCompra?     @relation(fields: [ordenCompraId], references: [id])
-  detalles     CompraDetalle[]
-  lotes        Lote[]
-  movimientos  MovimientoStock[]
-  devoluciones Devolucion[]
-  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaCompra")
+  empresa         Empresa           @relation(fields: [empresaId], references: [id])
+  sede            Sede              @relation(fields: [sedeId], references: [id])
+  proveedor       Proveedor         @relation(fields: [proveedorId], references: [id])
+  ordenCompra     OrdenCompra?      @relation(fields: [ordenCompraId], references: [id])
+  detalles        CompraDetalle[]
+  lotes           Lote[]
+  movimientos     MovimientoStock[]
+  devoluciones    Devolucion[]
+  movimientosCaja MovimientoCaja[]  @relation("MovimientoCajaCompra")
   pagos           PagoCompra[]
   guiasRemision   GuiaRemision[]
 
@@ -274,7 +274,7 @@ model Lote {
   compraId        String?
 
   // Identificación
-  codigo     String  // LOTE-2026-00001
+  codigo     String // LOTE-2026-00001
   numeroLote String? // Número de lote del fabricante
 
   // Costo unitario de ESTE lote
@@ -287,8 +287,8 @@ model Lote {
   cantidadReservada Int @default(0)
 
   // Fechas
-  fechaIngreso    DateTime  @default(now())
-  fechaProduccion DateTime?
+  fechaIngreso     DateTime  @default(now())
+  fechaProduccion  DateTime?
   fechaVencimiento DateTime?
 
   // Estado
@@ -335,15 +335,15 @@ model Lote {
 
 /// Pagos realizados a proveedores por compras
 model PagoCompra {
-  id          String          @id @default(cuid())
-  compraId    String
-  metodoPago  MetodoPagoVenta
-  monto       Decimal         @db.Decimal(10, 2)
-  referencia  String?         // Número de operación, voucher
-  bancoDestino String?        // Nombre del banco del proveedor
-  cuentaDestino String?       // Número de cuenta destino
-  fechaPago   DateTime        @default(now())
-  creadoEn    DateTime        @default(now())
+  id            String          @id @default(cuid())
+  compraId      String
+  metodoPago    MetodoPagoVenta
+  monto         Decimal         @db.Decimal(10, 2)
+  referencia    String? // Número de operación, voucher
+  bancoDestino  String? // Nombre del banco del proveedor
+  cuentaDestino String? // Número de cuenta destino
+  fechaPago     DateTime        @default(now())
+  creadoEn      DateTime        @default(now())
 
   compra Compra @relation(fields: [compraId], references: [id], onDelete: Cascade)
 

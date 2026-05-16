@@ -49,14 +49,14 @@ model Cotizacion {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa  Empresa             @relation(fields: [empresaId], references: [id])
-  sede     Sede                @relation(fields: [sedeId], references: [id])
-  cliente        EmpresaPersona? @relation(fields: [clienteId], references: [id])
-  clienteEmpresa ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
-  vendedor       Usuario         @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
-  venta          Venta?          @relation("CotizacionVenta", fields: [ventaId], references: [id])
-  ventasOrigen   Venta[]         @relation("VentaCotizacion") // Back-relation: ventas created from this cotizacion
-  detalles CotizacionDetalle[]
+  empresa         Empresa               @relation(fields: [empresaId], references: [id])
+  sede            Sede                  @relation(fields: [sedeId], references: [id])
+  cliente         EmpresaPersona?       @relation(fields: [clienteId], references: [id])
+  clienteEmpresa  ClienteEmpresa?       @relation(fields: [clienteEmpresaId], references: [id])
+  vendedor        Usuario               @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
+  venta           Venta?                @relation("CotizacionVenta", fields: [ventaId], references: [id])
+  ventasOrigen    Venta[]               @relation("VentaCotizacion") // Back-relation: ventas created from this cotizacion
+  detalles        CotizacionDetalle[]
   solicitudOrigen SolicitudCotizacion[] @relation("SolicitudCotizacionRespuesta")
 
   @@unique([empresaId, codigo])

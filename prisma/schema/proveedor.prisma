@@ -91,6 +91,7 @@ model Proveedor {
   compras                 Compra[]
   lotes                   Lote[]
   devoluciones            Devolucion[]
+  gastosRecurrentes       GastoRecurrente[]
 
   @@unique([empresaId, codigo])
   @@unique([empresaId, numeroDocumento])

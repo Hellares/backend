@@ -47,20 +47,20 @@ model Caja {
   observacionesCierre   String?
 
   // Emisor por defecto: sede/RUC con el que esta caja factura
-  sedeFacturacionId     String?
+  sedeFacturacionId String?
 
   // Auditoria
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa          Empresa  @relation(fields: [empresaId], references: [id])
-  sede             Sede     @relation(fields: [sedeId], references: [id])
-  usuario          Usuario  @relation("CajaUsuario", fields: [usuarioId], references: [id])
-  cerradoPor       Usuario? @relation("CajaCerradoPor", fields: [cerradoPorId], references: [id])
-  sedeFacturacion  Sede?    @relation("CajaSedeFacturacion", fields: [sedeFacturacionId], references: [id])
-  movimientos MovimientoCaja[]
-  cierre      CierreCaja?
+  empresa         Empresa          @relation(fields: [empresaId], references: [id])
+  sede            Sede             @relation(fields: [sedeId], references: [id])
+  usuario         Usuario          @relation("CajaUsuario", fields: [usuarioId], references: [id])
+  cerradoPor      Usuario?         @relation("CajaCerradoPor", fields: [cerradoPorId], references: [id])
+  sedeFacturacion Sede?            @relation("CajaSedeFacturacion", fields: [sedeFacturacionId], references: [id])
+  movimientos     MovimientoCaja[]
+  cierre          CierreCaja?
 
   @@unique([empresaId, codigo])
   @@index([empresaId, sedeId, estado])
@@ -69,63 +69,63 @@ model Caja {
 
 /// Movimiento de caja (ingreso o egreso)
 model MovimientoCaja {
-  id                    String                  @id @default(cuid())
-  cajaId                String
-  empresaId             String
-  tipo                  TipoMovimientoCaja
-  categoria             CategoriaMovimientoCaja
-  metodoPago            MetodoPagoVenta
-  monto                 Decimal                 @db.Decimal(10, 2)
-  descripcion           String?
-  metadata              Json?   // Desglose: { "principal": 100, "interes": 5, "mora": 2 }
+  id          String                  @id @default(cuid())
+  cajaId      String
+  empresaId   String
+  tipo        TipoMovimientoCaja
+  categoria   CategoriaMovimientoCaja
+  metodoPago  MetodoPagoVenta
+  monto       Decimal                 @db.Decimal(10, 2)
+  descripcion String?
+  metadata    Json? // Desglose: { "principal": 100, "interes": 5, "mora": 2 }
 
   // Categoria de gasto personalizada (opcional)
-  categoriaGastoId      String?
+  categoriaGastoId String?
 
   // Referencias opcionales a entidades origen
-  ventaId               String?
-  pedidoMarketplaceId   String?
-  compraId              String?
-  devolucionId          String?
-  boletaPagoId          String?
-  adelantoPagoId        String?
+  ventaId             String?
+  pedidoMarketplaceId String?
+  compraId            String?
+  devolucionId        String?
+  boletaPagoId        String?
+  adelantoPagoId      String?
 
-  esManual              Boolean                 @default(true)
-  registradoPorId       String
-  fechaMovimiento       DateTime                @default(now())
+  esManual        Boolean  @default(true)
+  registradoPorId String
+  fechaMovimiento DateTime @default(now())
 
   // Anulacion
-  anulado                    Boolean   @default(false)
-  motivoAnulacion            String?
-  anuladoPorId               String?
-  autorizadoPorId            String?
-  fechaAnulacion             DateTime?
-  movimientoContrapartidaId  String?   @unique
+  anulado                   Boolean   @default(false)
+  motivoAnulacion           String?
+  anuladoPorId              String?
+  autorizadoPorId           String?
+  fechaAnulacion            DateTime?
+  movimientoContrapartidaId String?   @unique
 
   // Auditoria
   creadoEn DateTime @default(now())
 
   // Relaciones
-  caja                Caja                @relation(fields: [cajaId], references: [id])
-  empresa             Empresa             @relation(fields: [empresaId], references: [id])
-  categoriaGasto      CategoriaGasto?     @relation(fields: [categoriaGastoId], references: [id])
-  venta               Venta?              @relation("MovimientoCajaVenta", fields: [ventaId], references: [id])
-  pedidoMarketplace   PedidoMarketplace?  @relation("MovimientoCajaPedido", fields: [pedidoMarketplaceId], references: [id])
-  compra              Compra?             @relation("MovimientoCajaCompra", fields: [compraId], references: [id])
-  devolucion          Devolucion?         @relation("MovimientoCajaDevolucion", fields: [devolucionId], references: [id])
-  registradoPor       Usuario             @relation("MovimientoCajaRegistradoPor", fields: [registradoPorId], references: [id])
-  anuladoPor          Usuario?            @relation("MovimientoCajaAnuladoPor", fields: [anuladoPorId], references: [id])
-  autorizadoPor       Usuario?            @relation("MovimientoCajaAutorizadoPor", fields: [autorizadoPorId], references: [id])
-  movimientoContrapartida MovimientoCaja? @relation("MovimientoContrapartida", fields: [movimientoContrapartidaId], references: [id])
-  contrapartidaDe     MovimientoCaja?     @relation("MovimientoContrapartida")
-  boletaPago          BoletaPago?     @relation("MovimientoCajaBoletaPago", fields: [boletaPagoId], references: [id])
-  adelantoPago        AdelantoPago?   @relation("MovimientoCajaAdelanto", fields: [adelantoPagoId], references: [id])
+  caja                    Caja                 @relation(fields: [cajaId], references: [id])
+  empresa                 Empresa              @relation(fields: [empresaId], references: [id])
+  categoriaGasto          CategoriaGasto?      @relation(fields: [categoriaGastoId], references: [id])
+  venta                   Venta?               @relation("MovimientoCajaVenta", fields: [ventaId], references: [id])
+  pedidoMarketplace       PedidoMarketplace?   @relation("MovimientoCajaPedido", fields: [pedidoMarketplaceId], references: [id])
+  compra                  Compra?              @relation("MovimientoCajaCompra", fields: [compraId], references: [id])
+  devolucion              Devolucion?          @relation("MovimientoCajaDevolucion", fields: [devolucionId], references: [id])
+  registradoPor           Usuario              @relation("MovimientoCajaRegistradoPor", fields: [registradoPorId], references: [id])
+  anuladoPor              Usuario?             @relation("MovimientoCajaAnuladoPor", fields: [anuladoPorId], references: [id])
+  autorizadoPor           Usuario?             @relation("MovimientoCajaAutorizadoPor", fields: [autorizadoPorId], references: [id])
+  movimientoContrapartida MovimientoCaja?      @relation("MovimientoContrapartida", fields: [movimientoContrapartidaId], references: [id])
+  contrapartidaDe         MovimientoCaja?      @relation("MovimientoContrapartida")
+  boletaPago              BoletaPago?          @relation("MovimientoCajaBoletaPago", fields: [boletaPagoId], references: [id])
+  adelantoPago            AdelantoPago?        @relation("MovimientoCajaAdelanto", fields: [adelantoPagoId], references: [id])
+  pagoGastoRecurrente     PagoGastoRecurrente?
+  rendicionesCajaChica    RendicionCajaChica[]
+  operacionesAgente       OperacionAgente[]
 
   @@index([boletaPagoId])
   @@index([adelantoPagoId])
-  rendicionesCajaChica RendicionCajaChica[]
-  operacionesAgente    OperacionAgente[]
-
   @@index([cajaId])
   @@index([anulado])
   @@index([cajaId, tipo])
@@ -134,15 +134,15 @@ model MovimientoCaja {
 
 /// Cierre de caja (resumen al cerrar)
 model CierreCaja {
-  id                    String  @id @default(cuid())
-  cajaId                String  @unique
-  totalIngresos         Decimal @db.Decimal(10, 2)
-  totalEgresos          Decimal @db.Decimal(10, 2)
-  totalEsperado         Decimal @db.Decimal(10, 2)
-  totalConteoFisico     Decimal @db.Decimal(10, 2)
-  diferencia            Decimal @db.Decimal(10, 2)
-  detallePorMetodoPago  Json
-  observaciones         String?
+  id                   String  @id @default(cuid())
+  cajaId               String  @unique
+  totalIngresos        Decimal @db.Decimal(10, 2)
+  totalEgresos         Decimal @db.Decimal(10, 2)
+  totalEsperado        Decimal @db.Decimal(10, 2)
+  totalConteoFisico    Decimal @db.Decimal(10, 2)
+  diferencia           Decimal @db.Decimal(10, 2)
+  detallePorMetodoPago Json
+  observaciones        String?
 
   // Auditoria
   creadoEn DateTime @default(now())

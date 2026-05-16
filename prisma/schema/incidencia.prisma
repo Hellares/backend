@@ -402,21 +402,21 @@ model Devolucion {
   // que registró la venta original, distinto del procesadoPor que hace la
   // reversión hoy. pendienteRegistroCaja=true cuando un admin procesó sin
   // caja abierta y queda como ajuste pendiente para tesorería.
-  esReversionTotal      Boolean   @default(false)
+  esReversionTotal      Boolean @default(false)
   cajeroOriginalId      String?
-  pendienteRegistroCaja Boolean   @default(false)
+  pendienteRegistroCaja Boolean @default(false)
 
   // Relaciones
-  empresa     Empresa           @relation(fields: [empresaId], references: [id])
-  sede        Sede              @relation(fields: [sedeId], references: [id])
-  venta       Venta?            @relation(fields: [ventaId], references: [id])
-  compra      Compra?           @relation(fields: [compraId], references: [id])
-  cliente     EmpresaPersona?   @relation(fields: [clienteId], references: [id])
-  proveedor   Proveedor?        @relation(fields: [proveedorId], references: [id])
-  cajeroOriginal Usuario?       @relation("DevolucionCajeroOriginal", fields: [cajeroOriginalId], references: [id])
-  items       DevolucionItem[]
-  movimientos MovimientoStock[]
-  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaDevolucion")
+  empresa         Empresa           @relation(fields: [empresaId], references: [id])
+  sede            Sede              @relation(fields: [sedeId], references: [id])
+  venta           Venta?            @relation(fields: [ventaId], references: [id])
+  compra          Compra?           @relation(fields: [compraId], references: [id])
+  cliente         EmpresaPersona?   @relation(fields: [clienteId], references: [id])
+  proveedor       Proveedor?        @relation(fields: [proveedorId], references: [id])
+  cajeroOriginal  Usuario?          @relation("DevolucionCajeroOriginal", fields: [cajeroOriginalId], references: [id])
+  items           DevolucionItem[]
+  movimientos     MovimientoStock[]
+  movimientosCaja MovimientoCaja[]  @relation("MovimientoCajaDevolucion")
   guiasRemision   GuiaRemision[]
 
   @@index([empresaId, sedeId, estado])
@@ -449,11 +449,11 @@ model DevolucionItem {
   imagenes      String[] // URLs de fotos del producto (evidencia)
 
   // Cambio de producto (cuando accion = CAMBIO_PRODUCTO)
-  productoReemplazoId   String?
-  varianteReemplazoId   String?
-  precioOriginal        Decimal?  @db.Decimal(10, 2)
-  precioReemplazo       Decimal?  @db.Decimal(10, 2)
-  diferenciaPrecio      Decimal?  @db.Decimal(10, 2)
+  productoReemplazoId String?
+  varianteReemplazoId String?
+  precioOriginal      Decimal? @db.Decimal(10, 2)
+  precioReemplazo     Decimal? @db.Decimal(10, 2)
+  diferenciaPrecio    Decimal? @db.Decimal(10, 2)
 
   // Auditoría
   creadoEn      DateTime @default(now())
@@ -464,8 +464,8 @@ model DevolucionItem {
   empresa           Empresa           @relation(fields: [empresaId], references: [id])
   producto          Producto?         @relation("DevolucionProducto", fields: [productoId], references: [id])
   variante          ProductoVariante? @relation("DevolucionVariante", fields: [varianteId], references: [id])
-  productoReemplazo  Producto?         @relation("DevolucionProductoReemplazo", fields: [productoReemplazoId], references: [id])
-  varianteReemplazo  ProductoVariante? @relation("DevolucionVarianteReemplazo", fields: [varianteReemplazoId], references: [id])
+  productoReemplazo Producto?         @relation("DevolucionProductoReemplazo", fields: [productoReemplazoId], references: [id])
+  varianteReemplazo ProductoVariante? @relation("DevolucionVarianteReemplazo", fields: [varianteReemplazoId], references: [id])
 
   @@index([devolucionId])
   @@index([empresaId])
@@ -523,6 +523,6 @@ enum AccionDevolucion {
 }
 
 enum TipoReembolso {
-  EFECTIVO        // Devolucion de dinero al cliente
+  EFECTIVO // Devolucion de dinero al cliente
   CAMBIO_PRODUCTO // Cambio por otro producto
 }

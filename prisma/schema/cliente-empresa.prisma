@@ -26,7 +26,7 @@ model ClienteEmpresa {
   provincia    String?
   departamento String?
   distrito     String?
-  pais         String @default("PE")
+  pais         String  @default("PE")
 
   // Datos SUNAT (snapshot al consultar RUC)
   estadoContribuyente    String? // "ACTIVO", "SUSPENSION TEMPORAL", "BAJA"
@@ -49,7 +49,7 @@ model ClienteEmpresa {
 
   // Vinculación B2B
   empresaVinculadaId  String?
-  empresaVinculadaRef Empresa? @relation("EmpresaVinculadaClientes", fields: [empresaVinculadaId], references: [id])
+  empresaVinculadaRef Empresa?             @relation("EmpresaVinculadaClientes", fields: [empresaVinculadaId], references: [id])
   vinculaciones       VinculacionEmpresa[]
 
   // Relaciones

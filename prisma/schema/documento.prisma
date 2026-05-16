@@ -21,8 +21,8 @@ model ConfiguracionDocumentos {
   empresaId String @unique
 
   // Marca/visual para documentos
-  logoUrl         String?  // Logo de la empresa
-  nombreComercial String?  // Nombre comercial (marca que ve el cliente)
+  logoUrl         String? // Logo de la empresa
+  nombreComercial String? // Nombre comercial (marca que ve el cliente)
   // Datos fiscales (ruc, dirección, teléfono, email) se leen de Empresa/Sede dinámicamente
 
   // Colores para documentos

@@ -1,18 +1,18 @@
 model PreguntaProducto {
-  id          String    @id @default(cuid())
-  productoId  String
-  empresaId   String
-  usuarioId   String
-  pregunta    String
-  respuesta   String?
+  id            String    @id @default(cuid())
+  productoId    String
+  empresaId     String
+  usuarioId     String
+  pregunta      String
+  respuesta     String?
   respondidoPor String?
   respondidoEn  DateTime?
-  creadoEn    DateTime  @default(now())
+  creadoEn      DateTime  @default(now())
 
-  producto    Producto  @relation(fields: [productoId], references: [id], onDelete: Cascade)
-  empresa     Empresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  usuario     Usuario   @relation("PreguntasProducto", fields: [usuarioId], references: [id])
-  respondedor Usuario?  @relation("RespuestasProducto", fields: [respondidoPor], references: [id])
+  producto    Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  empresa     Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  usuario     Usuario  @relation("PreguntasProducto", fields: [usuarioId], references: [id])
+  respondedor Usuario? @relation("RespuestasProducto", fields: [respondidoPor], references: [id])
 
   @@index([productoId, creadoEn])
   @@index([empresaId, productoId])

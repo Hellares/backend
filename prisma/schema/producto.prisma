@@ -12,11 +12,11 @@ model Producto {
   nombre             String
   descripcion        String?
 
-  peso               Decimal? @db.Decimal(10, 3)
+  peso               Decimal?          @db.Decimal(10, 3)
   dimensiones        Json?
   videoUrl           String?
-  impuestoPorcentaje Decimal? @db.Decimal(5, 2)
-  descuentoMaximo    Decimal? @db.Decimal(5, 2)
+  impuestoPorcentaje Decimal?          @db.Decimal(5, 2)
+  descuentoMaximo    Decimal?          @db.Decimal(5, 2)
   tipoAfectacionIgv  TipoAfectacionIgv @default(GRAVADO)
   aplicaIcbper       Boolean           @default(false)
 
@@ -75,8 +75,8 @@ model Producto {
   itemsTransferencia TransferenciaStockItem[]
 
   // Relaciones para devoluciones
-  devolucionItems        DevolucionItem[]   @relation("DevolucionProducto")
-  devolucionesReemplazo  DevolucionItem[]   @relation("DevolucionProductoReemplazo")
+  devolucionItems       DevolucionItem[] @relation("DevolucionProducto")
+  devolucionesReemplazo DevolucionItem[] @relation("DevolucionProductoReemplazo")
 
   // Relaciones para módulo de proveedores
   proveedorProductos ProveedorProducto[]
@@ -85,7 +85,7 @@ model Producto {
   cotizacionDetalles CotizacionDetalle[]
 
   // Relaciones para ventas
-  ventaDetalles VentaDetalle[]
+  ventaDetalles            VentaDetalle[]
   // Cuando este Producto es un combo, VentaDetalle de componentes vendidos
   // como parte de este combo (trazabilidad post-venta para reportes).
   ventaDetallesOrigenCombo VentaDetalle[] @relation("VentaDetalleOrigenCombo")
@@ -99,16 +99,16 @@ model Producto {
   citaItems CitaItem[]
 
   // Marketplace
-  preguntas   PreguntaProducto[]
-  opiniones   OpinionProducto[]
-  favoritos   FavoritoProducto[] @relation("FavoritosProducto")
-  vistas      ProductoVisto[]    @relation("ProductosVistos")
-  carritoItems              CarritoItem[]                @relation("CarritoProducto")
-  pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoProducto")
-  solicitudCotizacionItems  SolicitudCotizacionItem[]    @relation("SolicitudProducto")
+  preguntas                 PreguntaProducto[]
+  opiniones                 OpinionProducto[]
+  favoritos                 FavoritoProducto[]         @relation("FavoritosProducto")
+  vistas                    ProductoVisto[]            @relation("ProductosVistos")
+  carritoItems              CarritoItem[]              @relation("CarritoProducto")
+  pedidoDetallesMarketplace PedidoMarketplaceDetalle[] @relation("PedidoProducto")
+  solicitudCotizacionItems  SolicitudCotizacionItem[]  @relation("SolicitudProducto")
 
   // Guías de remisión
-  guiasRemisionDetalles     GuiaRemisionDetalle[]        @relation("GuiaRemisionProducto")
+  guiasRemisionDetalles GuiaRemisionDetalle[] @relation("GuiaRemisionProducto")
 
   @@unique([empresaId, codigoEmpresa])
   @@unique([empresaId, sku])
@@ -273,8 +273,8 @@ model ProductoVariante {
   itemsTransferencia TransferenciaStockItem[]
 
   // Relaciones para devoluciones
-  devolucionItems        DevolucionItem[]   @relation("DevolucionVariante")
-  devolucionesReemplazo  DevolucionItem[]   @relation("DevolucionVarianteReemplazo")
+  devolucionItems       DevolucionItem[] @relation("DevolucionVariante")
+  devolucionesReemplazo DevolucionItem[] @relation("DevolucionVarianteReemplazo")
 
   // Relaciones para módulo de proveedores
   proveedorProductos ProveedorProducto[]
@@ -286,15 +286,15 @@ model ProductoVariante {
   ventaDetalles VentaDetalle[]
 
   // Relaciones para módulo de compras
-  ordenCompraDetalles OrdenCompraDetalle[]
-  compraDetalles      CompraDetalle[]
-  lotes               Lote[]
-  carritoItems              CarritoItem[]                @relation("CarritoVariante")
-  pedidoDetallesMarketplace PedidoMarketplaceDetalle[]   @relation("PedidoVariante")
-  solicitudCotizacionItems  SolicitudCotizacionItem[]    @relation("SolicitudVariante")
+  ordenCompraDetalles       OrdenCompraDetalle[]
+  compraDetalles            CompraDetalle[]
+  lotes                     Lote[]
+  carritoItems              CarritoItem[]              @relation("CarritoVariante")
+  pedidoDetallesMarketplace PedidoMarketplaceDetalle[] @relation("PedidoVariante")
+  solicitudCotizacionItems  SolicitudCotizacionItem[]  @relation("SolicitudVariante")
 
   // Guías de remisión
-  guiasRemisionDetalles     GuiaRemisionDetalle[]        @relation("GuiaRemisionVariante")
+  guiasRemisionDetalles GuiaRemisionDetalle[] @relation("GuiaRemisionVariante")
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoEmpresa])
@@ -522,9 +522,9 @@ model ComboReservacion {
 
 /// Tipo de afectación IGV (Catálogo SUNAT N° 07)
 enum TipoAfectacionIgv {
-  GRAVADO     // 10 - Operación Onerosa gravada
-  EXONERADO   // 20 - Operación Onerosa exonerada
-  INAFECTO    // 30 - Operación Onerosa inafecta
+  GRAVADO // 10 - Operación Onerosa gravada
+  EXONERADO // 20 - Operación Onerosa exonerada
+  INAFECTO // 30 - Operación Onerosa inafecta
 }
 
 /// Tipos de atributos para productos

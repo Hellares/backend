@@ -13,10 +13,10 @@ enum EstadoSolicitudCotizacion {
 }
 
 model SolicitudCotizacion {
-  id              String  @id @default(cuid())
-  codigo          String
-  solicitanteId   String
-  empresaId       String
+  id            String @id @default(cuid())
+  codigo        String
+  solicitanteId String
+  empresaId     String
 
   // Datos del solicitante (snapshot)
   nombreSolicitante   String
@@ -24,14 +24,14 @@ model SolicitudCotizacion {
   telefonoSolicitante String?
 
   // Estado
-  estado          EstadoSolicitudCotizacion @default(PENDIENTE)
+  estado EstadoSolicitudCotizacion @default(PENDIENTE)
 
   // Contenido
-  observaciones       String?   // Notas del cliente
-  respuestaVendedor   String?   // Notas del vendedor al responder/rechazar
+  observaciones     String? // Notas del cliente
+  respuestaVendedor String? // Notas del vendedor al responder/rechazar
 
   // Vínculo con la cotización formal (cuando el vendedor responde)
-  cotizacionId    String?
+  cotizacionId String?
 
   // Vencimiento automático
   fechaVencimiento DateTime? // Calculada al crear (creadoEn + 7 días)
@@ -41,9 +41,9 @@ model SolicitudCotizacion {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  solicitante Usuario     @relation("SolicitudesCotizacion", fields: [solicitanteId], references: [id])
-  empresa     Empresa     @relation("SolicitudesEmpresa", fields: [empresaId], references: [id])
-  cotizacion  Cotizacion? @relation("SolicitudCotizacionRespuesta", fields: [cotizacionId], references: [id])
+  solicitante Usuario                   @relation("SolicitudesCotizacion", fields: [solicitanteId], references: [id])
+  empresa     Empresa                   @relation("SolicitudesEmpresa", fields: [empresaId], references: [id])
+  cotizacion  Cotizacion?               @relation("SolicitudCotizacionRespuesta", fields: [cotizacionId], references: [id])
   items       SolicitudCotizacionItem[]
 
   @@unique([empresaId, codigo])
@@ -52,30 +52,30 @@ model SolicitudCotizacion {
   @@index([estado])
   @@index([creadoEn])
   @@index([empresaId, estado])
-  @@index([estado, creadoEn])  // Cron: vencimiento
+  @@index([estado, creadoEn]) // Cron: vencimiento
 }
 
 model SolicitudCotizacionItem {
-  id            String  @id @default(cuid())
-  solicitudId   String
-  productoId    String?
-  varianteId    String?
+  id          String  @id @default(cuid())
+  solicitudId String
+  productoId  String?
+  varianteId  String?
 
   // Siempre presente (nombre del producto o texto libre)
-  descripcion   String
-  cantidad      Int     @default(1)
-  imagenUrl     String? // Snapshot del catálogo
-  esManual      Boolean @default(false) // true = escrito por cliente
+  descripcion String
+  cantidad    Int     @default(1)
+  imagenUrl   String? // Snapshot del catálogo
+  esManual    Boolean @default(false) // true = escrito por cliente
 
   // Notas específicas del item
-  notasItem     String? // Ej: "lo quiero en color negro"
+  notasItem String? // Ej: "lo quiero en color negro"
 
-  creadoEn      DateTime @default(now())
+  creadoEn DateTime @default(now())
 
   // Relaciones
-  solicitud     SolicitudCotizacion  @relation(fields: [solicitudId], references: [id], onDelete: Cascade)
-  producto      Producto?            @relation("SolicitudProducto", fields: [productoId], references: [id])
-  variante      ProductoVariante?    @relation("SolicitudVariante", fields: [varianteId], references: [id])
+  solicitud SolicitudCotizacion @relation(fields: [solicitudId], references: [id], onDelete: Cascade)
+  producto  Producto?           @relation("SolicitudProducto", fields: [productoId], references: [id])
+  variante  ProductoVariante?   @relation("SolicitudVariante", fields: [varianteId], references: [id])
 
   @@index([solicitudId])
 }

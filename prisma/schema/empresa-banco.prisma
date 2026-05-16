@@ -3,25 +3,26 @@
 // =========================================
 
 model EmpresaBanco {
-  id          String  @id @default(cuid())
-  empresaId   String
+  id        String @id @default(cuid())
+  empresaId String
 
-  nombreBanco  String         // BCP, Interbank, BBVA, Scotiabank, etc.
-  tipoCuenta   TipoCuenta     // Reutiliza enum de proveedor.prisma
+  nombreBanco  String // BCP, Interbank, BBVA, Scotiabank, etc.
+  tipoCuenta   TipoCuenta // Reutiliza enum de proveedor.prisma
   numeroCuenta String
-  cci          String?        // Código interbancario
-  moneda       String         @default("PEN")
-  titular      String?        // Nombre del titular
-  esPrincipal  Boolean        @default(false)
-  isActive     Boolean        @default(true)
+  cci          String? // Código interbancario
+  moneda       String     @default("PEN")
+  titular      String? // Nombre del titular
+  esPrincipal  Boolean    @default(false)
+  isActive     Boolean    @default(true)
 
   // Saldo (actualización manual o por conciliación)
-  saldoActual  Decimal?       @db.Decimal(12, 2)
+  saldoActual Decimal? @db.Decimal(12, 2)
 
-  creadoEn     DateTime       @default(now())
-  actualizadoEn DateTime      @updatedAt
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
 
-  empresa      Empresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresa              Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  pagosGastoRecurrente PagoGastoRecurrente[]
 
   @@index([empresaId])
   @@index([empresaId, isActive])

@@ -1,18 +1,18 @@
 model MensajeServicio {
-  id              String         @id @default(cuid())
+  id              String    @id @default(cuid())
   empresaId       String
   ordenServicioId String?
   citaId          String?
   usuarioId       String
   contenido       String
-  esCliente       Boolean        @default(false)
+  esCliente       Boolean   @default(false)
   leidoEn         DateTime?
-  creadoEn        DateTime       @default(now())
+  creadoEn        DateTime  @default(now())
 
-  empresa         Empresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  ordenServicio   OrdenServicio? @relation(fields: [ordenServicioId], references: [id], onDelete: Cascade)
-  cita            Cita?          @relation(fields: [citaId], references: [id], onDelete: Cascade)
-  usuario         Usuario        @relation(fields: [usuarioId], references: [id])
+  empresa       Empresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  ordenServicio OrdenServicio? @relation(fields: [ordenServicioId], references: [id], onDelete: Cascade)
+  cita          Cita?          @relation(fields: [citaId], references: [id], onDelete: Cascade)
+  usuario       Usuario        @relation(fields: [usuarioId], references: [id])
 
   @@index([ordenServicioId, creadoEn])
   @@index([citaId, creadoEn])

@@ -1,22 +1,22 @@
 model Empresa {
-  id                     String            @id @default(cuid())
-  nombre                 String
-  ruc                    String?           @unique
-  subdominio             String?           @unique
-  logo                   String?
-  rubro                  RubroEmpresa      @default(TECNOLOGIA)
-  isActive               Boolean           @default(true)
-  deletedAt              DateTime?
-  descripcion            String?
-  web                    String?
-  telefono               String?
-  email                  String?
+  id          String       @id @default(cuid())
+  nombre      String
+  ruc         String?      @unique
+  subdominio  String?      @unique
+  logo        String?
+  rubro       RubroEmpresa @default(TECNOLOGIA)
+  isActive    Boolean      @default(true)
+  deletedAt   DateTime?
+  descripcion String?
+  web         String?
+  telefono    String?
+  email       String?
 
   // Datos SUNAT
   razonSocial            String?
   tipoContribuyente      String?
-  estadoContribuyente    String?   // "ACTIVO", "SUSPENSION TEMPORAL", "BAJA"
-  condicionContribuyente String?   // "HABIDO", "NO HABIDO"
+  estadoContribuyente    String? // "ACTIVO", "SUSPENSION TEMPORAL", "BAJA"
+  condicionContribuyente String? // "HABIDO", "NO HABIDO"
   direccionFiscal        String?
   departamento           String?
   provincia              String?
@@ -37,11 +37,11 @@ model Empresa {
   vistasMarketplace    Int     @default(0)
 
   // Configuración de envío marketplace
-  envioGratisDesde     Decimal?  @db.Decimal(10, 2)  // Envío gratis si subtotal >= este monto
-  permiteRetiroTienda  Boolean   @default(false)
+  envioGratisDesde    Decimal? @db.Decimal(10, 2) // Envío gratis si subtotal >= este monto
+  permiteRetiroTienda Boolean  @default(false)
 
   // Configuración de caja
-  requiereCajaParaVender  Boolean  @default(false)  // Si true, no se pueden procesar ventas sin caja abierta
+  requiereCajaParaVender Boolean @default(false) // Si true, no se pueden procesar ventas sin caja abierta
 
   // SEO y Metadata
   metaTitle       String?
@@ -135,73 +135,77 @@ model Empresa {
   configuracionEmpresa ConfiguracionEmpresa?
 
   // Relaciones para tercerización B2B
-  aceptaTercerizacion           Boolean  @default(false)
-  descripcionTercerizacion      String?
-  tiposServicioTercerizacion    Json?    // ["REPARACION","MANTENIMIENTO",...]
-  tercerizacionesEnviadas       TercerizacionServicio[] @relation("TercerizacionOrigen")
-  tercerizacionesRecibidas      TercerizacionServicio[] @relation("TercerizacionDestino")
+  aceptaTercerizacion        Boolean                 @default(false)
+  descripcionTercerizacion   String?
+  tiposServicioTercerizacion Json? // ["REPARACION","MANTENIMIENTO",...]
+  tercerizacionesEnviadas    TercerizacionServicio[] @relation("TercerizacionOrigen")
+  tercerizacionesRecibidas   TercerizacionServicio[] @relation("TercerizacionDestino")
 
   // Relaciones para vinculación B2B
-  vinculacionesSolicitadas   VinculacionEmpresa[] @relation("VinculacionesSolicitadas")
-  vinculacionesRecibidas     VinculacionEmpresa[] @relation("VinculacionesRecibidas")
-  clientesEmpresaVinculados  ClienteEmpresa[]     @relation("EmpresaVinculadaClientes")
+  vinculacionesSolicitadas  VinculacionEmpresa[] @relation("VinculacionesSolicitadas")
+  vinculacionesRecibidas    VinculacionEmpresa[] @relation("VinculacionesRecibidas")
+  clientesEmpresaVinculados ClienteEmpresa[]     @relation("EmpresaVinculadaClientes")
 
   // Relaciones para avisos de mantenimiento
   configuracionAvisoMantenimiento ConfiguracionAvisoMantenimiento?
   avisosMantenimiento             AvisoMantenimiento[]
 
   // Relaciones para configuracion de documentos PDF
-  configuracionDocumentos  ConfiguracionDocumentos?
-  plantillasDocumentos     PlantillaDocumento[]
+  configuracionDocumentos ConfiguracionDocumentos?
+  plantillasDocumentos    PlantillaDocumento[]
 
   // Relaciones para módulo de citas
   citas Cita[]
 
   // Relaciones para notificaciones
-  notificaciones      Notificacion[]
-  campanasPromocion   CampanaPromocion[]
-  mensajesServicio    MensajeServicio[]
-  preguntasProducto   PreguntaProducto[]
-  opinionesProducto   OpinionProducto[]
-  carritoItems              CarritoItem[]           @relation("CarritoEmpresa")
-  pedidosMarketplace        PedidoMarketplace[]     @relation("PedidosEmpresa")
-  solicitudesCotizacion     SolicitudCotizacion[]   @relation("SolicitudesEmpresa")
+  notificaciones        Notificacion[]
+  campanasPromocion     CampanaPromocion[]
+  mensajesServicio      MensajeServicio[]
+  preguntasProducto     PreguntaProducto[]
+  opinionesProducto     OpinionProducto[]
+  carritoItems          CarritoItem[]         @relation("CarritoEmpresa")
+  pedidosMarketplace    PedidoMarketplace[]   @relation("PedidosEmpresa")
+  solicitudesCotizacion SolicitudCotizacion[] @relation("SolicitudesEmpresa")
 
   // Relaciones para módulo de caja
-  cajas            Caja[]
-  movimientosCaja  MovimientoCaja[]
+  cajas           Caja[]
+  movimientosCaja MovimientoCaja[]
 
   // Relaciones para módulo de caja chica
   cajasChicas          CajaChica[]
   gastosCajaChica      GastoCajaChica[]
   rendicionesCajaChica RendicionCajaChica[]
-  cuentasBancarias EmpresaBanco[]
-  prestamos          Prestamo[]
-  categoriasGasto    CategoriaGasto[]
-  metasFinancieras   MetaFinanciera[]
-  tiposCambio        TipoCambio[]
-  ubicacionesAlmacen UbicacionAlmacen[]
-  agentesBancarios   AgenteBancario[]
-  operacionesAgente  OperacionAgente[]
+  cuentasBancarias     EmpresaBanco[]
+  prestamos            Prestamo[]
+  categoriasGasto      CategoriaGasto[]
+  metasFinancieras     MetaFinanciera[]
+  tiposCambio          TipoCambio[]
+  ubicacionesAlmacen   UbicacionAlmacen[]
+  agentesBancarios     AgenteBancario[]
+  operacionesAgente    OperacionAgente[]
+
+  // Gastos recurrentes
+  gastosRecurrentes    GastoRecurrente[]
+  pagosGastoRecurrente PagoGastoRecurrente[]
 
   // Pagos de suscripción
-  pagosSuscripcion   PagoSuscripcion[]
+  pagosSuscripcion PagoSuscripcion[]
 
   // Relaciones para módulo RRHH
-  turnos             Turno[]
-  horariosPlantilla  HorarioPlantilla[]
-  empleados          Empleado[]
-  asistencias        Asistencia[]
-  incidencias        Incidencia[]
-  periodosPlanilla   PeriodoPlanilla[]
-  boletasPago        BoletaPago[]
-  adelantosPago      AdelantoPago[]
+  turnos            Turno[]
+  horariosPlantilla HorarioPlantilla[]
+  empleados         Empleado[]
+  asistencias       Asistencia[]
+  incidencias       Incidencia[]
+  periodosPlanilla  PeriodoPlanilla[]
+  boletasPago       BoletaPago[]
+  adelantosPago     AdelantoPago[]
 
   // Relaciones para módulo de guía de remisión
-  guiasRemision       GuiaRemision[]
-  vehiculosEmpresa    VehiculoEmpresa[]
-  conductoresEmpresa  ConductorEmpresa[]
-  transportistas      TransportistaEmpresa[]
+  guiasRemision      GuiaRemision[]
+  vehiculosEmpresa   VehiculoEmpresa[]
+  conductoresEmpresa ConductorEmpresa[]
+  transportistas     TransportistaEmpresa[]
 
   @@index([subdominio])
   @@index([isActive])
@@ -219,104 +223,104 @@ model Empresa {
 }
 
 model ConfiguracionCodigos {
-  id                    String   @id @default(cuid())
-  empresaId             String   @unique
-  productoCodigo        String   @default("PROD")
-  productoSeparador     String   @default("-")
-  productoLongitud      Int      @default(6)
-  productoIncluirSede   Boolean  @default(false)
-  servicioCodigo        String   @default("SERV")
-  servicioSeparador     String   @default("-")
-  servicioLongitud      Int      @default(6)
-  servicioIncluirSede   Boolean  @default(false)
-  varianteCodigo        String   @default("VAR")
-  varianteSeparador     String   @default("-")
-  varianteLongitud      Int      @default(6)
-  ventaCodigo           String   @default("VTA")
-  ventaSeparador        String   @default("-")
-  ventaLongitud         Int      @default(8)
-  ventaIncluirSede      Boolean  @default(true)
-  ultimoProducto        Int      @default(0)
-  ultimoServicio        Int      @default(0)
-  ultimaVariante        Int      @default(0)
-  ultimaVenta           Int      @default(0)
-  componenteCodigo      String   @default("COMP")
-  componenteSeparador   String   @default("-")
-  componenteLongitud    Int      @default(5)
-  ultimoComponente      Int      @default(0)
-  cotizacionCodigo      String   @default("COT")
-  cotizacionSeparador   String   @default("-")
-  cotizacionLongitud    Int      @default(6)
-  cotizacionIncluirSede Boolean  @default(true)
-  ultimaCotizacion      Int      @default(0)
-  ordenServicioCodigo       String   @default("OS")
-  ordenServicioSeparador    String   @default("-")
-  ordenServicioLongitud     Int      @default(5)
-  ultimaOrdenServicio       Int      @default(0)
-  proveedorCodigo           String   @default("PROV")
-  proveedorSeparador        String   @default("-")
-  proveedorLongitud         Int      @default(3)
-  ultimoProveedor           Int      @default(0)
-  transferenciaCodigo       String   @default("TRANS")
-  transferenciaSeparador    String   @default("-")
-  transferenciaLongitud     Int      @default(5)
-  ultimaTransferencia       Int      @default(0)
-  ordenCompraCodigo         String   @default("OC")
-  ordenCompraSeparador      String   @default("-")
-  ordenCompraLongitud       Int      @default(5)
-  ultimaOrdenCompra         Int      @default(0)
-  compraCodigo              String   @default("COMPRA")
-  compraSeparador           String   @default("-")
-  compraLongitud            Int      @default(5)
-  ultimaCompra              Int      @default(0)
-  loteCodigo                String   @default("LOTE")
-  loteSeparador             String   @default("-")
-  loteLongitud              Int      @default(5)
-  ultimoLote                Int      @default(0)
-  sedeCodigo                String   @default("SEDE")
-  sedeSeparador             String   @default("-")
-  sedeLongitud              Int      @default(3)
-  ultimaSede                Int      @default(0)
-  reporteIncidenciaCodigo   String   @default("RPI")
-  reporteIncidenciaSeparador String  @default("-")
-  reporteIncidenciaLongitud Int      @default(4)
-  ultimoReporteIncidencia   Int      @default(0)
-  inventarioCodigo          String   @default("INV")
-  inventarioSeparador       String   @default("-")
-  inventarioLongitud        Int      @default(4)
-  ultimoInventario          Int      @default(0)
-  clienteEmpresaCodigo    String   @default("CE")
-  clienteEmpresaSeparador String   @default("-")
-  clienteEmpresaLongitud  Int      @default(3)
-  ultimoClienteEmpresa    Int      @default(0)
-  citaCodigo              String   @default("CITA")
-  citaSeparador           String   @default("-")
-  citaLongitud            Int      @default(5)
-  ultimaCita              Int      @default(0)
-  pedidoMarketplaceCodigo     String   @default("PED")
-  pedidoMarketplaceSeparador  String   @default("-")
-  pedidoMarketplaceLongitud   Int      @default(5)
-  ultimoPedidoMarketplace     Int      @default(0)
-  solicitudCotizacionCodigo     String   @default("SOL")
-  solicitudCotizacionSeparador  String   @default("-")
-  solicitudCotizacionLongitud   Int      @default(5)
-  ultimaSolicitudCotizacion     Int      @default(0)
-  cajaCodigo                    String   @default("CAJA")
-  cajaSeparador                 String   @default("-")
-  cajaLongitud                  Int      @default(5)
-  cajaIncluirSede               Boolean  @default(true)
-  ultimaCaja                    Int      @default(0)
-  rendicionCodigo               String   @default("REND")
-  rendicionSeparador            String   @default("-")
-  rendicionLongitud             Int      @default(5)
-  ultimaRendicion               Int      @default(0)
-  empleadoCodigo                String   @default("EMP")
-  empleadoSeparador             String   @default("-")
-  empleadoLongitud              Int      @default(5)
-  ultimoEmpleado                Int      @default(0)
-  creadoEn              DateTime @default(now())
-  actualizadoEn         DateTime @updatedAt
-  empresa               Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  id                           String   @id @default(cuid())
+  empresaId                    String   @unique
+  productoCodigo               String   @default("PROD")
+  productoSeparador            String   @default("-")
+  productoLongitud             Int      @default(6)
+  productoIncluirSede          Boolean  @default(false)
+  servicioCodigo               String   @default("SERV")
+  servicioSeparador            String   @default("-")
+  servicioLongitud             Int      @default(6)
+  servicioIncluirSede          Boolean  @default(false)
+  varianteCodigo               String   @default("VAR")
+  varianteSeparador            String   @default("-")
+  varianteLongitud             Int      @default(6)
+  ventaCodigo                  String   @default("VTA")
+  ventaSeparador               String   @default("-")
+  ventaLongitud                Int      @default(8)
+  ventaIncluirSede             Boolean  @default(true)
+  ultimoProducto               Int      @default(0)
+  ultimoServicio               Int      @default(0)
+  ultimaVariante               Int      @default(0)
+  ultimaVenta                  Int      @default(0)
+  componenteCodigo             String   @default("COMP")
+  componenteSeparador          String   @default("-")
+  componenteLongitud           Int      @default(5)
+  ultimoComponente             Int      @default(0)
+  cotizacionCodigo             String   @default("COT")
+  cotizacionSeparador          String   @default("-")
+  cotizacionLongitud           Int      @default(6)
+  cotizacionIncluirSede        Boolean  @default(true)
+  ultimaCotizacion             Int      @default(0)
+  ordenServicioCodigo          String   @default("OS")
+  ordenServicioSeparador       String   @default("-")
+  ordenServicioLongitud        Int      @default(5)
+  ultimaOrdenServicio          Int      @default(0)
+  proveedorCodigo              String   @default("PROV")
+  proveedorSeparador           String   @default("-")
+  proveedorLongitud            Int      @default(3)
+  ultimoProveedor              Int      @default(0)
+  transferenciaCodigo          String   @default("TRANS")
+  transferenciaSeparador       String   @default("-")
+  transferenciaLongitud        Int      @default(5)
+  ultimaTransferencia          Int      @default(0)
+  ordenCompraCodigo            String   @default("OC")
+  ordenCompraSeparador         String   @default("-")
+  ordenCompraLongitud          Int      @default(5)
+  ultimaOrdenCompra            Int      @default(0)
+  compraCodigo                 String   @default("COMPRA")
+  compraSeparador              String   @default("-")
+  compraLongitud               Int      @default(5)
+  ultimaCompra                 Int      @default(0)
+  loteCodigo                   String   @default("LOTE")
+  loteSeparador                String   @default("-")
+  loteLongitud                 Int      @default(5)
+  ultimoLote                   Int      @default(0)
+  sedeCodigo                   String   @default("SEDE")
+  sedeSeparador                String   @default("-")
+  sedeLongitud                 Int      @default(3)
+  ultimaSede                   Int      @default(0)
+  reporteIncidenciaCodigo      String   @default("RPI")
+  reporteIncidenciaSeparador   String   @default("-")
+  reporteIncidenciaLongitud    Int      @default(4)
+  ultimoReporteIncidencia      Int      @default(0)
+  inventarioCodigo             String   @default("INV")
+  inventarioSeparador          String   @default("-")
+  inventarioLongitud           Int      @default(4)
+  ultimoInventario             Int      @default(0)
+  clienteEmpresaCodigo         String   @default("CE")
+  clienteEmpresaSeparador      String   @default("-")
+  clienteEmpresaLongitud       Int      @default(3)
+  ultimoClienteEmpresa         Int      @default(0)
+  citaCodigo                   String   @default("CITA")
+  citaSeparador                String   @default("-")
+  citaLongitud                 Int      @default(5)
+  ultimaCita                   Int      @default(0)
+  pedidoMarketplaceCodigo      String   @default("PED")
+  pedidoMarketplaceSeparador   String   @default("-")
+  pedidoMarketplaceLongitud    Int      @default(5)
+  ultimoPedidoMarketplace      Int      @default(0)
+  solicitudCotizacionCodigo    String   @default("SOL")
+  solicitudCotizacionSeparador String   @default("-")
+  solicitudCotizacionLongitud  Int      @default(5)
+  ultimaSolicitudCotizacion    Int      @default(0)
+  cajaCodigo                   String   @default("CAJA")
+  cajaSeparador                String   @default("-")
+  cajaLongitud                 Int      @default(5)
+  cajaIncluirSede              Boolean  @default(true)
+  ultimaCaja                   Int      @default(0)
+  rendicionCodigo              String   @default("REND")
+  rendicionSeparador           String   @default("-")
+  rendicionLongitud            Int      @default(5)
+  ultimaRendicion              Int      @default(0)
+  empleadoCodigo               String   @default("EMP")
+  empleadoSeparador            String   @default("-")
+  empleadoLongitud             Int      @default(5)
+  ultimoEmpleado               Int      @default(0)
+  creadoEn                     DateTime @default(now())
+  actualizadoEn                DateTime @updatedAt
+  empresa                      Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@index([empresaId])
 }
@@ -333,13 +337,13 @@ model Sede {
   // Ubicación completa
   direccion    String?
   referencia   String?
-  stand        String?  // Número o nombre de stand (ej: "Stand 45", "Puesto A-12")
+  stand        String? // Número o nombre de stand (ej: "Stand 45", "Puesto A-12")
   distrito     String?
   provincia    String?
   departamento String?
-  ubigeo       String?  // Código ubigeo SUNAT 6 dígitos (ej: "150131")
-  pais         String? @default("PERU")
-  coordenadas  Json?   // {lat: -12.0464, lon: -77.0428} para geolocalización
+  ubigeo       String? // Código ubigeo SUNAT 6 dígitos (ej: "150131")
+  pais         String?  @default("PERU")
+  coordenadas  Json? // {lat: -12.0464, lon: -77.0428} para geolocalización
   imagenes     String[] // URLs de imágenes referenciales de la sede
 
   // Configuración operativa
@@ -347,15 +351,15 @@ model Sede {
   configuracion   Json? // Configuraciones específicas de la sede
 
   // Facturación electrónica (override por sede, si null usa ConfiguracionFacturacion de empresa)
-  rucSede              String?  // RUC propio de la sede (si difiere del de la empresa)
-  razonSocialSede      String?  // Razón social del contribuyente
-  direccionFiscalSede  String?  // Dirección fiscal SUNAT
-  proveedorActivo      ProveedorFacturacion? // null = usa proveedorActivo de ConfiguracionFacturacion
-  proveedorRuta        String?  // URL API proveedor facturación (base URL)
-  proveedorToken       String?  // Token proveedor facturación
-  proveedorConfig      Json?    // Config extra específica del proveedor (override de sede)
-  facturacionActiva    Boolean? // null = usa config global
-  resolucionSunat      String?
+  rucSede               String? // RUC propio de la sede (si difiere del de la empresa)
+  razonSocialSede       String? // Razón social del contribuyente
+  direccionFiscalSede   String? // Dirección fiscal SUNAT
+  proveedorActivo       ProveedorFacturacion? // null = usa proveedorActivo de ConfiguracionFacturacion
+  proveedorRuta         String? // URL API proveedor facturación (base URL)
+  proveedorToken        String? // Token proveedor facturación
+  proveedorConfig       Json? // Config extra específica del proveedor (override de sede)
+  facturacionActiva     Boolean? // null = usa config global
+  resolucionSunat       String?
   seriesSincronizadasEn DateTime? // Última sincronización de series con el proveedor
 
   // Series de comprobantes por sede
@@ -364,22 +368,22 @@ model Sede {
   //   serieNotaCreditoBoleta → NC sobre Boleta   (prefijo BC, ej. "BC01")
   //   serieNotaDebito        → ND sobre Factura  (prefijo FD, ej. "FD01")
   //   serieNotaDebitoBoleta  → ND sobre Boleta   (prefijo BD, ej. "BD01")
-  serieFactura            String  @default("F001")
-  serieBoleta             String  @default("B001")
-  serieNotaCredito        String  @default("NC01")
-  serieNotaCreditoBoleta  String  @default("BC01")
-  serieNotaDebito         String  @default("ND01")
-  serieNotaDebitoBoleta   String  @default("BD01")
-  serieGuiaRemision       String? @default("GR01")
+  serieFactura           String  @default("F001")
+  serieBoleta            String  @default("B001")
+  serieNotaCredito       String  @default("NC01")
+  serieNotaCreditoBoleta String  @default("BC01")
+  serieNotaDebito        String  @default("ND01")
+  serieNotaDebitoBoleta  String  @default("BD01")
+  serieGuiaRemision      String? @default("GR01")
 
   // Contadores de documentos por sede
-  ultimoNumeroFactura            Int @default(0)
-  ultimoNumeroBoleta             Int @default(0)
-  ultimoNumeroNotaCredito        Int @default(0)
-  ultimoNumeroNotaCreditoBoleta  Int @default(0)
-  ultimoNumeroNotaDebito         Int @default(0)
-  ultimoNumeroNotaDebitoBoleta   Int @default(0)
-  ultimoNumeroGuiaRemision       Int @default(0)
+  ultimoNumeroFactura           Int @default(0)
+  ultimoNumeroBoleta            Int @default(0)
+  ultimoNumeroNotaCredito       Int @default(0)
+  ultimoNumeroNotaCreditoBoleta Int @default(0)
+  ultimoNumeroNotaDebito        Int @default(0)
+  ultimoNumeroNotaDebitoBoleta  Int @default(0)
+  ultimoNumeroGuiaRemision      Int @default(0)
 
   // Estado
   isActive    Boolean   @default(true)
@@ -437,7 +441,7 @@ model Sede {
   pedidosRetiro PedidoMarketplace[]
 
   // Relaciones para módulo de caja
-  cajas Caja[]
+  cajas            Caja[]
   cajasFacturacion Caja[] @relation("CajaSedeFacturacion")
 
   // Relaciones para módulo de caja chica
@@ -461,10 +465,13 @@ model Sede {
   comunicacionesBaja ComunicacionBaja[]
 
   // Resúmenes diarios (RC) emitidos desde esta sede
-  resumenesDiarios   ResumenDiario[]
+  resumenesDiarios ResumenDiario[]
 
   // Guías de remisión
   guiasRemision GuiaRemision[]
+
+  // Gastos recurrentes
+  gastosRecurrentes GastoRecurrente[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId])
@@ -534,7 +541,7 @@ model PersonalizacionEmpresa {
   webConfig            Json?
   bannerPrincipalUrl   String?
   bannerPrincipalTexto String?
-  banners              Json?    // [{url, texto, link, orden}]
+  banners              Json? // [{url, texto, link, orden}]
   bannerColor          String?  @default("#000000")
   colorPrimario        String?  @default("#007bff")
   colorSecundario      String?  @default("#6c757d")
@@ -569,35 +576,35 @@ model ConfiguracionEmpresa {
   condicionesDefault        String?
 
   // Etiquetas personalizables para sección equipo en órdenes de servicio
-  etiquetaSeccionEquipo     String?  // "EQUIPO", "VEHICULO", "SERVICIO", etc.
-  etiquetaTipoEquipo        String?  // "Tipo de equipo", "Tipo de vehículo", etc.
-  etiquetaMarcaEquipo       String?  // "Marca", "Marca/Modelo", etc.
-  etiquetaNumeroSerie       String?  // "Número de serie", "Placa", "N° Chasis", etc.
-  etiquetaCondicionEquipo   String?  // "Condición del equipo", "Estado del vehículo", etc.
-  mostrarSeccionEquipo      Boolean  @default(true)  // Permite ocultar la sección completa
+  etiquetaSeccionEquipo   String? // "EQUIPO", "VEHICULO", "SERVICIO", etc.
+  etiquetaTipoEquipo      String? // "Tipo de equipo", "Tipo de vehículo", etc.
+  etiquetaMarcaEquipo     String? // "Marca", "Marca/Modelo", etc.
+  etiquetaNumeroSerie     String? // "Número de serie", "Placa", "N° Chasis", etc.
+  etiquetaCondicionEquipo String? // "Condición del equipo", "Estado del vehículo", etc.
+  mostrarSeccionEquipo    Boolean @default(true) // Permite ocultar la sección completa
 
   // Configuración de interés por crédito
-  interesHabilitado          Boolean  @default(false)
-  porcentajeInteresDefault   Decimal? @default(0) @db.Decimal(5, 2) // 5.00 = 5%
-  interesEsEditable          Boolean  @default(true) // Vendedor puede cambiar %
+  interesHabilitado        Boolean  @default(false)
+  porcentajeInteresDefault Decimal? @default(0) @db.Decimal(5, 2) // 5.00 = 5%
+  interesEsEditable        Boolean  @default(true) // Vendedor puede cambiar %
 
   // Configuración de RRHH / Planilla
-  horasJornadaDefault       Float    @default(8.0)
-  horasExtraPorcentaje      Float    @default(25.0)   // % adicional por hora extra
-  dominicalPorcentaje       Float    @default(100.0)   // % adicional por trabajo dominical
-  feriadoPorcentaje         Float    @default(100.0)   // % adicional por trabajo en feriado
-  essaludPorcentaje         Float    @default(9.0)     // % aporte EsSalud empleador
-  periodoPlanillaTipo       String   @default("MENSUAL") // MENSUAL o QUINCENAL
+  horasJornadaDefault  Float  @default(8.0)
+  horasExtraPorcentaje Float  @default(25.0) // % adicional por hora extra
+  dominicalPorcentaje  Float  @default(100.0) // % adicional por trabajo dominical
+  feriadoPorcentaje    Float  @default(100.0) // % adicional por trabajo en feriado
+  essaludPorcentaje    Float  @default(9.0) // % aporte EsSalud empleador
+  periodoPlanillaTipo  String @default("MENSUAL") // MENSUAL o QUINCENAL
 
   // Configuración de mora para cuotas vencidas
-  moraHabilitada            Boolean  @default(false)
-  porcentajeMoraDiario      Decimal? @default(0.05) @db.Decimal(5, 4) // 0.05% diario por defecto
-  moraMaximaPorcentaje      Decimal? @default(30.0) @db.Decimal(5, 2) // Tope máximo 30% del monto cuota
-  diasGraciaMora            Int      @default(0) // Días de gracia antes de aplicar mora
+  moraHabilitada       Boolean  @default(false)
+  porcentajeMoraDiario Decimal? @default(0.05) @db.Decimal(5, 4) // 0.05% diario por defecto
+  moraMaximaPorcentaje Decimal? @default(30.0) @db.Decimal(5, 2) // Tope máximo 30% del monto cuota
+  diasGraciaMora       Int      @default(0) // Días de gracia antes de aplicar mora
 
-  creadoEn                  DateTime @default(now())
-  actualizadoEn             DateTime @updatedAt
-  empresa                   Empresa  @relation(fields: [empresaId], references: [id])
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+  empresa       Empresa  @relation(fields: [empresaId], references: [id])
 
   @@index([empresaId])
 }

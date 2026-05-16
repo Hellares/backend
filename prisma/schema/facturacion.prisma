@@ -67,106 +67,106 @@ model TransaccionPago {
 }
 
 model ConfiguracionFacturacion {
-  id                 String   @id @default(cuid())
-  empresaId          String   @unique
+  id                 String               @id @default(cuid())
+  empresaId          String               @unique
   // Datos fiscales ahora viven en Empresa (ruc, razonSocial, direccionFiscal)
   // Datos de marca/logo viven en ConfiguracionDocumentos (nombreComercial, logoUrl)
-  emailFacturacion   String?  // Email específico para facturación (puede diferir del email general)
+  emailFacturacion   String? // Email específico para facturación (puede diferir del email general)
   certificadoDigital String?
   claveCertificado   String?
   usuarioSol         String?
   claveSol           String?
-  entorno            String   @default("BETA")
+  entorno            String               @default("BETA")
   // Proveedor de facturación electrónica (Nubefact, Syncrofact, Efact, etc.)
   proveedorActivo    ProveedorFacturacion @default(SYNCROFACT) // Proveedor que emitirá nuevos comprobantes
-  proveedorRuta      String?  // URL API del proveedor (base URL)
-  proveedorToken     String?  // Token/credencial del proveedor
-  proveedorConfig    Json?    // Config extra específica del proveedor (ej. Syncrofact: { companyId, branchId })
-  facturacionActiva  Boolean  @default(false) // Switch maestro
-  resolucionSunat    String?  // Ej: "No.034-005-0005315"
-  textoPiePagina     String   @default("Gracias por su compra")
-  incluirIGV         Boolean  @default(true)
-  incluirDetalles    Boolean  @default(true)
-  formatoPapel       String   @default("A4")
-  porcentajeIGV      Decimal  @default(18.00) @db.Decimal(5, 2) // Fuente de verdad para IGV
-  creadoEn           DateTime @default(now())
-  actualizadoEn      DateTime @updatedAt
-  empresa            Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  proveedorRuta      String? // URL API del proveedor (base URL)
+  proveedorToken     String? // Token/credencial del proveedor
+  proveedorConfig    Json? // Config extra específica del proveedor (ej. Syncrofact: { companyId, branchId })
+  facturacionActiva  Boolean              @default(false) // Switch maestro
+  resolucionSunat    String? // Ej: "No.034-005-0005315"
+  textoPiePagina     String               @default("Gracias por su compra")
+  incluirIGV         Boolean              @default(true)
+  incluirDetalles    Boolean              @default(true)
+  formatoPapel       String               @default("A4")
+  porcentajeIGV      Decimal              @default(18.00) @db.Decimal(5, 2) // Fuente de verdad para IGV
+  creadoEn           DateTime             @default(now())
+  actualizadoEn      DateTime             @updatedAt
+  empresa            Empresa              @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
   @@index([empresaId])
 }
 
 model ComprobanteElectronico {
-  id               String               @id @default(cuid())
-  empresaId        String
-  sedeId           String?
-  clienteId        String?
-  clienteEmpresaId String?
+  id                  String                    @id @default(cuid())
+  empresaId           String
+  sedeId              String?
+  clienteId           String?
+  clienteEmpresaId    String?
   // Proveedor que emitió este comprobante. Se graba al crear y nunca cambia
   // para garantizar que envío/consulta/anulación usen el mismo proveedor.
-  proveedorEmisor  ProveedorFacturacion?
-  tipoComprobante  TipoComprobante
-  serie            String
-  correlativo      String
-  codigoGenerado   String
-  tipoDocumento    String?
-  numeroDocumento  String?
-  nombreCliente    String
-  direccionCliente String?
-  emailCliente     String?
-  fechaEmision     DateTime             @default(now())
-  fechaVencimiento DateTime?
-  moneda           String               @default("PEN")
-  tipoCambio       Decimal?             @db.Decimal(10, 6)
-  gravada          Decimal              @default(0) @db.Decimal(10, 2)
-  inafecta         Decimal              @default(0) @db.Decimal(10, 2)
-  exonerada        Decimal              @default(0) @db.Decimal(10, 2)
-  igv              Decimal              @default(0) @db.Decimal(10, 2)
-  icbper           Decimal              @default(0) @db.Decimal(10, 2)
-  total            Decimal              @default(0) @db.Decimal(10, 2)
-  totalIgv         Decimal              @default(0) @db.Decimal(10, 2)
-  cdrResponse      Json?
-  sunatStatus      EstadoSunat          @default(PENDIENTE)
-  sunatHash        String?
-  sunatXmlUrl      String?
-  sunatPdfUrl      String?
-  sunatCdrUrl      String?
-  cadenaQR         String?
-  enlaceProveedor    String?
-  enviadoAProveedor  Boolean              @default(false)
-  errorProveedor     String?
-  intentosEnvio    Int                  @default(0)
-  ultimoIntentoEnvio DateTime?
-  estado           EstadoComprobante    @default(BORRADOR)
-  anulado          Boolean              @default(false)
-  motivoAnulacion  String?
+  proveedorEmisor     ProveedorFacturacion?
+  tipoComprobante     TipoComprobante
+  serie               String
+  correlativo         String
+  codigoGenerado      String
+  tipoDocumento       String?
+  numeroDocumento     String?
+  nombreCliente       String
+  direccionCliente    String?
+  emailCliente        String?
+  fechaEmision        DateTime                  @default(now())
+  fechaVencimiento    DateTime?
+  moneda              String                    @default("PEN")
+  tipoCambio          Decimal?                  @db.Decimal(10, 6)
+  gravada             Decimal                   @default(0) @db.Decimal(10, 2)
+  inafecta            Decimal                   @default(0) @db.Decimal(10, 2)
+  exonerada           Decimal                   @default(0) @db.Decimal(10, 2)
+  igv                 Decimal                   @default(0) @db.Decimal(10, 2)
+  icbper              Decimal                   @default(0) @db.Decimal(10, 2)
+  total               Decimal                   @default(0) @db.Decimal(10, 2)
+  totalIgv            Decimal                   @default(0) @db.Decimal(10, 2)
+  cdrResponse         Json?
+  sunatStatus         EstadoSunat               @default(PENDIENTE)
+  sunatHash           String?
+  sunatXmlUrl         String?
+  sunatPdfUrl         String?
+  sunatCdrUrl         String?
+  cadenaQR            String?
+  enlaceProveedor     String?
+  enviadoAProveedor   Boolean                   @default(false)
+  errorProveedor      String?
+  intentosEnvio       Int                       @default(0)
+  ultimoIntentoEnvio  DateTime?
+  estado              EstadoComprobante         @default(BORRADOR)
+  anulado             Boolean                   @default(false)
+  motivoAnulacion     String?
   // Notas de crédito/débito: referencia al comprobante original
   comprobanteOrigenId String?
-  tipoNotaCredito    Int?
-  tipoNotaDebito     Int?
-  motivoNota         String?
-  creadoEn         DateTime             @default(now())
-  actualizadoEn    DateTime             @updatedAt
-  cliente          EmpresaPersona?      @relation("ComoCliente", fields: [clienteId], references: [id])
-  clienteEmpresa   ClienteEmpresa?      @relation("ComprobanteClienteEmpresa", fields: [clienteEmpresaId], references: [id])
-  empresa          Empresa              @relation(fields: [empresaId], references: [id])
-  sede             Sede?                @relation(fields: [sedeId], references: [id])
-  detalles         DetalleComprobante[]
-  ordenesServicio  OrdenServicio[]
-  pagos            PagoComprobante[]
-  componentes      ServicioComponente[] @relation("ComprobanteComponente")
-  productos        Producto[]           @relation("ProductoComprobante")
-  servicios        Servicio[]           @relation("ServicioComprobante")
+  tipoNotaCredito     Int?
+  tipoNotaDebito      Int?
+  motivoNota          String?
+  creadoEn            DateTime                  @default(now())
+  actualizadoEn       DateTime                  @updatedAt
+  cliente             EmpresaPersona?           @relation("ComoCliente", fields: [clienteId], references: [id])
+  clienteEmpresa      ClienteEmpresa?           @relation("ComprobanteClienteEmpresa", fields: [clienteEmpresaId], references: [id])
+  empresa             Empresa                   @relation(fields: [empresaId], references: [id])
+  sede                Sede?                     @relation(fields: [sedeId], references: [id])
+  detalles            DetalleComprobante[]
+  ordenesServicio     OrdenServicio[]
+  pagos               PagoComprobante[]
+  componentes         ServicioComponente[]      @relation("ComprobanteComponente")
+  productos           Producto[]                @relation("ProductoComprobante")
+  servicios           Servicio[]                @relation("ServicioComprobante")
   // Notas: self-relation
-  comprobanteOrigen  ComprobanteElectronico?  @relation("NotasRelacionadas", fields: [comprobanteOrigenId], references: [id])
-  notasRelacionadas  ComprobanteElectronico[] @relation("NotasRelacionadas")
+  comprobanteOrigen   ComprobanteElectronico?   @relation("NotasRelacionadas", fields: [comprobanteOrigenId], references: [id])
+  notasRelacionadas   ComprobanteElectronico[]  @relation("NotasRelacionadas")
   // Comunicaciones de Baja en las que este comprobante fue anulado
-  bajas              DetalleComunicacionBaja[] @relation("ComprobanteBajas")
+  bajas               DetalleComunicacionBaja[] @relation("ComprobanteBajas")
   // Resúmenes Diarios (RC) en los que este comprobante fue anulado (boletas)
-  resumenes          DetalleResumenDiario[]    @relation("ComprobanteResumenes")
+  resumenes           DetalleResumenDiario[]    @relation("ComprobanteResumenes")
   // Relación con Venta (1:1 opcional)
-  ventaId          String?              @unique
-  venta            Venta?               @relation(fields: [ventaId], references: [id])
+  ventaId             String?                   @unique
+  venta               Venta?                    @relation(fields: [ventaId], references: [id])
 
   @@unique([empresaId, tipoComprobante, serie, correlativo])
   @@unique([empresaId, codigoGenerado])
@@ -334,38 +334,38 @@ enum EstadoComprobante {
 /// fechaEmision del documento.
 /// Boletas y notas con prefijo BC/BD NO van por aquí — se anulan vía Resumen Diario.
 model ComunicacionBaja {
-  id                  String                @id @default(cuid())
-  empresaId           String
-  sedeId              String
+  id                 String               @id @default(cuid())
+  empresaId          String
+  sedeId             String
   // Identificación SUNAT
-  numeroCompleto      String                // "RA-20260426-001"
-  serie               String                // "RA-20260426"
-  correlativo         String                // "001"
-  fechaEmision        DateTime              @default(now())
-  fechaReferencia     DateTime              // fecha de los documentos a anular
-  motivoBaja          String                @db.VarChar(500)
+  numeroCompleto     String // "RA-20260426-001"
+  serie              String // "RA-20260426"
+  correlativo        String // "001"
+  fechaEmision       DateTime             @default(now())
+  fechaReferencia    DateTime // fecha de los documentos a anular
+  motivoBaja         String               @db.VarChar(500)
   // Estado
-  estadoSunat         EstadoSunat           @default(PENDIENTE)
-  ticket              String?
-  hashCdr             String?
-  errorProveedor      String?
-  cdrResponse         Json?
-  sunatXmlUrl         String?
-  sunatCdrUrl         String?
+  estadoSunat        EstadoSunat          @default(PENDIENTE)
+  ticket             String?
+  hashCdr            String?
+  errorProveedor     String?
+  cdrResponse        Json?
+  sunatXmlUrl        String?
+  sunatCdrUrl        String?
   // Tracking del proveedor
-  proveedorEmisor     ProveedorFacturacion
-  proveedorBajaId     String?               // ID en el proveedor (Syncrofact)
-  enviadoAProveedor   Boolean               @default(false)
-  intentosEnvio       Int                   @default(0)
-  ultimoIntentoEnvio  DateTime?
+  proveedorEmisor    ProveedorFacturacion
+  proveedorBajaId    String? // ID en el proveedor (Syncrofact)
+  enviadoAProveedor  Boolean              @default(false)
+  intentosEnvio      Int                  @default(0)
+  ultimoIntentoEnvio DateTime?
   // Auditoría
-  usuarioCreacionId   String?
-  creadoEn            DateTime              @default(now())
-  actualizadoEn       DateTime              @updatedAt
+  usuarioCreacionId  String?
+  creadoEn           DateTime             @default(now())
+  actualizadoEn      DateTime             @updatedAt
 
-  empresa             Empresa               @relation(fields: [empresaId], references: [id])
-  sede                Sede                  @relation(fields: [sedeId], references: [id])
-  detalles            DetalleComunicacionBaja[]
+  empresa  Empresa                   @relation(fields: [empresaId], references: [id])
+  sede     Sede                      @relation(fields: [sedeId], references: [id])
+  detalles DetalleComunicacionBaja[]
 
   @@unique([empresaId, numeroCompleto])
   @@index([empresaId])
@@ -376,14 +376,14 @@ model ComunicacionBaja {
 }
 
 model DetalleComunicacionBaja {
-  id                   String              @id @default(cuid())
-  comunicacionBajaId   String
-  comprobanteId        String              // FK al ComprobanteElectronico anulado
-  motivoEspecifico     String              @db.VarChar(250)
-  creadoEn             DateTime            @default(now())
+  id                 String   @id @default(cuid())
+  comunicacionBajaId String
+  comprobanteId      String // FK al ComprobanteElectronico anulado
+  motivoEspecifico   String   @db.VarChar(250)
+  creadoEn           DateTime @default(now())
 
-  comunicacionBaja     ComunicacionBaja        @relation(fields: [comunicacionBajaId], references: [id], onDelete: Cascade)
-  comprobante          ComprobanteElectronico  @relation("ComprobanteBajas", fields: [comprobanteId], references: [id])
+  comunicacionBaja ComunicacionBaja       @relation(fields: [comunicacionBajaId], references: [id], onDelete: Cascade)
+  comprobante      ComprobanteElectronico @relation("ComprobanteBajas", fields: [comprobanteId], references: [id])
 
   @@unique([comunicacionBajaId, comprobanteId])
   @@index([comprobanteId])
@@ -405,38 +405,38 @@ enum EstadoSunat {
 /// Todas las boletas dentro de un mismo RC deben compartir `fechaEmision`
 /// (regla SUNAT). Si hay boletas de fechas distintas, se generan RCs separados.
 model ResumenDiario {
-  id                  String                @id @default(cuid())
-  empresaId           String
-  sedeId              String
+  id                 String               @id @default(cuid())
+  empresaId          String
+  sedeId             String
   // Identificación SUNAT
-  numeroCompleto      String                // "RC-20260429-001"
-  serie               String                // "RC-20260429"
-  correlativo         String                // "001"
-  fechaEmision        DateTime              @default(now())
-  fechaReferencia     DateTime              // fecha de las boletas a anular
-  motivoAnulacion     String                @db.VarChar(500)
+  numeroCompleto     String // "RC-20260429-001"
+  serie              String // "RC-20260429"
+  correlativo        String // "001"
+  fechaEmision       DateTime             @default(now())
+  fechaReferencia    DateTime // fecha de las boletas a anular
+  motivoAnulacion    String               @db.VarChar(500)
   // Estado
-  estadoSunat         EstadoSunat           @default(PENDIENTE)
-  ticket              String?
-  hashCdr             String?
-  errorProveedor      String?
-  cdrResponse         Json?
-  sunatXmlUrl         String?
-  sunatCdrUrl         String?
+  estadoSunat        EstadoSunat          @default(PENDIENTE)
+  ticket             String?
+  hashCdr            String?
+  errorProveedor     String?
+  cdrResponse        Json?
+  sunatXmlUrl        String?
+  sunatCdrUrl        String?
   // Tracking del proveedor
-  proveedorEmisor     ProveedorFacturacion
-  proveedorResumenId  String?               // ID en el proveedor (Syncrofact)
-  enviadoAProveedor   Boolean               @default(false)
-  intentosEnvio       Int                   @default(0)
-  ultimoIntentoEnvio  DateTime?
+  proveedorEmisor    ProveedorFacturacion
+  proveedorResumenId String? // ID en el proveedor (Syncrofact)
+  enviadoAProveedor  Boolean              @default(false)
+  intentosEnvio      Int                  @default(0)
+  ultimoIntentoEnvio DateTime?
   // Auditoría
-  usuarioCreacionId   String?
-  creadoEn            DateTime              @default(now())
-  actualizadoEn       DateTime              @updatedAt
+  usuarioCreacionId  String?
+  creadoEn           DateTime             @default(now())
+  actualizadoEn      DateTime             @updatedAt
 
-  empresa             Empresa               @relation(fields: [empresaId], references: [id])
-  sede                Sede                  @relation(fields: [sedeId], references: [id])
-  detalles            DetalleResumenDiario[]
+  empresa  Empresa                @relation(fields: [empresaId], references: [id])
+  sede     Sede                   @relation(fields: [sedeId], references: [id])
+  detalles DetalleResumenDiario[]
 
   @@unique([empresaId, numeroCompleto])
   @@index([empresaId])
@@ -447,14 +447,14 @@ model ResumenDiario {
 }
 
 model DetalleResumenDiario {
-  id                   String              @id @default(cuid())
-  resumenDiarioId      String
-  comprobanteId        String              // FK al ComprobanteElectronico anulado (BOLETA)
-  motivoEspecifico     String              @db.VarChar(250)
-  creadoEn             DateTime            @default(now())
+  id               String   @id @default(cuid())
+  resumenDiarioId  String
+  comprobanteId    String // FK al ComprobanteElectronico anulado (BOLETA)
+  motivoEspecifico String   @db.VarChar(250)
+  creadoEn         DateTime @default(now())
 
-  resumenDiario        ResumenDiario           @relation(fields: [resumenDiarioId], references: [id], onDelete: Cascade)
-  comprobante          ComprobanteElectronico  @relation("ComprobanteResumenes", fields: [comprobanteId], references: [id])
+  resumenDiario ResumenDiario          @relation(fields: [resumenDiarioId], references: [id], onDelete: Cascade)
+  comprobante   ComprobanteElectronico @relation("ComprobanteResumenes", fields: [comprobanteId], references: [id])
 
   @@unique([resumenDiarioId, comprobanteId])
   @@index([comprobanteId])

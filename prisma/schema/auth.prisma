@@ -120,56 +120,59 @@ model Usuario {
   citasTecnico Cita[] @relation("CitasTecnico")
 
   // Relaciones para notificaciones push
-  dispositivos              DispositivoNotificacion[]
-  notificaciones            Notificacion[]
-  preferenciasNotificacion  PreferenciaNotificacion[]
-  campanasPromocion         CampanaPromocion[]
-  mensajesServicio          MensajeServicio[]
-  preguntasProducto         PreguntaProducto[] @relation("PreguntasProducto")
-  respuestasProducto        PreguntaProducto[] @relation("RespuestasProducto")
-  opinionesProducto         OpinionProducto[]
-  favoritosProducto         FavoritoProducto[] @relation("FavoritosProducto")
-  productosVistos           ProductoVisto[]    @relation("ProductosVistos")
-  carritoItems              CarritoItem[]                @relation("CarritoUsuario")
-  pedidosMarketplace        PedidoMarketplace[]          @relation("PedidosComprador")
-  solicitudesCotizacion     SolicitudCotizacion[]        @relation("SolicitudesCotizacion")
+  dispositivos             DispositivoNotificacion[]
+  notificaciones           Notificacion[]
+  preferenciasNotificacion PreferenciaNotificacion[]
+  campanasPromocion        CampanaPromocion[]
+  mensajesServicio         MensajeServicio[]
+  preguntasProducto        PreguntaProducto[]        @relation("PreguntasProducto")
+  respuestasProducto       PreguntaProducto[]        @relation("RespuestasProducto")
+  opinionesProducto        OpinionProducto[]
+  favoritosProducto        FavoritoProducto[]        @relation("FavoritosProducto")
+  productosVistos          ProductoVisto[]           @relation("ProductosVistos")
+  carritoItems             CarritoItem[]             @relation("CarritoUsuario")
+  pedidosMarketplace       PedidoMarketplace[]       @relation("PedidosComprador")
+  solicitudesCotizacion    SolicitudCotizacion[]     @relation("SolicitudesCotizacion")
 
   // Relaciones para módulo de caja
-  cajasAbiertas                  Caja[]             @relation("CajaUsuario")
-  cajasCerradas                  Caja[]             @relation("CajaCerradoPor")
-  movimientosCajaRegistrados     MovimientoCaja[]   @relation("MovimientoCajaRegistradoPor")
+  cajasAbiertas              Caja[]           @relation("CajaUsuario")
+  cajasCerradas              Caja[]           @relation("CajaCerradoPor")
+  movimientosCajaRegistrados MovimientoCaja[] @relation("MovimientoCajaRegistradoPor")
 
   // Relaciones para módulo de caja chica
-  cajasChicaResponsable          CajaChica[]            @relation("CajaChicaResponsable")
-  gastosCajaChicaRegistrados     GastoCajaChica[]       @relation("GastoCajaChicaRegistradoPor")
-  rendicionesAprobadas           RendicionCajaChica[]   @relation("RendicionAprobadaPor")
+  cajasChicaResponsable      CajaChica[]          @relation("CajaChicaResponsable")
+  gastosCajaChicaRegistrados GastoCajaChica[]     @relation("GastoCajaChicaRegistradoPor")
+  rendicionesAprobadas       RendicionCajaChica[] @relation("RendicionAprobadaPor")
+
+  // Gastos recurrentes
+  pagosGastoRecurrenteRegistrados PagoGastoRecurrente[] @relation("PagoGastoRecurrenteRegistradoPor")
 
   // Relaciones para anulaciones
-  movimientosCajaAnulados        MovimientoCaja[]       @relation("MovimientoCajaAnuladoPor")
-  movimientosCajaAutorizados     MovimientoCaja[]       @relation("MovimientoCajaAutorizadoPor")
-  ventasAnuladas                 Venta[]                @relation("VentaAnuladaPor")
-  ventasAutorizadasAnulacion     Venta[]                @relation("VentaAutorizadaAnulacion")
+  movimientosCajaAnulados    MovimientoCaja[] @relation("MovimientoCajaAnuladoPor")
+  movimientosCajaAutorizados MovimientoCaja[] @relation("MovimientoCajaAutorizadoPor")
+  ventasAnuladas             Venta[]          @relation("VentaAnuladaPor")
+  ventasAutorizadasAnulacion Venta[]          @relation("VentaAutorizadaAnulacion")
 
   // Agente bancario
-  agentesResponsable             AgenteBancario[]       @relation("AgenteResponsable")
-  operacionesAgenteRegistradas   OperacionAgente[]      @relation("OperacionAgenteRegistro")
+  agentesResponsable           AgenteBancario[]  @relation("AgenteResponsable")
+  operacionesAgenteRegistradas OperacionAgente[] @relation("OperacionAgenteRegistro")
 
   // RRHH
-  empleadosRegistro              Empleado[]             @relation("EmpleadoUsuario")
-  asistenciasRegistradas         Asistencia[]           @relation("AsistenciaRegistradaPor")
-  incidenciasAprobadas           Incidencia[]           @relation("IncidenciaAprobadaPor")
-  planillasCalculadas            PeriodoPlanilla[]      @relation("PlanillaCalculadaPor")
-  planillasAprobadas             PeriodoPlanilla[]      @relation("PlanillaAprobadaPor")
-  boletasPagadas                 BoletaPago[]           @relation("BoletaPagadaPor")
-  adelantosAprobados             AdelantoPago[]         @relation("AdelantoAprobadoPor")
-  adelantosPagados               AdelantoPago[]         @relation("AdelantoPagadoPor")
+  empleadosRegistro      Empleado[]        @relation("EmpleadoUsuario")
+  asistenciasRegistradas Asistencia[]      @relation("AsistenciaRegistradaPor")
+  incidenciasAprobadas   Incidencia[]      @relation("IncidenciaAprobadaPor")
+  planillasCalculadas    PeriodoPlanilla[] @relation("PlanillaCalculadaPor")
+  planillasAprobadas     PeriodoPlanilla[] @relation("PlanillaAprobadaPor")
+  boletasPagadas         BoletaPago[]      @relation("BoletaPagadaPor")
+  adelantosAprobados     AdelantoPago[]    @relation("AdelantoAprobadoPor")
+  adelantosPagados       AdelantoPago[]    @relation("AdelantoPagadoPor")
 
   // Guías de remisión
-  guiasRemisionCreadas           GuiaRemision[]         @relation("GuiaRemisionCreador")
+  guiasRemisionCreadas GuiaRemision[] @relation("GuiaRemisionCreador")
 
   // Cajero original de ventas que luego fueron revertidas (Devolucion.cajeroOriginalId).
   // Permite notificar/auditar al cajero original cuando otro usuario procesa la reversión.
-  devolucionesComoCajeroOriginal Devolucion[]           @relation("DevolucionCajeroOriginal")
+  devolucionesComoCajeroOriginal Devolucion[] @relation("DevolucionCajeroOriginal")
 
   @@index([email])
   @@index([telefono])
@@ -202,17 +205,17 @@ model AuthProvider {
 }
 
 model EmpresaPersona {
-  id              String                   @id @default(cuid())
-  personaId       String
-  empresaId       String
-  rol             RolPersona               @default(CLIENTE)
-  isActive        Boolean                  @default(true)
-  deletedAt       DateTime?
-  creadoEn        DateTime                 @default(now())
-  actualizadoEn   DateTime                 @updatedAt
-  comprobantes    ComprobanteElectronico[] @relation("ComoCliente")
-  empresa         Empresa                  @relation(fields: [empresaId], references: [id])
-  persona         Persona                  @relation(fields: [personaId], references: [id])
+  id                  String                   @id @default(cuid())
+  personaId           String
+  empresaId           String
+  rol                 RolPersona               @default(CLIENTE)
+  isActive            Boolean                  @default(true)
+  deletedAt           DateTime?
+  creadoEn            DateTime                 @default(now())
+  actualizadoEn       DateTime                 @updatedAt
+  comprobantes        ComprobanteElectronico[] @relation("ComoCliente")
+  empresa             Empresa                  @relation(fields: [empresaId], references: [id])
+  persona             Persona                  @relation(fields: [personaId], references: [id])
   ordenesServicio     OrdenServicio[]          @relation("OrdenServicioCliente")
   cotizaciones        Cotizacion[]
   ventas              Venta[]

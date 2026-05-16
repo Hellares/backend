@@ -11,9 +11,9 @@ enum EstadoVenta {
 }
 
 enum CanalVenta {
-  POS          // Punto de venta físico — requiere caja abierta
-  COTIZACION   // Desde cotización (atención presencial) — requiere caja abierta
-  ONLINE       // Tienda online / marketplace — no requiere caja
+  POS // Punto de venta físico — requiere caja abierta
+  COTIZACION // Desde cotización (atención presencial) — requiere caja abierta
+  ONLINE // Tienda online / marketplace — no requiere caja
 }
 
 enum MetodoPagoVenta {
@@ -30,7 +30,7 @@ enum MetodoPagoVenta {
 
 /// Venta a cliente
 model Venta {
-  id               String  @id @default(cuid())
+  id               String     @id @default(cuid())
   empresaId        String
   sedeId           String
   clienteId        String?
@@ -67,10 +67,10 @@ model Venta {
   descuentoAutorizadoEn     DateTime?
 
   // Pago
-  estado        EstadoVenta @default(BORRADOR)
+  estado        EstadoVenta      @default(BORRADOR)
   metodoPago    MetodoPagoVenta?
-  montoRecibido Decimal?    @db.Decimal(10, 2)
-  montoCambio   Decimal?    @db.Decimal(10, 2)
+  montoRecibido Decimal?         @db.Decimal(10, 2)
+  montoCambio   Decimal?         @db.Decimal(10, 2)
 
   // Bancarización (Ley 28194) — el cajero confirmó la advertencia legal cuando
   // el efectivo de la venta excede el límite permitido (cliente asume riesgo
@@ -78,51 +78,51 @@ model Venta {
   bancarizacionAdvertida Boolean @default(false)
 
   // Crédito
-  esCredito             Boolean   @default(false)
-  plazoCredito          Int? // Días de crédito
-  numeroCuotas          Int? // Número de cuotas
-  montoCreditoInicial   Decimal?  @db.Decimal(10, 2) // Monto de la porción crédito (ventas mixtas)
+  esCredito           Boolean  @default(false)
+  plazoCredito        Int? // Días de crédito
+  numeroCuotas        Int? // Número de cuotas
+  montoCreditoInicial Decimal? @db.Decimal(10, 2) // Monto de la porción crédito (ventas mixtas)
 
   // Interés por crédito
-  porcentajeInteres     Decimal?  @db.Decimal(5, 2)  // % aplicado (null = 0%)
-  montoInteres          Decimal?  @db.Decimal(10, 2) // Monto calculado del interés
-  totalConInteres       Decimal?  @db.Decimal(10, 2) // montoCreditoInicial + montoInteres
+  porcentajeInteres Decimal? @db.Decimal(5, 2) // % aplicado (null = 0%)
+  montoInteres      Decimal? @db.Decimal(10, 2) // Monto calculado del interés
+  totalConInteres   Decimal? @db.Decimal(10, 2) // montoCreditoInicial + montoInteres
 
-  fechaVencimientoPago  DateTime?
+  fechaVencimientoPago DateTime?
 
   // Fechas
-  fechaVenta    DateTime  @default(now())
+  fechaVenta    DateTime @default(now())
   observaciones String?
 
   // Anulacion
-  motivoAnulacion   String?
-  anuladoPorId      String?
-  autorizadoPorId   String?
-  fechaAnulacion    DateTime?
+  motivoAnulacion String?
+  anuladoPorId    String?
+  autorizadoPorId String?
+  fechaAnulacion  DateTime?
 
   // Auditoría
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa        Empresa         @relation(fields: [empresaId], references: [id])
-  sede           Sede            @relation(fields: [sedeId], references: [id])
-  cliente        EmpresaPersona? @relation(fields: [clienteId], references: [id])
-  clienteEmpresa ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
-  vendedor       Usuario         @relation("VentaVendedor", fields: [vendedorId], references: [id])
-  cajero         Usuario?        @relation("VentaCajero", fields: [cajeroId], references: [id])
-  anuladoPor     Usuario?        @relation("VentaAnuladaPor", fields: [anuladoPorId], references: [id])
-  autorizadoPorAnulacion Usuario? @relation("VentaAutorizadaAnulacion", fields: [autorizadoPorId], references: [id])
-  cotizacion     Cotizacion?     @relation("VentaCotizacion", fields: [cotizacionId], references: [id])
-  cotizacionesOrigen Cotizacion[] @relation("CotizacionVenta") // Back-relation for cotizacion.ventaId
-  detalles       VentaDetalle[]
-  pagos          PagoVenta[]
-  cuotas         CuotaVenta[]
-  movimientos    MovimientoStock[]
-  devoluciones   Devolucion[]
-  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaVenta")
-  comprobante    ComprobanteElectronico?
-  guiasRemision  GuiaRemision[]
+  empresa                Empresa                 @relation(fields: [empresaId], references: [id])
+  sede                   Sede                    @relation(fields: [sedeId], references: [id])
+  cliente                EmpresaPersona?         @relation(fields: [clienteId], references: [id])
+  clienteEmpresa         ClienteEmpresa?         @relation(fields: [clienteEmpresaId], references: [id])
+  vendedor               Usuario                 @relation("VentaVendedor", fields: [vendedorId], references: [id])
+  cajero                 Usuario?                @relation("VentaCajero", fields: [cajeroId], references: [id])
+  anuladoPor             Usuario?                @relation("VentaAnuladaPor", fields: [anuladoPorId], references: [id])
+  autorizadoPorAnulacion Usuario?                @relation("VentaAutorizadaAnulacion", fields: [autorizadoPorId], references: [id])
+  cotizacion             Cotizacion?             @relation("VentaCotizacion", fields: [cotizacionId], references: [id])
+  cotizacionesOrigen     Cotizacion[]            @relation("CotizacionVenta") // Back-relation for cotizacion.ventaId
+  detalles               VentaDetalle[]
+  pagos                  PagoVenta[]
+  cuotas                 CuotaVenta[]
+  movimientos            MovimientoStock[]
+  devoluciones           Devolucion[]
+  movimientosCaja        MovimientoCaja[]        @relation("MovimientoCajaVenta")
+  comprobante            ComprobanteElectronico?
+  guiasRemision          GuiaRemision[]
 
   @@unique([empresaId, codigo])
   // FK indexes
@@ -204,24 +204,24 @@ model VentaDetalle {
 
 /// Registro de pagos de una venta (soporta pagos parciales/múltiples)
 model PagoVenta {
-  id             String     @id @default(cuid())
-  ventaId        String
-  cuotaVentaId   String?    // Cuota específica a la que aplica este pago
-  metodoPago     MetodoPagoVenta
-  monto          Decimal    @db.Decimal(10, 2) // Monto en soles (siempre PEN)
-  referencia     String? // Número de operación, voucher, etc.
-  banco          String?    @db.VarChar(50) // Entidad financiera (TARJETA/TRANSFERENCIA)
-  fechaPago      DateTime   @default(now())
+  id           String          @id @default(cuid())
+  ventaId      String
+  cuotaVentaId String? // Cuota específica a la que aplica este pago
+  metodoPago   MetodoPagoVenta
+  monto        Decimal         @db.Decimal(10, 2) // Monto en soles (siempre PEN)
+  referencia   String? // Número de operación, voucher, etc.
+  banco        String?         @db.VarChar(50) // Entidad financiera (TARJETA/TRANSFERENCIA)
+  fechaPago    DateTime        @default(now())
 
   // Desglose del pago (principal, interés, mora)
-  montoPrincipal  Decimal? @db.Decimal(10, 2) // Porción aplicada a principal
-  montoInteres    Decimal? @db.Decimal(10, 2) // Porción aplicada a interés
-  montoMora       Decimal? @db.Decimal(10, 2) // Porción aplicada a mora
+  montoPrincipal Decimal? @db.Decimal(10, 2) // Porción aplicada a principal
+  montoInteres   Decimal? @db.Decimal(10, 2) // Porción aplicada a interés
+  montoMora      Decimal? @db.Decimal(10, 2) // Porción aplicada a mora
 
   // Pago en moneda extranjera
-  monedaOriginal  String?  // PEN o USD (null = PEN)
-  montoOriginal   Decimal? @db.Decimal(10, 2) // Monto en moneda original
-  tipoCambio      Decimal? @db.Decimal(10, 4) // Tipo de cambio usado
+  monedaOriginal String? // PEN o USD (null = PEN)
+  montoOriginal  Decimal? @db.Decimal(10, 2) // Monto en moneda original
+  tipoCambio     Decimal? @db.Decimal(10, 4) // Tipo de cambio usado
 
   creadoEn DateTime @default(now())
 
@@ -243,42 +243,42 @@ enum EstadoCuota {
   PAGADA_PARCIAL
   PAGADA
   VENCIDA
-  ANULADA   // Cuota cancelada por reversión total de la venta (comprobante anulado)
+  ANULADA // Cuota cancelada por reversión total de la venta (comprobante anulado)
 }
 
 /// Cuota individual de una venta a crédito
 model CuotaVenta {
-  id              String       @id @default(cuid())
-  ventaId         String
-  numero          Int          // 1, 2, 3...
+  id      String @id @default(cuid())
+  ventaId String
+  numero  Int // 1, 2, 3...
 
-  monto           Decimal      @db.Decimal(10, 2)  // Total cuota = montoPrincipal + montoInteres
-  montoPagado     Decimal      @default(0) @db.Decimal(10, 2) // Total pagado (principal + interés)
-  saldoPendiente  Decimal      @db.Decimal(10, 2)
+  monto          Decimal @db.Decimal(10, 2) // Total cuota = montoPrincipal + montoInteres
+  montoPagado    Decimal @default(0) @db.Decimal(10, 2) // Total pagado (principal + interés)
+  saldoPendiente Decimal @db.Decimal(10, 2)
 
   // Desglose principal / interés
-  montoPrincipal        Decimal  @default(0) @db.Decimal(10, 2) // Porción del capital
-  montoInteres          Decimal  @default(0) @db.Decimal(10, 2) // Porción del interés por crédito
+  montoPrincipal Decimal @default(0) @db.Decimal(10, 2) // Porción del capital
+  montoInteres   Decimal @default(0) @db.Decimal(10, 2) // Porción del interés por crédito
 
   // Tracking de pagos por componente
-  montoPagadoPrincipal  Decimal  @default(0) @db.Decimal(10, 2)
-  montoPagadoInteres    Decimal  @default(0) @db.Decimal(10, 2)
-  montoPagadoMora       Decimal  @default(0) @db.Decimal(10, 2)
+  montoPagadoPrincipal Decimal @default(0) @db.Decimal(10, 2)
+  montoPagadoInteres   Decimal @default(0) @db.Decimal(10, 2)
+  montoPagadoMora      Decimal @default(0) @db.Decimal(10, 2)
 
   fechaVencimiento DateTime
   estado           EstadoCuota @default(PENDIENTE)
 
   // Mora por vencimiento
-  montoMora           Decimal?     @db.Decimal(10, 2)
-  diasVencido         Int          @default(0)
-  fechaCalculoMora    DateTime?
+  montoMora        Decimal?  @db.Decimal(10, 2)
+  diasVencido      Int       @default(0)
+  fechaCalculoMora DateTime?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  venta  Venta       @relation(fields: [ventaId], references: [id], onDelete: Cascade)
-  pagos  PagoVenta[]
+  venta Venta       @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  pagos PagoVenta[]
 
   @@unique([ventaId, numero])
   @@index([ventaId])

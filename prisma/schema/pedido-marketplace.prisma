@@ -45,57 +45,57 @@ model CarritoItem {
 }
 
 model PedidoMarketplace {
-  id              String  @id @default(cuid())
-  codigo          String
-  compradorId     String
-  empresaId       String
+  id          String @id @default(cuid())
+  codigo      String
+  compradorId String
+  empresaId   String
 
-  nombreComprador    String
-  emailComprador     String?
-  telefonoComprador  String?
+  nombreComprador   String
+  emailComprador    String?
+  telefonoComprador String?
 
-  direccionEnvio     String?
-  referenciaEnvio    String?
-  distritoEnvio      String?
-  provinciaEnvio     String?
-  departamentoEnvio  String?
-  coordenadasEnvio   Json?
+  direccionEnvio    String?
+  referenciaEnvio   String?
+  distritoEnvio     String?
+  provinciaEnvio    String?
+  departamentoEnvio String?
+  coordenadasEnvio  Json?
 
-  subtotal        Decimal @db.Decimal(10, 2)
-  descuento       Decimal @default(0) @db.Decimal(10, 2)
-  costoEnvio      Decimal @default(0) @db.Decimal(10, 2)
-  total           Decimal @db.Decimal(10, 2)
-  moneda          String  @default("PEN")
+  subtotal   Decimal @db.Decimal(10, 2)
+  descuento  Decimal @default(0) @db.Decimal(10, 2)
+  costoEnvio Decimal @default(0) @db.Decimal(10, 2)
+  total      Decimal @db.Decimal(10, 2)
+  moneda     String  @default("PEN")
 
-  estado          EstadoPedidoMarketplace @default(PENDIENTE_PAGO)
+  estado EstadoPedidoMarketplace @default(PENDIENTE_PAGO)
 
   // Tipo de entrega
-  tipoEntrega     TipoEntregaMarketplace @default(ENVIO_DOMICILIO)
-  sedeRetiroId    String?
-  sedeRetiro      Sede?  @relation(fields: [sedeRetiroId], references: [id])
+  tipoEntrega  TipoEntregaMarketplace @default(ENVIO_DOMICILIO)
+  sedeRetiroId String?
+  sedeRetiro   Sede?                  @relation(fields: [sedeRetiroId], references: [id])
 
-  metodoPago          MetodoPagoMarketplace?
-  comprobantePagoUrl  String?
+  metodoPago           MetodoPagoMarketplace?
+  comprobantePagoUrl   String?
   transaccionExternaId String?
-  pagoEnviadoEn       DateTime?
-  pagoValidadoEn      DateTime?
-  pagoValidadoPor     String?
-  motivoRechazo       String?
+  pagoEnviadoEn        DateTime?
+  pagoValidadoEn       DateTime?
+  pagoValidadoPor      String?
+  motivoRechazo        String?
 
   enviadoEn         DateTime?
   entregadoEn       DateTime?
   codigoSeguimiento String?
 
-  notasComprador  String?
-  notasVendedor   String?
+  notasComprador String?
+  notasVendedor  String?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
-  comprador  Usuario  @relation("PedidosComprador", fields: [compradorId], references: [id])
-  empresa    Empresa  @relation("PedidosEmpresa", fields: [empresaId], references: [id])
-  detalles   PedidoMarketplaceDetalle[]
-  movimientosCaja MovimientoCaja[] @relation("MovimientoCajaPedido")
+  comprador       Usuario                    @relation("PedidosComprador", fields: [compradorId], references: [id])
+  empresa         Empresa                    @relation("PedidosEmpresa", fields: [empresaId], references: [id])
+  detalles        PedidoMarketplaceDetalle[]
+  movimientosCaja MovimientoCaja[]           @relation("MovimientoCajaPedido")
 
   @@unique([empresaId, codigo])
   @@index([compradorId])
@@ -104,24 +104,24 @@ model PedidoMarketplace {
   @@index([creadoEn])
   @@index([compradorId, creadoEn])
   @@index([empresaId, estado])
-  @@index([estado, creadoEn])          // Cron: pedidos sin pago expirados
-  @@index([estado, actualizadoEn])     // Cron: pedidos rechazados expirados
-  @@index([estado, pagoEnviadoEn])     // Cron: recordatorios de validación
+  @@index([estado, creadoEn]) // Cron: pedidos sin pago expirados
+  @@index([estado, actualizadoEn]) // Cron: pedidos rechazados expirados
+  @@index([estado, pagoEnviadoEn]) // Cron: recordatorios de validación
 }
 
 model PedidoMarketplaceDetalle {
-  id              String  @id @default(cuid())
-  pedidoId        String
-  productoId      String?
-  varianteId      String?
+  id         String  @id @default(cuid())
+  pedidoId   String
+  productoId String?
+  varianteId String?
 
-  descripcion     String
-  cantidad        Int
-  precioUnitario  Decimal @db.Decimal(10, 2)
-  subtotal        Decimal @db.Decimal(10, 2)
-  imagenUrl       String?
+  descripcion    String
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(10, 2)
+  subtotal       Decimal @db.Decimal(10, 2)
+  imagenUrl      String?
 
-  creadoEn        DateTime @default(now())
+  creadoEn DateTime @default(now())
 
   pedido   PedidoMarketplace @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
   producto Producto?         @relation("PedidoProducto", fields: [productoId], references: [id])

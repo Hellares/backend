@@ -1,17 +1,17 @@
 model AuditLog {
-  id          String        @id @default(cuid())
-  usuarioId   String?
-  usuarioEmail String?
-  empresaId   String?
+  id            String      @id @default(cuid())
+  usuarioId     String?
+  usuarioEmail  String?
+  empresaId     String?
   empresaNombre String?
-  accion      AccionAudit
-  entidad     String        // Empresa, Usuario, Plan, Pago, etc.
-  entidadId   String?
-  detalle     String?       // Descripción legible de la acción
-  metadata    Json?         // Datos extra (cambios, valores anteriores, etc.)
-  ip          String?
-  userAgent   String?
-  creadoEn    DateTime      @default(now())
+  accion        AccionAudit
+  entidad       String // Empresa, Usuario, Plan, Pago, etc.
+  entidadId     String?
+  detalle       String? // Descripción legible de la acción
+  metadata      Json? // Datos extra (cambios, valores anteriores, etc.)
+  ip            String?
+  userAgent     String?
+  creadoEn      DateTime    @default(now())
 
   @@index([usuarioId])
   @@index([empresaId])

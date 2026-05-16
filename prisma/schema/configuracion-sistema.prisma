@@ -1,34 +1,34 @@
 model ConfiguracionSistema {
-  id        String   @id @default("SYSTEM_CONFIG")
+  id String @id @default("SYSTEM_CONFIG")
 
   // === PAGOS ===
-  yapeNumero        String?   @default("942857613")
-  yapeTitular       String?   @default("Syncronize SAC")
-  yapeQrUrl         String?   // URL de imagen QR Yape
-  plinNumero        String?   @default("942857613")
-  plinTitular       String?   @default("Syncronize SAC")
-  plinQrUrl         String?   // URL de imagen QR Plin
-  bancoCuenta       String?   @default("191-12345678-0-12")
-  bancoCci          String?   @default("002-191-12345678012-34")
-  bancoNombre       String?   @default("BCP")
-  bancoTitular      String?   @default("Syncronize SAC")
+  yapeNumero   String? @default("942857613")
+  yapeTitular  String? @default("Syncronize SAC")
+  yapeQrUrl    String? // URL de imagen QR Yape
+  plinNumero   String? @default("942857613")
+  plinTitular  String? @default("Syncronize SAC")
+  plinQrUrl    String? // URL de imagen QR Plin
+  bancoCuenta  String? @default("191-12345678-0-12")
+  bancoCci     String? @default("002-191-12345678012-34")
+  bancoNombre  String? @default("BCP")
+  bancoTitular String? @default("Syncronize SAC")
 
   // === SUSCRIPCIONES ===
-  diasGracia        Int       @default(7)
-  diasTrialNuevas   Int       @default(30)
-  planDefaultId     String?   // ID del plan por defecto para nuevas empresas
+  diasGracia      Int     @default(7)
+  diasTrialNuevas Int     @default(30)
+  planDefaultId   String? // ID del plan por defecto para nuevas empresas
 
   // === SISTEMA ===
-  modoMantenimiento Boolean   @default(false)
+  modoMantenimiento    Boolean @default(false)
   mensajeMantenimiento String? @default("Estamos realizando mejoras en el sistema. Volveremos pronto.")
-  whatsappSoporte   String?   @default("51942857613")
-  emailSoporte      String?   @default("soporte@syncronize.net.pe")
-  mensajeBienvenida String?   @default("Bienvenido a Syncronize")
+  whatsappSoporte      String? @default("51942857613")
+  emailSoporte         String? @default("soporte@syncronize.net.pe")
+  mensajeBienvenida    String? @default("Bienvenido a Syncronize")
 
   // === BRANDING ===
-  nombreSistema     String?   @default("Syncronize")
-  logoUrl           String?
+  nombreSistema String? @default("Syncronize")
+  logoUrl       String?
 
-  creadoEn          DateTime  @default(now())
-  actualizadoEn     DateTime  @updatedAt
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
 }

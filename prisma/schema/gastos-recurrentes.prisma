@@ -1,0 +1,79 @@
+// =========================================
+// GASTOS RECURRENTES (Luz, Agua, Internet, Alquiler, Contador, Suscripciones)
+// =========================================
+// Capa encima de MovimientoCaja: programa el gasto y al marcarlo pagado
+// materializa un MovimientoCaja (fuente=CAJA) o decrementa EmpresaBanco
+// (fuente=BANCO). NO reemplaza el flujo manual de gastos del día.
+
+enum FrecuenciaGasto {
+  MENSUAL
+  BIMESTRAL
+  TRIMESTRAL
+  ANUAL
+}
+
+enum FuentePagoGasto {
+  CAJA // sale de caja física → genera MovimientoCaja EGRESO
+  BANCO // sale de cuenta bancaria → decrementa EmpresaBanco.saldoActual
+}
+
+/// Plantilla del gasto recurrente (luz, alquiler, etc.)
+model GastoRecurrente {
+  id               String          @id @default(cuid())
+  empresaId        String
+  sedeId           String? // opcional: si null, gasto de empresa global
+  nombre           String // "Recibo Luz", "Alquiler SJL"
+  categoriaGastoId String // FK CategoriaGasto (tipo=EGRESO)
+  proveedorId      String? // opcional: Luz del Sur, Sedapal
+  montoEstimado    Decimal         @db.Decimal(10, 2)
+  frecuencia       FrecuenciaGasto
+  diaVencimiento   Int // 1..31
+  activo           Boolean         @default(true)
+  ultimoPagoEn     DateTime? // se actualiza al registrar pago
+  notas            String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa        Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  sede           Sede?                 @relation(fields: [sedeId], references: [id])
+  categoriaGasto CategoriaGasto        @relation(fields: [categoriaGastoId], references: [id])
+  proveedor      Proveedor?            @relation(fields: [proveedorId], references: [id])
+  pagos          PagoGastoRecurrente[]
+
+  @@index([empresaId, activo])
+  @@index([empresaId, sedeId, activo])
+  @@index([empresaId, diaVencimiento])
+  @@index([categoriaGastoId])
+  @@index([proveedorId])
+}
+
+/// Pago materializado de un GastoRecurrente para un período específico
+model PagoGastoRecurrente {
+  id                String          @id @default(cuid())
+  gastoRecurrenteId String
+  empresaId         String // denormalizado para queries de reportes financieros
+  periodo           String // "2026-05" — único por gasto
+  montoReal         Decimal         @db.Decimal(10, 2)
+  fechaPago         DateTime        @default(now())
+  fuente            FuentePagoGasto
+  metodoPago        MetodoPagoVenta
+  bancoId           String? // FK EmpresaBanco (requerido si fuente=BANCO)
+  movimientoCajaId  String?         @unique // FK MovimientoCaja (set si fuente=CAJA)
+  comprobanteUrl    String? // S3 Contabo, opcional
+  notas             String?
+  registradoPorId   String
+
+  creadoEn DateTime @default(now())
+
+  gastoRecurrente GastoRecurrente @relation(fields: [gastoRecurrenteId], references: [id], onDelete: Cascade)
+  empresa         Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  banco           EmpresaBanco?   @relation(fields: [bancoId], references: [id])
+  movimientoCaja  MovimientoCaja? @relation(fields: [movimientoCajaId], references: [id])
+  registradoPor   Usuario         @relation("PagoGastoRecurrenteRegistradoPor", fields: [registradoPorId], references: [id])
+
+  @@unique([gastoRecurrenteId, periodo])
+  @@index([empresaId, fechaPago])
+  @@index([gastoRecurrenteId, fechaPago])
+  @@index([empresaId, fuente, fechaPago])
+}

@@ -12,46 +12,46 @@ enum EstadoCita {
 }
 
 model Cita {
-  id                String     @id @default(cuid())
-  empresaId         String
-  sedeId            String
-  servicioId        String
-  tecnicoId         String
-  clienteId         String?      // EmpresaPersona (persona natural)
-  clienteEmpresaId  String?      // ClienteEmpresa (empresa)
-  codigo            String       // CITA-00001
-  fecha             DateTime     @db.Date
-  horaInicio        String       // "09:00"
-  horaFin           String       // "10:00"
-  estado            EstadoCita   @default(PENDIENTE)
-  costoServicio     Decimal?     @db.Decimal(10, 2) // Mano de obra / precio del servicio
-  costoProductos    Decimal?     @db.Decimal(10, 2) // Suma automática de items
-  descuento         Decimal?     @db.Decimal(10, 2)
-  adelanto          Decimal?     @db.Decimal(10, 2)
-  costoTotal        Decimal?     @db.Decimal(10, 2) // costoServicio + costoProductos - descuento
-  metodoPagoAdelanto String?
-  datosPersonalizados Json?    // Campos dinámicos de la plantilla del servicio
-  notas             String?
-  ordenServicioId   String?
-  creadoPor         String?
-  canceladoPor      String?
-  motivoCancelacion String?
-  creadoEn          DateTime     @default(now())
-  actualizadoEn     DateTime     @updatedAt
+  id                  String     @id @default(cuid())
+  empresaId           String
+  sedeId              String
+  servicioId          String
+  tecnicoId           String
+  clienteId           String? // EmpresaPersona (persona natural)
+  clienteEmpresaId    String? // ClienteEmpresa (empresa)
+  codigo              String // CITA-00001
+  fecha               DateTime   @db.Date
+  horaInicio          String // "09:00"
+  horaFin             String // "10:00"
+  estado              EstadoCita @default(PENDIENTE)
+  costoServicio       Decimal?   @db.Decimal(10, 2) // Mano de obra / precio del servicio
+  costoProductos      Decimal?   @db.Decimal(10, 2) // Suma automática de items
+  descuento           Decimal?   @db.Decimal(10, 2)
+  adelanto            Decimal?   @db.Decimal(10, 2)
+  costoTotal          Decimal?   @db.Decimal(10, 2) // costoServicio + costoProductos - descuento
+  metodoPagoAdelanto  String?
+  datosPersonalizados Json? // Campos dinámicos de la plantilla del servicio
+  notas               String?
+  ordenServicioId     String?
+  creadoPor           String?
+  canceladoPor        String?
+  motivoCancelacion   String?
+  creadoEn            DateTime   @default(now())
+  actualizadoEn       DateTime   @updatedAt
 
-  empresa          Empresa         @relation(fields: [empresaId], references: [id])
-  sede             Sede            @relation(fields: [sedeId], references: [id])
-  servicio         Servicio        @relation(fields: [servicioId], references: [id])
-  tecnico          Usuario         @relation("CitasTecnico", fields: [tecnicoId], references: [id])
-  cliente          EmpresaPersona? @relation(fields: [clienteId], references: [id])
-  clienteEmpresa   ClienteEmpresa? @relation(fields: [clienteEmpresaId], references: [id])
-  siguienteCitaId  String?         @unique
-  ordenServicio    OrdenServicio?  @relation(fields: [ordenServicioId], references: [id])
-  siguienteCita    Cita?           @relation("CitaSiguiente", fields: [siguienteCitaId], references: [id])
-  citaAnterior     Cita?           @relation("CitaSiguiente")
-  historial        HistorialCita[]
-  items            CitaItem[]
-  mensajes         MensajeServicio[]
+  empresa         Empresa           @relation(fields: [empresaId], references: [id])
+  sede            Sede              @relation(fields: [sedeId], references: [id])
+  servicio        Servicio          @relation(fields: [servicioId], references: [id])
+  tecnico         Usuario           @relation("CitasTecnico", fields: [tecnicoId], references: [id])
+  cliente         EmpresaPersona?   @relation(fields: [clienteId], references: [id])
+  clienteEmpresa  ClienteEmpresa?   @relation(fields: [clienteEmpresaId], references: [id])
+  siguienteCitaId String?           @unique
+  ordenServicio   OrdenServicio?    @relation(fields: [ordenServicioId], references: [id])
+  siguienteCita   Cita?             @relation("CitaSiguiente", fields: [siguienteCitaId], references: [id])
+  citaAnterior    Cita?             @relation("CitaSiguiente")
+  historial       HistorialCita[]
+  items           CitaItem[]
+  mensajes        MensajeServicio[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId, fecha])
@@ -64,19 +64,19 @@ model Cita {
 }
 
 model CitaItem {
-  id              String   @id @default(cuid())
-  citaId          String
-  productoId      String?  // Producto del inventario (opcional)
-  nombre          String   // Nombre libre o del producto
-  descripcion     String?
-  cantidad        Int      @default(1)
-  precioUnitario  Decimal  @db.Decimal(10, 2)
-  subtotal        Decimal  @db.Decimal(10, 2)
-  creadoEn        DateTime @default(now())
-  actualizadoEn   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  citaId         String
+  productoId     String? // Producto del inventario (opcional)
+  nombre         String // Nombre libre o del producto
+  descripcion    String?
+  cantidad       Int      @default(1)
+  precioUnitario Decimal  @db.Decimal(10, 2)
+  subtotal       Decimal  @db.Decimal(10, 2)
+  creadoEn       DateTime @default(now())
+  actualizadoEn  DateTime @updatedAt
 
-  cita            Cita      @relation(fields: [citaId], references: [id], onDelete: Cascade)
-  producto        Producto? @relation(fields: [productoId], references: [id])
+  cita     Cita      @relation(fields: [citaId], references: [id], onDelete: Cascade)
+  producto Producto? @relation(fields: [productoId], references: [id])
 
   @@index([citaId])
   @@index([productoId])

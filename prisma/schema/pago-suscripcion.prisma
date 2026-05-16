@@ -1,31 +1,31 @@
 model PagoSuscripcion {
-  id                String              @id @default(cuid())
+  id                String                @id @default(cuid())
   empresaId         String
   planSuscripcionId String
-  monto             Decimal             @db.Decimal(10, 2)
-  moneda            String              @default("PEN")
+  monto             Decimal               @db.Decimal(10, 2)
+  moneda            String                @default("PEN")
   periodo           PeriodoSuscripcion
   metodoPago        MetodoPagoSuscripcion @default(TRANSFERENCIA)
-  referencia        String?             // Nro operación, voucher, etc
+  referencia        String? // Nro operación, voucher, etc
   notas             String?
   estado            EstadoPagoSuscripcion @default(PENDIENTE)
-  fechaPago         DateTime            @default(now())
-  fechaInicio       DateTime            // Inicio del periodo pagado
-  fechaFin          DateTime            // Fin del periodo pagado
-  registradoPor     String?             // userId del admin que registró
+  fechaPago         DateTime              @default(now())
+  fechaInicio       DateTime // Inicio del periodo pagado
+  fechaFin          DateTime // Fin del periodo pagado
+  registradoPor     String? // userId del admin que registró
 
   // Comprobante de pago (voucher)
-  comprobantePagoUrl  String?           // URL de la imagen del voucher
-  pagoEnviadoEn       DateTime?         // Cuando el cliente subió el comprobante
-  pagoValidadoEn      DateTime?         // Cuando el admin validó
-  pagoValidadoPor     String?           // userId del admin que validó
-  motivoRechazo       String?           // Si el admin rechaza el pago
+  comprobantePagoUrl String? // URL de la imagen del voucher
+  pagoEnviadoEn      DateTime? // Cuando el cliente subió el comprobante
+  pagoValidadoEn     DateTime? // Cuando el admin validó
+  pagoValidadoPor    String? // userId del admin que validó
+  motivoRechazo      String? // Si el admin rechaza el pago
 
-  creadoEn          DateTime            @default(now())
-  actualizadoEn     DateTime            @updatedAt
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
 
-  empresa           Empresa             @relation(fields: [empresaId], references: [id])
-  planSuscripcion   PlanSuscripcion     @relation(fields: [planSuscripcionId], references: [id])
+  empresa         Empresa         @relation(fields: [empresaId], references: [id])
+  planSuscripcion PlanSuscripcion @relation(fields: [planSuscripcionId], references: [id])
 
   @@index([empresaId])
   @@index([planSuscripcionId])

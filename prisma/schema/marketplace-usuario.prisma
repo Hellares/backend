@@ -4,8 +4,8 @@ model FavoritoProducto {
   productoId String
   creadoEn   DateTime @default(now())
 
-  usuario    Usuario  @relation("FavoritosProducto", fields: [usuarioId], references: [id], onDelete: Cascade)
-  producto   Producto @relation("FavoritosProducto", fields: [productoId], references: [id], onDelete: Cascade)
+  usuario  Usuario  @relation("FavoritosProducto", fields: [usuarioId], references: [id], onDelete: Cascade)
+  producto Producto @relation("FavoritosProducto", fields: [productoId], references: [id], onDelete: Cascade)
 
   @@unique([usuarioId, productoId])
   @@index([usuarioId, creadoEn])
@@ -18,8 +18,8 @@ model ProductoVisto {
   productoId String
   vistoEn    DateTime @default(now())
 
-  usuario    Usuario  @relation("ProductosVistos", fields: [usuarioId], references: [id], onDelete: Cascade)
-  producto   Producto @relation("ProductosVistos", fields: [productoId], references: [id], onDelete: Cascade)
+  usuario  Usuario  @relation("ProductosVistos", fields: [usuarioId], references: [id], onDelete: Cascade)
+  producto Producto @relation("ProductosVistos", fields: [productoId], references: [id], onDelete: Cascade)
 
   @@unique([usuarioId, productoId])
   @@index([usuarioId, vistoEn])
