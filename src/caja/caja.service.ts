@@ -1020,6 +1020,23 @@ export class CajaService {
     );
     const diferencia = totalConteoFisico - totalEsperado;
 
+    // ── Validar desglose efectivo (si se envia) ──
+    // Suma de (denominacion * cantidad) debe coincidir con el conteo
+    // EFECTIVO (tolerancia 1 centavo por redondeos).
+    if (dto.desgloseEfectivo) {
+      const sumaDesglose = Object.entries(dto.desgloseEfectivo).reduce(
+        (s, [denom, cant]) => s + Number(denom) * Number(cant),
+        0,
+      );
+      const conteoEfectivo =
+        detallePorMetodoPago[MetodoPagoVenta.EFECTIVO]?.conteoFisico ?? 0;
+      if (Math.abs(sumaDesglose - conteoEfectivo) > 0.01) {
+        throw new BadRequestException(
+          `Desglose de efectivo (S/ ${sumaDesglose.toFixed(2)}) no coincide con el conteo fisico EFECTIVO (S/ ${conteoEfectivo.toFixed(2)}).`,
+        );
+      }
+    }
+
     // ── Crear arqueo ──
     const arqueo = await this.prisma.arqueoCaja.create({
       data: {
@@ -1033,6 +1050,7 @@ export class CajaService {
         totalConteoFisico,
         diferencia,
         detallePorMetodoPago,
+        desgloseEfectivo: dto.desgloseEfectivo ?? undefined,
         observaciones: dto.observaciones,
         realizadoPorId,
         autorizadoPorId: dto.autorizadoPorId ?? null,

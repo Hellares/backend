@@ -178,6 +178,12 @@ model ArqueoCaja {
   detallePorMetodoPago Json
   observaciones        String?
 
+  /// Desglose opcional de billetes y monedas del EFECTIVO contado.
+  /// Shape: { "200": 5, "100": 10, "50": 0, ..., "0.10": 30 }.
+  /// La suma (denominacion * cantidad) debe coincidir con el
+  /// conteoFisico del EFECTIVO (con tolerancia de centavos).
+  desgloseEfectivo Json?
+
   // Auditoria
   realizadoPorId    String
   autorizadoPorId   String? // Para SORPRESIVO: quien autoriza la auditoria (puede ser owner).
