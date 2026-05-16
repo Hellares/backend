@@ -407,7 +407,14 @@ export class CajaService {
   }
 
   /**
-   * Obtener resumen de una caja (agrupado por metodoPago + tipo)
+   * Obtener resumen de una caja: totales generales + detalle por método
+   * de pago. El cliente Flutter (cerrar_caja_page) consume `detalles[]`
+   * con shape `{ metodoPago, totalIngresos, totalEgresos, saldo }`.
+   *
+   * El `saldo` por método incluye el `montoApertura` cuando el método es
+   * EFECTIVO (mismo criterio que cerrarCaja: la apertura es física, va
+   * a EFECTIVO). Sin esto el cajero veía esperado=0 en EFECTIVO al
+   * pre-cierre aunque hubiera abierto con S/100.
    */
   async getResumen(empresaId: string, cajaId: string) {
     const caja = await this.prisma.caja.findFirst({
@@ -451,13 +458,44 @@ export class CajaService {
       .filter((r) => r.tipo === TipoMovimientoCaja.EGRESO)
       .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
 
+    const montoApertura = Number(caja.montoApertura);
+    const saldoActual = montoApertura + totalIngresos - totalEgresos;
+
+    // Detalle por método agregado (lo que consume Flutter en cerrar_caja).
+    // Para cada método incluye totalIngresos, totalEgresos y saldo, sumando
+    // la apertura al EFECTIVO. Devolvemos TODOS los métodos (incluso 0)
+    // para que el cliente decida ocultar lo que no aplica.
+    const detalles = Object.values(MetodoPagoVenta).map((metodo) => {
+      const ingresos = Number(
+        resumenPorMetodo.find(
+          (r) => r.metodoPago === metodo && r.tipo === TipoMovimientoCaja.INGRESO,
+        )?._sum.monto ?? 0,
+      );
+      const egresos = Number(
+        resumenPorMetodo.find(
+          (r) => r.metodoPago === metodo && r.tipo === TipoMovimientoCaja.EGRESO,
+        )?._sum.monto ?? 0,
+      );
+      const apertura = metodo === MetodoPagoVenta.EFECTIVO ? montoApertura : 0;
+      return {
+        metodoPago: metodo,
+        apertura,
+        totalIngresos: ingresos,
+        totalEgresos: egresos,
+        saldo: apertura + ingresos - egresos,
+      };
+    });
+
     return {
       caja,
-      montoApertura: Number(caja.montoApertura),
+      montoApertura,
       totalIngresos,
       totalEgresos,
-      saldoActual: Number(caja.montoApertura) + totalIngresos - totalEgresos,
-      resumenPorMetodo,
+      saldoActual,
+      // Alias `saldo` para el shape que consume ResumenCajaModel del Flutter.
+      saldo: saldoActual,
+      detalles,
+      resumenPorMetodo, // backward compat: groupBy raw por si otro consumer lo usa
       resumenPorCategoria,
     };
   }
