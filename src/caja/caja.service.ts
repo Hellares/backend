@@ -309,11 +309,24 @@ export class CajaService {
     const metodosPago = Object.values(MetodoPagoVenta);
     const detallePorMetodoPago: Record<
       string,
-      { ingresos: number; egresos: number; esperado: number; conteoFisico: number; diferencia: number }
+      {
+        apertura: number;
+        ingresos: number;
+        egresos: number;
+        esperado: number;
+        conteoFisico: number;
+        diferencia: number;
+      }
     > = {};
 
     let totalIngresos = 0;
     let totalEgresos = 0;
+    // El monto de apertura SIEMPRE es efectivo (el cajero lo deja físicamente
+    // en la caja al abrir). Se imputa al método EFECTIVO para que detalle y
+    // total cuadren al sumar (antes esperado por método era ingresos-egresos
+    // y el totalEsperado sumaba aparte el montoApertura → desfase del monto
+    // de apertura en la línea EFECTIVO del cierre).
+    const montoApertura = Number(caja.montoApertura);
 
     for (const metodo of metodosPago) {
       const ingresos = Number(
@@ -330,11 +343,14 @@ export class CajaService {
       totalIngresos += ingresos;
       totalEgresos += egresos;
 
-      const esperado = ingresos - egresos;
+      const apertura =
+        metodo === MetodoPagoVenta.EFECTIVO ? montoApertura : 0;
+      const esperado = apertura + ingresos - egresos;
       const conteo = dto.conteos.find((c) => c.metodoPago === metodo);
       const conteoFisico = conteo?.conteoFisico ?? 0;
 
       detallePorMetodoPago[metodo] = {
+        apertura,
         ingresos,
         egresos,
         esperado,
@@ -343,8 +359,6 @@ export class CajaService {
       };
     }
 
-    // Incluir monto de apertura en el total esperado (siempre es efectivo)
-    const montoApertura = Number(caja.montoApertura);
     const totalEsperado = montoApertura + totalIngresos - totalEgresos;
     const totalConteoFisico = dto.conteos.reduce(
       (sum, c) => sum + c.conteoFisico,
