@@ -84,6 +84,22 @@ export class GastosRecurrentesController {
     return this.service.uploadComprobante(empresaId, usuarioId, file);
   }
 
+  @Get('reportes')
+  @RequiresPermission(Permission.VIEW_GASTOS_RECURRENTES)
+  @ApiOperation({
+    summary: 'Evolución mensual + breakdown del mes actual por categoría',
+  })
+  @ApiQuery({ name: 'meses', required: false, type: Number, example: 12 })
+  reportes(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('meses') meses?: string,
+  ) {
+    return this.service.reportes(
+      empresaId,
+      meses ? parseInt(meses, 10) : 12,
+    );
+  }
+
   @Get('dashboard')
   @RequiresPermission(Permission.VIEW_GASTOS_RECURRENTES)
   @ApiOperation({

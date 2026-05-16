@@ -358,6 +358,104 @@ export class GastosRecurrentesService {
     return { items, total, take, skip };
   }
 
+  /**
+   * Reportes agregados del módulo:
+   *  - evolucionMensual: monto pagado por mes + breakdown por categoría
+   *    para los últimos N meses (default 12).
+   *  - mesActual: total + breakdown por categoría del mes en curso.
+   *
+   * Considera SOLO PagoGastoRecurrente (no MovimientoCaja arbitrario).
+   * Sirve para responder "¿cuánto pago de luz al mes?" y similares.
+   */
+  async reportes(empresaId: string, meses = 12) {
+    const m = Math.min(Math.max(meses, 1), 24);
+    const hoy = new Date();
+    const inicio = new Date(hoy.getFullYear(), hoy.getMonth() - (m - 1), 1);
+    const fin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    const pagos = await this.prisma.pagoGastoRecurrente.findMany({
+      where: {
+        empresaId,
+        fechaPago: { gte: inicio, lte: fin },
+      },
+      select: {
+        montoReal: true,
+        fechaPago: true,
+        gastoRecurrente: {
+          select: {
+            categoriaGasto: {
+              select: { id: true, nombre: true, icono: true, color: true },
+            },
+          },
+        },
+      },
+    });
+
+    type Bucket = { porCategoria: Record<string, number>; total: number };
+    const porMes = new Map<string, Bucket>();
+    const catMeta: Record<
+      string,
+      { id: string; nombre: string; icono: string | null; color: string | null }
+    > = {};
+
+    for (const p of pagos) {
+      const d = p.fechaPago;
+      const periodo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!porMes.has(periodo)) {
+        porMes.set(periodo, { porCategoria: {}, total: 0 });
+      }
+      const bucket = porMes.get(periodo)!;
+      const monto = Number(p.montoReal);
+      bucket.total += monto;
+      const cat = p.gastoRecurrente.categoriaGasto;
+      bucket.porCategoria[cat.nombre] = (bucket.porCategoria[cat.nombre] ?? 0) + monto;
+      catMeta[cat.nombre] = cat;
+    }
+
+    // Construir lista contigua de meses (rellena con 0 los sin pagos)
+    const evolucionMensual: Array<{
+      periodo: string;
+      total: number;
+      porCategoria: Record<string, number>;
+    }> = [];
+    for (let i = 0; i < m; i++) {
+      const d = new Date(hoy.getFullYear(), hoy.getMonth() - (m - 1 - i), 1);
+      const periodo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const bucket = porMes.get(periodo) ?? { porCategoria: {}, total: 0 };
+      evolucionMensual.push({
+        periodo,
+        total: Math.round(bucket.total * 100) / 100,
+        porCategoria: Object.fromEntries(
+          Object.entries(bucket.porCategoria).map(([k, v]) => [
+            k,
+            Math.round(v * 100) / 100,
+          ]),
+        ),
+      });
+    }
+
+    const periodoActual = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+    const bucketMesActual = porMes.get(periodoActual) ?? { porCategoria: {}, total: 0 };
+    const breakdown = Object.entries(bucketMesActual.porCategoria)
+      .map(([nombre, monto]) => ({
+        categoriaId: catMeta[nombre]?.id ?? '',
+        nombre,
+        monto: Math.round(monto * 100) / 100,
+        icono: catMeta[nombre]?.icono ?? null,
+        color: catMeta[nombre]?.color ?? null,
+      }))
+      .sort((a, b) => b.monto - a.monto);
+
+    return {
+      evolucionMensual,
+      mesActual: {
+        periodo: periodoActual,
+        totalGastado: Math.round(bucketMesActual.total * 100) / 100,
+        porCategoria: breakdown,
+      },
+    };
+  }
+
   async dashboard(empresaId: string, periodo?: string, sedeId?: string) {
     const hoy = new Date();
     const periodoVigente =
