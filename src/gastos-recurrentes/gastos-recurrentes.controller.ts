@@ -33,6 +33,7 @@ import { CrearGastoRecurrenteDto } from './dto/crear-gasto-recurrente.dto';
 import { ActualizarGastoRecurrenteDto } from './dto/actualizar-gasto-recurrente.dto';
 import { ListarGastosRecurrentesQueryDto } from './dto/listar-gastos-recurrentes.query.dto';
 import { PagarGastoRecurrenteDto } from './dto/pagar-gasto-recurrente.dto';
+import { AnularPagoGastoRecurrenteDto } from './dto/anular-pago.dto';
 
 @ApiTags('Gastos Recurrentes')
 @Controller('gastos-recurrentes')
@@ -144,16 +145,37 @@ export class GastosRecurrentesController {
   @ApiOperation({ summary: 'Histórico paginado de pagos del gasto' })
   @ApiQuery({ name: 'take', required: false, type: Number })
   @ApiQuery({ name: 'skip', required: false, type: Number })
+  @ApiQuery({
+    name: 'incluirAnulados',
+    required: false,
+    description: '"true" para ver pagos anulados (auditoría); default false',
+  })
   listarPagos(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('incluirAnulados') incluirAnulados?: string,
   ) {
     return this.service.listarPagos(empresaId, id, {
       take: take ? parseInt(take, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
+      incluirAnulados: incluirAnulados === 'true',
     });
+  }
+
+  @Post('pagos/:pagoId/anular')
+  @RequiresPermission(Permission.MANAGE_GASTOS_RECURRENTES)
+  @ApiOperation({
+    summary: 'Anular un pago erróneo (revierte caja/banco y libera el período)',
+  })
+  anularPago(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('pagoId') pagoId: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() dto: AnularPagoGastoRecurrenteDto,
+  ) {
+    return this.service.anularPago(empresaId, pagoId, usuarioId, dto);
   }
 
   @Patch(':id')

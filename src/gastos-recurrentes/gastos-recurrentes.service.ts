@@ -20,6 +20,7 @@ import { CrearGastoRecurrenteDto } from './dto/crear-gasto-recurrente.dto';
 import { ActualizarGastoRecurrenteDto } from './dto/actualizar-gasto-recurrente.dto';
 import { ListarGastosRecurrentesQueryDto } from './dto/listar-gastos-recurrentes.query.dto';
 import { PagarGastoRecurrenteDto } from './dto/pagar-gasto-recurrente.dto';
+import { AnularPagoGastoRecurrenteDto } from './dto/anular-pago.dto';
 import { StorageService } from '../storage/storage.service';
 
 export type EstadoPeriodoGasto = 'PAGADO' | 'PENDIENTE' | 'VENCIDO';
@@ -107,6 +108,7 @@ export class GastosRecurrentesService {
       include: {
         ...this.defaultInclude,
         pagos: {
+          where: { anulado: false },
           orderBy: { fechaPago: 'desc' },
           take: 12,
           select: {
@@ -324,7 +326,7 @@ export class GastosRecurrentesService {
   async listarPagos(
     empresaId: string,
     gastoId: string,
-    opts: { take?: number; skip?: number } = {},
+    opts: { take?: number; skip?: number; incluirAnulados?: boolean } = {},
   ) {
     const gasto = await this.prisma.gastoRecurrente.findFirst({
       where: { id: gastoId, empresaId },
@@ -334,10 +336,12 @@ export class GastosRecurrentesService {
 
     const take = Math.min(Math.max(opts.take ?? 50, 1), 200);
     const skip = Math.max(opts.skip ?? 0, 0);
+    const where: any = { gastoRecurrenteId: gasto.id };
+    if (!opts.incluirAnulados) where.anulado = false;
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.pagoGastoRecurrente.findMany({
-        where: { gastoRecurrenteId: gasto.id },
+        where,
         orderBy: { fechaPago: 'desc' },
         take,
         skip,
@@ -350,12 +354,104 @@ export class GastosRecurrentesService {
               persona: { select: { nombres: true, apellidos: true } },
             },
           },
+          anuladoPor: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
         },
       }),
-      this.prisma.pagoGastoRecurrente.count({ where: { gastoRecurrenteId: gasto.id } }),
+      this.prisma.pagoGastoRecurrente.count({ where }),
     ]);
 
     return { items, total, take, skip };
+  }
+
+  /**
+   * Anula un pago erróneo y revierte sus efectos transaccionalmente:
+   *  - fuente=CAJA: marca el MovimientoCaja enlazado como anulado=true.
+   *    Las queries de cierre filtran por anulado=false, así el saldo de caja
+   *    se ajusta automáticamente sin necesidad de contrapartida.
+   *  - fuente=BANCO: incrementa EmpresaBanco.saldoActual con el monto del pago
+   *    (revierte el decrement original).
+   *
+   * Tras anular, el partial unique index libera (gastoRecurrenteId, periodo)
+   * para que se pueda registrar un nuevo pago del mismo período.
+   *
+   * Si era el último pago del gasto, recalcula ultimoPagoEn al penúltimo
+   * pago no anulado (o null si no quedan).
+   */
+  async anularPago(
+    empresaId: string,
+    pagoId: string,
+    usuarioId: string,
+    dto: AnularPagoGastoRecurrenteDto,
+  ) {
+    const pago = await this.prisma.pagoGastoRecurrente.findFirst({
+      where: { id: pagoId, empresaId },
+      select: {
+        id: true,
+        gastoRecurrenteId: true,
+        montoReal: true,
+        fuente: true,
+        bancoId: true,
+        movimientoCajaId: true,
+        anulado: true,
+      },
+    });
+    if (!pago) throw new NotFoundException('Pago no encontrado');
+    if (pago.anulado) {
+      throw new BadRequestException('Este pago ya fue anulado');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Revertir el efecto colateral según fuente
+      if (pago.fuente === FuentePagoGasto.CAJA && pago.movimientoCajaId) {
+        await tx.movimientoCaja.update({
+          where: { id: pago.movimientoCajaId },
+          data: {
+            anulado: true,
+            motivoAnulacion: `[GASTO RECURRENTE] ${dto.motivo}`,
+            anuladoPorId: usuarioId,
+            fechaAnulacion: new Date(),
+          },
+        });
+      } else if (pago.fuente === FuentePagoGasto.BANCO && pago.bancoId) {
+        await tx.empresaBanco.update({
+          where: { id: pago.bancoId },
+          data: { saldoActual: { increment: pago.montoReal } },
+        });
+      }
+
+      // 2. Marcar el pago como anulado
+      const pagoAnulado = await tx.pagoGastoRecurrente.update({
+        where: { id: pago.id },
+        data: {
+          anulado: true,
+          motivoAnulacion: dto.motivo,
+          anuladoPorId: usuarioId,
+          fechaAnulacion: new Date(),
+        },
+        include: {
+          banco: { select: { id: true, nombreBanco: true, numeroCuenta: true } },
+          movimientoCaja: { select: { id: true, cajaId: true } },
+        },
+      });
+
+      // 3. Recalcular ultimoPagoEn del gasto al último pago vigente (o null)
+      const ultimoVigente = await tx.pagoGastoRecurrente.findFirst({
+        where: { gastoRecurrenteId: pago.gastoRecurrenteId, anulado: false },
+        orderBy: { fechaPago: 'desc' },
+        select: { fechaPago: true },
+      });
+      await tx.gastoRecurrente.update({
+        where: { id: pago.gastoRecurrenteId },
+        data: { ultimoPagoEn: ultimoVigente?.fechaPago ?? null },
+      });
+
+      return pagoAnulado;
+    });
   }
 
   /**
@@ -376,6 +472,7 @@ export class GastosRecurrentesService {
     const pagos = await this.prisma.pagoGastoRecurrente.findMany({
       where: {
         empresaId,
+        anulado: false,
         fechaPago: { gte: inicio, lte: fin },
       },
       select: {
@@ -475,7 +572,7 @@ export class GastosRecurrentesService {
       include: {
         ...this.defaultInclude,
         pagos: {
-          where: { periodo: periodoVigente },
+          where: { periodo: periodoVigente, anulado: false },
           select: {
             id: true,
             periodo: true,

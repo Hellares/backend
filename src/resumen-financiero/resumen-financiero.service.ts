@@ -250,6 +250,7 @@ export class ResumenFinancieroService {
         where: {
           empresaId,
           fuente: 'BANCO',
+          anulado: false,
           fechaPago: { gte: desde, lte: hasta },
         },
         select: { montoReal: true, fechaPago: true },
@@ -392,6 +393,7 @@ export class ResumenFinancieroService {
       where: {
         empresaId,
         fuente: 'BANCO',
+        anulado: false,
         fechaPago: { gte: desde, lte: hasta },
       },
       select: {

@@ -146,6 +146,7 @@ model Usuario {
 
   // Gastos recurrentes
   pagosGastoRecurrenteRegistrados PagoGastoRecurrente[] @relation("PagoGastoRecurrenteRegistradoPor")
+  pagosGastoRecurrenteAnulados    PagoGastoRecurrente[] @relation("PagoGastoRecurrenteAnuladoPor")
 
   // Relaciones para anulaciones
   movimientosCajaAnulados    MovimientoCaja[] @relation("MovimientoCajaAnuladoPor")

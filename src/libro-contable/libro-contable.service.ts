@@ -238,6 +238,7 @@ export class LibroContableService {
       where: {
         empresaId,
         fuente: 'BANCO',
+        anulado: false,
         fechaPago: { gte: desde, lte: hasta },
       },
       include: {

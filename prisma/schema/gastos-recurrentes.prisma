@@ -64,6 +64,15 @@ model PagoGastoRecurrente {
   notas             String?
   registradoPorId   String
 
+  // Anulación (corregir un pago erróneo: anular y registrar el correcto).
+  // La uniqueness por (gastoRecurrenteId, periodo) es PARCIAL: solo aplica
+  // a pagos NO anulados, vía partial unique index en SQL (Prisma no lo
+  // declara). Ver migration 20260516_add_anulacion_pago_gasto_recurrente.
+  anulado         Boolean   @default(false)
+  motivoAnulacion String?
+  anuladoPorId    String?
+  fechaAnulacion  DateTime?
+
   creadoEn DateTime @default(now())
 
   gastoRecurrente GastoRecurrente @relation(fields: [gastoRecurrenteId], references: [id], onDelete: Cascade)
@@ -71,9 +80,10 @@ model PagoGastoRecurrente {
   banco           EmpresaBanco?   @relation(fields: [bancoId], references: [id])
   movimientoCaja  MovimientoCaja? @relation(fields: [movimientoCajaId], references: [id])
   registradoPor   Usuario         @relation("PagoGastoRecurrenteRegistradoPor", fields: [registradoPorId], references: [id])
+  anuladoPor      Usuario?        @relation("PagoGastoRecurrenteAnuladoPor", fields: [anuladoPorId], references: [id])
 
-  @@unique([gastoRecurrenteId, periodo])
   @@index([empresaId, fechaPago])
   @@index([gastoRecurrenteId, fechaPago])
   @@index([empresaId, fuente, fechaPago])
+  @@index([anulado])
 }
