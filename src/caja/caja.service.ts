@@ -629,13 +629,19 @@ export class CajaService {
       where.sedeId = sedeId;
     }
 
+    // Filtramos por fechaCierre, no fechaApertura. Es el "Historial de
+    // cajas CERRADAS" y el orden ya es por fechaCierre desc — la fecha
+    // relevante para auditoria es cuando se cerro, no cuando se abrio.
+    // Caso real: CAJA-00002 abierta 2026-05-04, cerrada 2026-05-16. Si
+    // alguien filtraba "ultimas 7 dias" por fechaApertura, no la veia
+    // aunque el cierre fue ayer.
     if (fechaDesde || fechaHasta) {
-      where.fechaApertura = {};
+      where.fechaCierre = {};
       if (fechaDesde) {
-        where.fechaApertura.gte = new Date(fechaDesde);
+        where.fechaCierre.gte = new Date(fechaDesde);
       }
       if (fechaHasta) {
-        where.fechaApertura.lte = new Date(fechaHasta);
+        where.fechaCierre.lte = new Date(fechaHasta);
       }
     }
 
