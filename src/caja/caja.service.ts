@@ -362,8 +362,21 @@ export class CajaService {
       throw new NotFoundException('Caja no encontrada');
     }
 
+    // Excluimos las contrapartidas auto-generadas por anularMovimiento
+    // (los inversos con [ANULACION] en la descripcion). El original
+    // anulado SI se muestra para que el cajero/auditor vea que se anulo
+    // (la UI lo presenta tachado/con badge). Asi evitamos pares
+    // duplicados original+contrapartida ensuciando la lista, sin perder
+    // trazabilidad.
+    //
+    // `contrapartidaDe` es la relacion inversa de movimientoContrapartidaId:
+    // un movimiento que es "contrapartida de otro" tiene esa relacion no
+    // nula. Lo filtramos con `is: null` para excluir SOLO contrapartidas.
     const movimientos = await this.prisma.movimientoCaja.findMany({
-      where: { cajaId },
+      where: {
+        cajaId,
+        contrapartidaDe: { is: null },
+      },
       orderBy: { fechaMovimiento: 'desc' },
       include: {
         venta: { select: { id: true, codigo: true } },
