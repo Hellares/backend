@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
@@ -17,6 +18,8 @@ import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
 
 @Injectable()
 export class CajaService {
+  private readonly logger = new Logger(CajaService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -158,7 +161,18 @@ export class CajaService {
   }
 
   /**
-   * Crear movimiento automático (llamado desde otros módulos)
+   * Crear movimiento automático (llamado desde otros módulos).
+   *
+   * SEGURIDAD: valida que la caja exista, pertenezca a la empresa y
+   * esté ABIERTA antes del insert. Si está CERRADA (o no existe), NO
+   * inserta y devuelve null + warning en logs. Antes esta función
+   * insertaba ciegamente — un cajaId stale podía meter un movimiento en
+   * una caja ya cerrada distorsionando el cierre histórico que el cajero
+   * ya firmó.
+   *
+   * Devuelve null cuando se rechazó el insert (para que el llamador pueda
+   * decidir si tratar como warning silencioso o como error; los actuales
+   * llamadores ya manejan que no haya caja vía registrarMovimientoSiHayCaja).
    */
   async crearMovimientoAutomatico(
     empresaId: string,
@@ -181,6 +195,25 @@ export class CajaService {
     tx?: Prisma.TransactionClient,
   ) {
     const client = tx ?? this.prisma;
+
+    const caja = await client.caja.findFirst({
+      where: { id: cajaId, empresaId },
+      select: { id: true, estado: true, codigo: true },
+    });
+
+    if (!caja) {
+      this.logger.warn(
+        `crearMovimientoAutomatico: caja ${cajaId} no encontrada en empresa ${empresaId}. Movimiento ${data.categoria} ${data.tipo} S/${data.monto} NO registrado.`,
+      );
+      return null;
+    }
+
+    if (caja.estado !== EstadoCaja.ABIERTA) {
+      this.logger.warn(
+        `crearMovimientoAutomatico: caja ${caja.codigo} ya está CERRADA. Movimiento ${data.categoria} ${data.tipo} S/${data.monto} NO registrado (evita distorsionar cierre firmado).`,
+      );
+      return null;
+    }
 
     const movimiento = await client.movimientoCaja.create({
       data: {
