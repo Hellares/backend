@@ -420,8 +420,15 @@ export class CajaService {
       _sum: { monto: true },
     });
 
-    // Construir detalle por método de pago
-    const metodosPago = Object.values(MetodoPagoVenta);
+    // Construir detalle por método de pago. Excluimos MIXTO: es solo
+    // una etiqueta UX para ventas con multi-pago (la fuente real es la
+    // tabla PagoVenta que ya desglosa por metodo real), nunca hay un
+    // MovimientoCaja con metodoPago=MIXTO. Devolverlo generaba ruido
+    // (linea S/0) y ademas el cliente Flutter lo remapeaba a EFECTIVO
+    // por su default → duplicaba la linea EFECTIVO en la lista.
+    const metodosPago = Object.values(MetodoPagoVenta).filter(
+      (m) => m !== MetodoPagoVenta.MIXTO,
+    );
     const detallePorMetodoPago: Record<
       string,
       {
@@ -579,8 +586,11 @@ export class CajaService {
     // Detalle por método agregado (lo que consume Flutter en cerrar_caja).
     // Para cada método incluye totalIngresos, totalEgresos y saldo, sumando
     // la apertura al EFECTIVO. Devolvemos TODOS los métodos (incluso 0)
-    // para que el cliente decida ocultar lo que no aplica.
-    const detalles = Object.values(MetodoPagoVenta).map((metodo) => {
+    // para que el cliente decida ocultar lo que no aplica. Excluimos
+    // MIXTO (ver comentario en cerrarCaja: es etiqueta UX, no metodo real).
+    const detalles = Object.values(MetodoPagoVenta)
+      .filter((m) => m !== MetodoPagoVenta.MIXTO)
+      .map((metodo) => {
       const ingresos = Number(
         resumenPorMetodo.find(
           (r) => r.metodoPago === metodo && r.tipo === TipoMovimientoCaja.INGRESO,
