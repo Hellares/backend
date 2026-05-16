@@ -116,25 +116,40 @@ export class CajaService {
       return null;
     }
 
-    // Calcular totales rápidos
+    // Agrupamos por (metodoPago, tipo) para poder distinguir EFECTIVO del
+    // resto. `saldoActual` mantiene la semántica histórica (total operado
+    // sumando todos los métodos) para no romper consumidores; `saldoEfectivo`
+    // es lo que realmente está en la gaveta física y es lo que el cajero
+    // debe contar al cerrar.
     const totales = await this.prisma.movimientoCaja.groupBy({
-      by: ['tipo'],
+      by: ['metodoPago', 'tipo'],
       where: { cajaId: caja.id, anulado: false },
       _sum: { monto: true },
     });
 
-    const totalIngresos = Number(
-      totales.find((t) => t.tipo === TipoMovimientoCaja.INGRESO)?._sum.monto ?? 0,
-    );
-    const totalEgresos = Number(
-      totales.find((t) => t.tipo === TipoMovimientoCaja.EGRESO)?._sum.monto ?? 0,
-    );
+    let totalIngresos = 0;
+    let totalEgresos = 0;
+    let ingresosEfectivo = 0;
+    let egresosEfectivo = 0;
+    for (const row of totales) {
+      const monto = Number(row._sum.monto ?? 0);
+      if (row.tipo === TipoMovimientoCaja.INGRESO) {
+        totalIngresos += monto;
+        if (row.metodoPago === MetodoPagoVenta.EFECTIVO) ingresosEfectivo += monto;
+      } else {
+        totalEgresos += monto;
+        if (row.metodoPago === MetodoPagoVenta.EFECTIVO) egresosEfectivo += monto;
+      }
+    }
+
+    const montoApertura = Number(caja.montoApertura);
 
     return {
       ...caja,
       totalIngresos,
       totalEgresos,
-      saldoActual: Number(caja.montoApertura) + totalIngresos - totalEgresos,
+      saldoActual: montoApertura + totalIngresos - totalEgresos,
+      saldoEfectivo: montoApertura + ingresosEfectivo - egresosEfectivo,
     };
   }
 
@@ -573,12 +588,21 @@ export class CajaService {
       };
     });
 
+    // saldoEfectivo = lo que está físicamente en la gaveta. Solo cuenta
+    // movimientos en EFECTIVO + apertura. saldoActual mezcla todos los
+    // métodos y sirve como "total operado del día".
+    const detalleEfectivo = detalles.find(
+      (d) => d.metodoPago === MetodoPagoVenta.EFECTIVO,
+    );
+    const saldoEfectivo = detalleEfectivo?.saldo ?? montoApertura;
+
     return {
       caja,
       montoApertura,
       totalIngresos,
       totalEgresos,
       saldoActual,
+      saldoEfectivo,
       // Alias `saldo` para el shape que consume ResumenCajaModel del Flutter.
       saldo: saldoActual,
       detalles,
@@ -677,21 +701,33 @@ export class CajaService {
       },
     });
 
-    // Calcular totales para cada caja en paralelo
+    // Calcular totales para cada caja en paralelo. groupBy por
+    // (metodoPago, tipo) para separar saldoEfectivo (lo físico en gaveta)
+    // de saldoActual (total operado, mezcla todos los métodos).
     const cajasConTotales = await Promise.all(
       cajasAbiertas.map(async (caja) => {
         const totales = await this.prisma.movimientoCaja.groupBy({
-          by: ['tipo'],
+          by: ['metodoPago', 'tipo'],
           where: { cajaId: caja.id, anulado: false },
           _sum: { monto: true },
         });
 
-        const totalIngresos = Number(
-          totales.find((t) => t.tipo === TipoMovimientoCaja.INGRESO)?._sum.monto ?? 0,
-        );
-        const totalEgresos = Number(
-          totales.find((t) => t.tipo === TipoMovimientoCaja.EGRESO)?._sum.monto ?? 0,
-        );
+        let totalIngresos = 0;
+        let totalEgresos = 0;
+        let ingresosEfectivo = 0;
+        let egresosEfectivo = 0;
+        for (const row of totales) {
+          const monto = Number(row._sum.monto ?? 0);
+          if (row.tipo === TipoMovimientoCaja.INGRESO) {
+            totalIngresos += monto;
+            if (row.metodoPago === MetodoPagoVenta.EFECTIVO) ingresosEfectivo += monto;
+          } else {
+            totalEgresos += monto;
+            if (row.metodoPago === MetodoPagoVenta.EFECTIVO) egresosEfectivo += monto;
+          }
+        }
+
+        const montoApertura = Number(caja.montoApertura);
 
         // Último movimiento
         const ultimoMovimiento = await this.prisma.movimientoCaja.findFirst({
@@ -710,7 +746,8 @@ export class CajaService {
           ...caja,
           totalIngresos,
           totalEgresos,
-          saldoActual: Number(caja.montoApertura) + totalIngresos - totalEgresos,
+          saldoActual: montoApertura + totalIngresos - totalEgresos,
+          saldoEfectivo: montoApertura + ingresosEfectivo - egresosEfectivo,
           ultimoMovimiento,
         };
       }),
@@ -721,6 +758,10 @@ export class CajaService {
     const totalIngresosGlobal = cajasConTotales.reduce((s, c) => s + c.totalIngresos, 0);
     const totalEgresosGlobal = cajasConTotales.reduce((s, c) => s + c.totalEgresos, 0);
     const totalSaldoGlobal = cajasConTotales.reduce((s, c) => s + c.saldoActual, 0);
+    const totalSaldoEfectivoGlobal = cajasConTotales.reduce(
+      (s, c) => s + c.saldoEfectivo,
+      0,
+    );
 
     return {
       resumen: {
@@ -728,6 +769,7 @@ export class CajaService {
         totalIngresos: Math.round(totalIngresosGlobal * 100) / 100,
         totalEgresos: Math.round(totalEgresosGlobal * 100) / 100,
         totalSaldo: Math.round(totalSaldoGlobal * 100) / 100,
+        totalSaldoEfectivo: Math.round(totalSaldoEfectivoGlobal * 100) / 100,
       },
       cajas: cajasConTotales,
     };
