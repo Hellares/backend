@@ -23,54 +23,59 @@ export class CajaService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Abrir una nueva caja
+   * Abrir una nueva caja.
+   *
+   * Toda la operación (validación + generación de código + insert) corre
+   * en UNA SOLA transacción para evitar:
+   *  1. Race condition (dos abrirCaja simultáneos del mismo usuario que
+   *     pasaban ambos la validación y creaban dos cajas).
+   *  2. Huecos en numeración (antes: si _generarCodigoCaja incrementaba
+   *     ultimaCaja en tx propia y el create posterior fallaba, el contador
+   *     quedaba avanzado y aparecían CAJA-001, CAJA-003 con CAJA-002
+   *     perdida en el aire).
    */
   async abrirCaja(empresaId: string, usuarioId: string, dto: AbrirCajaDto) {
-    // Verificar que no tenga una caja abierta en la misma sede
-    const cajaExistente = await this.prisma.caja.findFirst({
-      where: {
-        empresaId,
-        usuarioId,
-        sedeId: dto.sedeId,
-        estado: EstadoCaja.ABIERTA,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const cajaExistente = await tx.caja.findFirst({
+        where: {
+          empresaId,
+          usuarioId,
+          sedeId: dto.sedeId,
+          estado: EstadoCaja.ABIERTA,
+        },
+        select: { id: true },
+      });
 
-    if (cajaExistente) {
-      throw new BadRequestException(
-        'Ya tienes una caja abierta en esta sede. Ciérrala antes de abrir otra.',
-      );
-    }
+      if (cajaExistente) {
+        throw new BadRequestException(
+          'Ya tienes una caja abierta en esta sede. Ciérrala antes de abrir otra.',
+        );
+      }
 
-    // Generar código
-    const codigo = await this.prisma.$transaction(async (tx) => {
-      return this._generarCodigoCaja(tx, empresaId);
-    });
+      const codigo = await this._generarCodigoCaja(tx, empresaId);
 
-    // Crear caja
-    const caja = await this.prisma.caja.create({
-      data: {
-        empresaId,
-        sedeId: dto.sedeId,
-        usuarioId,
-        codigo,
-        montoApertura: dto.montoApertura,
-        estado: EstadoCaja.ABIERTA,
-        observacionesApertura: dto.observaciones,
-        sedeFacturacionId: dto.sedeFacturacionId || null,
-      },
-      include: {
-        sede: { select: { id: true, nombre: true, codigo: true } },
-        usuario: {
-          select: {
-            id: true,
-            persona: { select: { nombres: true, apellidos: true } },
+      return tx.caja.create({
+        data: {
+          empresaId,
+          sedeId: dto.sedeId,
+          usuarioId,
+          codigo,
+          montoApertura: dto.montoApertura,
+          estado: EstadoCaja.ABIERTA,
+          observacionesApertura: dto.observaciones,
+          sedeFacturacionId: dto.sedeFacturacionId || null,
+        },
+        include: {
+          sede: { select: { id: true, nombre: true, codigo: true } },
+          usuario: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
           },
         },
-      },
+      });
     });
-
-    return caja;
   }
 
   /**
