@@ -3,24 +3,31 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificacionService } from '../notificacion/notificacion.service';
 import {
   EstadoCaja,
   TipoMovimientoCaja,
   CategoriaMovimientoCaja,
   MetodoPagoVenta,
+  TipoArqueoCaja,
   Prisma,
 } from '@prisma/client';
 import { AbrirCajaDto } from './dto/abrir-caja.dto';
 import { CerrarCajaDto } from './dto/cerrar-caja.dto';
 import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
+import { CrearArqueoDto } from './dto/crear-arqueo.dto';
 
 @Injectable()
 export class CajaService {
   private readonly logger = new Logger(CajaService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificacionService: NotificacionService,
+  ) {}
 
   /**
    * Abrir una nueva caja.
@@ -878,6 +885,293 @@ export class CajaService {
 
       return { movimientoAnulado: movimiento, contrapartida };
     });
+  }
+
+  // ─── Arqueos de caja ───
+
+  /**
+   * Crear arqueo (conteo intermedio sin cerrar la caja).
+   *
+   * Validaciones por tipo:
+   * - SORPRESIVO: el que realiza no puede ser el cajero titular (es
+   *   auditoria, autoauditarse no tiene sentido).
+   * - RELEVO: turnoEntregadoAId requerido + debe ser usuario de la
+   *   misma empresa.
+   * - RUTINARIO: cualquiera con permiso puede.
+   *
+   * Si la diferencia (sobrante o faltante) supera el umbral, dispara
+   * push al owner de la empresa.
+   */
+  async crearArqueo(
+    empresaId: string,
+    cajaId: string,
+    realizadoPorId: string,
+    dto: CrearArqueoDto,
+  ) {
+    const caja = await this.prisma.caja.findFirst({
+      where: { id: cajaId, empresaId },
+      select: {
+        id: true,
+        codigo: true,
+        estado: true,
+        usuarioId: true,
+        montoApertura: true,
+        sede: { select: { id: true, nombre: true } },
+        usuario: {
+          select: {
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+      },
+    });
+
+    if (!caja) throw new NotFoundException('Caja no encontrada');
+    if (caja.estado !== EstadoCaja.ABIERTA) {
+      throw new BadRequestException(
+        'Solo se puede arquear una caja ABIERTA. Para auditar una caja cerrada, mira el resumen de cierre.',
+      );
+    }
+
+    // ── Validaciones especificas por tipo ──
+    if (dto.tipo === TipoArqueoCaja.SORPRESIVO) {
+      if (realizadoPorId === caja.usuarioId) {
+        throw new ForbiddenException(
+          'Un arqueo SORPRESIVO debe realizarlo alguien distinto al cajero titular (auditoria externa).',
+        );
+      }
+    }
+    if (dto.tipo === TipoArqueoCaja.RELEVO) {
+      if (!dto.turnoEntregadoAId) {
+        throw new BadRequestException(
+          'Arqueo de RELEVO requiere indicar el usuario que recibe el turno.',
+        );
+      }
+      const sucesor = await this.prisma.usuario.findFirst({
+        where: { id: dto.turnoEntregadoAId },
+        select: { id: true, empresas: { where: { empresaId } } },
+      });
+      if (!sucesor || sucesor.empresas.length === 0) {
+        throw new BadRequestException(
+          'El usuario que recibe el turno no pertenece a esta empresa.',
+        );
+      }
+    }
+
+    // ── Calcular totales por metodo (mismo patron que cerrarCaja) ──
+    const movimientos = await this.prisma.movimientoCaja.groupBy({
+      by: ['metodoPago', 'tipo'],
+      where: { cajaId, anulado: false },
+      _sum: { monto: true },
+    });
+
+    const metodosPago = Object.values(MetodoPagoVenta).filter(
+      (m) => m !== MetodoPagoVenta.MIXTO,
+    );
+    const detallePorMetodoPago: Record<
+      string,
+      {
+        apertura: number;
+        ingresos: number;
+        egresos: number;
+        esperado: number;
+        conteoFisico: number;
+        diferencia: number;
+      }
+    > = {};
+
+    let totalIngresos = 0;
+    let totalEgresos = 0;
+    const montoApertura = Number(caja.montoApertura);
+
+    for (const metodo of metodosPago) {
+      const ingresos = Number(
+        movimientos.find(
+          (m) => m.metodoPago === metodo && m.tipo === TipoMovimientoCaja.INGRESO,
+        )?._sum.monto ?? 0,
+      );
+      const egresos = Number(
+        movimientos.find(
+          (m) => m.metodoPago === metodo && m.tipo === TipoMovimientoCaja.EGRESO,
+        )?._sum.monto ?? 0,
+      );
+
+      totalIngresos += ingresos;
+      totalEgresos += egresos;
+
+      const apertura = metodo === MetodoPagoVenta.EFECTIVO ? montoApertura : 0;
+      const esperado = apertura + ingresos - egresos;
+      const conteo = dto.conteos.find((c) => c.metodoPago === metodo);
+      const conteoFisico = conteo?.conteoFisico ?? 0;
+
+      detallePorMetodoPago[metodo] = {
+        apertura,
+        ingresos,
+        egresos,
+        esperado,
+        conteoFisico,
+        diferencia: conteoFisico - esperado,
+      };
+    }
+
+    const totalEsperado = montoApertura + totalIngresos - totalEgresos;
+    const totalConteoFisico = dto.conteos.reduce(
+      (sum, c) => sum + c.conteoFisico,
+      0,
+    );
+    const diferencia = totalConteoFisico - totalEsperado;
+
+    // ── Crear arqueo ──
+    const arqueo = await this.prisma.arqueoCaja.create({
+      data: {
+        cajaId,
+        empresaId,
+        tipo: dto.tipo,
+        montoApertura,
+        totalIngresos,
+        totalEgresos,
+        totalEsperado,
+        totalConteoFisico,
+        diferencia,
+        detallePorMetodoPago,
+        observaciones: dto.observaciones,
+        realizadoPorId,
+        autorizadoPorId: dto.autorizadoPorId ?? null,
+        turnoEntregadoAId: dto.turnoEntregadoAId ?? null,
+      },
+      include: {
+        realizadoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        autorizadoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        turnoEntregadoA: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        caja: {
+          select: {
+            id: true,
+            codigo: true,
+            sede: { select: { id: true, nombre: true } },
+          },
+        },
+      },
+    });
+
+    // ── Alertar al admin si hay diferencia significativa ──
+    // Umbral: S/1.00 (centavos no califican como sospechoso).
+    if (Math.abs(diferencia) >= 1) {
+      await this._notificarDiferencia(empresaId, arqueo, caja).catch((err) =>
+        this.logger.warn(
+          `No se pudo enviar alerta de arqueo ${arqueo.id}: ${err.message}`,
+        ),
+      );
+      await this.prisma.arqueoCaja.update({
+        where: { id: arqueo.id },
+        data: { alertaEnviada: true },
+      });
+    }
+
+    return arqueo;
+  }
+
+  /**
+   * Listar arqueos de una caja, mas reciente primero.
+   */
+  async getArqueos(empresaId: string, cajaId: string) {
+    const caja = await this.prisma.caja.findFirst({
+      where: { id: cajaId, empresaId },
+      select: { id: true },
+    });
+    if (!caja) throw new NotFoundException('Caja no encontrada');
+
+    return this.prisma.arqueoCaja.findMany({
+      where: { cajaId },
+      orderBy: { fechaArqueo: 'desc' },
+      include: {
+        realizadoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        autorizadoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        turnoEntregadoA: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Envia push a admins/gerentes de la empresa cuando un arqueo arroja
+   * diferencia material. Receptores: usuarios con rol GERENTE_SEDE o
+   * ADMINISTRADOR en cualquier sede de la empresa (distinct para no
+   * enviar duplicados si un user es admin de varias sedes).
+   */
+  private async _notificarDiferencia(
+    empresaId: string,
+    arqueo: {
+      id: string;
+      tipo: TipoArqueoCaja;
+      diferencia: Prisma.Decimal;
+    },
+    caja: {
+      codigo: string;
+      sede: { nombre: string } | null;
+      usuario: {
+        persona: { nombres: string; apellidos: string } | null;
+      } | null;
+    },
+  ) {
+    const adminRoles = await this.prisma.usuarioSedeRol.findMany({
+      where: {
+        rol: { in: ['GERENTE_SEDE', 'ADMINISTRADOR'] },
+        sede: { empresaId },
+      },
+      select: { usuarioId: true },
+      distinct: ['usuarioId'],
+    });
+    if (adminRoles.length === 0) return;
+
+    const diff = Number(arqueo.diferencia);
+    const signo = diff > 0 ? 'sobrante' : 'faltante';
+    const cajero = caja.usuario?.persona
+      ? `${caja.usuario.persona.nombres} ${caja.usuario.persona.apellidos}`.trim()
+      : 'desconocido';
+
+    const titulo = `Arqueo ${arqueo.tipo.toLowerCase()}: ${signo} en ${caja.codigo}`;
+    const cuerpo = `Diferencia de S/ ${Math.abs(diff).toFixed(2)} (${signo}) detectada en ${caja.codigo} (${caja.sede?.nombre ?? 'sede'}). Cajero: ${cajero}.`;
+
+    await Promise.all(
+      adminRoles.map((r) =>
+        this.notificacionService.enviarAUsuario(r.usuarioId, titulo, cuerpo, {
+          empresaId,
+          data: {
+            tipo: 'ARQUEO_CAJA_DIFERENCIA',
+            arqueoId: arqueo.id,
+          },
+          respetarPreferencias: false,
+        }),
+      ),
+    );
   }
 
   // ─── Configuración ───

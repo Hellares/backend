@@ -170,6 +170,7 @@ model Empresa {
   // Relaciones para módulo de caja
   cajas           Caja[]
   movimientosCaja MovimientoCaja[]
+  arqueosCaja     ArqueoCaja[]
 
   // Relaciones para módulo de caja chica
   cajasChicas          CajaChica[]

@@ -138,6 +138,9 @@ model Usuario {
   cajasAbiertas              Caja[]           @relation("CajaUsuario")
   cajasCerradas              Caja[]           @relation("CajaCerradoPor")
   movimientosCajaRegistrados MovimientoCaja[] @relation("MovimientoCajaRegistradoPor")
+  arqueosRealizados          ArqueoCaja[]     @relation("ArqueoRealizadoPor")
+  arqueosAutorizados         ArqueoCaja[]     @relation("ArqueoAutorizadoPor")
+  arqueosTurnoRecibido       ArqueoCaja[]     @relation("ArqueoTurnoEntregadoA")
 
   // Relaciones para módulo de caja chica
   cajasChicaResponsable      CajaChica[]          @relation("CajaChicaResponsable")

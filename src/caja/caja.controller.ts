@@ -27,6 +27,7 @@ import { AbrirCajaDto } from './dto/abrir-caja.dto';
 import { CerrarCajaDto } from './dto/cerrar-caja.dto';
 import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
 import { AnularMovimientoDto } from './dto/anular-movimiento.dto';
+import { CrearArqueoDto } from './dto/crear-arqueo.dto';
 
 @ApiTags('Caja')
 @Controller('caja')
@@ -143,6 +144,32 @@ export class CajaController {
     @Param('id') cajaId: string,
   ) {
     return this.cajaService.getResumen(empresaId, cajaId);
+  }
+
+  @Post(':id/arqueo')
+  @RequiresPermission(Permission.CERRAR_CAJA)
+  @ApiOperation({
+    summary: 'Realizar arqueo de caja (conteo intermedio sin cerrar)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async crearArqueo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') cajaId: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() dto: CrearArqueoDto,
+  ) {
+    return this.cajaService.crearArqueo(empresaId, cajaId, usuarioId, dto);
+  }
+
+  @Get(':id/arqueos')
+  @RequiresPermission(Permission.VIEW_CAJA)
+  @ApiOperation({ summary: 'Listar arqueos de una caja' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getArqueos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') cajaId: string,
+  ) {
+    return this.cajaService.getArqueos(empresaId, cajaId);
   }
 
   @Get('configuracion')

@@ -7,6 +7,13 @@ enum EstadoCaja {
   CERRADA
 }
 
+/// Tipo de arqueo de caja (conteo intermedio mientras la caja sigue ABIERTA).
+enum TipoArqueoCaja {
+  RUTINARIO // El cajero se audita a si mismo durante el turno.
+  SORPRESIVO // Admin/supervisor cuenta sin avisar. Implica supervisor != cajero titular.
+  RELEVO // Cambio de turno sin cerrar caja. turnoEntregadoAId guarda el sucesor.
+}
+
 enum TipoMovimientoCaja {
   INGRESO
   EGRESO
@@ -61,6 +68,7 @@ model Caja {
   sedeFacturacion Sede?            @relation("CajaSedeFacturacion", fields: [sedeFacturacionId], references: [id])
   movimientos     MovimientoCaja[]
   cierre          CierreCaja?
+  arqueos         ArqueoCaja[]
 
   @@unique([empresaId, codigo])
   @@index([empresaId, sedeId, estado])
@@ -149,4 +157,44 @@ model CierreCaja {
 
   // Relaciones
   caja Caja @relation(fields: [cajaId], references: [id])
+}
+
+/// Arqueo de caja (conteo intermedio sin cerrar).
+/// A diferencia del CierreCaja, NO finaliza la caja. Sirve para auditoria
+/// (rutinaria o sorpresiva) y para relevo de turno sin cerrar.
+model ArqueoCaja {
+  id        String         @id @default(cuid())
+  cajaId    String
+  empresaId String
+  tipo      TipoArqueoCaja
+
+  // Snapshot del estado de la caja AL MOMENTO del arqueo
+  montoApertura        Decimal @db.Decimal(10, 2)
+  totalIngresos        Decimal @db.Decimal(10, 2)
+  totalEgresos         Decimal @db.Decimal(10, 2)
+  totalEsperado        Decimal @db.Decimal(10, 2)
+  totalConteoFisico    Decimal @db.Decimal(10, 2)
+  diferencia           Decimal @db.Decimal(10, 2)
+  detallePorMetodoPago Json
+  observaciones        String?
+
+  // Auditoria
+  realizadoPorId    String
+  autorizadoPorId   String? // Para SORPRESIVO: quien autoriza la auditoria (puede ser owner).
+  turnoEntregadoAId String? // Para RELEVO: usuario que recibe el turno.
+
+  alertaEnviada Boolean  @default(false)
+  fechaArqueo   DateTime @default(now())
+  creadoEn      DateTime @default(now())
+
+  // Relaciones
+  caja            Caja     @relation(fields: [cajaId], references: [id])
+  empresa         Empresa  @relation(fields: [empresaId], references: [id])
+  realizadoPor    Usuario  @relation("ArqueoRealizadoPor", fields: [realizadoPorId], references: [id])
+  autorizadoPor   Usuario? @relation("ArqueoAutorizadoPor", fields: [autorizadoPorId], references: [id])
+  turnoEntregadoA Usuario? @relation("ArqueoTurnoEntregadoA", fields: [turnoEntregadoAId], references: [id])
+
+  @@index([cajaId])
+  @@index([empresaId, fechaArqueo])
+  @@index([tipo])
 }
