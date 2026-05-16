@@ -47,8 +47,9 @@ export class VentaController {
   async create(
     @Headers('x-tenant-id') empresaId: string,
     @Body() dto: CreateVentaDto,
+    @CurrentUser('id') cajeroId: string,
   ) {
-    return this.ventaService.create(empresaId, dto);
+    return this.ventaService.create(empresaId, dto, cajeroId);
   }
 
   @Post('cobrar')

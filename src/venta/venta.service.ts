@@ -478,8 +478,19 @@ export class VentaService {
     return 'MIXTO' as MetodoPagoVenta;
   }
 
-  async create(empresaId: string, dto: CreateVentaDto) {
+  async create(empresaId: string, dto: CreateVentaDto, cajeroId?: string) {
     this.logger.info('Creando venta', { empresaId, sede: dto.sedeId });
+
+    // Si la empresa exige caja para vender (flag `requiereCajaParaVender`),
+    // bloquear si el cajero no tiene caja abierta en la sede destino.
+    // Cada cajero gestiona su propia caja. Si el flag está OFF, no valida.
+    if (cajeroId) {
+      await this.cajaService.validarCajaParaVender(
+        empresaId,
+        dto.sedeId,
+        cajeroId,
+      );
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const { codigoVenta } =

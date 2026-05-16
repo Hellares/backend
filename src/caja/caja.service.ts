@@ -207,8 +207,14 @@ export class CajaService {
   }
 
   /**
-   * Registrar movimiento automático buscando la caja activa del usuario en la sede.
-   * Si no hay caja activa, no hace nada (no bloquea la operación).
+   * Registrar movimiento automático en la caja del USUARIO actual de la sede.
+   * Si el usuario no tiene caja abierta, no hace nada (no bloquea la operación
+   * — la validación previa de "exige caja" debe hacerla el llamador con
+   * `validarCajaParaVender` si corresponde).
+   *
+   * IMPORTANTE: NO usa fallback a "cualquier caja de la sede" — esa lógica
+   * vieja metía las ventas de A en la caja de B cuando A no tenía caja
+   * abierta, generando desfases imposibles de cuadrar al cierre.
    */
   async registrarMovimientoSiHayCaja(
     empresaId: string,
@@ -232,11 +238,8 @@ export class CajaService {
   ) {
     const client = tx ?? this.prisma;
 
-    // Buscar primero la caja del usuario específico, luego cualquier caja de la sede
     const cajaActiva = await client.caja.findFirst({
       where: { empresaId, sedeId, usuarioId, estado: EstadoCaja.ABIERTA },
-    }) ?? await client.caja.findFirst({
-      where: { empresaId, sedeId, estado: EstadoCaja.ABIERTA },
     });
 
     if (!cajaActiva) return;
@@ -245,6 +248,43 @@ export class CajaService {
       ...data,
       registradoPorId: usuarioId,
     }, tx);
+  }
+
+  /**
+   * Valida que el usuario tenga caja abierta en la sede ANTES de iniciar
+   * una venta. Solo se aplica si `empresa.requiereCajaParaVender = true`.
+   *
+   * Si el flag está OFF (default), no valida nada (comportamiento histórico).
+   * Si está ON, bloquea con BadRequestException si el cajero no tiene caja
+   * abierta en la sede destino — cada cajero con su caja.
+   *
+   * Usada por venta.service en `create`, `crearYCobrar`, `crearDesdeCotizacion`.
+   */
+  async validarCajaParaVender(
+    empresaId: string,
+    sedeId: string,
+    usuarioId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.prisma;
+
+    const empresa = await client.empresa.findUnique({
+      where: { id: empresaId },
+      select: { requiereCajaParaVender: true },
+    });
+
+    if (!empresa?.requiereCajaParaVender) return;
+
+    const cajaAbierta = await client.caja.findFirst({
+      where: { empresaId, sedeId, usuarioId, estado: EstadoCaja.ABIERTA },
+      select: { id: true },
+    });
+
+    if (!cajaAbierta) {
+      throw new BadRequestException(
+        'Debes abrir caja antes de procesar una venta. Cada cajero gestiona su propia caja.',
+      );
+    }
   }
 
   /**
