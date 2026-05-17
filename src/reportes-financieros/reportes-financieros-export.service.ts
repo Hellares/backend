@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { LibroContableService } from '../libro-contable/libro-contable.service';
-import { EstadoVenta, MotivoLiquidacion, Prisma } from '@prisma/client';
+import { EstadoDevolucion, EstadoVenta, MotivoLiquidacion, Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import { Response } from 'express';
 
@@ -453,9 +453,44 @@ export class ReportesFinancierosExportService {
       orderBy: { venta: { fechaVenta: 'desc' } },
     });
 
+    // Pre-cargar devoluciones PROCESADAS de las ventas afectadas para
+    // descontar cantidades devueltas de la perdida (sino sobre-cuenta).
+    // Clave: `ventaId|productoId|varianteId` → cantidadDevueltaTotal.
+    const ventaIds = Array.from(new Set(rows.map((r) => r.venta.id)));
+    const devolucionesProcesadas = ventaIds.length
+      ? await this.prisma.devolucion.findMany({
+          where: {
+            ventaId: { in: ventaIds },
+            estado: EstadoDevolucion.PROCESADA,
+          },
+          select: {
+            ventaId: true,
+            items: {
+              select: {
+                productoId: true,
+                varianteId: true,
+                cantidad: true,
+              },
+            },
+          },
+        })
+      : [];
+    const cantidadDevueltaPorLinea = new Map<string, number>();
+    for (const dev of devolucionesProcesadas) {
+      if (!dev.ventaId) continue;
+      for (const item of dev.items) {
+        const key = `${dev.ventaId}|${item.productoId ?? ''}|${item.varianteId ?? ''}`;
+        cantidadDevueltaPorLinea.set(
+          key,
+          (cantidadDevueltaPorLinea.get(key) ?? 0) + item.cantidad,
+        );
+      }
+    }
+
     // Resumen
     let ingresoTotal = 0;
     let costoTotal = 0;
+    let cantidadLineasRealizadas = 0;
     const ventasSet = new Set<string>();
     const porMotivoMap = new Map<string, { cantidadLineas: number; ingreso: number; costo: number; perdida: number }>();
     const porProductoMap = new Map<
@@ -465,17 +500,38 @@ export class ReportesFinancierosExportService {
     const detalle: Awaited<ReturnType<typeof this.getReporteLiquidaciones>>['detalle'] = [];
 
     for (const r of rows) {
-      const cantidad = Number(r.cantidad);
+      const cantidadVendida = Number(r.cantidad);
       const precioUnitario = Number(r.precioUnitario);
-      const descuento = Number(r.descuento);
+      const descuentoOriginal = Number(r.descuento);
       const precioCosto = Number(r.precioCostoSnapshot);
       const margenUnitario = Number(r.margenSnapshot);
-      const ingresoLinea = precioUnitario * cantidad - descuento;
-      const costoLinea = precioCosto * cantidad;
+
+      // Descontar cantidad devuelta procesada del mismo producto/variante
+      // en la misma venta. Si una venta tiene 2 detalles del mismo producto
+      // (caso raro), el descuento se prorratea por orden de aparicion —
+      // marcamos la cantidad consumida para no contarla 2 veces.
+      const key = `${r.venta.id}|${r.productoId ?? ''}|${r.varianteId ?? ''}`;
+      const devueltaDisponible = cantidadDevueltaPorLinea.get(key) ?? 0;
+      const devueltaParaLinea = Math.min(devueltaDisponible, cantidadVendida);
+      if (devueltaDisponible > 0) {
+        cantidadDevueltaPorLinea.set(key, devueltaDisponible - devueltaParaLinea);
+      }
+      const cantidadRealizada = cantidadVendida - devueltaParaLinea;
+
+      // Si todo se devolvio, la perdida no se realizo: excluir del reporte.
+      if (cantidadRealizada <= 0) continue;
+
+      // Prorratear el descuento de la linea segun cantidad realizada.
+      const descuento = cantidadVendida > 0
+        ? descuentoOriginal * (cantidadRealizada / cantidadVendida)
+        : 0;
+      const ingresoLinea = precioUnitario * cantidadRealizada - descuento;
+      const costoLinea = precioCosto * cantidadRealizada;
       const perdidaLinea = ingresoLinea - costoLinea;
 
       ingresoTotal += ingresoLinea;
       costoTotal += costoLinea;
+      cantidadLineasRealizadas++;
       ventasSet.add(r.venta.id);
 
       const motivoKey = (r.motivoLiquidacionSnapshot as string) ?? 'SIN_LIQUIDACION_AUTORIZADA';
@@ -496,7 +552,7 @@ export class ReportesFinancierosExportService {
         costo: 0,
         perdida: 0,
       };
-      p.cantidadVendida += cantidad;
+      p.cantidadVendida += cantidadRealizada;
       p.ingreso += ingresoLinea;
       p.costo += costoLinea;
       p.perdida += perdidaLinea;
@@ -511,10 +567,12 @@ export class ReportesFinancierosExportService {
         ventaCodigo: r.venta.codigo,
         fechaVenta: r.venta.fechaVenta,
         sedeNombre: r.venta.sede.nombre,
-        descripcion: r.descripcion,
-        cantidad,
+        descripcion: devueltaParaLinea > 0
+          ? `${r.descripcion} (devuelto: ${devueltaParaLinea}/${cantidadVendida})`
+          : r.descripcion,
+        cantidad: cantidadRealizada,
         precioUnitario,
-        descuento,
+        descuento: Math.round(descuento * 100) / 100,
         precioCostoSnapshot: precioCosto,
         margenSnapshot: margenUnitario,
         motivo: r.motivoLiquidacionSnapshot,
@@ -525,12 +583,14 @@ export class ReportesFinancierosExportService {
     const round2 = (n: number) => Math.round(n * 100) / 100;
     return {
       resumen: {
-        cantidadLineas: rows.length,
+        cantidadLineas: cantidadLineasRealizadas,
         cantidadVentas: ventasSet.size,
         ingresoTotal: round2(ingresoTotal),
         costoTotal: round2(costoTotal),
         perdidaTotal: round2(ingresoTotal - costoTotal),
-        promedioPerdidaPorLinea: rows.length ? round2((ingresoTotal - costoTotal) / rows.length) : 0,
+        promedioPerdidaPorLinea: cantidadLineasRealizadas > 0
+          ? round2((ingresoTotal - costoTotal) / cantidadLineasRealizadas)
+          : 0,
       },
       porMotivo: Array.from(porMotivoMap.entries())
         .map(([motivo, v]) => ({
