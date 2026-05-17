@@ -580,6 +580,30 @@ export class ProductoCatalogService {
       }
     }
 
+    // Filtrar productos con liquidacion activa en al menos una sede
+    // (o en la sede especificada por filters.sedeId).
+    if (filters.enLiquidacion === true) {
+      const now = new Date();
+      where.stocksPorSede = {
+        some: {
+          enLiquidacion: true,
+          ...(filters.sedeId ? { sedeId: filters.sedeId } : {}),
+          OR: [
+            { fechaFinLiquidacion: null },
+            { fechaFinLiquidacion: { gte: now } },
+          ],
+          AND: [
+            {
+              OR: [
+                { fechaInicioLiquidacion: null },
+                { fechaInicioLiquidacion: { lte: now } },
+              ],
+            },
+          ],
+        },
+      };
+    }
+
     // Filtrar solo productos simples (excluye combos)
     if (filters.soloProductos === true) {
       where.esCombo = false;

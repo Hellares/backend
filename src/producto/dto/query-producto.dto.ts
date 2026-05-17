@@ -102,6 +102,14 @@ export class QueryProductoDto {
   stockBajo?: boolean;
 
   @ApiPropertyOptional({
+    description: 'Filtrar productos con liquidación activa (en sedeId si se proporciona, sino en cualquier sede)',
+    example: true,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  enLiquidacion?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Filtrar solo productos simples (excluye combos)',
     example: false,
   })
