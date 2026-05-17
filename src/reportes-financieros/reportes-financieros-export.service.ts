@@ -442,9 +442,9 @@ export class ReportesFinancierosExportService {
             codigo: true,
             fechaVenta: true,
             sede: { select: { nombre: true } },
-            ventaBajoCostoAutorizadaPor: {
-              select: { persona: { select: { nombres: true, apellidos: true } } },
-            },
+            // Solo el ID del autorizador — el nombre se resuelve en una
+            // sola query agregada abajo para evitar N+1 contra Persona.
+            ventaBajoCostoAutorizadaPorId: true,
           },
         },
         producto: { select: { id: true, nombre: true } },
@@ -452,6 +452,34 @@ export class ReportesFinancierosExportService {
       },
       orderBy: { venta: { fechaVenta: 'desc' } },
     });
+
+    // Batch query de autorizadores: 1 sola query para todos los IDs únicos
+    // en vez de N joins anidados por VentaDetalle.
+    const autorizadorIds = Array.from(
+      new Set(
+        rows
+          .map((r) => r.venta.ventaBajoCostoAutorizadaPorId)
+          .filter((id): id is string => id != null),
+      ),
+    );
+    const autorizadores = autorizadorIds.length
+      ? await this.prisma.usuario.findMany({
+          where: { id: { in: autorizadorIds } },
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        })
+      : [];
+    const autorizadorNombrePorId = new Map<string, string>();
+    for (const u of autorizadores) {
+      if (u.persona) {
+        autorizadorNombrePorId.set(
+          u.id,
+          `${u.persona.nombres ?? ''} ${u.persona.apellidos ?? ''}`.trim(),
+        );
+      }
+    }
 
     // Pre-cargar devoluciones PROCESADAS de las ventas afectadas para
     // descontar cantidades devueltas de la perdida (sino sobre-cuenta).
@@ -579,9 +607,10 @@ export class ReportesFinancierosExportService {
       p.perdida += perdidaLinea;
       porProductoMap.set(productoKey, p);
 
-      const autorizadoNombre = r.venta.ventaBajoCostoAutorizadaPor?.persona
-        ? `${r.venta.ventaBajoCostoAutorizadaPor.persona.nombres} ${r.venta.ventaBajoCostoAutorizadaPor.persona.apellidos}`.trim()
-        : null;
+      // Lookup O(1) en el mapa pre-cargado (batch).
+      const autorizadoNombre = r.venta.ventaBajoCostoAutorizadaPorId
+          ? autorizadorNombrePorId.get(r.venta.ventaBajoCostoAutorizadaPorId) ?? null
+          : null;
 
       detalle.push({
         ventaId: r.venta.id,
