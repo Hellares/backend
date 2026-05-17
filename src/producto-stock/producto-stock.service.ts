@@ -12,6 +12,12 @@ import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { ActualizarPreciosSedeDto } from './dto/actualizar-precios-sede.dto';
 import { QueryHistorialPreciosDto } from './dto/query-historial-precios.dto';
 import { ActivarLiquidacionDto } from './dto/activar-liquidacion.dto';
+import {
+  CampoPrecio,
+  FiltroStock,
+  ModoVerificacion,
+  VerificarPreciosDto,
+} from './dto/verificar-precios.dto';
 import { Prisma, TipoCambioPrecio } from '@prisma/client';
 import { PromocionService } from '../promocion/promocion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
@@ -2646,5 +2652,198 @@ export class ProductoStockService {
     if (result.count > 0) {
       this.logger.log(`Cron liquidaciones: ${result.count} expiradas desactivadas`);
     }
+  }
+
+  // =====================================================
+  // VERIFICACIÓN / AUDITORÍA DE PRECIOS
+  // =====================================================
+
+  /**
+   * Construye el where Prisma según el campo + modo del filtro.
+   * Usado por verificarPrecios y exportVerificacionPrecios.
+   */
+  private _buildVerificacionWhere(
+    empresaId: string,
+    dto: VerificarPreciosDto,
+  ): Prisma.ProductoStockWhereInput {
+    const campo = dto.campo ?? CampoPrecio.COSTO;
+    const modo = dto.modo ?? ModoVerificacion.RANGO;
+
+    const campoMap: Record<CampoPrecio, keyof Prisma.ProductoStockWhereInput> = {
+      [CampoPrecio.PRECIO]: 'precio',
+      [CampoPrecio.COSTO]: 'precioCosto',
+      [CampoPrecio.OFERTA]: 'precioOferta',
+      [CampoPrecio.LIQUIDACION]: 'precioLiquidacion',
+    };
+    const campoKey = campoMap[campo];
+
+    const where: Prisma.ProductoStockWhereInput = { empresaId };
+    if (dto.sedeId) where.sedeId = dto.sedeId;
+
+    // Filtro por valor del campo seleccionado
+    if (modo === ModoVerificacion.SIN_VALOR) {
+      (where as any)[campoKey] = null;
+    } else if (modo === ModoVerificacion.EXACTO && dto.exacto != null) {
+      (where as any)[campoKey] = new Prisma.Decimal(dto.exacto);
+    } else if (modo === ModoVerificacion.RANGO) {
+      const filtroRango: any = { not: null };
+      if (dto.min != null) filtroRango.gte = new Prisma.Decimal(dto.min);
+      if (dto.max != null) filtroRango.lte = new Prisma.Decimal(dto.max);
+      // Si no se pasa min/max el modo RANGO trae todos los que tienen valor.
+      (where as any)[campoKey] = filtroRango;
+    }
+
+    // Filtros sobre el producto relacionado (categoría, marca, activo).
+    // Nota: empresaCategoria/Marca tienen nombre via relación con maestro
+    // o nombrePersonalizado — la UI filtra por ID así que aceptamos eso
+    // directamente sin resolver el nombre.
+    const productoFilter: Prisma.ProductoWhereInput = {};
+    if (dto.empresaCategoriaId)
+      productoFilter.empresaCategoriaId = dto.empresaCategoriaId;
+    if (dto.empresaMarcaId) productoFilter.empresaMarcaId = dto.empresaMarcaId;
+    if (dto.soloActivos !== false) {
+      productoFilter.isActive = true;
+      productoFilter.deletedAt = null;
+    }
+    if (Object.keys(productoFilter).length > 0) {
+      where.producto = productoFilter;
+    }
+
+    // Filtro por stock
+    if (dto.stock === FiltroStock.CON) {
+      where.stockActual = { gt: 0 };
+    } else if (dto.stock === FiltroStock.SIN) {
+      where.stockActual = { lte: 0 };
+    }
+
+    return where;
+  }
+
+  /**
+   * Lista de productos+sede para auditoría de precios. Response plano y
+   * liviano (sin paginar — se limita por `limit`, default 500). Pensado
+   * para localizar precios mal cargados via filtros por valor.
+   */
+  async verificarPrecios(empresaId: string, dto: VerificarPreciosDto) {
+    const where = this._buildVerificacionWhere(empresaId, dto);
+    const limit = Number(dto.limit ?? 500);
+    const stocks = await this.prisma.productoStock.findMany({
+      where,
+      take: limit,
+      orderBy: [{ producto: { nombre: 'asc' } }, { sede: { nombre: 'asc' } }],
+      include: {
+        producto: {
+          select: { id: true, nombre: true, codigoEmpresa: true },
+        },
+        variante: { select: { id: true, nombre: true, sku: true } },
+        sede: { select: { id: true, nombre: true } },
+      },
+    });
+
+    return {
+      total: stocks.length,
+      limitAlcanzado: stocks.length === limit,
+      items: stocks.map((s) => ({
+        id: s.id,
+        productoId: s.productoId,
+        varianteId: s.varianteId,
+        codigoEmpresa: s.producto?.codigoEmpresa ?? null,
+        nombre:
+          s.variante?.nombre != null
+            ? `${s.producto?.nombre ?? ''} — ${s.variante.nombre}`
+            : (s.producto?.nombre ?? ''),
+        sedeId: s.sede.id,
+        sedeNombre: s.sede.nombre,
+        stockActual: s.stockActual,
+        precio: s.precio != null ? Number(s.precio) : null,
+        precioCosto: s.precioCosto != null ? Number(s.precioCosto) : null,
+        precioOferta: s.precioOferta != null ? Number(s.precioOferta) : null,
+        precioLiquidacion:
+          s.precioLiquidacion != null ? Number(s.precioLiquidacion) : null,
+        enOferta: s.enOferta,
+        enLiquidacion: s.enLiquidacion,
+        precioConfigurado: s.precioConfigurado,
+      })),
+    };
+  }
+
+  /**
+   * Exporta verificación a Excel. Mismas filas que verificarPrecios pero
+   * sin límite (configurable, default 5000 para no romper memoria).
+   */
+  async exportVerificacionPrecios(
+    empresaId: string,
+    dto: VerificarPreciosDto,
+    res: Response,
+  ) {
+    const where = this._buildVerificacionWhere(empresaId, dto);
+    const limit = Number(dto.limit ?? 5000);
+    const stocks = await this.prisma.productoStock.findMany({
+      where,
+      take: limit,
+      orderBy: [{ producto: { nombre: 'asc' } }, { sede: { nombre: 'asc' } }],
+      include: {
+        producto: { select: { nombre: true, codigoEmpresa: true } },
+        variante: { select: { nombre: true, sku: true } },
+        sede: { select: { nombre: true } },
+      },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Syncronize';
+    wb.created = new Date();
+    const sheet = wb.addWorksheet('Verificación precios');
+    sheet.columns = [
+      { header: 'Código', key: 'codigo', width: 14 },
+      { header: 'Producto', key: 'nombre', width: 38 },
+      { header: 'Variante', key: 'variante', width: 18 },
+      { header: 'Sede', key: 'sede', width: 16 },
+      { header: 'Stock', key: 'stock', width: 8 },
+      { header: 'Precio venta', key: 'precio', width: 13 },
+      { header: 'Precio costo', key: 'costo', width: 13 },
+      { header: 'Precio oferta', key: 'oferta', width: 13 },
+      { header: 'Precio liquidación', key: 'liquidacion', width: 16 },
+      { header: 'En oferta', key: 'enOferta', width: 10 },
+      { header: 'En liquidación', key: 'enLiquidacion', width: 13 },
+    ];
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1565C0' },
+    };
+    headerRow.alignment = { horizontal: 'center' };
+    headerRow.height = 22;
+
+    for (const s of stocks) {
+      sheet.addRow({
+        codigo: s.producto?.codigoEmpresa ?? '',
+        nombre: s.producto?.nombre ?? '',
+        variante: s.variante?.nombre ?? '',
+        sede: s.sede.nombre,
+        stock: s.stockActual,
+        precio: s.precio != null ? Number(s.precio) : null,
+        costo: s.precioCosto != null ? Number(s.precioCosto) : null,
+        oferta: s.precioOferta != null ? Number(s.precioOferta) : null,
+        liquidacion:
+          s.precioLiquidacion != null ? Number(s.precioLiquidacion) : null,
+        enOferta: s.enOferta ? 'Sí' : '',
+        enLiquidacion: s.enLiquidacion ? 'Sí' : '',
+      });
+    }
+
+    // Format moneda para columnas de precios
+    for (const col of [6, 7, 8, 9]) {
+      sheet.getColumn(col).numFmt = '#,##0.00';
+    }
+
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=verificacion_precios_${new Date().toISOString().slice(0, 10)}.xlsx`,
+    });
+    await wb.xlsx.write(res);
+    res.end();
   }
 }

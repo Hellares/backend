@@ -22,6 +22,7 @@ import {
   AjusteMasivoPreciosDto,
   QueryHistorialPreciosDto,
   ActivarLiquidacionDto,
+  VerificarPreciosDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
@@ -686,6 +687,39 @@ export class ProductoStockController {
       page ? +page : 1,
       limit ? +limit : 50,
     );
+  }
+
+  // =====================================================
+  // VERIFICACIÓN / AUDITORÍA DE PRECIOS
+  // =====================================================
+
+  @Get('verificacion-precios')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Lista productos filtrados por valor de precio para auditoría',
+    description:
+      'Pensado para localizar productos con precios mal cargados. Filtros: ' +
+      'sede, campo (PRECIO/COSTO/OFERTA/LIQUIDACION), modo (RANGO/EXACTO/SIN_VALOR), ' +
+      'categoría, marca, stock, activo. Response plano.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async verificarPrecios(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VerificarPreciosDto,
+  ) {
+    return this.stockService.verificarPrecios(empresaId, query);
+  }
+
+  @Get('verificacion-precios/export')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Exporta verificación de precios a Excel' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async exportVerificacionPrecios(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VerificarPreciosDto,
+    @Res() res: Response,
+  ) {
+    await this.stockService.exportVerificacionPrecios(empresaId, query, res);
   }
 
   @Get('historial-precios')

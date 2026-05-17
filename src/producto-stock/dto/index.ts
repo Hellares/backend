@@ -4,3 +4,4 @@ export * from './actualizar-precios-sede.dto';
 export * from './ajuste-masivo-precios.dto';
 export * from './query-historial-precios.dto';
 export * from './activar-liquidacion.dto';
+export * from './verificar-precios.dto';
