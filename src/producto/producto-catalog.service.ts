@@ -775,6 +775,10 @@ export class ProductoCatalogService {
           enOferta: true,
           fechaInicioOferta: true,
           fechaFinOferta: true,
+          enLiquidacion: true,
+          precioLiquidacion: true,
+          fechaInicioLiquidacion: true,
+          fechaFinLiquidacion: true,
           precioConfigurado: true,
           precioIncluyeIgv: true,
           sede: {
