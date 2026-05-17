@@ -696,11 +696,22 @@ export class ProductoStockService {
         },
       });
 
-      // Registrar en historial si hubo cambios en precios
+      // Registrar en historial SOLO si hubo cambio real de valor (no solo
+      // si el DTO trae el campo). Antes se creaba un registro MANUAL
+      // "sin diff de precios" cada vez que el frontend reenviaba los
+      // mismos precios al guardar el dialog sin tocar nada.
+      const cambio = (anterior: any, nuevo: any) => {
+        if (nuevo === undefined) return false; // campo no enviado
+        const ant = anterior != null ? Number(anterior.toString()) : null;
+        const nvo = nuevo != null ? Number(nuevo) : null;
+        if (ant == null && nvo == null) return false;
+        if (ant == null || nvo == null) return true;
+        return Math.abs(ant - nvo) > 0.001; // tolerancia centavo
+      };
       const huboCambioPrecios =
-        dto.precio !== undefined ||
-        dto.precioCosto !== undefined ||
-        dto.precioOferta !== undefined;
+        cambio(stock.precio, dto.precio) ||
+        cambio(stock.precioCosto, dto.precioCosto) ||
+        cambio(stock.precioOferta, dto.precioOferta);
 
       if (huboCambioPrecios) {
         await tx.productoPrecioHistorialSede.create({
