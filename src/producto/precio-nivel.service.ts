@@ -469,10 +469,17 @@ export class PrecioNivelService {
     // Elegir el menor entre todos los precios aplicables.
     // Estrategia mismo patrón que carrito B2C (session_2026_05_07_carrito_b2c_niveles):
     // gana el menor sin acumular descuentos.
+    //
+    // EXCEPCION: si liquidacion activa, niveles por mayor se IGNORAN. Un
+    // nivel "Por Mayor PRECIO_FIJO S/9" sobre un producto en liquidacion
+    // a S/5 podria llevarlo de vuelta a S/9 si vende 12 unidades, lo cual
+    // contradice el remate. La liquidacion gana siempre.
     const candidatos: Array<{ valor: number; etiqueta: string; motivoLiquidacion?: string | null }> = [
       { valor: precioBase, etiqueta: 'Precio base' },
     ];
-    if (precioConNivel != null) candidatos.push({ valor: precioConNivel, etiqueta: nivelNombre ?? 'Nivel' });
+    if (precioConNivel != null && !liquidacionVigente) {
+      candidatos.push({ valor: precioConNivel, etiqueta: nivelNombre ?? 'Nivel' });
+    }
     if (precioOferta != null) candidatos.push({ valor: precioOferta, etiqueta: 'Oferta' });
     if (precioLiquidacion != null) {
       candidatos.push({

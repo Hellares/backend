@@ -85,7 +85,9 @@ export class CarritoService {
       }
     }
 
-    // Comparar candidatos y elegir el menor
+    // Comparar candidatos y elegir el menor.
+    // EXCEPCION: si liquidacion activa, niveles por mayor se IGNORAN
+    // (mismo criterio que PrecioNivelService.calcularPrecioSegunCantidad).
     const candidatos: Array<{ precio: number; tipo: 'base' | 'oferta' | 'nivel' | 'liquidacion' }> = [
       { precio: precioBase, tipo: 'base' },
     ];
@@ -95,7 +97,7 @@ export class CarritoService {
     if (precioLiquidacionActiva != null) {
       candidatos.push({ precio: precioLiquidacionActiva, tipo: 'liquidacion' });
     }
-    if (precioConNivel != null) {
+    if (precioConNivel != null && precioLiquidacionActiva == null) {
       candidatos.push({ precio: precioConNivel, tipo: 'nivel' });
     }
     candidatos.sort((a, b) => a.precio - b.precio);
