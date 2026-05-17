@@ -220,6 +220,10 @@ export class ProductoCatalogService {
         enOferta: stock.enOferta ?? false,
         fechaInicioOferta: stock.fechaInicioOferta,
         fechaFinOferta: stock.fechaFinOferta,
+        enLiquidacion: stock.enLiquidacion ?? false,
+        precioLiquidacion: stock.precioLiquidacion ? Number(stock.precioLiquidacion) : null,
+        fechaInicioLiquidacion: stock.fechaInicioLiquidacion,
+        fechaFinLiquidacion: stock.fechaFinLiquidacion,
         precioConfigurado: stock.precioConfigurado ?? false,
         precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
       };
@@ -379,6 +383,10 @@ export class ProductoCatalogService {
             enOferta: stock.enOferta ?? false,
             fechaInicioOferta: stock.fechaInicioOferta,
             fechaFinOferta: stock.fechaFinOferta,
+            enLiquidacion: stock.enLiquidacion ?? false,
+            precioLiquidacion: stock.precioLiquidacion ? Number(stock.precioLiquidacion) : null,
+            fechaInicioLiquidacion: stock.fechaInicioLiquidacion,
+            fechaFinLiquidacion: stock.fechaFinLiquidacion,
             precioConfigurado: stock.precioConfigurado ?? false,
             precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
           }));
@@ -710,6 +718,10 @@ export class ProductoCatalogService {
             enOferta: true,
             fechaInicioOferta: true,
             fechaFinOferta: true,
+            enLiquidacion: true,
+            precioLiquidacion: true,
+            fechaInicioLiquidacion: true,
+            fechaFinLiquidacion: true,
             precioConfigurado: true,
             precioIncluyeIgv: true,
             sede: {
