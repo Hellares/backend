@@ -1399,6 +1399,14 @@ export class VentaService {
         );
       }
 
+      // Hidratar snapshot de costo + motivo liquidacion para cada linea
+      // (cotizacion + adicionales). Sin esto el reporte de liquidaciones
+      // los ignora y el guard no se dispara.
+      const snapshotsCotizacion = await this._hidratarSnapshotsCotizacion(
+        detallesVenta,
+        cotizacion.sedeId,
+      );
+
       // Recalcular totales si hubo modificaciones
       let subtotalVenta: number;
       let descuentoVenta: number;
@@ -1406,7 +1414,11 @@ export class VentaService {
       let totalVenta: number;
 
       // 3c. Procesar items adicionales agregados por el cajero
-      const itemsAdicionales = (dto.itemsAdicionales ?? []).map((item) => {
+      const snapshotsAdicionales = await this._hidratarSnapshotsAdicionales(
+        dto.itemsAdicionales ?? [],
+        cotizacion.sedeId,
+      );
+      const itemsAdicionales = (dto.itemsAdicionales ?? []).map((item, idx) => {
         const cantidad = item.cantidad;
         const precioUnitario = item.precioUnitario;
         const descuento = item.descuento ?? 0;
@@ -1416,6 +1428,9 @@ export class VentaService {
         const subtotal = (cantidad * precioUnitario) - descuento;
         const igv = Math.round(subtotal * (porcentajeIGV / 100) * 100) / 100;
         const total = subtotal + igv + icbperMonto;
+        const snap = snapshotsAdicionales[idx];
+        const descuentoUnit = cantidad > 0 ? descuento / cantidad : 0;
+        const margenUnit = (precioUnitario - descuentoUnit) - snap.precioCostoSnapshot;
         return {
           productoId: item.productoId || null,
           varianteId: item.varianteId || null,
@@ -1431,14 +1446,52 @@ export class VentaService {
           subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
           total: new Prisma.Decimal(total.toFixed(2)),
           orden: 0,
-          // Guardar valores numéricos para stock
+          precioCostoSnapshot: new Prisma.Decimal(snap.precioCostoSnapshot.toFixed(2)),
+          margenSnapshot: new Prisma.Decimal((Math.round(margenUnit * 100) / 100).toFixed(2)),
+          motivoLiquidacionSnapshot: snap.motivoLiquidacionSnapshot,
+          // Guardar valores numéricos para stock + guard
           _cantidad: cantidad,
           _subtotal: subtotal,
           _descuento: descuento,
           _igv: igv,
           _total: total,
+          _precioCosto: snap.precioCostoSnapshot,
+          _margen: margenUnit,
+          _motivoLiq: snap.motivoLiquidacionSnapshot,
+          _precioUnitario: precioUnitario,
         };
       });
+
+      // 3d. Guard venta bajo costo combinado (cotizacion + adicionales).
+      const lineasParaGuard = [
+        ...detallesVenta.map((d, i) => ({
+          descripcion: d.descripcion,
+          productoId: d.productoId,
+          varianteId: d.varianteId,
+          cantidad: Number(d.cantidad),
+          precioUnitario: Number(d.precioUnitario),
+          descuento: Number(d.descuento),
+          precioCostoSnapshot: snapshotsCotizacion[i].precioCostoSnapshot,
+          margenSnapshot: snapshotsCotizacion[i].margenSnapshot,
+          motivoLiquidacionSnapshot: snapshotsCotizacion[i].motivoLiquidacionSnapshot,
+        })),
+        ...itemsAdicionales.map((d) => ({
+          descripcion: d.descripcion,
+          productoId: d.productoId,
+          varianteId: d.varianteId,
+          cantidad: d._cantidad,
+          precioUnitario: d._precioUnitario,
+          descuento: d._descuento,
+          precioCostoSnapshot: d._precioCosto,
+          margenSnapshot: d._margen,
+          motivoLiquidacionSnapshot: d._motivoLiq,
+        })),
+      ];
+      const perdidaTotalCot = await this.validarVentaBajoCosto(
+        empresaId,
+        lineasParaGuard,
+        dto.ventaBajoCostoAutorizadaPorId ?? null,
+      );
 
       const hayItems = hayModificaciones || itemsAdicionales.length > 0;
 
@@ -1505,11 +1558,18 @@ export class VentaService {
             ? new Date(dto.fechaVencimientoPago)
             : null,
           observaciones: dto.observaciones ?? cotizacion.observaciones,
+          perdidaTotalLineas: perdidaTotalCot,
+          ventaBajoCostoAutorizadaPorId:
+            perdidaTotalCot != null ? dto.ventaBajoCostoAutorizadaPorId ?? null : null,
+          ventaBajoCostoAutorizadaEn:
+            perdidaTotalCot != null && dto.ventaBajoCostoAutorizadaPorId
+              ? new Date()
+              : null,
           // Venta POS: CONFIRMADA (con stock descontado) o PAGADA_COMPLETA
           estado: estaPagada ? EstadoVenta.PAGADA_COMPLETA : EstadoVenta.CONFIRMADA,
           detalles: {
             create: [
-              ...detallesVenta.map((d) => ({
+              ...detallesVenta.map((d, i) => ({
                 productoId: d.productoId,
                 varianteId: d.varianteId,
                 servicioId: d.servicioId,
@@ -1524,6 +1584,14 @@ export class VentaService {
                 subtotal: d.subtotal,
                 total: d.total,
                 orden: d.orden,
+                precioCostoSnapshot: new Prisma.Decimal(
+                  snapshotsCotizacion[i].precioCostoSnapshot.toFixed(2),
+                ),
+                margenSnapshot: new Prisma.Decimal(
+                  snapshotsCotizacion[i].margenSnapshot.toFixed(2),
+                ),
+                motivoLiquidacionSnapshot:
+                  snapshotsCotizacion[i].motivoLiquidacionSnapshot,
               })),
               ...itemsAdicionales.map((d, i) => ({
                 productoId: d.productoId,
@@ -1540,6 +1608,9 @@ export class VentaService {
                 subtotal: d.subtotal,
                 total: d.total,
                 orden: detallesVenta.length + i,
+                precioCostoSnapshot: d.precioCostoSnapshot,
+                margenSnapshot: d.margenSnapshot,
+                motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
               })),
             ],
           },
@@ -2712,6 +2783,111 @@ export class VentaService {
    * BadRequest con código VENTA_BAJO_COSTO_NO_AUTORIZADA + lista de líneas
    * para que el front muestre el dialog de autorización.
    */
+  /**
+   * Hidrata snapshot de costo + motivo liquidacion para detalles
+   * provenientes de una Cotizacion. Reusa la query del PrecioNivelService
+   * solo para extraer costo + motivoLiquidacion (el precio NO se recalcula
+   * porque la cotizacion ya fijo el precio; respetar el precio cotizado
+   * es parte del contrato comercial).
+   */
+  private async _hidratarSnapshotsCotizacion(
+    detalles: Array<{
+      productoId: string | null;
+      varianteId: string | null;
+      descripcion: string;
+      cantidad: Prisma.Decimal;
+      precioUnitario: Prisma.Decimal;
+      descuento: Prisma.Decimal;
+    }>,
+    sedeId: string,
+  ): Promise<Array<{
+    precioCostoSnapshot: number;
+    margenSnapshot: number;
+    motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+  }>> {
+    const result: Array<{
+      precioCostoSnapshot: number;
+      margenSnapshot: number;
+      motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+    }> = [];
+    for (const d of detalles) {
+      if (!d.productoId && !d.varianteId) {
+        result.push({ precioCostoSnapshot: 0, margenSnapshot: 0, motivoLiquidacionSnapshot: null });
+        continue;
+      }
+      try {
+        const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
+          d.productoId,
+          d.varianteId,
+          sedeId,
+          Number(d.cantidad),
+        );
+        const precioUnit = Number(d.precioUnitario);
+        const cantidadNum = Number(d.cantidad);
+        const descuentoUnit = cantidadNum > 0 ? Number(d.descuento) / cantidadNum : 0;
+        const costo = calc.precioCosto ?? 0;
+        const margenUnit = (precioUnit - descuentoUnit) - costo;
+        result.push({
+          precioCostoSnapshot: costo,
+          margenSnapshot: Math.round(margenUnit * 100) / 100,
+          motivoLiquidacionSnapshot:
+            (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `No se pudo hidratar snapshot para "${d.descripcion}" en cotizacion: ${msg}`,
+        );
+        result.push({ precioCostoSnapshot: 0, margenSnapshot: 0, motivoLiquidacionSnapshot: null });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Hidrata snapshot para itemsAdicionales que el cajero agrega durante
+   * la conversion cotizacion→venta. Estos no estaban en la cotizacion,
+   * asi que deben pasar por la misma logica de precio/costo/liquidacion.
+   */
+  private async _hidratarSnapshotsAdicionales(
+    items: Array<{
+      productoId?: string;
+      varianteId?: string;
+      cantidad: number;
+    }>,
+    sedeId: string,
+  ): Promise<Array<{
+    precioCostoSnapshot: number;
+    motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+  }>> {
+    const result: Array<{
+      precioCostoSnapshot: number;
+      motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+    }> = [];
+    for (const item of items) {
+      if (!item.productoId && !item.varianteId) {
+        result.push({ precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
+        continue;
+      }
+      try {
+        const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
+          item.productoId ?? null,
+          item.varianteId ?? null,
+          sedeId,
+          item.cantidad,
+        );
+        result.push({
+          precioCostoSnapshot: calc.precioCosto ?? 0,
+          motivoLiquidacionSnapshot:
+            (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
+        });
+      } catch (err) {
+        result.push({ precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
+      }
+    }
+    return result;
+  }
+
   private async validarVentaBajoCosto(
     empresaId: string,
     detalles: Array<{

@@ -102,4 +102,12 @@ export class CreateVentaDesdeCotizacionDto {
     varianteId?: string;
     servicioId?: string;
   }>;
+
+  @ApiPropertyOptional({
+    description:
+      'ID del usuario GERENTE/ADMIN que autorizó vender bajo costo. Requerido si alguna línea convertida tiene margen negativo y el producto NO está en liquidación.',
+  })
+  @IsOptional()
+  @IsString()
+  ventaBajoCostoAutorizadaPorId?: string;
 }
