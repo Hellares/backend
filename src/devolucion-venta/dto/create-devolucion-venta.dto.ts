@@ -28,6 +28,14 @@ export class CreateDevolucionItemDto {
   @IsString()
   varianteId?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'ID exacto del VentaDetalle original. Cuando se conoce, el reporte de liquidaciones usa esta FK para descontar la cantidad devuelta del detalle correcto incluso si la venta tiene varios detalles del mismo producto.',
+  })
+  @IsOptional()
+  @IsString()
+  ventaDetalleId?: string;
+
   @ApiProperty({ description: 'Cantidad a devolver', minimum: 1 })
   @IsNumber()
   @Min(1)

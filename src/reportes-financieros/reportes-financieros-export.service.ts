@@ -455,7 +455,13 @@ export class ReportesFinancierosExportService {
 
     // Pre-cargar devoluciones PROCESADAS de las ventas afectadas para
     // descontar cantidades devueltas de la perdida (sino sobre-cuenta).
-    // Clave: `ventaId|productoId|varianteId` → cantidadDevueltaTotal.
+    // Dos mapas:
+    //  - cantidadDevueltaPorDetalle: match exacto cuando DevolucionItem
+    //    tiene ventaDetalleId (preciso aunque la venta tenga varios
+    //    detalles del mismo producto).
+    //  - cantidadDevueltaPorLinea: fallback agregado por
+    //    (ventaId, productoId, varianteId) para devoluciones viejas o
+    //    reversiones totales sin FK.
     const ventaIds = Array.from(new Set(rows.map((r) => r.venta.id)));
     const devolucionesProcesadas = ventaIds.length
       ? await this.prisma.devolucion.findMany({
@@ -467,6 +473,7 @@ export class ReportesFinancierosExportService {
             ventaId: true,
             items: {
               select: {
+                ventaDetalleId: true,
                 productoId: true,
                 varianteId: true,
                 cantidad: true,
@@ -475,15 +482,24 @@ export class ReportesFinancierosExportService {
           },
         })
       : [];
+    const cantidadDevueltaPorDetalle = new Map<string, number>();
     const cantidadDevueltaPorLinea = new Map<string, number>();
     for (const dev of devolucionesProcesadas) {
       if (!dev.ventaId) continue;
       for (const item of dev.items) {
-        const key = `${dev.ventaId}|${item.productoId ?? ''}|${item.varianteId ?? ''}`;
-        cantidadDevueltaPorLinea.set(
-          key,
-          (cantidadDevueltaPorLinea.get(key) ?? 0) + item.cantidad,
-        );
+        if (item.ventaDetalleId) {
+          cantidadDevueltaPorDetalle.set(
+            item.ventaDetalleId,
+            (cantidadDevueltaPorDetalle.get(item.ventaDetalleId) ?? 0) + item.cantidad,
+          );
+        } else {
+          // Devoluciones legacy sin FK — agregar al fallback por producto/variante.
+          const key = `${dev.ventaId}|${item.productoId ?? ''}|${item.varianteId ?? ''}`;
+          cantidadDevueltaPorLinea.set(
+            key,
+            (cantidadDevueltaPorLinea.get(key) ?? 0) + item.cantidad,
+          );
+        }
       }
     }
 
@@ -506,15 +522,20 @@ export class ReportesFinancierosExportService {
       const precioCosto = Number(r.precioCostoSnapshot);
       const margenUnitario = Number(r.margenSnapshot);
 
-      // Descontar cantidad devuelta procesada del mismo producto/variante
-      // en la misma venta. Si una venta tiene 2 detalles del mismo producto
-      // (caso raro), el descuento se prorratea por orden de aparicion —
-      // marcamos la cantidad consumida para no contarla 2 veces.
-      const key = `${r.venta.id}|${r.productoId ?? ''}|${r.varianteId ?? ''}`;
-      const devueltaDisponible = cantidadDevueltaPorLinea.get(key) ?? 0;
-      const devueltaParaLinea = Math.min(devueltaDisponible, cantidadVendida);
-      if (devueltaDisponible > 0) {
-        cantidadDevueltaPorLinea.set(key, devueltaDisponible - devueltaParaLinea);
+      // Descontar cantidad devuelta procesada. Prefiero match exacto via
+      // ventaDetalleId; sino fallback al agregado por (venta, producto,
+      // variante) — en este ultimo caso, si la venta tiene 2 detalles del
+      // mismo producto, el descuento se prorratea por orden de aparicion
+      // marcando la cantidad consumida.
+      const devueltaExacta = cantidadDevueltaPorDetalle.get(r.id) ?? 0;
+      let devueltaParaLinea = Math.min(devueltaExacta, cantidadVendida);
+      if (devueltaExacta === 0) {
+        const key = `${r.venta.id}|${r.productoId ?? ''}|${r.varianteId ?? ''}`;
+        const devueltaDisponible = cantidadDevueltaPorLinea.get(key) ?? 0;
+        devueltaParaLinea = Math.min(devueltaDisponible, cantidadVendida);
+        if (devueltaDisponible > 0) {
+          cantidadDevueltaPorLinea.set(key, devueltaDisponible - devueltaParaLinea);
+        }
       }
       const cantidadRealizada = cantidadVendida - devueltaParaLinea;
 

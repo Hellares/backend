@@ -99,6 +99,12 @@ export class DevolucionVentaService {
               empresaId,
               productoId: item.productoId,
               varianteId: item.varianteId,
+              // Si el cliente envia ventaDetalleId explicito, lo usamos
+              // tal cual. Sino, intentamos resolverlo por match (producto
+              // + variante) sobre los detalles de la venta original; si
+              // hay > 1 candidato dejamos null (caso ambiguo) y el reporte
+              // cae al fallback de agrupar por producto.
+              ventaDetalleId: this._resolverVentaDetalleId(item, venta.detalles),
               cantidad: item.cantidad,
               motivo: item.motivo,
               estadoProducto: item.estadoProducto,
@@ -837,5 +843,27 @@ export class DevolucionVentaService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Error al invalidar cache: ${errorMessage}`);
     }
+  }
+
+  /**
+   * Resuelve `ventaDetalleId` para un item de devolucion:
+   *  - Si el DTO trae `ventaDetalleId` explicito (frontend nuevo), lo usa.
+   *  - Sino busca un VentaDetalle de la venta con mismo producto+variante:
+   *    - Match unico → devuelve su id.
+   *    - Multiples matches (caso raro, mismo producto repetido en la venta)
+   *      → null para que el reporte use fallback agregado.
+   *    - Sin match (item agregado que no estaba en la venta) → null.
+   */
+  private _resolverVentaDetalleId(
+    item: { ventaDetalleId?: string; productoId?: string; varianteId?: string },
+    detallesVenta: Array<{ id: string; productoId: string | null; varianteId: string | null }>,
+  ): string | null {
+    if (item.ventaDetalleId) return item.ventaDetalleId;
+    const candidatos = detallesVenta.filter(
+      (d) =>
+        d.productoId === (item.productoId ?? null) &&
+        d.varianteId === (item.varianteId ?? null),
+    );
+    return candidatos.length === 1 ? candidatos[0].id : null;
   }
 }

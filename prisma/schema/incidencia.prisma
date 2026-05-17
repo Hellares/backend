@@ -436,6 +436,15 @@ model DevolucionItem {
   productoId   String?
   varianteId   String?
 
+  /// FK exacta al VentaDetalle original (cuando la devolucion es de
+  /// cliente y la UI puede identificar la linea). Permite el reporte de
+  /// liquidaciones descontar la cantidad devuelta del detalle correcto
+  /// incluso cuando una venta tiene varios detalles del mismo producto
+  /// (caso raro). Nullable porque devoluciones viejas pre-migration y
+  /// reversiones totales pueden no traerlo — el reporte cae a match por
+  /// (ventaId, productoId, varianteId) como fallback.
+  ventaDetalleId String?
+
   // Cantidades
   cantidad Int // Cantidad devuelta
 
@@ -466,11 +475,13 @@ model DevolucionItem {
   variante          ProductoVariante? @relation("DevolucionVariante", fields: [varianteId], references: [id])
   productoReemplazo Producto?         @relation("DevolucionProductoReemplazo", fields: [productoReemplazoId], references: [id])
   varianteReemplazo ProductoVariante? @relation("DevolucionVarianteReemplazo", fields: [varianteReemplazoId], references: [id])
+  ventaDetalle      VentaDetalle?     @relation(fields: [ventaDetalleId], references: [id])
 
   @@index([devolucionId])
   @@index([empresaId])
   @@index([productoId])
   @@index([varianteId])
+  @@index([ventaDetalleId])
   @@index([motivo])
   @@index([estadoProducto])
   @@index([accion])

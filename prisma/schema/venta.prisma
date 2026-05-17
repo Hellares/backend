@@ -209,11 +209,12 @@ model VentaDetalle {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  venta       Venta             @relation(fields: [ventaId], references: [id], onDelete: Cascade)
-  producto    Producto?         @relation(fields: [productoId], references: [id])
-  variante    ProductoVariante? @relation(fields: [varianteId], references: [id])
-  servicio    Servicio?         @relation(fields: [servicioId], references: [id])
-  origenCombo Producto?         @relation("VentaDetalleOrigenCombo", fields: [origenComboId], references: [id])
+  venta        Venta             @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  producto     Producto?         @relation(fields: [productoId], references: [id])
+  variante     ProductoVariante? @relation(fields: [varianteId], references: [id])
+  servicio     Servicio?         @relation(fields: [servicioId], references: [id])
+  origenCombo  Producto?         @relation("VentaDetalleOrigenCombo", fields: [origenComboId], references: [id])
+  devoluciones DevolucionItem[]
 
   @@index([ventaId])
   @@index([productoId])
