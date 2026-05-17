@@ -2575,6 +2575,11 @@ export class ProductoStockService {
       sedeId: stock.sedeId,
     });
 
+    this.logger.log(
+      `Liquidación desactivada para ${stock.producto?.nombre || stock.variante?.nombre} en sede ${stock.sede.nombre}` +
+        (razon ? ` (razón: ${razon})` : ''),
+    );
+
     return updated;
   }
 
