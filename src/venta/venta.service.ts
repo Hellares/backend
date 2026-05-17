@@ -2142,6 +2142,15 @@ export class VentaService {
           this.calcularDetalle(d, index),
         );
 
+        // Guard venta bajo costo (mismo que create/crearYCobrar). Si la
+        // edicion del borrador trae lineas con margen<0 sin liquidacion
+        // ni autorizacion, rebota con 400 VENTA_BAJO_COSTO_NO_AUTORIZADA.
+        const perdidaTotal = await this.validarVentaBajoCosto(
+          empresaId,
+          detallesCalculados,
+          dto.ventaBajoCostoAutorizadaPorId ?? null,
+        );
+
         await tx.ventaDetalle.createMany({
           data: detallesCalculados.map((d) => ({
             ventaId: id,
@@ -2193,6 +2202,13 @@ export class VentaService {
             descuento: totalDescuento,
             impuestos: totalImpuestos,
             total,
+            perdidaTotalLineas: perdidaTotal,
+            ventaBajoCostoAutorizadaPorId:
+              perdidaTotal != null ? dto.ventaBajoCostoAutorizadaPorId ?? null : null,
+            ventaBajoCostoAutorizadaEn:
+              perdidaTotal != null && dto.ventaBajoCostoAutorizadaPorId
+                ? new Date()
+                : null,
           },
           include: this.getInclude(),
         });

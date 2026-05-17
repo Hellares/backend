@@ -2405,6 +2405,15 @@ export class ProductoStockService {
     if (stock.empresaId !== empresaId) {
       throw new BadRequestException('El stock no pertenece a esta empresa');
     }
+    // Lock conceptual: no permitir reactivar si ya está activa. Evita
+    // race entre dos admins simultáneos que pisaría el precioLiquidacion
+    // / motivo del primero sin warning. Para cambiar precio/motivo el
+    // admin debe desactivar primero y volver a activar.
+    if (stock.enLiquidacion) {
+      throw new BadRequestException(
+        'El producto ya está en liquidación. Desactívala primero si necesitás cambiar el precio o motivo.',
+      );
+    }
     if (!stock.precioCosto || Number(stock.precioCosto) <= 0) {
       throw new BadRequestException(
         'El producto no tiene precio de costo configurado. Configúralo antes de liquidar.',
@@ -2432,8 +2441,11 @@ export class ProductoStockService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.productoStock.update({
-        where: { id: productoStockId },
+      // Check atomico contra race: updateMany con where enLiquidacion=false
+      // garantiza que solo gana la primera transaccion. La segunda admin
+      // que llegue obtiene count=0 y tiramos error claro.
+      const lock = await tx.productoStock.updateMany({
+        where: { id: productoStockId, enLiquidacion: false },
         data: {
           enLiquidacion: true,
           precioLiquidacion: new Decimal(dto.precioLiquidacion),
@@ -2443,6 +2455,14 @@ export class ProductoStockService {
           fechaFinLiquidacion: fechaFin,
           liquidacionAutorizadaPorId: dto.autorizadoPorId,
         },
+      });
+      if (lock.count === 0) {
+        throw new BadRequestException(
+          'Otro usuario activó la liquidación de este producto simultáneamente. Refrescá y revisá el estado actual.',
+        );
+      }
+      const result = await tx.productoStock.findUniqueOrThrow({
+        where: { id: productoStockId },
         include: { producto: true, variante: true, sede: true },
       });
 

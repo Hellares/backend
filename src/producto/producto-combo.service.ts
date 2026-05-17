@@ -1547,18 +1547,43 @@ export class ProductoComboService {
     let precioCalculado = 0;
     let precioRegularTotal = 0;
 
+    const now = new Date();
+
     for (const componente of componentes) {
       const stock = componente.componenteVariante
         ? componente.componenteVariante.stocksPorSede?.[0]
         : componente.componenteProducto?.stocksPorSede?.[0];
 
-      const precioRegular = stock?.precio ? Number(stock.precio) : 0;
+      const precioBase = stock?.precio ? Number(stock.precio) : 0;
+
+      // Calcular precio efectivo del componente: min(base, oferta activa,
+      // liquidacion activa). Si el componente está en liquidacion, el combo
+      // NO debe contarlo a precio base — sino el cliente paga más por el
+      // combo que comprando suelto, y la liquidación pierde sentido.
+      let precioEfectivo = precioBase;
+      const ofertaVigente = stock?.enOferta
+        && stock?.precioOferta != null
+        && (!stock?.fechaInicioOferta || stock.fechaInicioOferta <= now)
+        && (!stock?.fechaFinOferta || stock.fechaFinOferta >= now);
+      if (ofertaVigente && Number(stock.precioOferta) < precioEfectivo) {
+        precioEfectivo = Number(stock.precioOferta);
+      }
+      const liquidacionVigente = stock?.enLiquidacion
+        && stock?.precioLiquidacion != null
+        && (!stock?.fechaInicioLiquidacion || stock.fechaInicioLiquidacion <= now)
+        && (!stock?.fechaFinLiquidacion || stock.fechaFinLiquidacion >= now);
+      if (liquidacionVigente && Number(stock.precioLiquidacion) < precioEfectivo) {
+        precioEfectivo = Number(stock.precioLiquidacion);
+      }
+
+      // El override `precioEnCombo` (admin lo fija explicitamente) gana
+      // sobre todo. Si admin no lo definio, usar precioEfectivo.
       const precioOverride = componente.precioEnCombo !== null && componente.precioEnCombo !== undefined
         ? Number(componente.precioEnCombo)
         : null;
 
-      precioRegularTotal += precioRegular * componente.cantidad;
-      precioCalculado += (precioOverride ?? precioRegular) * componente.cantidad;
+      precioRegularTotal += precioEfectivo * componente.cantidad;
+      precioCalculado += (precioOverride ?? precioEfectivo) * componente.cantidad;
     }
 
     return { precioCalculado, precioRegularTotal };

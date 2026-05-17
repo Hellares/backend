@@ -103,4 +103,12 @@ export class UpdateVentaDto {
   @ValidateNested({ each: true })
   @Type(() => CreateVentaDetalleDto)
   detalles?: CreateVentaDetalleDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'ID del usuario GERENTE/ADMIN que autoriza vender bajo costo (si la edición introduce líneas con margen negativo sin liquidación).',
+  })
+  @IsOptional()
+  @IsString()
+  ventaBajoCostoAutorizadaPorId?: string;
 }
