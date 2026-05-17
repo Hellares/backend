@@ -236,6 +236,7 @@ export class ProductoPrecioHistorialService {
       AJUSTE_MERCADO: 'Ajuste por condiciones de mercado',
       COMPETENCIA: 'Ajuste por competencia',
       CORRECCION: 'Corrección de precio',
+      LIQUIDACION: 'Liquidación (remate bajo costo)',
     };
 
     return razones[tipoCambio];

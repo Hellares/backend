@@ -21,6 +21,7 @@ import {
   ActualizarPreciosSedeDto,
   AjusteMasivoPreciosDto,
   QueryHistorialPreciosDto,
+  ActivarLiquidacionDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
@@ -633,6 +634,59 @@ export class ProductoStockController {
   // =====================================================
   // HISTORIAL DE PRECIOS GLOBAL
   // =====================================================
+
+  // =====================================================
+  // LIQUIDACIÓN (remate por debajo de costo)
+  // =====================================================
+
+  @Patch(':id/liquidacion/activar')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Activar liquidación sobre un ProductoStock',
+    description:
+      'Marca el producto como EN LIQUIDACIÓN con un precio menor al costo y motivo justificado. ' +
+      'Requiere autorización gerencial (DNI+password via /auth/autorizar-operacion); el frontend pasa el autorizadoPorId resultante.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async activarLiquidacion(
+    @Param('id') productoStockId: string,
+    @Body() dto: ActivarLiquidacionDto,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.stockService.activarLiquidacion(productoStockId, empresaId, dto, user.sub);
+  }
+
+  @Patch(':id/liquidacion/desactivar')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({ summary: 'Desactivar la liquidación de un ProductoStock' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async desactivarLiquidacion(
+    @Param('id') productoStockId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() body?: { razon?: string },
+  ) {
+    return this.stockService.desactivarLiquidacion(productoStockId, empresaId, user.sub, body?.razon);
+  }
+
+  @Get('liquidaciones')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Listar productos en liquidación activa' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async listarLiquidaciones(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.stockService.listarLiquidacionesActivas(
+      empresaId,
+      sedeId,
+      page ? +page : 1,
+      limit ? +limit : 50,
+    );
+  }
 
   @Get('historial-precios')
   @ApiOperation({

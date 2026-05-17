@@ -25,11 +25,22 @@ import {
   EstadoCotizacion,
   TipoMovimientoStock,
   MetodoPagoVenta,
+  MotivoLiquidacion,
   Prisma,
   Rol,
 } from '@prisma/client';
 import { FacturacionService } from '../sunat/facturacion.service';
 import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
+
+/**
+ * DTO interno enriquecido por `aplicarPreciosBackendNivel` con el snapshot
+ * de costo y motivo de liquidación. Persiste a VentaDetalle como
+ * precioCostoSnapshot/margenSnapshot/motivoLiquidacionSnapshot.
+ */
+type DetalleConSnapshot = CreateVentaDetalleDto & {
+  precioCostoSnapshot: number;
+  motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+};
 
 @Injectable()
 export class VentaService {
@@ -70,8 +81,8 @@ export class VentaService {
   private async aplicarPreciosBackendNivel(
     detalles: CreateVentaDetalleDto[],
     sedeId: string,
-  ): Promise<CreateVentaDetalleDto[]> {
-    const result: CreateVentaDetalleDto[] = [];
+  ): Promise<DetalleConSnapshot[]> {
+    const result: DetalleConSnapshot[] = [];
 
     /// Divergencias entre el precio que el cliente envió y el que el backend
     /// calcula. Si después del loop hay alguna, abortamos la venta con 409
@@ -92,8 +103,8 @@ export class VentaService {
     for (const d of detalles) {
       const productoIdParaNivel = d.productoId ?? d.comboId ?? null;
       if (!productoIdParaNivel && !d.varianteId) {
-        // Servicio puro o item sin producto — no aplica niveles.
-        result.push(d);
+        // Servicio puro o item sin producto — no aplica niveles ni snapshot.
+        result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
         continue;
       }
       try {
@@ -118,7 +129,13 @@ export class VentaService {
             nivelAplicado: calc.nivelAplicado ?? null,
           });
         }
-        result.push({ ...d, precioUnitario: calc.precioUnitario });
+        result.push({
+          ...d,
+          precioUnitario: calc.precioUnitario,
+          precioCostoSnapshot: calc.precioCosto ?? 0,
+          motivoLiquidacionSnapshot:
+            (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
+        });
       } catch (err) {
         // Producto sin precio configurado en sede, etc. — caso edge donde el
         // cliente envía un precio "razonable" y el backend no puede recalcular.
@@ -128,7 +145,7 @@ export class VentaService {
           `No se pudo recalcular precio para "${d.descripcion}": ${msg}. ` +
             `Usando precio del cliente como fallback.`,
         );
-        result.push(d);
+        result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
       }
     }
 
@@ -509,6 +526,14 @@ export class VentaService {
         this.calcularDetalle(d, index),
       );
 
+      // Guard: validar venta bajo costo. Lanza 422 si hay líneas sin
+      // liquidación + sin autorización GERENTE/ADMIN.
+      const perdidaTotal = await this.validarVentaBajoCosto(
+        empresaId,
+        detallesCalculados,
+        dto.ventaBajoCostoAutorizadaPorId ?? null,
+      );
+
       const subtotal = detallesCalculados.reduce(
         (sum, d) => sum + d.subtotal,
         0,
@@ -568,6 +593,11 @@ export class VentaService {
             ? new Date(dto.fechaVencimientoPago)
             : null,
           observaciones: dto.observaciones,
+          perdidaTotalLineas: perdidaTotal,
+          ventaBajoCostoAutorizadaPorId:
+            perdidaTotal != null ? dto.ventaBajoCostoAutorizadaPorId ?? null : null,
+          ventaBajoCostoAutorizadaEn:
+            perdidaTotal != null && dto.ventaBajoCostoAutorizadaPorId ? new Date() : null,
           detalles: {
             create: detallesCalculados.map((d) => ({
               productoId: d.productoId,
@@ -587,6 +617,9 @@ export class VentaService {
               orden: d.orden,
               origenComboId: d.origenComboId,
               origenComboNombre: d.origenComboNombre,
+              precioCostoSnapshot: d.precioCostoSnapshot,
+              margenSnapshot: d.margenSnapshot,
+              motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
             })),
           },
         },
@@ -648,7 +681,14 @@ export class VentaService {
           this.calcularDetalle(d, index),
         );
 
-        // 2b. Validar descuentos máximos por producto
+        // 2b. Guard: validar venta bajo costo (margen negativo).
+        const perdidaTotal = await this.validarVentaBajoCosto(
+          empresaId,
+          detallesCalculados,
+          dto.ventaBajoCostoAutorizadaPorId ?? null,
+        );
+
+        // 2c. Validar descuentos máximos por producto
         const detallesConDescuento = detallesCalculados.filter(d => d.descuento > 0 && d.productoId);
         if (detallesConDescuento.length > 0) {
           const productoIds = [...new Set(detallesConDescuento.map(d => d.productoId!))];
@@ -747,6 +787,11 @@ export class VentaService {
             descuentoGlobalPorcentaje: dto.descuentoGlobalPorcentaje ?? null,
             descuentoAutorizadoPorId: descuentoGlobal > 0 ? dto.descuentoAutorizadoPorId : null,
             descuentoAutorizadoEn: descuentoGlobal > 0 ? new Date() : null,
+            perdidaTotalLineas: perdidaTotal,
+            ventaBajoCostoAutorizadaPorId:
+              perdidaTotal != null ? dto.ventaBajoCostoAutorizadaPorId ?? null : null,
+            ventaBajoCostoAutorizadaEn:
+              perdidaTotal != null && dto.ventaBajoCostoAutorizadaPorId ? new Date() : null,
             estado: estaPagada
               ? EstadoVenta.PAGADA_COMPLETA
               : EstadoVenta.CONFIRMADA,
@@ -769,6 +814,9 @@ export class VentaService {
                 orden: d.orden,
                 origenComboId: d.origenComboId,
                 origenComboNombre: d.origenComboNombre,
+                precioCostoSnapshot: d.precioCostoSnapshot,
+                margenSnapshot: d.margenSnapshot,
+                motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
               })),
             },
           },
@@ -2043,6 +2091,9 @@ export class VentaService {
             orden: d.orden,
             origenComboId: d.origenComboId,
             origenComboNombre: d.origenComboNombre,
+            precioCostoSnapshot: d.precioCostoSnapshot,
+            margenSnapshot: d.margenSnapshot,
+            motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
           })),
         });
 
@@ -2647,7 +2698,108 @@ export class VentaService {
     });
   }
 
-  private calcularDetalle(dto: CreateVentaDetalleDto, index: number) {
+  /**
+   * Guard: si alguna línea tiene margen negativo (venta bajo costo) verifica
+   * que esté autorizada — bien por liquidación activa del producto (motivo
+   * snapshot en el detalle) o bien por un autorizador GERENTE/ADMIN
+   * adjunto a la venta (ventaBajoCostoAutorizadaPorId).
+   *
+   * Devuelve la pérdida total agregada (suma de márgenes negativos x
+   * cantidad) — la persistimos en `Venta.perdidaTotalLineas` para reporte.
+   *
+   * Si el autorizador NO tiene rol válido en la empresa, lanza Forbidden.
+   * Si NO hay autorizador y NO hay liquidación, lanza
+   * BadRequest con código VENTA_BAJO_COSTO_NO_AUTORIZADA + lista de líneas
+   * para que el front muestre el dialog de autorización.
+   */
+  private async validarVentaBajoCosto(
+    empresaId: string,
+    detalles: Array<{
+      descripcion: string;
+      productoId: string | null;
+      varianteId: string | null;
+      cantidad: number;
+      precioUnitario: number;
+      descuento: number;
+      precioCostoSnapshot: number;
+      margenSnapshot: number;
+      motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+    }>,
+    autorizadoPorId: string | null,
+  ): Promise<number | null> {
+    const lineasBajoCosto = detalles.filter(
+      (d) => d.precioCostoSnapshot > 0 && d.margenSnapshot < 0,
+    );
+    if (lineasBajoCosto.length === 0) return null;
+
+    const perdidaTotal = lineasBajoCosto.reduce(
+      (sum, d) => sum + d.margenSnapshot * d.cantidad,
+      0,
+    );
+
+    // Bucket A: líneas en liquidación activa (snapshot ya copió el motivo).
+    // Bucket B: el resto requiere autorización gerencial.
+    const requierenAutorizacion = lineasBajoCosto.filter(
+      (d) => !d.motivoLiquidacionSnapshot,
+    );
+
+    if (requierenAutorizacion.length > 0) {
+      if (!autorizadoPorId) {
+        throw new BadRequestException({
+          code: 'VENTA_BAJO_COSTO_NO_AUTORIZADA',
+          message:
+            requierenAutorizacion.length === 1
+              ? `"${requierenAutorizacion[0].descripcion}" se está vendiendo bajo costo y no está en liquidación. Se requiere autorización gerencial.`
+              : `${requierenAutorizacion.length} productos se están vendiendo bajo costo sin liquidación. Se requiere autorización gerencial.`,
+          perdidaTotal: Math.round(perdidaTotal * 100) / 100,
+          lineas: requierenAutorizacion.map((d) => ({
+            descripcion: d.descripcion,
+            productoId: d.productoId,
+            varianteId: d.varianteId,
+            cantidad: d.cantidad,
+            precioUnitario: d.precioUnitario,
+            precioCosto: d.precioCostoSnapshot,
+            margenUnitario: Math.round(d.margenSnapshot * 100) / 100,
+            perdidaLinea: Math.round(d.margenSnapshot * d.cantidad * 100) / 100,
+          })),
+        });
+      }
+
+      // Validar que el autorizador tiene rol válido en la empresa.
+      // Reutilizamos la misma policy que liquidaciones: GERENTE_SEDE/ADMINISTRADOR
+      // (sede) o SUPER_ADMIN/EMPRESA_ADMIN (empresa).
+      const [empresaRol, sedeRol] = await Promise.all([
+        this.prisma.empresaUsuarioRol.findFirst({
+          where: {
+            usuarioId: autorizadoPorId,
+            empresaId,
+            isActive: true,
+            deletedAt: null,
+            rol: { in: ['SUPER_ADMIN', 'EMPRESA_ADMIN'] },
+          },
+          select: { id: true },
+        }),
+        this.prisma.usuarioSedeRol.findFirst({
+          where: {
+            usuarioId: autorizadoPorId,
+            sede: { empresaId },
+            rol: { in: ['GERENTE_SEDE', 'ADMINISTRADOR'] },
+            isActive: true,
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (!empresaRol && !sedeRol) {
+        throw new BadRequestException(
+          'El autorizador de la venta bajo costo no tiene rol GERENTE_SEDE/ADMINISTRADOR',
+        );
+      }
+    }
+
+    return Math.round(perdidaTotal * 100) / 100;
+  }
+
+  private calcularDetalle(dto: CreateVentaDetalleDto | DetalleConSnapshot, index: number) {
     const cantidad = dto.cantidad;
     const precioUnitario = dto.precioUnitario;
     const descuento = dto.descuento ?? 0;
@@ -2676,6 +2828,17 @@ export class VentaService {
     const icbperMonto = dto.icbper ?? 0;
     const totalConIcbper = total + icbperMonto;
 
+    // Snapshot de costo y margen: el costo viene de aplicarPreciosBackendNivel
+    // (cero si la línea no es producto o el cálculo falló). Margen = ingreso
+    // neto de descuento por unidad, menos costo unitario.
+    const precioCostoSnapshot =
+      'precioCostoSnapshot' in dto ? dto.precioCostoSnapshot : 0;
+    const motivoLiquidacionSnapshot =
+      'motivoLiquidacionSnapshot' in dto ? dto.motivoLiquidacionSnapshot : null;
+    const descuentoUnitario = cantidad > 0 ? descuento / cantidad : 0;
+    const ingresoNetoUnitario = precioUnitario - descuentoUnitario;
+    const margenSnapshot = ingresoNetoUnitario - precioCostoSnapshot;
+
     return {
       productoId: dto.productoId || null,
       varianteId: dto.varianteId || null,
@@ -2694,6 +2857,10 @@ export class VentaService {
       orden: index,
       origenComboId: dto.origenComboId || null,
       origenComboNombre: dto.origenComboNombre || null,
+      // Snapshot de margen para reportería de liquidaciones / pérdidas.
+      precioCostoSnapshot: Math.round(precioCostoSnapshot * 100) / 100,
+      margenSnapshot: Math.round(margenSnapshot * 100) / 100,
+      motivoLiquidacionSnapshot,
     };
   }
 

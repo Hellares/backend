@@ -21,6 +21,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { ReportesFinancierosExportService } from './reportes-financieros-export.service';
+import { MotivoLiquidacion } from '@prisma/client';
 
 @ApiTags('Reportes Financieros')
 @Controller('reportes-financieros')
@@ -76,5 +77,75 @@ export class ReportesFinancierosController {
     @Res() res: Response,
   ) {
     await this.exportService.exportCuentasPorPagar(empresaId, res);
+  }
+
+  // =====================================================
+  // LIQUIDACIONES Y PÉRDIDAS COMERCIALES
+  // =====================================================
+
+  private parseFiltrosLiquidacion(
+    fechaInicio: string,
+    fechaFin: string,
+    motivo?: string,
+  ): { fechaInicio: Date; fechaFin: Date; motivo?: MotivoLiquidacion } {
+    if (!fechaInicio || !fechaFin) {
+      throw new BadRequestException('fechaInicio y fechaFin son requeridos (formato YYYY-MM-DD)');
+    }
+    const fi = new Date(fechaInicio);
+    const ff = new Date(fechaFin);
+    if (isNaN(fi.getTime()) || isNaN(ff.getTime())) {
+      throw new BadRequestException('Fechas inválidas');
+    }
+    if (fi > ff) {
+      throw new BadRequestException('fechaInicio debe ser anterior a fechaFin');
+    }
+    if (motivo && !Object.values(MotivoLiquidacion).includes(motivo as MotivoLiquidacion)) {
+      throw new BadRequestException(`motivo inválido. Valores válidos: ${Object.values(MotivoLiquidacion).join(', ')}`);
+    }
+    // Asegurar día completo
+    ff.setHours(23, 59, 59, 999);
+    return { fechaInicio: fi, fechaFin: ff, motivo: motivo as MotivoLiquidacion | undefined };
+  }
+
+  @Get('liquidaciones')
+  @RequiresPermission(Permission.VIEW_REPORTS)
+  @ApiOperation({
+    summary: 'Reporte de liquidaciones y pérdidas comerciales',
+    description: 'Agrega ventas con margen negativo (productos en liquidación o autorización bajo costo).',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getReporteLiquidaciones(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('fechaInicio') fechaInicio: string,
+    @Query('fechaFin') fechaFin: string,
+    @Query('sedeId') sedeId?: string,
+    @Query('motivo') motivo?: string,
+  ) {
+    const filtros = this.parseFiltrosLiquidacion(fechaInicio, fechaFin, motivo);
+    return this.exportService.getReporteLiquidaciones(empresaId, { ...filtros, sedeId });
+  }
+
+  @Get('export/liquidaciones')
+  @RequiresPermission(Permission.VIEW_REPORTS)
+  @ApiOperation({ summary: 'Exportar reporte de liquidaciones (Excel)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async exportLiquidaciones(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('fechaInicio') fechaInicio: string,
+    @Query('fechaFin') fechaFin: string,
+    @Res() res: Response,
+    @Query('sedeId') sedeId?: string,
+    @Query('motivo') motivo?: string,
+  ) {
+    const filtros = this.parseFiltrosLiquidacion(fechaInicio, fechaFin, motivo);
+    // Validar rango ≤ 3 meses (igual que otros exports)
+    const maxFin = new Date(filtros.fechaInicio);
+    maxFin.setMonth(maxFin.getMonth() + ReportesFinancierosController.MAX_EXPORT_MONTHS);
+    if (filtros.fechaFin > maxFin) {
+      throw new BadRequestException(
+        `El rango máximo de exportación es de ${ReportesFinancierosController.MAX_EXPORT_MONTHS} meses`,
+      );
+    }
+    await this.exportService.exportLiquidaciones(empresaId, { ...filtros, sedeId }, res);
   }
 }

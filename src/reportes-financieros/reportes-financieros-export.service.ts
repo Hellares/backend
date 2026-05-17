@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { LibroContableService } from '../libro-contable/libro-contable.service';
+import { EstadoVenta, MotivoLiquidacion, Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import { Response } from 'express';
 
@@ -359,6 +360,295 @@ export class ReportesFinancierosExportService {
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename=cuentas_por_pagar_${new Date().toISOString().split('T')[0]}.xlsx`,
+    });
+    await workbook.xlsx.write(res);
+    res.end();
+  }
+
+  // =====================================================
+  // REPORTE: Liquidaciones y pérdidas comerciales
+  // =====================================================
+
+  /**
+   * Agrega ventas con líneas de margen negativo (motivoLiquidacionSnapshot
+   * presente o autorización de venta bajo costo). Devuelve resumen + detalle.
+   */
+  async getReporteLiquidaciones(
+    empresaId: string,
+    filtros: {
+      sedeId?: string;
+      fechaInicio: Date;
+      fechaFin: Date;
+      motivo?: MotivoLiquidacion;
+    },
+  ): Promise<{
+    resumen: {
+      cantidadLineas: number;
+      cantidadVentas: number;
+      ingresoTotal: number; // sum (ingresoNetoLinea x cantidad)
+      costoTotal: number; // sum (costoUnitario x cantidad)
+      perdidaTotal: number; // ingreso - costo (negativo)
+      promedioPerdidaPorLinea: number;
+    };
+    porMotivo: Array<{
+      motivo: string; // MotivoLiquidacion o "SIN_LIQUIDACION_AUTORIZADA"
+      cantidadLineas: number;
+      ingreso: number;
+      costo: number;
+      perdida: number;
+    }>;
+    porProducto: Array<{
+      productoId: string | null;
+      varianteId: string | null;
+      descripcion: string;
+      cantidadVendida: number;
+      ingreso: number;
+      costo: number;
+      perdida: number;
+    }>;
+    detalle: Array<{
+      ventaId: string;
+      ventaCodigo: string;
+      fechaVenta: Date;
+      sedeNombre: string;
+      descripcion: string;
+      cantidad: number;
+      precioUnitario: number;
+      descuento: number;
+      precioCostoSnapshot: number;
+      margenSnapshot: number;
+      motivo: string | null;
+      autorizadoPorNombre: string | null;
+    }>;
+  }> {
+    const where: Prisma.VentaDetalleWhereInput = {
+      venta: {
+        empresaId,
+        estado: { not: EstadoVenta.ANULADA },
+        fechaVenta: { gte: filtros.fechaInicio, lte: filtros.fechaFin },
+        ...(filtros.sedeId ? { sedeId: filtros.sedeId } : {}),
+      },
+      precioCostoSnapshot: { gt: 0 },
+      margenSnapshot: { lt: 0 },
+      ...(filtros.motivo ? { motivoLiquidacionSnapshot: filtros.motivo } : {}),
+    };
+
+    const rows = await this.prisma.ventaDetalle.findMany({
+      where,
+      include: {
+        venta: {
+          select: {
+            id: true,
+            codigo: true,
+            fechaVenta: true,
+            sede: { select: { nombre: true } },
+            ventaBajoCostoAutorizadaPor: {
+              select: { persona: { select: { nombres: true, apellidos: true } } },
+            },
+          },
+        },
+        producto: { select: { id: true, nombre: true } },
+        variante: { select: { id: true, nombre: true } },
+      },
+      orderBy: { venta: { fechaVenta: 'desc' } },
+    });
+
+    // Resumen
+    let ingresoTotal = 0;
+    let costoTotal = 0;
+    const ventasSet = new Set<string>();
+    const porMotivoMap = new Map<string, { cantidadLineas: number; ingreso: number; costo: number; perdida: number }>();
+    const porProductoMap = new Map<
+      string,
+      { productoId: string | null; varianteId: string | null; descripcion: string; cantidadVendida: number; ingreso: number; costo: number; perdida: number }
+    >();
+    const detalle: Awaited<ReturnType<typeof this.getReporteLiquidaciones>>['detalle'] = [];
+
+    for (const r of rows) {
+      const cantidad = Number(r.cantidad);
+      const precioUnitario = Number(r.precioUnitario);
+      const descuento = Number(r.descuento);
+      const precioCosto = Number(r.precioCostoSnapshot);
+      const margenUnitario = Number(r.margenSnapshot);
+      const ingresoLinea = precioUnitario * cantidad - descuento;
+      const costoLinea = precioCosto * cantidad;
+      const perdidaLinea = ingresoLinea - costoLinea;
+
+      ingresoTotal += ingresoLinea;
+      costoTotal += costoLinea;
+      ventasSet.add(r.venta.id);
+
+      const motivoKey = (r.motivoLiquidacionSnapshot as string) ?? 'SIN_LIQUIDACION_AUTORIZADA';
+      const m = porMotivoMap.get(motivoKey) ?? { cantidadLineas: 0, ingreso: 0, costo: 0, perdida: 0 };
+      m.cantidadLineas++;
+      m.ingreso += ingresoLinea;
+      m.costo += costoLinea;
+      m.perdida += perdidaLinea;
+      porMotivoMap.set(motivoKey, m);
+
+      const productoKey = r.varianteId ?? r.productoId ?? r.descripcion;
+      const p = porProductoMap.get(productoKey) ?? {
+        productoId: r.productoId,
+        varianteId: r.varianteId,
+        descripcion: r.descripcion,
+        cantidadVendida: 0,
+        ingreso: 0,
+        costo: 0,
+        perdida: 0,
+      };
+      p.cantidadVendida += cantidad;
+      p.ingreso += ingresoLinea;
+      p.costo += costoLinea;
+      p.perdida += perdidaLinea;
+      porProductoMap.set(productoKey, p);
+
+      const autorizadoNombre = r.venta.ventaBajoCostoAutorizadaPor?.persona
+        ? `${r.venta.ventaBajoCostoAutorizadaPor.persona.nombres} ${r.venta.ventaBajoCostoAutorizadaPor.persona.apellidos}`.trim()
+        : null;
+
+      detalle.push({
+        ventaId: r.venta.id,
+        ventaCodigo: r.venta.codigo,
+        fechaVenta: r.venta.fechaVenta,
+        sedeNombre: r.venta.sede.nombre,
+        descripcion: r.descripcion,
+        cantidad,
+        precioUnitario,
+        descuento,
+        precioCostoSnapshot: precioCosto,
+        margenSnapshot: margenUnitario,
+        motivo: r.motivoLiquidacionSnapshot,
+        autorizadoPorNombre: autorizadoNombre,
+      });
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    return {
+      resumen: {
+        cantidadLineas: rows.length,
+        cantidadVentas: ventasSet.size,
+        ingresoTotal: round2(ingresoTotal),
+        costoTotal: round2(costoTotal),
+        perdidaTotal: round2(ingresoTotal - costoTotal),
+        promedioPerdidaPorLinea: rows.length ? round2((ingresoTotal - costoTotal) / rows.length) : 0,
+      },
+      porMotivo: Array.from(porMotivoMap.entries())
+        .map(([motivo, v]) => ({
+          motivo,
+          cantidadLineas: v.cantidadLineas,
+          ingreso: round2(v.ingreso),
+          costo: round2(v.costo),
+          perdida: round2(v.perdida),
+        }))
+        .sort((a, b) => a.perdida - b.perdida),
+      porProducto: Array.from(porProductoMap.values())
+        .map((v) => ({
+          ...v,
+          ingreso: round2(v.ingreso),
+          costo: round2(v.costo),
+          perdida: round2(v.perdida),
+        }))
+        .sort((a, b) => a.perdida - b.perdida),
+      detalle,
+    };
+  }
+
+  async exportLiquidaciones(
+    empresaId: string,
+    filtros: {
+      sedeId?: string;
+      fechaInicio: Date;
+      fechaFin: Date;
+      motivo?: MotivoLiquidacion;
+    },
+    res: Response,
+  ): Promise<void> {
+    const data = await this.getReporteLiquidaciones(empresaId, filtros);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Syncronize';
+    workbook.created = new Date();
+
+    // Sheet 1: Resumen
+    const resumenSheet = workbook.addWorksheet('Resumen');
+    resumenSheet.columns = [
+      { header: 'Concepto', key: 'concepto', width: 30 },
+      { header: 'Valor', key: 'valor', width: 18 },
+    ];
+    resumenSheet.getRow(1).eachCell((c) => (c.style = HEADER_STYLE));
+    resumenSheet.getRow(1).height = 25;
+    resumenSheet.addRows([
+      { concepto: 'Periodo', valor: `${filtros.fechaInicio.toISOString().slice(0, 10)} - ${filtros.fechaFin.toISOString().slice(0, 10)}` },
+      { concepto: 'Líneas vendidas bajo costo', valor: data.resumen.cantidadLineas },
+      { concepto: 'Ventas afectadas', valor: data.resumen.cantidadVentas },
+      { concepto: 'Ingreso recuperado', valor: data.resumen.ingresoTotal },
+      { concepto: 'Costo total', valor: data.resumen.costoTotal },
+      { concepto: 'Pérdida total', valor: data.resumen.perdidaTotal },
+      { concepto: 'Pérdida promedio por línea', valor: data.resumen.promedioPerdidaPorLinea },
+    ]);
+    for (let i = 5; i <= 8; i++) {
+      resumenSheet.getRow(i).getCell('valor').numFmt = '#,##0.00';
+    }
+
+    // Sheet 2: Por motivo
+    const motivoSheet = workbook.addWorksheet('Por motivo');
+    motivoSheet.columns = [
+      { header: 'Motivo', key: 'motivo', width: 25 },
+      { header: 'Líneas', key: 'cantidadLineas', width: 10 },
+      { header: 'Ingreso', key: 'ingreso', width: 14 },
+      { header: 'Costo', key: 'costo', width: 14 },
+      { header: 'Pérdida', key: 'perdida', width: 14 },
+    ];
+    motivoSheet.getRow(1).eachCell((c) => (c.style = HEADER_STYLE));
+    motivoSheet.getRow(1).height = 25;
+    data.porMotivo.forEach((m) => motivoSheet.addRow(m));
+    [3, 4, 5].forEach((col) => (motivoSheet.getColumn(col).numFmt = '#,##0.00'));
+
+    // Sheet 3: Por producto
+    const productoSheet = workbook.addWorksheet('Por producto');
+    productoSheet.columns = [
+      { header: 'Producto', key: 'descripcion', width: 40 },
+      { header: 'Cantidad', key: 'cantidadVendida', width: 12 },
+      { header: 'Ingreso', key: 'ingreso', width: 14 },
+      { header: 'Costo', key: 'costo', width: 14 },
+      { header: 'Pérdida', key: 'perdida', width: 14 },
+    ];
+    productoSheet.getRow(1).eachCell((c) => (c.style = HEADER_STYLE));
+    productoSheet.getRow(1).height = 25;
+    data.porProducto.forEach((p) => productoSheet.addRow(p));
+    [3, 4, 5].forEach((col) => (productoSheet.getColumn(col).numFmt = '#,##0.00'));
+
+    // Sheet 4: Detalle
+    const detalleSheet = workbook.addWorksheet('Detalle');
+    detalleSheet.columns = [
+      { header: 'Fecha', key: 'fecha', width: 14 },
+      { header: 'Venta', key: 'ventaCodigo', width: 16 },
+      { header: 'Sede', key: 'sedeNombre', width: 18 },
+      { header: 'Producto', key: 'descripcion', width: 36 },
+      { header: 'Cantidad', key: 'cantidad', width: 10 },
+      { header: 'Precio venta', key: 'precioUnitario', width: 12 },
+      { header: 'Descuento', key: 'descuento', width: 11 },
+      { header: 'Costo unitario', key: 'precioCostoSnapshot', width: 14 },
+      { header: 'Margen unitario', key: 'margenSnapshot', width: 14 },
+      { header: 'Motivo', key: 'motivo', width: 22 },
+      { header: 'Autorizado por', key: 'autorizadoPorNombre', width: 24 },
+    ];
+    detalleSheet.getRow(1).eachCell((c) => (c.style = HEADER_STYLE));
+    detalleSheet.getRow(1).height = 25;
+    data.detalle.forEach((d) =>
+      detalleSheet.addRow({
+        ...d,
+        fecha: d.fechaVenta.toISOString().slice(0, 10),
+        motivo: d.motivo ?? 'Autorización gerencial',
+        autorizadoPorNombre: d.autorizadoPorNombre ?? '',
+      }),
+    );
+    [6, 7, 8, 9].forEach((col) => (detalleSheet.getColumn(col).numFmt = '#,##0.00'));
+
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=liquidaciones_${filtros.fechaInicio.toISOString().slice(0, 10)}_${filtros.fechaFin.toISOString().slice(0, 10)}.xlsx`,
     });
     await workbook.xlsx.write(res);
     res.end();

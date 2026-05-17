@@ -11,6 +11,7 @@ import { CrearStockDto } from './dto/crear-stock.dto';
 import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { ActualizarPreciosSedeDto } from './dto/actualizar-precios-sede.dto';
 import { QueryHistorialPreciosDto } from './dto/query-historial-precios.dto';
+import { ActivarLiquidacionDto } from './dto/activar-liquidacion.dto';
 import { Prisma, TipoCambioPrecio } from '@prisma/client';
 import { PromocionService } from '../promocion/promocion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
@@ -2350,5 +2351,264 @@ export class ProductoStockService {
       data: { precioIncluyeIgv },
     });
     return { updated: result.count };
+  }
+
+  // =====================================================
+  // LIQUIDACIÓN — remate por debajo de precio costo
+  // =====================================================
+
+  /**
+   * Valida que el usuario tenga rol de GERENTE_SEDE/ADMINISTRADOR (a nivel
+   * sede) o SUPER_ADMIN/EMPRESA_ADMIN (a nivel empresa) — usado para
+   * autorizar la activación de liquidación o la venta bajo costo. El flujo
+   * normal es que el front llame primero a /auth/autorizar-operacion para
+   * validar DNI+password, este método sirve como defensa extra.
+   */
+  private async assertAutorizadorGerencial(autorizadoPorId: string, empresaId: string): Promise<void> {
+    const empresaRol = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        usuarioId: autorizadoPorId,
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+        rol: { in: ['SUPER_ADMIN', 'EMPRESA_ADMIN'] },
+      },
+    });
+    if (empresaRol) return;
+
+    const sedeRol = await this.prisma.usuarioSedeRol.findFirst({
+      where: {
+        usuarioId: autorizadoPorId,
+        sede: { empresaId },
+        rol: { in: ['GERENTE_SEDE', 'ADMINISTRADOR'] },
+        isActive: true,
+      },
+    });
+    if (sedeRol) return;
+
+    throw new BadRequestException(
+      'El autorizador no tiene rol de GERENTE_SEDE/ADMINISTRADOR',
+    );
+  }
+
+  async activarLiquidacion(
+    productoStockId: string,
+    empresaId: string,
+    dto: ActivarLiquidacionDto,
+    usuarioId: string,
+  ) {
+    const stock = await this.prisma.productoStock.findUnique({
+      where: { id: productoStockId },
+      include: { producto: true, variante: true, sede: true },
+    });
+    if (!stock) throw new NotFoundException('Stock no encontrado');
+    if (stock.empresaId !== empresaId) {
+      throw new BadRequestException('El stock no pertenece a esta empresa');
+    }
+    if (!stock.precioCosto || Number(stock.precioCosto) <= 0) {
+      throw new BadRequestException(
+        'El producto no tiene precio de costo configurado. Configúralo antes de liquidar.',
+      );
+    }
+    if (dto.precioLiquidacion >= Number(stock.precioCosto)) {
+      throw new BadRequestException(
+        'El precio de liquidación debe ser menor al precio de costo (S/' +
+          Number(stock.precioCosto).toFixed(2) +
+          '). Si el precio es mayor al costo, usa una oferta normal.',
+      );
+    }
+    if (dto.motivoLiquidacion === 'OTRO' && !dto.observaciones?.trim()) {
+      throw new BadRequestException(
+        'Cuando el motivo es OTRO, las observaciones son obligatorias',
+      );
+    }
+
+    await this.assertAutorizadorGerencial(dto.autorizadoPorId, empresaId);
+
+    const fechaInicio = new Date();
+    const fechaFin = dto.fechaFin ? new Date(dto.fechaFin) : null;
+    if (fechaFin && fechaFin <= fechaInicio) {
+      throw new BadRequestException('La fecha de fin debe ser posterior a hoy');
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.productoStock.update({
+        where: { id: productoStockId },
+        data: {
+          enLiquidacion: true,
+          precioLiquidacion: new Decimal(dto.precioLiquidacion),
+          motivoLiquidacion: dto.motivoLiquidacion,
+          observacionesLiquidacion: dto.observaciones ?? null,
+          fechaInicioLiquidacion: fechaInicio,
+          fechaFinLiquidacion: fechaFin,
+          liquidacionAutorizadaPorId: dto.autorizadoPorId,
+        },
+        include: { producto: true, variante: true, sede: true },
+      });
+
+      await tx.productoPrecioHistorialSede.create({
+        data: {
+          productoStockId: stock.id,
+          sedeId: stock.sedeId,
+          precioAnterior: stock.precio,
+          precioNuevo: stock.precio,
+          precioCostoAnterior: stock.precioCosto,
+          precioCostoNuevo: stock.precioCosto,
+          precioOfertaAnterior: stock.precioOferta,
+          precioOfertaNuevo: new Decimal(dto.precioLiquidacion),
+          tipoCambio: TipoCambioPrecio.LIQUIDACION,
+          razon:
+            `Liquidación activada [${dto.motivoLiquidacion}]` +
+            (dto.observaciones ? `: ${dto.observaciones}` : ''),
+          origenModulo: 'LIQUIDACION',
+          usuarioId,
+        },
+      });
+
+      return result;
+    });
+
+    await this.invalidateProductCache(empresaId);
+    this.realtimeInvalidation.notifyPrecioCambiado({
+      empresaId,
+      productoId: stock.productoId,
+      varianteId: stock.varianteId,
+      sedeId: stock.sedeId,
+    });
+
+    this.logger.log(
+      `Liquidación activada para ${stock.producto?.nombre || stock.variante?.nombre} en sede ${stock.sede.nombre} (motivo: ${dto.motivoLiquidacion}, precio: S/${dto.precioLiquidacion})`,
+    );
+
+    return updated;
+  }
+
+  async desactivarLiquidacion(
+    productoStockId: string,
+    empresaId: string,
+    usuarioId: string,
+    razon?: string,
+  ) {
+    const stock = await this.prisma.productoStock.findUnique({
+      where: { id: productoStockId },
+      include: { producto: true, variante: true, sede: true },
+    });
+    if (!stock) throw new NotFoundException('Stock no encontrado');
+    if (stock.empresaId !== empresaId) {
+      throw new BadRequestException('El stock no pertenece a esta empresa');
+    }
+    if (!stock.enLiquidacion) {
+      throw new BadRequestException('El producto no está en liquidación');
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.productoStock.update({
+        where: { id: productoStockId },
+        data: {
+          enLiquidacion: false,
+          precioLiquidacion: null,
+          motivoLiquidacion: null,
+          observacionesLiquidacion: null,
+          fechaInicioLiquidacion: null,
+          fechaFinLiquidacion: null,
+          liquidacionAutorizadaPorId: null,
+        },
+        include: { producto: true, variante: true, sede: true },
+      });
+
+      await tx.productoPrecioHistorialSede.create({
+        data: {
+          productoStockId: stock.id,
+          sedeId: stock.sedeId,
+          precioAnterior: stock.precio,
+          precioNuevo: stock.precio,
+          precioCostoAnterior: stock.precioCosto,
+          precioCostoNuevo: stock.precioCosto,
+          precioOfertaAnterior: stock.precioLiquidacion,
+          precioOfertaNuevo: stock.precioOferta,
+          tipoCambio: TipoCambioPrecio.LIQUIDACION,
+          razon: razon ? `Liquidación desactivada: ${razon}` : 'Liquidación desactivada',
+          origenModulo: 'LIQUIDACION',
+          usuarioId,
+        },
+      });
+
+      return result;
+    });
+
+    await this.invalidateProductCache(empresaId);
+    this.realtimeInvalidation.notifyPrecioCambiado({
+      empresaId,
+      productoId: stock.productoId,
+      varianteId: stock.varianteId,
+      sedeId: stock.sedeId,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Lista los productos en liquidación activa por sede (vigentes según fechas).
+   */
+  async listarLiquidacionesActivas(
+    empresaId: string,
+    sedeId?: string,
+    page = 1,
+    limit = 50,
+  ) {
+    const now = new Date();
+    const where: Prisma.ProductoStockWhereInput = {
+      empresaId,
+      enLiquidacion: true,
+      ...(sedeId ? { sedeId } : {}),
+      OR: [
+        { fechaFinLiquidacion: null },
+        { fechaFinLiquidacion: { gte: now } },
+      ],
+    };
+
+    const [total, rows] = await Promise.all([
+      this.prisma.productoStock.count({ where }),
+      this.prisma.productoStock.findMany({
+        where,
+        include: {
+          producto: { select: { id: true, nombre: true, codigoEmpresa: true, sku: true } },
+          variante: { select: { id: true, nombre: true, sku: true } },
+          sede: { select: { id: true, nombre: true } },
+          liquidacionAutorizadaPor: {
+            select: { id: true, persona: { select: { nombres: true, apellidos: true } } },
+          },
+        },
+        orderBy: { fechaInicioLiquidacion: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return createPaginatedResponse(rows, total, page, limit);
+  }
+
+  /**
+   * Cron diario que limpia liquidaciones cuya fechaFin ya pasó.
+   * Mantiene el campo de auditoría pero las desmarca para que no se apliquen
+   * en ventas nuevas.
+   */
+  @Cron('0 5 * * *')
+  async cronExpirarLiquidaciones() {
+    const now = new Date();
+    const result = await this.prisma.productoStock.updateMany({
+      where: {
+        enLiquidacion: true,
+        fechaFinLiquidacion: { not: null, lt: now },
+      },
+      data: {
+        enLiquidacion: false,
+        precioLiquidacion: null,
+        motivoLiquidacion: null,
+      },
+    });
+    if (result.count > 0) {
+      this.logger.log(`Cron liquidaciones: ${result.count} expiradas desactivadas`);
+    }
   }
 }

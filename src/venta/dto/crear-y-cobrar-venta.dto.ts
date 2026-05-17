@@ -180,4 +180,12 @@ export class CrearYCobrarVentaDto {
   @IsOptional()
   @IsString()
   descuentoAutorizadoPorId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'ID del usuario GERENTE/ADMIN que autorizó vender bajo costo. Requerido si alguna línea tiene margen negativo y el producto NO está en liquidación.',
+  })
+  @IsOptional()
+  @IsString()
+  ventaBajoCostoAutorizadaPorId?: string;
 }

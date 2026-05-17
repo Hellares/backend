@@ -121,6 +121,14 @@ export class CreateVentaDto {
   @IsString()
   observaciones?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'ID del usuario GERENTE/ADMIN que autorizó vender bajo costo. Requerido si alguna línea tiene margen negativo y el producto NO está en liquidación.',
+  })
+  @IsOptional()
+  @IsString()
+  ventaBajoCostoAutorizadaPorId?: string;
+
   @ApiProperty({ description: 'Detalles de la venta', type: [CreateVentaDetalleDto] })
   @IsArray()
   @ArrayMinSize(1)

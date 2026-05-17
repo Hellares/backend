@@ -21,8 +21,10 @@ interface PrecioCalculado {
   precioUnitario: number;
   precioBase: number;
   precioOferta: number | null;
+  precioLiquidacion: number | null;
   nivelAplicado: string | null;
   descuentoNivelPct: number | null;
+  enLiquidacion: boolean;
 }
 
 @Injectable()
@@ -42,19 +44,21 @@ export class CarritoService {
   }
 
   /**
-   * Calcular precio efectivo aplicando: min(precioBase, precioOferta activa, precio con nivel).
+   * Calcular precio efectivo aplicando:
+   *   min(precioBase, precioOferta activa, precioLiquidacion activa, precio con nivel).
    *
    * Reglas:
-   * - El nivel se aplica sobre `precioBase` (no sobre oferta), igual que VentaService.
-   * - Gana el menor entre los 3 candidatos. La oferta NO se acumula con el nivel.
-   * - Etiqueta: si nivel gana o empata con oferta → nombre del nivel (más informativo).
-   *   Si oferta gana → 'Oferta'. Si nada gana → null.
+   * - El nivel se aplica sobre `precioBase` (no sobre oferta/liquidación).
+   * - Gana el menor sin acumular (mismo patrón que VentaService).
+   * - Etiqueta: si nivel gana o empata → nombre del nivel. Si liquidación
+   *   gana → 'Liquidación'. Si oferta gana → 'Oferta'. Si nada gana → null.
    */
   private aplicarNivel(
     niveles: NivelLite[],
     cantidad: number,
     precioBase: number,
     precioOfertaActiva: number | null,
+    precioLiquidacionActiva: number | null,
   ): PrecioCalculado {
     // Buscar nivel aplicable más específico (mayor cantidadMinima ≤ cantidad)
     const aplicable = niveles
@@ -82,11 +86,14 @@ export class CarritoService {
     }
 
     // Comparar candidatos y elegir el menor
-    const candidatos: Array<{ precio: number; tipo: 'base' | 'oferta' | 'nivel' }> = [
+    const candidatos: Array<{ precio: number; tipo: 'base' | 'oferta' | 'nivel' | 'liquidacion' }> = [
       { precio: precioBase, tipo: 'base' },
     ];
     if (precioOfertaActiva != null) {
       candidatos.push({ precio: precioOfertaActiva, tipo: 'oferta' });
+    }
+    if (precioLiquidacionActiva != null) {
+      candidatos.push({ precio: precioLiquidacionActiva, tipo: 'liquidacion' });
     }
     if (precioConNivel != null) {
       candidatos.push({ precio: precioConNivel, tipo: 'nivel' });
@@ -94,17 +101,17 @@ export class CarritoService {
     candidatos.sort((a, b) => a.precio - b.precio);
     const ganador = candidatos[0];
 
-    // Etiqueta: empate oferta-nivel prioriza nivel (info más útil "compra X+")
+    // Etiqueta: nivel > liquidación > oferta. Empates priorizan nivel.
     let nivelAplicado: string | null = null;
     if (ganador.tipo === 'nivel') {
       nivelAplicado = aplicable!.nombre;
     } else if (
-      ganador.tipo === 'oferta' &&
       precioConNivel != null &&
       Math.abs(precioConNivel - ganador.precio) < 0.001
     ) {
-      // empate: prioriza nivel
       nivelAplicado = aplicable!.nombre;
+    } else if (ganador.tipo === 'liquidacion') {
+      nivelAplicado = 'Liquidación';
     } else if (ganador.tipo === 'oferta') {
       nivelAplicado = 'Oferta';
     }
@@ -113,6 +120,8 @@ export class CarritoService {
       precioUnitario: Math.round(ganador.precio * 100) / 100,
       precioBase,
       precioOferta: precioOfertaActiva,
+      precioLiquidacion: precioLiquidacionActiva,
+      enLiquidacion: ganador.tipo === 'liquidacion',
       nivelAplicado,
       descuentoNivelPct:
         descuentoNivelPct != null && ganador.tipo === 'nivel'
@@ -184,6 +193,10 @@ export class CarritoService {
           enOferta: true,
           fechaInicioOferta: true,
           fechaFinOferta: true,
+          precioLiquidacion: true,
+          enLiquidacion: true,
+          fechaInicioLiquidacion: true,
+          fechaFinLiquidacion: true,
           stockActual: true,
           stockReservado: true,
           stockReservadoVenta: true,
@@ -271,14 +284,21 @@ export class CarritoService {
         && (!stock.fechaInicioOferta || stock.fechaInicioOferta <= now)
         && (!stock.fechaFinOferta || stock.fechaFinOferta >= now);
 
+      const liquidacionActiva = stock?.enLiquidacion
+        && stock.precioLiquidacion
+        && (!stock.fechaInicioLiquidacion || stock.fechaInicioLiquidacion <= now)
+        && (!stock.fechaFinLiquidacion || stock.fechaFinLiquidacion >= now);
+
       const precioBase = stock?.precio ? Number(stock.precio) : 0;
       const precioOfertaActiva = ofertaActiva ? Number(stock.precioOferta) : null;
+      const precioLiquidacionActiva = liquidacionActiva ? Number(stock.precioLiquidacion) : null;
 
       const calc = this.aplicarNivel(
         niveles,
         item.cantidad,
         precioBase,
         precioOfertaActiva,
+        precioLiquidacionActiva,
       );
 
       const stockDisponible = this.calcularDisponible(stock);
@@ -294,6 +314,8 @@ export class CarritoService {
         varianteNombre: item.variante?.nombre ?? null,
         precioUnitario: calc.precioUnitario,
         precioOferta: precioOfertaActiva,
+        precioLiquidacion: precioLiquidacionActiva,
+        enLiquidacion: calc.enLiquidacion,
         precioNormal: precioBase,
         precioBase,
         nivelAplicado: calc.nivelAplicado,

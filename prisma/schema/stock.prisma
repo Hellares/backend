@@ -45,6 +45,16 @@ model ProductoStock {
   fechaInicioOferta DateTime? // Inicio de oferta en esta sede
   fechaFinOferta    DateTime? // Fin de oferta en esta sede
 
+  // Liquidación (remate por debajo de costo, autorizado por gerencia)
+  // Diferente a oferta: tiene motivo justificado y acepta margen negativo.
+  enLiquidacion              Boolean            @default(false)
+  precioLiquidacion          Decimal?           @db.Decimal(10, 2)
+  motivoLiquidacion          MotivoLiquidacion?
+  observacionesLiquidacion   String?            @db.Text
+  fechaInicioLiquidacion     DateTime?
+  fechaFinLiquidacion        DateTime?
+  liquidacionAutorizadaPorId String?
+
   // Estado de configuración de precio (útil para filtros y dashboards)
   precioConfigurado Boolean @default(false) // true cuando se ha establecido al menos el precio de venta
   precioIncluyeIgv  Boolean @default(true) // true cuando el precio de venta ya incluye IGV
@@ -57,15 +67,16 @@ model ProductoStock {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  sede                   Sede                          @relation(fields: [sedeId], references: [id])
-  empresa                Empresa                       @relation(fields: [empresaId], references: [id])
-  producto               Producto?                     @relation(fields: [productoId], references: [id])
-  variante               ProductoVariante?             @relation(fields: [varianteId], references: [id])
-  movimientos            MovimientoStock[]
-  preciosHistorial       ProductoPrecioHistorialSede[] // Historial de cambios de precio por sede
-  itemsReporteIncidencia ReporteIncidenciaItem[] // Items de reportes de incidencias
-  itemsInventario        InventarioItem[] // Items de inventarios
-  lotes                  Lote[] // Lotes de producto en esta sede
+  sede                     Sede                          @relation(fields: [sedeId], references: [id])
+  empresa                  Empresa                       @relation(fields: [empresaId], references: [id])
+  producto                 Producto?                     @relation(fields: [productoId], references: [id])
+  variante                 ProductoVariante?             @relation(fields: [varianteId], references: [id])
+  movimientos              MovimientoStock[]
+  preciosHistorial         ProductoPrecioHistorialSede[] // Historial de cambios de precio por sede
+  itemsReporteIncidencia   ReporteIncidenciaItem[] // Items de reportes de incidencias
+  itemsInventario          InventarioItem[] // Items de inventarios
+  lotes                    Lote[] // Lotes de producto en esta sede
+  liquidacionAutorizadaPor Usuario?                      @relation("ProductoStockLiquidacionAutorizadaPor", fields: [liquidacionAutorizadaPorId], references: [id])
 
   @@unique([sedeId, productoId, varianteId])
   @@index([sedeId])
@@ -77,6 +88,9 @@ model ProductoStock {
   @@index([precio]) // Búsquedas por precio
   @@index([enOferta]) // Filtrar productos en oferta por sede
   @@index([enOferta, fechaFinOferta]) // Cron de expiración de ofertas
+  @@index([enLiquidacion]) // Filtrar productos en liquidación por sede
+  @@index([enLiquidacion, fechaFinLiquidacion]) // Cron de expiración de liquidaciones
+  @@index([sedeId, enLiquidacion]) // Listado de liquidaciones por sede
   @@index([precioConfigurado]) // Filtrar productos con/sin precio configurado
   @@index([sedeId, precioConfigurado]) // Productos con precio por sede
   @@index([sedeId, precioConfigurado, stockActual]) // Productos vendibles por sede
@@ -284,6 +298,14 @@ enum TipoMovimientoStock {
   SALIDA_MERMA // Merma genérica (deprecado, usar AJUSTE_MERMA)
   SALIDA_ROBO // Robo (deprecado, usar AJUSTE_PERDIDA)
   SALIDA_DONACION // Donación
+}
+
+enum MotivoLiquidacion {
+  FUERA_DE_CAMPANA // Producto de temporada que ya pasó
+  SIN_ROTACION // Producto sin movimiento prolongado
+  PROXIMO_A_VENCER // Stock cerca de fecha de vencimiento
+  DESCONTINUADO // Producto descontinuado por proveedor/empresa
+  OTRO // Motivo libre — usar observacionesLiquidacion
 }
 
 enum EstadoTransferencia {

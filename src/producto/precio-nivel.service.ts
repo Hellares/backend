@@ -359,6 +359,10 @@ export class PrecioNivelService {
     nivelAplicado: string;
     descuentoAplicado: number;
     precioBase: number;
+    /** Estado de liquidación si se aplicó (para snapshot de motivo en VentaDetalle). */
+    motivoLiquidacion?: string | null;
+    /** Costo del producto en la sede al momento del cálculo. Usado por VentaService para snapshot de margen. */
+    precioCosto?: number | null;
   }> {
     this.logger.info('Calculating price by quantity', {
       productoId,
@@ -367,57 +371,61 @@ export class PrecioNivelService {
       cantidad,
     });
 
-    // Obtener el precio base desde ProductoStock
-    let precioBase: Prisma.Decimal | null = null;
+    // Obtener el stock con precios completos (base, oferta, liquidación, costo).
+    let stock:
+      | {
+          precio: Prisma.Decimal | null;
+          precioCosto: Prisma.Decimal | null;
+          precioOferta: Prisma.Decimal | null;
+          precioLiquidacion: Prisma.Decimal | null;
+          enOferta: boolean;
+          enLiquidacion: boolean;
+          motivoLiquidacion: string | null;
+          fechaInicioOferta: Date | null;
+          fechaFinOferta: Date | null;
+          fechaInicioLiquidacion: Date | null;
+          fechaFinLiquidacion: Date | null;
+        }
+      | null = null;
     let itemNombre: string;
 
     if (varianteId) {
       const variante = await this.prisma.productoVariante.findUnique({
         where: { id: varianteId },
-        include: {
-          stocksPorSede: {
-            where: { sedeId },
-          },
-        },
+        include: { stocksPorSede: { where: { sedeId } } },
       });
-      if (!variante) {
-        throw new NotFoundException(`Variante ${varianteId} no encontrada`);
-      }
-      const stock = variante.stocksPorSede[0];
-      if (!stock || !stock.precio) {
+      if (!variante) throw new NotFoundException(`Variante ${varianteId} no encontrada`);
+      const s = variante.stocksPorSede[0];
+      if (!s || !s.precio) {
         throw new BadRequestException(
           `No se ha configurado precio para la variante ${variante.nombre} en esta sede`,
         );
       }
-      precioBase = stock.precio;
+      stock = s;
       itemNombre = variante.nombre;
     } else if (productoId) {
       const producto = await this.prisma.producto.findUnique({
         where: { id: productoId },
-        include: {
-          stocksPorSede: {
-            where: { sedeId },
-          },
-        },
+        include: { stocksPorSede: { where: { sedeId } } },
       });
-      if (!producto) {
-        throw new NotFoundException(`Producto ${productoId} no encontrado`);
-      }
-      const stock = producto.stocksPorSede[0];
-      if (!stock || !stock.precio) {
+      if (!producto) throw new NotFoundException(`Producto ${productoId} no encontrado`);
+      const s = producto.stocksPorSede[0];
+      if (!s || !s.precio) {
         throw new BadRequestException(
           `No se ha configurado precio para el producto ${producto.nombre} en esta sede`,
         );
       }
-      precioBase = stock.precio;
+      stock = s;
       itemNombre = producto.nombre;
     } else {
-      throw new BadRequestException(
-        'Debe proporcionar productoId o varianteId',
-      );
+      throw new BadRequestException('Debe proporcionar productoId o varianteId');
     }
 
-    // Buscar niveles de precio aplicables
+    const precioBaseDecimal = stock.precio as Prisma.Decimal;
+    const precioBase = precioBaseDecimal.toNumber();
+    const precioCosto = stock.precioCosto ? stock.precioCosto.toNumber() : null;
+
+    // Calcular precio según niveles (si aplica)
     const niveles = await this.prisma.precioNivel.findMany({
       where: {
         ...(productoId && { productoId }),
@@ -426,52 +434,74 @@ export class PrecioNivelService {
         cantidadMinima: { lte: cantidad },
         OR: [{ cantidadMaxima: { gte: cantidad } }, { cantidadMaxima: null }],
       },
-      orderBy: { cantidadMinima: 'desc' }, // El nivel más alto aplicable
+      orderBy: { cantidadMinima: 'desc' },
     });
 
-    if (!niveles.length) {
-      // No hay niveles, usar precio base
-      return {
-        precioUnitario: precioBase.toNumber(),
-        nivelAplicado: 'Precio base',
-        descuentoAplicado: 0,
-        precioBase: precioBase.toNumber(),
-      };
+    let precioConNivel: number | null = null;
+    let nivelNombre: string | null = null;
+    if (niveles.length) {
+      const nivel = niveles[0];
+      if (nivel.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO) {
+        precioConNivel = nivel.precio!.toNumber();
+      } else {
+        precioConNivel = precioBase * (1 - nivel.porcentajeDesc!.toNumber() / 100);
+      }
+      nivelNombre = nivel.nombre;
     }
 
-    // Tomar el primer nivel (más específico)
-    const nivel = niveles[0];
+    // Verificar oferta activa por fechas
+    const now = new Date();
+    const ofertaVigente =
+      stock.enOferta &&
+      stock.precioOferta != null &&
+      (!stock.fechaInicioOferta || stock.fechaInicioOferta <= now) &&
+      (!stock.fechaFinOferta || stock.fechaFinOferta >= now);
+    const precioOferta = ofertaVigente ? stock.precioOferta!.toNumber() : null;
 
-    // Calcular precio según tipo
-    let precioUnitario: number;
-    let descuentoAplicado: number;
+    // Verificar liquidación activa por fechas
+    const liquidacionVigente =
+      stock.enLiquidacion &&
+      stock.precioLiquidacion != null &&
+      (!stock.fechaInicioLiquidacion || stock.fechaInicioLiquidacion <= now) &&
+      (!stock.fechaFinLiquidacion || stock.fechaFinLiquidacion >= now);
+    const precioLiquidacion = liquidacionVigente ? stock.precioLiquidacion!.toNumber() : null;
 
-    if (nivel.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO) {
-      precioUnitario = nivel.precio.toNumber();
-      descuentoAplicado =
-        ((precioBase.toNumber() - precioUnitario) / precioBase.toNumber()) *
-        100;
-    } else {
-      // PORCENTAJE_DESCUENTO
-      const descuento = nivel.porcentajeDesc.toNumber();
-      precioUnitario = precioBase.toNumber() * (1 - descuento / 100);
-      descuentoAplicado = descuento;
+    // Elegir el menor entre todos los precios aplicables.
+    // Estrategia mismo patrón que carrito B2C (session_2026_05_07_carrito_b2c_niveles):
+    // gana el menor sin acumular descuentos.
+    const candidatos: Array<{ valor: number; etiqueta: string; motivoLiquidacion?: string | null }> = [
+      { valor: precioBase, etiqueta: 'Precio base' },
+    ];
+    if (precioConNivel != null) candidatos.push({ valor: precioConNivel, etiqueta: nivelNombre ?? 'Nivel' });
+    if (precioOferta != null) candidatos.push({ valor: precioOferta, etiqueta: 'Oferta' });
+    if (precioLiquidacion != null) {
+      candidatos.push({
+        valor: precioLiquidacion,
+        etiqueta: 'Liquidación',
+        motivoLiquidacion: stock.motivoLiquidacion,
+      });
     }
+    const ganador = candidatos.reduce((best, c) => (c.valor < best.valor ? c : best));
+    const descuentoAplicado = precioBase > 0 ? ((precioBase - ganador.valor) / precioBase) * 100 : 0;
 
     this.logger.info('Price calculated', {
       itemNombre,
       cantidad,
-      precioBase: precioBase.toNumber(),
-      precioUnitario,
-      nivelAplicado: nivel.nombre,
+      precioBase,
+      precioUnitario: ganador.valor,
+      nivelAplicado: ganador.etiqueta,
       descuentoAplicado,
+      enOferta: ofertaVigente,
+      enLiquidacion: liquidacionVigente,
     });
 
     return {
-      precioUnitario,
-      nivelAplicado: nivel.nombre,
+      precioUnitario: ganador.valor,
+      nivelAplicado: ganador.etiqueta,
       descuentoAplicado,
-      precioBase: precioBase.toNumber(),
+      precioBase,
+      motivoLiquidacion: ganador.motivoLiquidacion ?? null,
+      precioCosto,
     };
   }
 

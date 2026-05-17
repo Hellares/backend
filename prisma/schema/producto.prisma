@@ -656,4 +656,5 @@ enum TipoCambioPrecio {
   AJUSTE_MERCADO // Ajuste por condiciones de mercado
   COMPETENCIA // Ajuste por competencia
   CORRECCION // Corrección de error
+  LIQUIDACION // Activación/desactivación de liquidación (remate bajo costo)
 }

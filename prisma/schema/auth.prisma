@@ -156,6 +156,8 @@ model Usuario {
   movimientosCajaAutorizados MovimientoCaja[] @relation("MovimientoCajaAutorizadoPor")
   ventasAnuladas             Venta[]          @relation("VentaAnuladaPor")
   ventasAutorizadasAnulacion Venta[]          @relation("VentaAutorizadaAnulacion")
+  ventasBajoCostoAutorizadas Venta[]          @relation("VentaBajoCostoAutorizadaPor")
+  liquidacionesAutorizadas   ProductoStock[]  @relation("ProductoStockLiquidacionAutorizadaPor")
 
   // Agente bancario
   agentesResponsable           AgenteBancario[]  @relation("AgenteResponsable")

@@ -66,6 +66,13 @@ model Venta {
   descuentoAutorizadoPorId  String?
   descuentoAutorizadoEn     DateTime?
 
+  // Autorización de venta bajo costo (margen negativo) — distinto del descuento global.
+  // Requerido cuando alguna línea tiene margenSnapshot < 0 y el producto NO está
+  // en liquidación activa. Solo GERENTE_SEDE / ADMINISTRADOR puede autorizar.
+  ventaBajoCostoAutorizadaPorId String?
+  ventaBajoCostoAutorizadaEn    DateTime?
+  perdidaTotalLineas            Decimal?  @db.Decimal(10, 2) // Suma de márgenes negativos (snapshot)
+
   // Pago
   estado        EstadoVenta      @default(BORRADOR)
   metodoPago    MetodoPagoVenta?
@@ -105,24 +112,25 @@ model Venta {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa                Empresa                 @relation(fields: [empresaId], references: [id])
-  sede                   Sede                    @relation(fields: [sedeId], references: [id])
-  cliente                EmpresaPersona?         @relation(fields: [clienteId], references: [id])
-  clienteEmpresa         ClienteEmpresa?         @relation(fields: [clienteEmpresaId], references: [id])
-  vendedor               Usuario                 @relation("VentaVendedor", fields: [vendedorId], references: [id])
-  cajero                 Usuario?                @relation("VentaCajero", fields: [cajeroId], references: [id])
-  anuladoPor             Usuario?                @relation("VentaAnuladaPor", fields: [anuladoPorId], references: [id])
-  autorizadoPorAnulacion Usuario?                @relation("VentaAutorizadaAnulacion", fields: [autorizadoPorId], references: [id])
-  cotizacion             Cotizacion?             @relation("VentaCotizacion", fields: [cotizacionId], references: [id])
-  cotizacionesOrigen     Cotizacion[]            @relation("CotizacionVenta") // Back-relation for cotizacion.ventaId
-  detalles               VentaDetalle[]
-  pagos                  PagoVenta[]
-  cuotas                 CuotaVenta[]
-  movimientos            MovimientoStock[]
-  devoluciones           Devolucion[]
-  movimientosCaja        MovimientoCaja[]        @relation("MovimientoCajaVenta")
-  comprobante            ComprobanteElectronico?
-  guiasRemision          GuiaRemision[]
+  empresa                     Empresa                 @relation(fields: [empresaId], references: [id])
+  sede                        Sede                    @relation(fields: [sedeId], references: [id])
+  cliente                     EmpresaPersona?         @relation(fields: [clienteId], references: [id])
+  clienteEmpresa              ClienteEmpresa?         @relation(fields: [clienteEmpresaId], references: [id])
+  vendedor                    Usuario                 @relation("VentaVendedor", fields: [vendedorId], references: [id])
+  cajero                      Usuario?                @relation("VentaCajero", fields: [cajeroId], references: [id])
+  anuladoPor                  Usuario?                @relation("VentaAnuladaPor", fields: [anuladoPorId], references: [id])
+  autorizadoPorAnulacion      Usuario?                @relation("VentaAutorizadaAnulacion", fields: [autorizadoPorId], references: [id])
+  ventaBajoCostoAutorizadaPor Usuario?                @relation("VentaBajoCostoAutorizadaPor", fields: [ventaBajoCostoAutorizadaPorId], references: [id])
+  cotizacion                  Cotizacion?             @relation("VentaCotizacion", fields: [cotizacionId], references: [id])
+  cotizacionesOrigen          Cotizacion[]            @relation("CotizacionVenta") // Back-relation for cotizacion.ventaId
+  detalles                    VentaDetalle[]
+  pagos                       PagoVenta[]
+  cuotas                      CuotaVenta[]
+  movimientos                 MovimientoStock[]
+  devoluciones                Devolucion[]
+  movimientosCaja             MovimientoCaja[]        @relation("MovimientoCajaVenta")
+  comprobante                 ComprobanteElectronico?
+  guiasRemision               GuiaRemision[]
 
   @@unique([empresaId, codigo])
   // FK indexes
@@ -164,6 +172,18 @@ model VentaDetalle {
   precioUnitario Decimal @db.Decimal(10, 2)
   descuento      Decimal @default(0) @db.Decimal(10, 2)
 
+  // Snapshot del costo unitario al momento de la venta (deuda técnica
+  // necesaria para reportería histórica de margen). Si cambia el
+  // precioCosto después, el margen ya vendido queda preservado.
+  precioCostoSnapshot       Decimal            @default(0) @db.Decimal(10, 2)
+  // Margen unitario = (precioUnitario - descuentoUnitario) - precioCostoSnapshot.
+  // Negativo cuando se vende bajo costo (liquidación o autorización).
+  margenSnapshot            Decimal            @default(0) @db.Decimal(10, 2)
+  // Si el item se vendió en estado liquidación, copia del motivo
+  // (snapshot) para reportería. Null cuando margen no fue negativo o
+  // cuando la venta bajo costo se autorizó manualmente sin liquidación.
+  motivoLiquidacionSnapshot MotivoLiquidacion?
+
   // Impuesto
   tipoAfectacion String  @default("10") // SUNAT Cat.07: 10=Gravado, 20=Exonerado, 30=Inafecto
   porcentajeIGV  Decimal @default(18.00) @db.Decimal(5, 2)
@@ -200,6 +220,7 @@ model VentaDetalle {
   @@index([varianteId])
   @@index([servicioId])
   @@index([origenComboId])
+  @@index([motivoLiquidacionSnapshot]) // Reportería de liquidaciones por motivo
 }
 
 /// Registro de pagos de una venta (soporta pagos parciales/múltiples)
