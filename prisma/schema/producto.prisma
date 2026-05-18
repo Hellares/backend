@@ -54,6 +54,10 @@ model Producto {
   reservacionesCombo   ComboReservacion[]     @relation("ComboReservaciones")
   configHistorialCombo ComboConfigHistorial[] @relation("ComboConfigCambios")
 
+  // Relaciones para productos compuestos / BOM (módulo distinto del combo)
+  componentesBOM      ProductoComponente[] @relation("ProductoFinal")
+  usadoComoComponente ProductoComponente[] @relation("ProductoComponenteUsado")
+
   // Relaciones para atributos estructurados
   atributosValores ProductoAtributoValor[]
 

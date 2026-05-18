@@ -1,0 +1,41 @@
+// =====================================================================
+// PRODUCTO COMPUESTO / BOM (Bill of Materials)
+// =====================================================================
+//
+// Diferencia con Combo:
+// - Combo agrupa productos YA terminados (3 chocolates + 1 caja regalo).
+// - ProductoComponente define los INSUMOS para fabricar un producto
+//   final (peluche = funda + algodón + hilos).
+//
+// MVP: solo calculadora de costo. NO descuenta stock al "armar".
+// Lista de componentes con cantidad. Endpoint suma cantidad ×
+// componente.precioCosto (en una sede dada) → costo sugerido del
+// producto final.
+//
+// Futuro (no MVP): botón "Fabricar N" que descuente componentes,
+// sume al stock del producto final y registre movimientos
+// PRODUCCION_ENTRADA / PRODUCCION_SALIDA en kardex.
+//
+// La cantidad va en la unidad NATIVA del componente:
+// - Si el componente es "Algodón" en KG, cantidad 0.0500 = 50 g.
+// - Si es "Tela" en M, cantidad 0.30 = 30 cm.
+// - Si es "Hilo" en UND, cantidad 1 = 1 unidad.
+
+model ProductoComponente {
+  id           String  @id @default(cuid())
+  productoId   String // Producto final (el peluche armado)
+  componenteId String // Insumo (algodón, tela, hilo)
+  cantidad     Decimal @db.Decimal(12, 4)
+  notas        String?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  producto   Producto @relation("ProductoFinal", fields: [productoId], references: [id], onDelete: Cascade)
+  componente Producto @relation("ProductoComponenteUsado", fields: [componenteId], references: [id], onDelete: Restrict)
+
+  // No duplicar el mismo componente en la receta del mismo producto
+  @@unique([productoId, componenteId])
+  @@index([productoId])
+  @@index([componenteId])
+}

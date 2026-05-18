@@ -16,6 +16,7 @@ import { ClientesModule } from './clientes/clientes.module';
 import { PoliticaDescuentoModule } from './politica-descuento/politica-descuento.module';
 import { SedeModule } from './sede/sede.module';
 import { ProductoStockModule } from './producto-stock/producto-stock.module';
+import { ProductoComponenteModule } from './producto-componente/producto-componente.module';
 import { TransferenciaStockModule } from './transferencia-stock/transferencia-stock.module';
 import { ProveedorModule } from './proveedor/proveedor.module';
 import { ReporteIncidenciaModule } from './reporte-incidencia/reporte-incidencia.module';
@@ -95,6 +96,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     PoliticaDescuentoModule,
     SedeModule,
     ProductoStockModule,
+    ProductoComponenteModule,
     TransferenciaStockModule,
     ProveedorModule,
     ReporteIncidenciaModule,
