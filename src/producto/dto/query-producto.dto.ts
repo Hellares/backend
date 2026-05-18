@@ -87,12 +87,12 @@ export class QueryProductoDto {
 
   @ApiPropertyOptional({
     description:
-      'Filtra por esInsumo. true=solo insumos, false=solo no insumos, ausente=todos',
-    example: false,
+      'Filtra por esInsumo. "true"=solo insumos, "false"=solo no insumos, ausente=todos. String para evitar que enableImplicitConversion convierta "false" en true.',
+    enum: ['true', 'false'],
   })
   @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
-  esInsumo?: boolean;
+  @IsIn(['true', 'false'])
+  esInsumo?: 'true' | 'false';
 
   @ApiPropertyOptional({
     description: 'Filtrar solo productos destacados',

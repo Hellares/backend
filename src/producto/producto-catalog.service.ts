@@ -555,11 +555,12 @@ export class ProductoCatalogService {
       where.visibleMarketplace = filters.visibleMarketplace;
     }
 
-    // Filtro insumos: si no viene, no filtra. Si viene true/false, filtra.
-    // El frontend pasa esInsumo=false en el tab PRODUCTOS y true en INSUMOS;
-    // sin parámetro se ve todo (tab TODOS).
-    if (filters.esInsumo !== undefined) {
-      where.esInsumo = filters.esInsumo;
+    // Filtro insumos: string para evitar bug de enableImplicitConversion.
+    // El frontend pasa 'true'/'false' explícito; aquí lo traducimos.
+    if (filters.esInsumo === 'true') {
+      where.esInsumo = true;
+    } else if (filters.esInsumo === 'false') {
+      where.esInsumo = false;
     }
 
     // Filtro de stock bajo: productos con stock <= stockMinimo en al menos una sede
