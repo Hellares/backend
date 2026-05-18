@@ -32,6 +32,11 @@ model Producto {
   esCombo         Boolean          @default(false)
   tipoPrecioCombo TipoPrecioCombo?
 
+  // Insumo / materia prima. Productos así marcados están OCULTOS del
+  // marketplace, del carrito B2C y del POS. Solo se usan como componentes
+  // de productos compuestos (peluches, PCs armadas) en el módulo BOM.
+  esInsumo Boolean @default(false)
+
   // Configuración de precios por volumen
   configuracionPrecioId String?
 
@@ -142,6 +147,7 @@ model Producto {
   @@index([codigoBarras(ops: raw("gin_trgm_ops"))], type: Gin, map: "Producto_codigoBarras_trgm_idx")
   // Índices compuestos para filtros comunes
   @@index([empresaId, esCombo])
+  @@index([empresaId, esInsumo, isActive])
   @@index([empresaId, isActive, deletedAt])
   @@index([empresaId, visibleMarketplace, isActive])
 }

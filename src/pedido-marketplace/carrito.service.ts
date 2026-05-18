@@ -375,11 +375,17 @@ export class CarritoService {
         empresaId: true,
         isActive: true,
         visibleMarketplace: true,
+        esInsumo: true,
         tieneVariantes: true,
       },
     });
 
-    if (!producto || !producto.isActive || !producto.visibleMarketplace) {
+    if (
+      !producto ||
+      !producto.isActive ||
+      !producto.visibleMarketplace ||
+      producto.esInsumo
+    ) {
       throw new NotFoundException('Producto no encontrado o no disponible');
     }
 

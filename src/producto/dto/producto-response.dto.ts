@@ -99,6 +99,12 @@ export class ProductoResponseDto {
   @ApiProperty()
   esCombo: boolean;
 
+  @ApiProperty({
+    description: 'Insumo / materia prima (oculto de POS y marketplace)',
+    example: false,
+  })
+  esInsumo: boolean;
+
   @ApiPropertyOptional({
     enum: ['FIJO', 'CALCULADO', 'CALCULADO_CON_DESCUENTO'],
     nullable: true,

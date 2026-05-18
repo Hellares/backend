@@ -246,7 +246,13 @@ export class VentaService {
     if (productoIds.size > 0) {
       const productos = await this.prisma.producto.findMany({
         where: { id: { in: [...productoIds] }, empresaId },
-        select: { id: true, nombre: true, isActive: true, deletedAt: true },
+        select: {
+          id: true,
+          nombre: true,
+          isActive: true,
+          deletedAt: true,
+          esInsumo: true,
+        },
       });
 
       // Detectar IDs faltantes (no pertenecen a la empresa o no existen).
@@ -273,6 +279,16 @@ export class VentaService {
           `Producto(s) no disponible(s) para venta: ${inactivos
             .map((p) => `"${p.nombre}"`)
             .join(', ')}. Activálos desde el detalle del producto.`,
+        );
+      }
+
+      // Detectar insumos / materia prima — no se venden directo al cliente.
+      const insumos = productos.filter((p) => p.esInsumo);
+      if (insumos.length > 0) {
+        throw new BadRequestException(
+          `Producto(s) marcado(s) como insumo no se pueden vender directamente: ${insumos
+            .map((p) => `"${p.nombre}"`)
+            .join(', ')}. Si querés venderlos al cliente, desmarcá "Es insumo" en el detalle del producto.`,
         );
       }
     }

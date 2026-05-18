@@ -86,6 +86,15 @@ export class QueryProductoDto {
   visibleMarketplace?: boolean;
 
   @ApiPropertyOptional({
+    description:
+      'Filtra por esInsumo. true=solo insumos, false=solo no insumos, ausente=todos',
+    example: false,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  esInsumo?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Filtrar solo productos destacados',
     example: false,
   })

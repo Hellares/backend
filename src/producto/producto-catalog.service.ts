@@ -555,6 +555,13 @@ export class ProductoCatalogService {
       where.visibleMarketplace = filters.visibleMarketplace;
     }
 
+    // Filtro insumos: si no viene, no filtra. Si viene true/false, filtra.
+    // El frontend pasa esInsumo=false en el tab PRODUCTOS y true en INSUMOS;
+    // sin parámetro se ve todo (tab TODOS).
+    if (filters.esInsumo !== undefined) {
+      where.esInsumo = filters.esInsumo;
+    }
+
     // Filtro de stock bajo: productos con stock <= stockMinimo en al menos una sede
     // Nota: Se implementa usando una subquery SQL cruda porque Prisma no soporta
     // comparaciones directas entre campos del mismo registro

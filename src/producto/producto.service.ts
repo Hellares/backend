@@ -1182,6 +1182,7 @@ export class ProductoService {
         deletedAt: null,
         isActive: true,
         esCombo: false, // Solo productos no-combo
+        esInsumo: false, // Insumos no pueden ser componentes de combo
       };
 
       // Agregar búsqueda si se proporciona

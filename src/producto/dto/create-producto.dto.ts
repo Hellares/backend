@@ -203,6 +203,16 @@ export class CreateProductoDto {
   esCombo?: boolean;
 
   @ApiPropertyOptional({
+    description:
+      'Marca el producto como insumo / materia prima. Insumos están ocultos del POS, marketplace y carrito B2C — solo se usan como componentes en productos compuestos (BOM).',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  esInsumo?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Tipo de precio del combo (solo aplica si esCombo es true)',
     enum: TipoPrecioCombo,
     example: TipoPrecioCombo.FIJO,

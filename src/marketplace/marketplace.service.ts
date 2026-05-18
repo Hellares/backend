@@ -42,6 +42,8 @@ export class MarketplaceService {
       visibleMarketplace: true,
       isActive: true,
       deletedAt: null,
+      // Insumos / materia prima jamás aparecen al público.
+      esInsumo: false,
       empresa: { isActive: true, deletedAt: null, visibleEnMarketplace: true },
     };
 
