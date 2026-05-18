@@ -72,6 +72,7 @@ export class ProductoStockService {
             nombre: true,
             codigoEmpresa: true,
             sku: true,
+            esInsumo: true,
           },
         },
         variante: {
@@ -550,6 +551,7 @@ export class ProductoStockService {
             nombre: true,
             codigoEmpresa: true,
             sku: true,
+            esInsumo: true,
           },
         },
         variante: {
