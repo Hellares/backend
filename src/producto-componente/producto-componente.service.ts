@@ -65,18 +65,23 @@ export class ProductoComponenteService {
     // final para hidratar costos sin pedirle al usuario una sede explícita.
     const sedeResuelta = sedeId ?? (await this._sedeUnicaDelProducto(productoId));
 
-    const stocksMap = sedeResuelta
-      ? await this._costosPorComponente(
-          componentes.map((c) => c.componenteId),
-          sedeResuelta,
-        )
-      : new Map<string, number | null>();
+    const componenteIds = componentes.map((c) => c.componenteId);
+    const [costosMap, stocksMap] = sedeResuelta
+      ? await Promise.all([
+          this._costosPorComponente(componenteIds, sedeResuelta),
+          this._stocksPorComponente(componenteIds, sedeResuelta),
+        ])
+      : [
+          new Map<string, number>(),
+          new Map<string, number>(),
+        ];
 
     return componentes.map((c) => {
       const cantidad = Number(c.cantidad);
-      const costoUnit = stocksMap.get(c.componenteId) ?? null;
+      const costoUnit = costosMap.get(c.componenteId) ?? null;
       const subtotal =
         costoUnit != null ? +(cantidad * costoUnit).toFixed(4) : null;
+      const stockActual = stocksMap.get(c.componenteId) ?? null;
       const um = c.componente.unidadMedida;
       // Resolución del símbolo/nombre: local override > personalizado > maestra.
       const simbolo =
@@ -104,6 +109,7 @@ export class ProductoComponenteService {
         },
         precioCostoUnitario: costoUnit,
         subtotal,
+        stockDisponible: stockActual,
         sedeUsada: sedeResuelta ?? null,
       };
     });
@@ -336,15 +342,18 @@ export class ProductoComponenteService {
     const motivoEntrada = `Fabricación: ${producto.nombre} × ${dto.cantidad}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Lock + cargar stocks de TODOS los componentes en esta sede
+      // Lock + cargar stocks (con precioCosto) de TODOS los componentes
+      // en esta sede. El precioCosto lo necesitamos para el promedio
+      // ponderado del costo del producto final.
       const componenteIds = consumos.map((c) => c.componenteId);
       const stocksComponentes = await tx.$queryRaw<
         Array<{
           id: string;
           productoId: string;
           stockActual: number;
+          precioCosto: string | null;
         }>
-      >`SELECT id, "productoId", "stockActual"
+      >`SELECT id, "productoId", "stockActual", "precioCosto"
         FROM "ProductoStock"
         WHERE "sedeId" = ${dto.sedeId}
           AND "varianteId" IS NULL
@@ -353,13 +362,14 @@ export class ProductoComponenteService {
 
       const stockPorComponenteId = new Map<
         string,
-        { id: string; stockActual: number }
+        { id: string; stockActual: number; precioCosto: number | null }
       >();
       for (const s of stocksComponentes) {
         if (s.productoId) {
           stockPorComponenteId.set(s.productoId, {
             id: s.id,
             stockActual: s.stockActual,
+            precioCosto: s.precioCosto != null ? Number(s.precioCosto) : null,
           });
         }
       }
@@ -442,15 +452,55 @@ export class ProductoComponenteService {
           productoId,
           varianteId: null,
         },
-        select: { id: true, stockActual: true },
+        select: { id: true, stockActual: true, precioCosto: true },
       });
       const stockFinalAnterior = stockFinal?.stockActual ?? 0;
       const stockFinalNuevo = stockFinalAnterior + dto.cantidad;
+      const precioCostoAnterior =
+        stockFinal?.precioCosto != null ? Number(stockFinal.precioCosto) : null;
+
+      // Calcular costo del lote sumando (cantidadConsumida × precioCosto)
+      // de cada insumo. Si algún insumo no tiene precioCosto en la sede,
+      // omitimos la actualización del costo del final (sería parcial y
+      // engañoso). Se reporta el motivo en el response.
+      let costoLote = 0;
+      const insumosSinCosto: string[] = [];
+      for (const c of consumos) {
+        const stock = stockPorComponenteId.get(c.componenteId)!;
+        if (stock.precioCosto == null) {
+          insumosSinCosto.push(c.nombreComponente);
+        } else {
+          costoLote += c.cantidadConsumidaEntera * stock.precioCosto;
+        }
+      }
+
+      // Promedio ponderado con el stock previo (si existía).
+      // - Si no hay stock previo: nuevoCosto = costoLote / cantidad
+      // - Si hay stock previo con costo: ponderado de los dos lotes
+      // - Si hay stock previo sin costo: tratamos el costo previo como 0
+      //   (caso edge, mejor que dejar el precioCosto null).
+      let precioCostoNuevo: number | null = null;
+      let costoActualizado = false;
+      let razonCostoNoActualizado: string | null = null;
+      if (insumosSinCosto.length > 0) {
+        razonCostoNoActualizado = `Insumos sin precio costo: ${insumosSinCosto.join(', ')}`;
+      } else {
+        const valorPrevio =
+          stockFinalAnterior * (precioCostoAnterior ?? 0);
+        const valorTotal = valorPrevio + costoLote;
+        precioCostoNuevo = +(valorTotal / stockFinalNuevo).toFixed(2);
+        costoActualizado = true;
+      }
 
       if (stockFinal) {
         await tx.productoStock.update({
           where: { id: stockFinal.id },
-          data: { stockActual: stockFinalNuevo },
+          data: {
+            stockActual: stockFinalNuevo,
+            ...(costoActualizado && precioCostoNuevo != null
+              ? { precioCosto: precioCostoNuevo }
+              : {}),
+          },
         });
       } else {
         stockFinal = await tx.productoStock.create({
@@ -459,8 +509,36 @@ export class ProductoComponenteService {
             productoId,
             empresaId,
             stockActual: stockFinalNuevo,
+            ...(costoActualizado && precioCostoNuevo != null
+              ? { precioCosto: precioCostoNuevo }
+              : {}),
           },
-          select: { id: true, stockActual: true },
+          select: { id: true, stockActual: true, precioCosto: true },
+        });
+      }
+
+      // Trazabilidad del cambio de costo en el historial de precios
+      // (mismo modelo que usa producto-stock.service para que aparezca
+      // en la auditoría general).
+      if (
+        costoActualizado &&
+        precioCostoNuevo != null &&
+        precioCostoNuevo !== precioCostoAnterior
+      ) {
+        await tx.productoPrecioHistorialSede.create({
+          data: {
+            productoStockId: stockFinal.id,
+            sedeId: dto.sedeId,
+            tipoCambio: 'COSTO',
+            precioCostoAnterior:
+              precioCostoAnterior != null
+                ? new Prisma.Decimal(precioCostoAnterior)
+                : null,
+            precioCostoNuevo: new Prisma.Decimal(precioCostoNuevo),
+            razon: `Fabricación ${numeroDocumento}: promedio ponderado con ${stockFinalAnterior} unidad(es) previa(s)`,
+            origenModulo: 'PRODUCCION',
+            usuarioId,
+          },
         });
       }
 
@@ -489,6 +567,10 @@ export class ProductoComponenteService {
         cantidadProducida: dto.cantidad,
         stockFinalAnterior,
         stockFinalNuevo,
+        precioCostoAnterior,
+        precioCostoNuevo,
+        costoActualizado,
+        razonCostoNoActualizado,
         componentesConsumidos: movimientosSalida,
       };
     });
@@ -505,6 +587,177 @@ export class ProductoComponenteService {
     }
 
     return result;
+  }
+
+  /**
+   * Historial de lotes de fabricación de un producto: lista los
+   * MovimientoStock con tipo=PRODUCCION_ENTRADA agrupados por
+   * numeroDocumento (cada lote es 1 fila). Opcionalmente filtrado por
+   * sede.
+   */
+  async historialFabricaciones(
+    empresaId: string,
+    productoId: string,
+    sedeId?: string,
+    limit = 50,
+  ) {
+    await this._assertProductoPerteneceAEmpresa(empresaId, productoId);
+
+    const movimientos = await this.prisma.movimientoStock.findMany({
+      where: {
+        tipo: 'PRODUCCION_ENTRADA',
+        tipoDocumento: 'PRODUCCION',
+        productoStock: {
+          productoId,
+          varianteId: null,
+          ...(sedeId ? { sedeId } : {}),
+        },
+      },
+      orderBy: { creadoEn: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        numeroDocumento: true,
+        cantidad: true,
+        cantidadAnterior: true,
+        cantidadNueva: true,
+        observaciones: true,
+        creadoEn: true,
+        usuarioId: true,
+        sede: { select: { id: true, nombre: true } },
+      },
+    });
+
+    // Resolver nombres de usuario en batch. MovimientoStock no tiene
+    // relación directa con Usuario en el schema, así que separamos.
+    const usuariosUnicos = [
+      ...new Set(movimientos.map((m) => m.usuarioId)),
+    ];
+    const usuarios = await this.prisma.usuario.findMany({
+      where: { id: { in: usuariosUnicos } },
+      select: {
+        id: true,
+        email: true,
+        persona: {
+          select: { nombres: true, apellidos: true },
+        },
+      },
+    });
+    const usuarioById = new Map(usuarios.map((u) => [u.id, u]));
+
+    return movimientos.map((m) => {
+      const u = usuarioById.get(m.usuarioId);
+      const nombreCompleto = u?.persona
+        ? `${u.persona.nombres ?? ''} ${u.persona.apellidos ?? ''}`.trim()
+        : (u?.email ?? '');
+      return {
+        id: m.id,
+        numeroDocumento: m.numeroDocumento,
+        cantidadProducida: m.cantidad,
+        stockAnterior: m.cantidadAnterior,
+        stockNuevo: m.cantidadNueva,
+        observaciones: m.observaciones,
+        creadoEn: m.creadoEn,
+        sede: m.sede,
+        usuario: u ? { id: u.id, nombre: nombreCompleto } : null,
+      };
+    });
+  }
+
+  /**
+   * Detalle de un lote: todos los insumos consumidos
+   * (PRODUCCION_SALIDA con el mismo numeroDocumento).
+   */
+  async detalleFabricacion(
+    empresaId: string,
+    productoId: string,
+    numeroDocumento: string,
+  ) {
+    await this._assertProductoPerteneceAEmpresa(empresaId, productoId);
+
+    const movimientos = await this.prisma.movimientoStock.findMany({
+      where: {
+        numeroDocumento,
+        tipoDocumento: 'PRODUCCION',
+        productoStock: { empresaId },
+      },
+      orderBy: { creadoEn: 'asc' },
+      select: {
+        id: true,
+        tipo: true,
+        cantidad: true,
+        cantidadAnterior: true,
+        cantidadNueva: true,
+        observaciones: true,
+        creadoEn: true,
+        sede: { select: { id: true, nombre: true } },
+        productoStock: {
+          select: {
+            id: true,
+            producto: {
+              select: {
+                id: true,
+                nombre: true,
+                codigoEmpresa: true,
+                unidadMedida: {
+                  select: {
+                    simboloLocal: true,
+                    simboloPersonalizado: true,
+                    unidadMaestra: { select: { simbolo: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (movimientos.length === 0) {
+      throw new NotFoundException(
+        `No se encontró el lote de fabricación ${numeroDocumento}`,
+      );
+    }
+
+    const entrada = movimientos.find((m) => m.tipo === 'PRODUCCION_ENTRADA');
+    const salidas = movimientos.filter(
+      (m) => m.tipo === 'PRODUCCION_SALIDA',
+    );
+
+    const fmtUm = (p: (typeof movimientos)[number]['productoStock']['producto']) => {
+      const um = p?.unidadMedida;
+      return (
+        um?.simboloLocal ??
+        um?.simboloPersonalizado ??
+        um?.unidadMaestra?.simbolo ??
+        ''
+      );
+    };
+
+    return {
+      numeroDocumento,
+      sede: entrada?.sede ?? null,
+      creadoEn: entrada?.creadoEn ?? null,
+      productoFinal: entrada
+        ? {
+            id: entrada.productoStock.producto?.id,
+            nombre: entrada.productoStock.producto?.nombre,
+            cantidadProducida: entrada.cantidad,
+            stockAnterior: entrada.cantidadAnterior,
+            stockNuevo: entrada.cantidadNueva,
+          }
+        : null,
+      insumosConsumidos: salidas.map((s) => ({
+        id: s.productoStock.producto?.id,
+        nombre: s.productoStock.producto?.nombre,
+        codigo: s.productoStock.producto?.codigoEmpresa,
+        unidadMedida: fmtUm(s.productoStock.producto),
+        cantidadConsumida: Math.abs(s.cantidad),
+        stockAnterior: s.cantidadAnterior,
+        stockNuevo: s.cantidadNueva,
+      })),
+      observaciones: entrada?.observaciones ?? null,
+    };
   }
 
   // ─── helpers privados ─────────────────────────────────────────
@@ -544,6 +797,33 @@ export class ProductoComponenteService {
     for (const s of stocks) {
       if (s.productoId && s.precioCosto != null) {
         map.set(s.productoId, Number(s.precioCosto));
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Devuelve `Map<componenteId, stockActual>` para una sede dada.
+   * Usado por el GET /componentes para que el frontend pueda mostrar
+   * disponibilidad por insumo y validar fabricación en cliente.
+   */
+  private async _stocksPorComponente(
+    componenteIds: string[],
+    sedeId: string,
+  ): Promise<Map<string, number>> {
+    if (componenteIds.length === 0) return new Map();
+    const stocks = await this.prisma.productoStock.findMany({
+      where: {
+        sedeId,
+        productoId: { in: componenteIds },
+        varianteId: null,
+      },
+      select: { productoId: true, stockActual: true },
+    });
+    const map = new Map<string, number>();
+    for (const s of stocks) {
+      if (s.productoId) {
+        map.set(s.productoId, s.stockActual);
       }
     }
     return map;

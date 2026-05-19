@@ -119,4 +119,40 @@ export class ProductoComponenteController {
   ) {
     return this.service.fabricar(empresaId, productoId, dto, user.sub);
   }
+
+  @Get('fabricaciones')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Lista los lotes de fabricación de un producto (historial)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async historialFabricaciones(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('productoId') productoId: string,
+    @Query('sedeId') sedeId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const lim = limit ? Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200) : 50;
+    return this.service.historialFabricaciones(
+      empresaId,
+      productoId,
+      sedeId,
+      lim,
+    );
+  }
+
+  @Get('fabricaciones/:numeroDocumento')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary:
+      'Detalle de un lote de fabricación (producto final + insumos consumidos)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async detalleFabricacion(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('productoId') productoId: string,
+    @Param('numeroDocumento') numeroDocumento: string,
+  ) {
+    return this.service.detalleFabricacion(empresaId, productoId, numeroDocumento);
+  }
 }
