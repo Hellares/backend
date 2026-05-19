@@ -432,14 +432,15 @@ export class ProductoComponenteService {
         });
       }
 
-      // Sumar al producto final (crear stock si no existe en esta sede)
-      let stockFinal = await tx.productoStock.findUnique({
+      // Sumar al producto final (crear stock si no existe en esta sede).
+      // findFirst en vez de findUnique: Prisma rechaza null en campos
+      // opcionales dentro de compound unique. Mismo patrón que usa
+      // _costosPorComponente más abajo.
+      let stockFinal = await tx.productoStock.findFirst({
         where: {
-          sedeId_productoId_varianteId: {
-            sedeId: dto.sedeId,
-            productoId,
-            varianteId: null,
-          },
+          sedeId: dto.sedeId,
+          productoId,
+          varianteId: null,
         },
         select: { id: true, stockActual: true },
       });
