@@ -253,7 +253,7 @@ export class ProductoCatalogService {
     }
 
     // Desestructurar para excluir campos relacionados
-    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, stocksPorSede: _, ...productoData } = producto;
+    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, unidadCompra, stocksPorSede: _, ...productoData } = producto;
 
     // Obtener precio del primer stock con precio configurado
     let precioFinal = 0;
@@ -333,6 +333,22 @@ export class ProductoCatalogService {
           actualizadoEn: unidadMedida.unidadMaestra.actualizadoEn,
         } : null,
       } : null,
+      // Unidad de Compra (si el producto tiene factor configurado).
+      // Forma simplificada: solo necesitamos id+simbolo+nombre para UI.
+      unidadCompra: unidadCompra ? {
+        id: unidadCompra.id,
+        nombrePersonalizado: unidadCompra.nombrePersonalizado,
+        simboloPersonalizado: unidadCompra.simboloPersonalizado,
+        nombreLocal: unidadCompra.nombreLocal,
+        simboloLocal: unidadCompra.simboloLocal,
+        unidadMaestra: unidadCompra.unidadMaestra ? {
+          id: unidadCompra.unidadMaestra.id,
+          codigo: unidadCompra.unidadMaestra.codigo,
+          nombre: unidadCompra.unidadMaestra.nombre,
+          simbolo: unidadCompra.unidadMaestra.simbolo,
+        } : null,
+      } : null,
+      factorCompra: producto.factorCompra != null ? Number(producto.factorCompra) : null,
       imagenes: archivos?.map((a) => a.url) || [],
       archivos: archivos?.map((a) => ({
         id: a.id,
@@ -677,6 +693,18 @@ export class ProductoCatalogService {
               isActive: true,
               creadoEn: true,
               actualizadoEn: true,
+            },
+          },
+        },
+      },
+      unidadCompra: {
+        include: {
+          unidadMaestra: {
+            select: {
+              id: true,
+              codigo: true,
+              nombre: true,
+              simbolo: true,
             },
           },
         },

@@ -5,6 +5,7 @@ import {
   IsInt,
   Min,
   IsNotEmpty,
+  IsBoolean,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -55,4 +56,21 @@ export class CreateCompraDetalleDto {
   @Min(0)
   @Type(() => Number)
   porcentajeIGV?: number;
+
+  // ─── Unidad de Compra ─────────────────────────────────────────
+  // Si la línea fue ingresada en la unidad de COMPRA del producto
+  // (PAQUETE/KG/DOCENA), el service convierte `cantidad` y
+  // `precioUnitario` a unidad atómica (de venta/stock) antes de
+  // persistir, multiplicando/dividiendo por el `factorCompra` actual
+  // del producto. Snapshot del factor y de la cantidad original se
+  // guardan en el CompraDetalle para mostrar dual-view después.
+  @ApiPropertyOptional({
+    description:
+      'Si true: cantidad y precioUnitario están en la unidad de COMPRA del producto y serán convertidos a unidad atómica (×factorCompra y ÷factorCompra respectivamente). Requiere que el producto tenga unidadCompraId+factorCompra.',
+    example: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  usaUnidadCompra?: boolean;
 }

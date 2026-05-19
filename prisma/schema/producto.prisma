@@ -4,7 +4,18 @@ model Producto {
   sedeId             String?
   empresaCategoriaId String?
   empresaMarcaId     String?
-  unidadMedidaId     String? // Unidad de medida del producto
+  unidadMedidaId     String? // Unidad de medida del producto (= unidad de VENTA = unidad de STOCK).
+
+  // ─── Unidad de COMPRA ─────────────────────────────────────────
+  // Opcional. Si el producto se compra al proveedor en una unidad
+  // distinta a la de venta (ej: viene en PAQUETE de 100 BOLSAS),
+  // configurar `unidadCompraId` + `factorCompra`. El módulo de compras
+  // ofrece al usuario elegir si carga la línea en unidad de compra o
+  // venta, y el service convierte a unidad atómica antes de afectar
+  // stock y precioCosto. UM principal sigue siendo la de stock/venta.
+  unidadCompraId String?
+  factorCompra   Decimal? @db.Decimal(12, 4) // Unidades de venta que trae 1 unidad de compra (ej: 100 BOLSAS/PAQUETE).
+
   codigoEmpresa      String
   codigoSistema      String
   sku                String?
@@ -48,6 +59,7 @@ model Producto {
   empresaCategoria    EmpresaCategoria?        @relation(fields: [empresaCategoriaId], references: [id])
   empresaMarca        EmpresaMarca?            @relation(fields: [empresaMarcaId], references: [id])
   unidadMedida        EmpresaUnidadMedida?     @relation(fields: [unidadMedidaId], references: [id])
+  unidadCompra        EmpresaUnidadMedida?     @relation("ProductoUnidadCompra", fields: [unidadCompraId], references: [id])
   empresa             Empresa                  @relation(fields: [empresaId], references: [id])
   sede                Sede?                    @relation(fields: [sedeId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ProductoComprobante")
@@ -126,6 +138,7 @@ model Producto {
   @@index([empresaCategoriaId])
   @@index([empresaMarcaId])
   @@index([unidadMedidaId])
+  @@index([unidadCompraId])
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])

@@ -59,6 +59,27 @@ export class CreateProductoDto {
   unidadMedidaId?: string;
 
   @ApiPropertyOptional({
+    description:
+      'Unidad de COMPRA (EmpresaUnidadMedida). Distinta a unidadMedida cuando el proveedor te vende en otra unidad (ej: PAQUETE de 100 BOLSAS). Requiere factorCompra.',
+    example: 'unidad-medida-paquete-id',
+  })
+  @IsOptional()
+  @IsString()
+  unidadCompraId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Cantidad de unidades de venta que trae 1 unidad de compra. Ej: 100 (BOLSAS por PAQUETE), 1000 (GR por KG), 12 (UND por DOCENA). Required si se define unidadCompraId.',
+    example: 100,
+    minimum: 0.0001,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0.0001, { message: 'El factor de compra debe ser mayor a 0' })
+  factorCompra?: number;
+
+  @ApiPropertyOptional({
     description: 'SKU del producto',
     example: 'SKU-12345',
   })

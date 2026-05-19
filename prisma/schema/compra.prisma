@@ -226,11 +226,25 @@ model CompraDetalle {
   productoId           String?
   varianteId           String?
 
-  // Descripción y cantidades
+  // Descripción y cantidades.
+  // `cantidad` y `precioUnitario` SIEMPRE están en la unidad atómica
+  // (= unidad de venta/stock del producto). Si la línea se cargó
+  // originalmente en unidad de compra (PAQUETE/KG/DOCENA), el service
+  // convierte antes de persistir y guarda los snapshots para que la
+  // UI muestre la doble vista.
   descripcion    String
   cantidad       Int
   precioUnitario Decimal @db.Decimal(12, 2)
   descuento      Decimal @default(0) @db.Decimal(12, 2)
+
+  // ─── Snapshot Unidad de Compra ────────────────────────────────
+  // Trazabilidad de cómo se ingresó originalmente la línea cuando se
+  // usó la unidad de compra del producto. Cero impacto en cálculos:
+  // los totales y stock siguen tomando `cantidad` y `precioUnitario`.
+  usaUnidadCompra       Boolean  @default(false)
+  cantidadOriginal      Decimal? @db.Decimal(12, 4) // Ej: 10 (paquetes)
+  unidadOriginalSimbolo String?  // Ej: "PAQ" (snapshot del símbolo)
+  factorAplicado        Decimal? @db.Decimal(12, 4) // Ej: 100 (snapshot del factor en el momento de la compra)
 
   // IGV
   porcentajeIGV Decimal @default(18) @db.Decimal(5, 2)

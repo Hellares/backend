@@ -81,6 +81,54 @@ export class ProductoService {
   }
 
   /**
+   * Valida la pareja `unidadCompraId` + `factorCompra` del producto:
+   * - Ambos o ninguno (no se puede setear uno solo).
+   * - `factorCompra` debe ser > 0.
+   * - `unidadCompraId` debe pertenecer a la empresa.
+   * - `unidadCompraId` debe ser distinta a `unidadMedidaId` (no tiene
+   *   sentido tener la misma unidad como compra y venta).
+   */
+  private async _validarUnidadCompra(
+    empresaId: string,
+    data: {
+      unidadCompraId?: string | null;
+      factorCompra?: number | null;
+      unidadMedidaId?: string | null;
+    },
+  ): Promise<void> {
+    const tieneUC = data.unidadCompraId != null && data.unidadCompraId !== '';
+    const tieneFactor = data.factorCompra != null && Number(data.factorCompra) > 0;
+
+    if (tieneUC && !tieneFactor) {
+      throw new BadRequestException(
+        'factorCompra es requerido cuando se define unidadCompraId (cuántas unidades de venta trae 1 unidad de compra).',
+      );
+    }
+    if (!tieneUC && tieneFactor) {
+      throw new BadRequestException(
+        'unidadCompraId es requerido cuando se define factorCompra.',
+      );
+    }
+    if (!tieneUC) return;
+
+    if (data.unidadCompraId === data.unidadMedidaId) {
+      throw new BadRequestException(
+        'La unidad de compra debe ser distinta a la unidad de venta. Si vendés y comprás en la misma unidad, dejá unidadCompra vacía.',
+      );
+    }
+
+    const um = await this.prisma.empresaUnidadMedida.findFirst({
+      where: { id: data.unidadCompraId!, empresaId, isActive: true },
+      select: { id: true },
+    });
+    if (!um) {
+      throw new BadRequestException(
+        'La unidad de compra no existe o no pertenece a la empresa.',
+      );
+    }
+  }
+
+  /**
    * Crear un nuevo producto
    * Método delegador (Facade) - orquesta llamadas a servicios especializados
    */
@@ -164,6 +212,9 @@ export class ProductoService {
 
     // 4. Validar/normalizar IGV (tipoAfectacionIgv ↔ impuestoPorcentaje)
     this.normalizarIgvProducto(productoData);
+
+    // 4.1 Validar Unidad de Compra (opcional)
+    await this._validarUnidadCompra(empresaId, productoData);
 
     // 4. Validar relación XOR entre esCombo y tieneVariantes (lógica de negocio - mantener en Facade)
     if (productoData.esCombo === true && productoData.tieneVariantes === true) {
@@ -571,6 +622,31 @@ export class ProductoService {
         productoData.empresaMarcaId,
         empresaId,
       );
+    }
+
+    // Validar Unidad de Compra: si el update toca cualquiera de los 2
+    // campos, validamos considerando los valores existentes.
+    if (
+      productoData.unidadCompraId !== undefined ||
+      productoData.factorCompra !== undefined
+    ) {
+      const merged: any = {
+        unidadCompraId:
+          productoData.unidadCompraId !== undefined
+            ? productoData.unidadCompraId
+            : productoExistente.unidadCompraId,
+        factorCompra:
+          productoData.factorCompra !== undefined
+            ? productoData.factorCompra
+            : productoExistente.factorCompra != null
+              ? Number(productoExistente.factorCompra)
+              : null,
+        unidadMedidaId:
+          productoData.unidadMedidaId !== undefined
+            ? productoData.unidadMedidaId
+            : productoExistente.unidadMedidaId,
+      };
+      await this._validarUnidadCompra(empresaId, merged);
     }
 
     // Validar relación XOR entre esCombo y tieneVariantes
