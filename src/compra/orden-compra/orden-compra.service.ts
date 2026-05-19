@@ -35,6 +35,11 @@ export class OrdenCompraService {
   async create(empresaId: string, dto: CreateOrdenCompraDto, usuarioId: string) {
     this.logger.info('Creando orden de compra', { empresaId, proveedor: dto.proveedorId });
 
+    const factoresMap = await this._resolverFactoresCompra(
+      empresaId,
+      dto.detalles,
+    );
+
     return this.prisma.$transaction(async (tx) => {
       // Obtener proveedor para snapshot
       const proveedor = await tx.proveedor.findFirst({
@@ -53,7 +58,7 @@ export class OrdenCompraService {
 
       // Calcular detalles
       const detallesCalculados = dto.detalles.map((d, index) =>
-        this.calcularDetalle(d, index),
+        this.calcularDetalle(d, index, factoresMap),
       );
 
       // Calcular totales del header
@@ -108,6 +113,10 @@ export class OrdenCompraService {
               cantidadRecibida: 0,
               cantidadPendiente: d.cantidad,
               orden: d.orden,
+              usaUnidadCompra: d.usaUnidadCompra,
+              cantidadOriginal: d.cantidadOriginal,
+              unidadOriginalSimbolo: d.unidadOriginalSimbolo,
+              factorAplicado: d.factorAplicado,
             })),
           },
         },
@@ -232,8 +241,12 @@ export class OrdenCompraService {
           where: { ordenCompraId: id },
         });
 
+        const factoresMap = await this._resolverFactoresCompra(
+          empresaId,
+          dto.detalles,
+        );
         const detallesCalculados = dto.detalles.map((d, index) =>
-          this.calcularDetalle(d, index),
+          this.calcularDetalle(d, index, factoresMap),
         );
 
         // Crear nuevos detalles
@@ -253,6 +266,10 @@ export class OrdenCompraService {
             cantidadRecibida: 0,
             cantidadPendiente: d.cantidad,
             orden: d.orden,
+            usaUnidadCompra: d.usaUnidadCompra,
+            cantidadOriginal: d.cantidadOriginal,
+            unidadOriginalSimbolo: d.unidadOriginalSimbolo,
+            factorAplicado: d.factorAplicado,
           })),
         });
 
@@ -440,6 +457,10 @@ export class OrdenCompraService {
               cantidadRecibida: 0,
               cantidadPendiente: d.cantidad,
               orden: d.orden,
+              usaUnidadCompra: d.usaUnidadCompra,
+              cantidadOriginal: d.cantidadOriginal,
+              unidadOriginalSimbolo: d.unidadOriginalSimbolo,
+              factorAplicado: d.factorAplicado,
             })),
           },
         },
@@ -483,13 +504,41 @@ export class OrdenCompraService {
   }
 
   /**
-   * Calcular montos de un detalle
+   * Calcular montos de un detalle. Si la línea fue cargada en unidad
+   * de compra del producto, convierte cantidad × factor y precioUnitario
+   * / factor antes del cálculo (mismo patrón que CompraService).
    */
-  private calcularDetalle(dto: CreateOrdenCompraDetalleDto, index: number) {
-    const cantidad = dto.cantidad;
-    const precioUnitario = dto.precioUnitario;
+  private calcularDetalle(
+    dto: CreateOrdenCompraDetalleDto,
+    index: number,
+    factoresMap?: Map<
+      string,
+      { factor: number; simboloUnidadCompra: string }
+    >,
+  ) {
+    let cantidad = dto.cantidad;
+    let precioUnitario = dto.precioUnitario;
     const descuento = dto.descuento ?? 0;
     const porcentajeIGV = dto.porcentajeIGV ?? 18;
+
+    let usaUnidadCompra = false;
+    let cantidadOriginal: number | null = null;
+    let factorAplicado: number | null = null;
+    let unidadOriginalSimbolo: string | null = null;
+    if (dto.usaUnidadCompra && dto.productoId) {
+      const info = factoresMap?.get(dto.productoId);
+      if (!info) {
+        throw new BadRequestException(
+          `Producto "${dto.descripcion}" marcado para usar unidad de compra, pero no tiene unidadCompra+factorCompra configurados.`,
+        );
+      }
+      usaUnidadCompra = true;
+      cantidadOriginal = dto.cantidad;
+      factorAplicado = info.factor;
+      unidadOriginalSimbolo = info.simboloUnidadCompra;
+      cantidad = Math.round(dto.cantidad * info.factor);
+      precioUnitario = +(dto.precioUnitario / info.factor).toFixed(2);
+    }
 
     const subtotalBruto = cantidad * precioUnitario;
     const subtotal = subtotalBruto - descuento;
@@ -508,7 +557,66 @@ export class OrdenCompraService {
       subtotal: Math.round(subtotal * 100) / 100,
       total: Math.round(total * 100) / 100,
       orden: index,
+      usaUnidadCompra,
+      cantidadOriginal,
+      factorAplicado,
+      unidadOriginalSimbolo,
     };
+  }
+
+  /**
+   * Pre-carga factor de conversión y símbolo para todos los productos
+   * referenciados con `usaUnidadCompra=true`. Mismo patrón que en
+   * CompraService.
+   */
+  private async _resolverFactoresCompra(
+    empresaId: string,
+    detalles: CreateOrdenCompraDetalleDto[],
+  ): Promise<Map<string, { factor: number; simboloUnidadCompra: string }>> {
+    const ids = [
+      ...new Set(
+        detalles
+          .filter((d) => d.usaUnidadCompra && d.productoId)
+          .map((d) => d.productoId as string),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+    const productos = await this.prisma.producto.findMany({
+      where: { id: { in: ids }, empresaId },
+      select: {
+        id: true,
+        nombre: true,
+        factorCompra: true,
+        unidadCompra: {
+          select: {
+            simboloLocal: true,
+            simboloPersonalizado: true,
+            unidadMaestra: { select: { simbolo: true } },
+          },
+        },
+      },
+    });
+    const map = new Map<
+      string,
+      { factor: number; simboloUnidadCompra: string }
+    >();
+    for (const p of productos) {
+      if (!p.factorCompra || !p.unidadCompra) {
+        throw new BadRequestException(
+          `Producto "${p.nombre}" no tiene unidadCompra+factorCompra configurados.`,
+        );
+      }
+      const simbolo =
+        p.unidadCompra.simboloLocal ??
+        p.unidadCompra.simboloPersonalizado ??
+        p.unidadCompra.unidadMaestra?.simbolo ??
+        '?';
+      map.set(p.id, {
+        factor: Number(p.factorCompra),
+        simboloUnidadCompra: simbolo,
+      });
+    }
+    return map;
   }
 
   /**

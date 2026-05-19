@@ -173,6 +173,10 @@ export class CompraService {
         subtotal: number;
         total: number;
         orden: number;
+        usaUnidadCompra: boolean;
+        cantidadOriginal: number | null;
+        unidadOriginalSimbolo: string | null;
+        factorAplicado: number | null;
       }> = [];
 
       for (const [index, linea] of dto.lineas.entries()) {
@@ -201,6 +205,18 @@ export class CompraService {
         const igv = subtotal * (porcentajeIGV / 100);
         const total = subtotal + igv;
 
+        // Propagar snapshot de unidad de compra desde OC a Compra.
+        // Si la recepción es parcial, ajustamos cantidadOriginal por
+        // proporción para mantener consistencia (X atómicos / factor).
+        const ocUsaUC = detalleOc.usaUnidadCompra;
+        const ocFactor = detalleOc.factorAplicado
+          ? Number(detalleOc.factorAplicado)
+          : null;
+        const cantidadOriginal =
+          ocUsaUC && ocFactor && ocFactor > 0
+            ? +(linea.cantidad / ocFactor).toFixed(4)
+            : null;
+
         detallesData.push({
           ordenCompraDetalleId: linea.ordenCompraDetalleId,
           productoId: detalleOc.productoId,
@@ -214,6 +230,10 @@ export class CompraService {
           subtotal: Math.round(subtotal * 100) / 100,
           total: Math.round(total * 100) / 100,
           orden: index,
+          usaUnidadCompra: ocUsaUC,
+          cantidadOriginal,
+          unidadOriginalSimbolo: detalleOc.unidadOriginalSimbolo,
+          factorAplicado: ocFactor,
         });
       }
 
@@ -263,6 +283,10 @@ export class CompraService {
               subtotal: d.subtotal,
               total: d.total,
               orden: d.orden,
+              usaUnidadCompra: d.usaUnidadCompra,
+              cantidadOriginal: d.cantidadOriginal,
+              unidadOriginalSimbolo: d.unidadOriginalSimbolo,
+              factorAplicado: d.factorAplicado,
             })),
           },
         },

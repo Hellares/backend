@@ -5,6 +5,7 @@ import {
   IsInt,
   Min,
   IsNotEmpty,
+  IsBoolean,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -50,4 +51,15 @@ export class CreateOrdenCompraDetalleDto {
   @Min(0)
   @Type(() => Number)
   porcentajeIGV?: number;
+
+  // ─── Unidad de Compra ─────────────────────────────────────────
+  @ApiPropertyOptional({
+    description:
+      'Si true: cantidad y precioUnitario están en la unidad de COMPRA del producto y serán convertidos a unidad atómica antes de persistir.',
+    example: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  usaUnidadCompra?: boolean;
 }
