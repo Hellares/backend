@@ -107,6 +107,10 @@ export class CotizacionService {
         this.calcularDetalle(d, index),
       );
 
+      // Rechazar insumos (materia prima — no se cotizan al cliente
+      // porque tampoco se venden directo).
+      await this._assertNoInsumos(tx, detallesCalculados);
+
       // Validar descuentos máximos por producto
       const detallesConDescuento = detallesCalculados.filter(d => d.descuento > 0 && d.productoId);
       if (detallesConDescuento.length > 0) {
@@ -362,6 +366,9 @@ export class CotizacionService {
         const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
         );
+
+        // Rechazar insumos
+        await this._assertNoInsumos(tx, detallesCalculados);
 
         await tx.cotizacionDetalle.createMany({
           data: detallesCalculados.map((d) => ({
@@ -921,6 +928,36 @@ export class CotizacionService {
           empresaId,
           data: { action: 'COLA_POS', cotizacionCodigo },
         },
+      );
+    }
+  }
+
+  /**
+   * Rechaza si alguno de los productoIds en los detalles está marcado
+   * como insumo. Los insumos son materia prima y no se venden ni se
+   * cotizan al cliente final (mismo guard que venta.service).
+   */
+  private async _assertNoInsumos(
+    tx: Prisma.TransactionClient,
+    detalles: Array<{ productoId: string | null; descripcion: string }>,
+  ): Promise<void> {
+    const ids = [
+      ...new Set(
+        detalles
+          .filter((d) => d.productoId != null)
+          .map((d) => d.productoId as string),
+      ),
+    ];
+    if (ids.length === 0) return;
+    const insumos = await tx.producto.findMany({
+      where: { id: { in: ids }, esInsumo: true },
+      select: { id: true, nombre: true },
+    });
+    if (insumos.length > 0) {
+      throw new BadRequestException(
+        `Producto(s) marcado(s) como insumo no se pueden cotizar: ${insumos
+          .map((p) => `"${p.nombre}"`)
+          .join(', ')}. Si querés cotizarlos al cliente, desmarcá "Es insumo" en el detalle del producto.`,
       );
     }
   }
