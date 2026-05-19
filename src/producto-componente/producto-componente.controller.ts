@@ -17,10 +17,16 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { ProductoComponenteService } from './producto-componente.service';
-import { CrearComponenteDto, ActualizarComponenteDto } from './dto';
+import {
+  CrearComponenteDto,
+  ActualizarComponenteDto,
+  FabricarDto,
+} from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 
 @ApiTags('Producto Compuesto / BOM')
 @ApiBearerAuth()
@@ -96,5 +102,21 @@ export class ProductoComponenteController {
     @Param('componenteRowId') componenteRowId: string,
   ) {
     return this.service.eliminar(empresaId, productoId, componenteRowId);
+  }
+
+  @Post('fabricar')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary:
+      'Fabrica N unidades del producto desde sus componentes (descuenta insumos + suma stock final + genera kardex PRODUCCION_ENTRADA/SALIDA)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async fabricar(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('productoId') productoId: string,
+    @Body() dto: FabricarDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.fabricar(empresaId, productoId, dto, user.sub);
   }
 }

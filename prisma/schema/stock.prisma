@@ -291,6 +291,10 @@ enum TipoMovimientoStock {
   SALIDA_GARANTIA // Enviar producto a reparación/proveedor
   RETORNO_GARANTIA // Producto reparado regresa (stockEnGarantia--)
 
+  // === PRODUCCIÓN / BOM ===
+  PRODUCCION_ENTRADA // Producto final fabricado desde componentes (suma stockActual)
+  PRODUCCION_SALIDA // Insumo consumido en fabricación (resta stockActual)
+
   // === OTROS (Legacy - mantener compatibilidad) ===
   ENTRADA_AJUSTE // (DEPRECADO) Usar AJUSTE_ENTRADA
   SALIDA_AJUSTE // (DEPRECADO) Usar AJUSTE_SALIDA

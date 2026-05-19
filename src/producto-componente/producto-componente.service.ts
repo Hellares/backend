@@ -2,21 +2,32 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { Prisma } from '@prisma/client';
-import { CrearComponenteDto, ActualizarComponenteDto } from './dto';
+import {
+  CrearComponenteDto,
+  ActualizarComponenteDto,
+  FabricarDto,
+} from './dto';
 
 /**
  * Módulo Producto Compuesto / BOM (Bill of Materials).
  *
- * MVP: solo calculadora de costo a partir de los componentes definidos.
- * No descuenta stock — la "fabricación" formal es trabajo futuro.
+ * Fase A (calculadora de costo): listar/calcular/CRUD componentes.
+ * Fase B (fabricar): descontar insumos + sumar producto final + kardex.
  */
 @Injectable()
 export class ProductoComponenteService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ProductoComponenteService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cacheService: CacheService,
+  ) {}
 
   /**
    * Lista los componentes de un producto final, incluyendo nombre,
@@ -238,6 +249,261 @@ export class ProductoComponenteService {
       where: { id: componenteRowId },
     });
     return { id: componenteRowId };
+  }
+
+  /**
+   * Fabrica `cantidad` unidades del producto final desde sus componentes.
+   * Descuenta stock de cada insumo (cantidad_componente × N) y suma
+   * `cantidad` al stock del producto final. Genera 1+N movimientos de
+   * kardex con el mismo `numeroDocumento` para reconstruir el lote.
+   *
+   * Reglas:
+   * - El producto NO debe ser insumo (no se fabrican insumos).
+   * - El producto debe tener al menos un componente en su receta.
+   * - `cantidad_componente × N` debe ser entero para cada componente
+   *   (stockActual es Int). Si no, 400 con detalle de los conflictivos.
+   * - Stock de cada componente debe ser suficiente en la sede dada.
+   * - Si el producto final no tiene stock en esta sede, se crea.
+   */
+  async fabricar(
+    empresaId: string,
+    productoId: string,
+    dto: FabricarDto,
+    usuarioId: string,
+  ) {
+    await this._assertProductoPerteneceAEmpresa(empresaId, productoId);
+
+    const producto = await this.prisma.producto.findUnique({
+      where: { id: productoId },
+      select: { id: true, nombre: true, esInsumo: true, empresaId: true },
+    });
+    if (!producto) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+    if (producto.esInsumo) {
+      throw new BadRequestException(
+        'Este producto está marcado como insumo y no se puede fabricar',
+      );
+    }
+
+    const componentes = await this.prisma.productoComponente.findMany({
+      where: { productoId },
+      include: {
+        componente: { select: { id: true, nombre: true } },
+      },
+    });
+    if (componentes.length === 0) {
+      throw new BadRequestException(
+        'El producto no tiene receta. Agrega componentes antes de fabricar.',
+      );
+    }
+
+    // Validar enteros: cantidad_componente × N para cada uno.
+    const consumos = componentes.map((c) => {
+      const cantidadConsumida = Number(c.cantidad) * dto.cantidad;
+      // Tolerancia mínima para evitar falsos positivos por float (0.1+0.2)
+      const redondeado = Math.round(cantidadConsumida);
+      const esEntero = Math.abs(cantidadConsumida - redondeado) < 1e-6;
+      return {
+        componenteRowId: c.id,
+        componenteId: c.componenteId,
+        nombreComponente: c.componente.nombre,
+        cantidadPorUnidad: Number(c.cantidad),
+        cantidadConsumida,
+        cantidadConsumidaEntera: redondeado,
+        esEntero,
+      };
+    });
+    const fraccionarios = consumos.filter((c) => !c.esEntero);
+    if (fraccionarios.length > 0) {
+      throw new BadRequestException({
+        code: 'FABRICACION_CANTIDAD_FRACCIONARIA',
+        message: `No se puede fabricar ${dto.cantidad} unidad(es): algunos componentes requieren cantidad fraccionaria que no se puede descontar del inventario (el stock se maneja en unidades enteras). Cambia la unidad de medida de esos componentes a una más pequeña (ej: KG → GR) o ajusta el lote.`,
+        cantidad: dto.cantidad,
+        componentesConflictivos: fraccionarios.map((f) => ({
+          componenteId: f.componenteId,
+          nombre: f.nombreComponente,
+          cantidadPorUnidad: f.cantidadPorUnidad,
+          cantidadConsumida: f.cantidadConsumida,
+        })),
+      });
+    }
+
+    const numeroDocumento = `PROD-${Date.now()}-${Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, '0')}`;
+    const motivoSalida = `Insumo para producción de ${producto.nombre}`;
+    const motivoEntrada = `Fabricación: ${producto.nombre} × ${dto.cantidad}`;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Lock + cargar stocks de TODOS los componentes en esta sede
+      const componenteIds = consumos.map((c) => c.componenteId);
+      const stocksComponentes = await tx.$queryRaw<
+        Array<{
+          id: string;
+          productoId: string;
+          stockActual: number;
+        }>
+      >`SELECT id, "productoId", "stockActual"
+        FROM "ProductoStock"
+        WHERE "sedeId" = ${dto.sedeId}
+          AND "varianteId" IS NULL
+          AND "productoId" = ANY(${componenteIds}::text[])
+        FOR UPDATE`;
+
+      const stockPorComponenteId = new Map<
+        string,
+        { id: string; stockActual: number }
+      >();
+      for (const s of stocksComponentes) {
+        if (s.productoId) {
+          stockPorComponenteId.set(s.productoId, {
+            id: s.id,
+            stockActual: s.stockActual,
+          });
+        }
+      }
+
+      // Validar disponibilidad de cada componente
+      const sinStock: {
+        nombre: string;
+        disponible: number;
+        requerido: number;
+      }[] = [];
+      for (const c of consumos) {
+        const stock = stockPorComponenteId.get(c.componenteId);
+        const disponible = stock?.stockActual ?? 0;
+        if (disponible < c.cantidadConsumidaEntera) {
+          sinStock.push({
+            nombre: c.nombreComponente,
+            disponible,
+            requerido: c.cantidadConsumidaEntera,
+          });
+        }
+      }
+      if (sinStock.length > 0) {
+        throw new BadRequestException({
+          code: 'FABRICACION_STOCK_INSUFICIENTE',
+          message: `Stock insuficiente para fabricar: ${sinStock
+            .map(
+              (s) => `${s.nombre} (necesita ${s.requerido}, hay ${s.disponible})`,
+            )
+            .join('; ')}`,
+          faltantes: sinStock,
+        });
+      }
+
+      // Descontar cada componente + crear movimiento PRODUCCION_SALIDA
+      const movimientosSalida: {
+        componenteId: string;
+        nombre: string;
+        cantidadConsumida: number;
+        stockResultante: number;
+      }[] = [];
+      for (const c of consumos) {
+        const stock = stockPorComponenteId.get(c.componenteId)!;
+        const stockAnterior = stock.stockActual;
+        const stockNuevo = stockAnterior - c.cantidadConsumidaEntera;
+        await tx.productoStock.update({
+          where: { id: stock.id },
+          data: { stockActual: stockNuevo },
+        });
+        await tx.movimientoStock.create({
+          data: {
+            sedeId: dto.sedeId,
+            empresaId,
+            productoStockId: stock.id,
+            tipo: 'PRODUCCION_SALIDA',
+            tipoDocumento: 'PRODUCCION',
+            numeroDocumento,
+            cantidadAnterior: stockAnterior,
+            cantidad: -c.cantidadConsumidaEntera,
+            cantidadNueva: stockNuevo,
+            motivo: motivoSalida,
+            observaciones: dto.observaciones,
+            usuarioId,
+          },
+        });
+        movimientosSalida.push({
+          componenteId: c.componenteId,
+          nombre: c.nombreComponente,
+          cantidadConsumida: c.cantidadConsumidaEntera,
+          stockResultante: stockNuevo,
+        });
+      }
+
+      // Sumar al producto final (crear stock si no existe en esta sede)
+      let stockFinal = await tx.productoStock.findUnique({
+        where: {
+          sedeId_productoId_varianteId: {
+            sedeId: dto.sedeId,
+            productoId,
+            varianteId: null,
+          },
+        },
+        select: { id: true, stockActual: true },
+      });
+      const stockFinalAnterior = stockFinal?.stockActual ?? 0;
+      const stockFinalNuevo = stockFinalAnterior + dto.cantidad;
+
+      if (stockFinal) {
+        await tx.productoStock.update({
+          where: { id: stockFinal.id },
+          data: { stockActual: stockFinalNuevo },
+        });
+      } else {
+        stockFinal = await tx.productoStock.create({
+          data: {
+            sedeId: dto.sedeId,
+            productoId,
+            empresaId,
+            stockActual: stockFinalNuevo,
+          },
+          select: { id: true, stockActual: true },
+        });
+      }
+
+      await tx.movimientoStock.create({
+        data: {
+          sedeId: dto.sedeId,
+          empresaId,
+          productoStockId: stockFinal.id,
+          tipo: 'PRODUCCION_ENTRADA',
+          tipoDocumento: 'PRODUCCION',
+          numeroDocumento,
+          cantidadAnterior: stockFinalAnterior,
+          cantidad: dto.cantidad,
+          cantidadNueva: stockFinalNuevo,
+          motivo: motivoEntrada,
+          observaciones: dto.observaciones,
+          usuarioId,
+        },
+      });
+
+      return {
+        numeroDocumento,
+        productoId,
+        productoNombre: producto.nombre,
+        sedeId: dto.sedeId,
+        cantidadProducida: dto.cantidad,
+        stockFinalAnterior,
+        stockFinalNuevo,
+        componentesConsumidos: movimientosSalida,
+      };
+    });
+
+    this.logger.log(
+      `Fabricación ${numeroDocumento}: ${producto.nombre} × ${dto.cantidad} en sede ${dto.sedeId} (usuario ${usuarioId})`,
+    );
+
+    try {
+      await this.cacheService.invalidateProductosLists(empresaId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`No se pudo invalidar cache tras fabricar: ${msg}`);
+    }
+
+    return result;
   }
 
   // ─── helpers privados ─────────────────────────────────────────
