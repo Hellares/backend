@@ -184,9 +184,10 @@ export class ResumenFinancieroService {
       where: { empresaId, estado: 'ABIERTA' },
     });
 
-    // Movimientos del día
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
+    // Movimientos del día — usa inicio del día hora Perú (no UTC).
+    // Sin esto el container UTC contaba 19:00-23:59 del día anterior Perú
+    // como "hoy" y arrastraba ventas/movs del cierre del día previo.
+    const hoy = this._startOfTodayPeru();
 
     const movimientosHoy = await this.prisma.movimientoCaja.groupBy({
       by: ['tipo'],
@@ -425,8 +426,24 @@ export class ResumenFinancieroService {
     };
   }
 
+  /// Inicio del día ACTUAL en zona Perú (America/Lima, UTC-5) expresado en
+  /// UTC. El container corre en UTC; sin esto, `new Date()` + `setHours(0)`
+  /// daba 00:00 UTC = 19:00 hora Perú del día anterior, y filtros tipo
+  /// "ingresos de hoy" arrastraban ventas de la tarde-noche del día previo.
+  private _startOfTodayPeru(): Date {
+    const ymd = new Date().toLocaleDateString('en-CA', {
+      timeZone: 'America/Lima',
+    });
+    // Perú = UTC-5 sin DST. 00:00 hora Perú = 05:00 UTC del mismo día.
+    return new Date(`${ymd}T05:00:00.000Z`);
+  }
+
   private _inicioMes(): Date {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
+    const ymd = new Date().toLocaleDateString('en-CA', {
+      timeZone: 'America/Lima',
+    });
+    // ymd = 'YYYY-MM-DD' en Perú → primer día del mes Perú en UTC.
+    const [y, m] = ymd.split('-');
+    return new Date(`${y}-${m}-01T05:00:00.000Z`);
   }
 }
