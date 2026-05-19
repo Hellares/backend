@@ -9,6 +9,7 @@ import {
   ArrayMinSize,
   IsDateString,
   IsEnum,
+  IsBoolean,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -72,6 +73,16 @@ export class CreateCompraDto {
   @IsOptional()
   @IsDateString()
   fechaRecepcion?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'true (default): los precios unitarios ingresados YA incluyen IGV (lo común en Perú). false: el precio es la base imponible y el IGV se suma encima.',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  precioIncluyeIgv?: boolean;
 
   @ApiPropertyOptional({ description: 'Observaciones' })
   @IsOptional()

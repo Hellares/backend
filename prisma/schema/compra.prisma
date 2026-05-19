@@ -180,7 +180,15 @@ model Compra {
   moneda     String   @default("PEN")
   tipoCambio Decimal? @db.Decimal(10, 4)
 
-  // Montos calculados
+  // Convención de IGV en los precios ingresados. Default true porque
+  // en Perú el proveedor típicamente factura con precios YA incluido
+  // IGV. Si true → calcularDetalle EXTRAE el IGV del precio ingresado.
+  // Si false → el precio ingresado es la base y el IGV se suma encima.
+  precioIncluyeIgv Boolean @default(true)
+
+  // Montos calculados.
+  // SUNAT/contable: subtotal = SIEMPRE base imponible (sin IGV);
+  // impuestos = IGV total; total = lo efectivamente pagado.
   subtotal  Decimal @default(0) @db.Decimal(12, 2)
   descuento Decimal @default(0) @db.Decimal(12, 2)
   impuestos Decimal @default(0) @db.Decimal(12, 2)

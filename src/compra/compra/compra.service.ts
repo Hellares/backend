@@ -50,6 +50,7 @@ export class CompraService {
       empresaId,
       dto.detalles,
     );
+    const precioIncluyeIgv = dto.precioIncluyeIgv ?? true;
 
     return this.prisma.$transaction(async (tx) => {
       const proveedor = await tx.proveedor.findFirst({
@@ -63,7 +64,7 @@ export class CompraService {
       const codigo = await this.configuracionCodigos.generarCodigoCompra(empresaId, tx);
 
       const detallesCalculados = dto.detalles.map((d, index) =>
-        this.calcularDetalle(d, index, factoresMap),
+        this.calcularDetalle(d, index, factoresMap, precioIncluyeIgv),
       );
 
       const subtotal = detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0);
@@ -89,6 +90,7 @@ export class CompraService {
             : null,
           moneda: dto.moneda ?? 'PEN',
           tipoCambio: dto.tipoCambio,
+          precioIncluyeIgv,
           subtotal,
           descuento: totalDescuento,
           impuestos: totalImpuestos,
@@ -400,7 +402,15 @@ export class CompraService {
         const costoAnterior = stockLocked.precioCosto
           ? parseFloat(stockLocked.precioCosto)
           : 0;
-        const precioCompra = Number(detalle.precioUnitario);
+        // Costo efectivo por unidad CON IGV (= total / cantidad).
+        // Consistente con la convención de retail (margen real contra
+        // precio venta que también es con IGV). Independiente de si
+        // la compra fue cargada con precioIncluyeIgv true o false:
+        // total siempre incluye IGV.
+        const precioCompra =
+          detalle.cantidad > 0
+            ? Number(detalle.total) / detalle.cantidad
+            : Number(detalle.precioUnitario);
 
         // b. Calcular costo promedio ponderado
         let nuevoCosto: number;
@@ -1181,6 +1191,11 @@ export class CompraService {
     const factoresMap = dto.detalles
       ? await this._resolverFactoresCompra(empresaId, dto.detalles)
       : new Map();
+    // Si el dto trae el flag, usarlo; sino conservar el de la compra
+    // existente (no asumir true que podría cambiar la convención
+    // contable de una compra ya creada con flag=false).
+    const precioIncluyeIgv =
+      dto.precioIncluyeIgv ?? compra.precioIncluyeIgv;
 
     return this.prisma.$transaction(async (tx) => {
       let montosData = {};
@@ -1188,7 +1203,7 @@ export class CompraService {
         await tx.compraDetalle.deleteMany({ where: { compraId: id } });
 
         const detallesCalculados = dto.detalles.map((d, index) =>
-          this.calcularDetalle(d, index, factoresMap),
+          this.calcularDetalle(d, index, factoresMap, precioIncluyeIgv),
         );
 
         await tx.compraDetalle.createMany({
@@ -1231,6 +1246,7 @@ export class CompraService {
           diasCredito: dto.diasCredito ?? compra.diasCredito,
           moneda: dto.moneda ?? compra.moneda,
           tipoCambio: dto.tipoCambio ?? compra.tipoCambio,
+          precioIncluyeIgv,
           observaciones: dto.observaciones ?? compra.observaciones,
           actualizadoPor: usuarioId,
         },
@@ -1345,6 +1361,7 @@ export class CompraService {
       string,
       { factor: number; simboloUnidadCompra: string }
     >,
+    precioIncluyeIgv = true,
   ) {
     let cantidad = dto.cantidad;
     let precioUnitario = dto.precioUnitario;
@@ -1370,14 +1387,30 @@ export class CompraService {
       unidadOriginalSimbolo = info.simboloUnidadCompra;
       // Cantidad en unidad atómica (Int). Round defensivo por float.
       cantidad = Math.round(dto.cantidad * info.factor);
-      // Precio por unidad atómica (Decimal 12,2 → 2 decimales).
-      precioUnitario = +(dto.precioUnitario / info.factor).toFixed(2);
+      // Precio por unidad atómica (Decimal 14,4 → 4 decimales).
+      precioUnitario = +(dto.precioUnitario / info.factor).toFixed(4);
     }
 
-    const subtotalBruto = cantidad * precioUnitario;
-    const subtotal = subtotalBruto - descuento;
-    const igv = subtotal * (porcentajeIGV / 100);
-    const total = subtotal + igv;
+    // Cálculo de IGV según convención de la compra.
+    // - precioIncluyeIgv=true: el precio ingresado YA tiene IGV.
+    //   subtotal (base) = bruto / (1 + igv%/100); igv = bruto - subtotal;
+    //   total = bruto (lo que el user esperaba pagar).
+    // - precioIncluyeIgv=false: precio es la base; igv encima; total
+    //   = subtotal + igv.
+    const subtotalBruto = cantidad * precioUnitario - descuento;
+    let subtotal: number;
+    let igv: number;
+    let total: number;
+    if (precioIncluyeIgv) {
+      const factor = 1 + porcentajeIGV / 100;
+      subtotal = subtotalBruto / factor;
+      igv = subtotalBruto - subtotal;
+      total = subtotalBruto;
+    } else {
+      subtotal = subtotalBruto;
+      igv = subtotal * (porcentajeIGV / 100);
+      total = subtotal + igv;
+    }
 
     return {
       productoId: dto.productoId || null,
