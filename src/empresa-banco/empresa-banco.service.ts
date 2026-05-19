@@ -127,6 +127,7 @@ export class EmpresaBancoService {
     const movimientos = await this.prisma.movimientoCaja.findMany({
       where: {
         empresaId,
+        anulado: false,
         metodoPago: 'TRANSFERENCIA',
         fechaMovimiento: { gte: desde, lte: hasta },
       },

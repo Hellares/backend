@@ -146,6 +146,20 @@ export class CajaController {
     return this.cajaService.getResumen(empresaId, cajaId);
   }
 
+  @Get(':id/auditoria')
+  @RequiresPermission(Permission.VIEW_CAJA)
+  @ApiOperation({
+    summary:
+      'Auditoría completa de una caja (apertura → cierre): caja + cierre + arqueos + TODOS los movimientos (incluye anulados y contrapartidas).',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getAuditoria(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') cajaId: string,
+  ) {
+    return this.cajaService.getAuditoria(empresaId, cajaId);
+  }
+
   @Post(':id/arqueo')
   @RequiresPermission(Permission.CERRAR_CAJA)
   @ApiOperation({

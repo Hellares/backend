@@ -164,6 +164,7 @@ export class LibroContableService {
     const movimientos = await this.prisma.movimientoCaja.findMany({
       where: {
         empresaId,
+        anulado: false,
         fechaMovimiento: { gte: desde, lte: hasta },
         // Excluir VENTA y COMPRA para evitar doble conteo con _getVentas/_getCompras
         categoria: { notIn: ['VENTA', 'COMPRA'] },

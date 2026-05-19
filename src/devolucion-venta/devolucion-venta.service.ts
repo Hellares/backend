@@ -730,32 +730,42 @@ export class DevolucionVentaService {
           });
         }
 
-        // 3. Caja: 1 EGRESO por cada PagoVenta no-CREDITO, en la caja del procesador.
-        // Si no hay caja abierta y es admin → se omite y queda flag pendiente.
-        if (cajaAbierta) {
-          for (const pago of venta.pagos) {
-            if (pago.metodoPago === 'CREDITO') continue;
-            try {
-              await this.cajaService.registrarMovimientoSiHayCaja(
-                empresaId,
-                sedeIdDevolucion,
-                userId,
-                {
-                  tipo: 'EGRESO' as any,
-                  categoria: 'DEVOLUCION' as any,
-                  metodoPago: pago.metodoPago as any,
-                  monto: Number(pago.monto),
-                  descripcion: `Reversión venta ${venta.codigo} (${venta.comprobante!.codigoGenerado} anulado)`,
-                  devolucionId: dev.id,
-                },
-                tx,
-              );
-            } catch (e: any) {
-              this.logger.warn(
-                `Reversión ${dev.codigo}: error registrando egreso caja (${pago.metodoPago}): ${e?.message ?? e}`,
-              );
-            }
-          }
+        // 3. Reverso de caja: el helper busca cada MovimientoCaja(INGRESO)
+        // original de esta venta y crea su contrapartida EN LA MISMA caja si
+        // sigue abierta, o ajuste en la caja actual del que procesa si está
+        // cerrada. Esto evita el bug histórico donde el EGRESO espejo caía en
+        // la caja del admin que procesaba (cuando el cajero original ya cerró)
+        // y el INGRESO de la caja original quedaba huérfano.
+        //
+        // Si no hay caja del que procesa Y no hay movimientos originales en
+        // cajas abiertas, el helper deja `sinCompensar>0` y se loggea warning.
+        // El flag `pendienteRegistroCaja=true` ya marcado en la Devolución
+        // sirve como recordatorio para que tesorería ajuste.
+        const fallbackPagos = (venta.pagos ?? [])
+          .filter((p) => p.metodoPago !== 'CREDITO')
+          .map((p) => ({
+            metodoPago: p.metodoPago as any,
+            monto: Number(p.monto),
+          }));
+
+        try {
+          const r = await this.cajaService.reversarMovimientosDeOrigen(
+            empresaId,
+            { ventaId: venta.id },
+            userId,
+            `Reversión total ${dev.codigo} — venta ${venta.codigo}`,
+            fallbackPagos.length > 0
+              ? { sedeId: sedeIdDevolucion, pagos: fallbackPagos }
+              : null,
+            tx,
+          );
+          this.logger.log(
+            `Reverso caja reversión ${dev.codigo}: ${r.reversadosEnCajaOriginal} en caja origen, ${r.ajustesEnCajaActual} ajustes, ${r.sinCompensar} sin compensar`,
+          );
+        } catch (e: any) {
+          this.logger.warn(
+            `Reversión ${dev.codigo}: error reversando caja: ${e?.message ?? e}`,
+          );
         }
 
         // 4. Cuotas pendientes → ANULADA (si era venta a crédito).

@@ -2662,44 +2662,44 @@ export class VentaService {
         include: this.getInclude(),
       });
 
-      // Registrar EGRESOS espejo en caja: uno por cada PagoVenta cobrado.
-      // Multi-medio: la devolución reversa cada método con su monto exacto.
+      // Reverso de caja: el helper busca cada MovimientoCaja(INGRESO) original
+      // de esta venta y crea su contrapartida EN LA MISMA caja si sigue abierta
+      // (o, si está cerrada, marca original anulado + ajuste en caja actual de
+      // quien anula). Esto evita el bug clásico de anular venta del cajero X
+      // desde una caja del admin Y y que el INGRESO quede huérfano en X.
+      //
+      // Fallback: si la venta fue cobrada sin caja activa (no hay
+      // MovimientoCaja), usamos los PagoVenta no-CREDITO como compensación
+      // contra la caja del que anula.
       const pagosACobrar = (venta.pagos ?? []).filter(
         (p) => p.metodoPago !== 'CREDITO',
       );
-      const montoRecibido = Number(venta.montoRecibido ?? 0);
-
-      const reversos = pagosACobrar.length > 0
+      const fallbackPagos = pagosACobrar.length > 0
         ? pagosACobrar.map((p) => ({
-            metodoPago: p.metodoPago as string,
+            metodoPago: p.metodoPago as any,
             monto: Number(p.monto),
           }))
-        : (montoRecibido > 0
+        : (Number(venta.montoRecibido ?? 0) > 0
             ? [{
-                metodoPago: (venta.metodoPago ?? 'EFECTIVO') as string,
-                monto: montoRecibido,
+                metodoPago: (venta.metodoPago ?? 'EFECTIVO') as any,
+                monto: Number(venta.montoRecibido),
               }]
             : []);
 
-      for (const r of reversos) {
-        try {
-          await this.cajaService.registrarMovimientoSiHayCaja(
-            empresaId,
-            venta.sedeId,
-            usuarioId,
-            {
-              tipo: 'EGRESO',
-              categoria: 'DEVOLUCION',
-              metodoPago: r.metodoPago as any,
-              monto: r.monto,
-              descripcion: `Anulación venta ${venta.codigo}`,
-              ventaId: venta.id,
-            },
-            tx,
-          );
-        } catch (e: any) {
-          this.logger.warn(`Error registrando egreso caja (${r.metodoPago}) por anulación ${venta.codigo}: ${e?.message ?? e}`);
-        }
+      try {
+        const r = await this.cajaService.reversarMovimientosDeOrigen(
+          empresaId,
+          { ventaId: venta.id },
+          usuarioId,
+          dto?.motivo ?? `Anulación ${venta.codigo}`,
+          fallbackPagos.length > 0 ? { sedeId: venta.sedeId, pagos: fallbackPagos } : null,
+          tx,
+        );
+        this.logger.log(
+          `Reverso caja venta ${venta.codigo}: ${r.reversadosEnCajaOriginal} en caja origen, ${r.ajustesEnCajaActual} ajustes, ${r.sinCompensar} sin compensar`,
+        );
+      } catch (e: any) {
+        this.logger.warn(`Error reversando caja para anulación ${venta.codigo}: ${e?.message ?? e}`);
       }
 
       this.logger.log(`Venta anulada: ${venta.codigo}`);

@@ -20,6 +20,35 @@ import { CerrarCajaDto } from './dto/cerrar-caja.dto';
 import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
 import { CrearArqueoDto } from './dto/crear-arqueo.dto';
 
+/**
+ * Mapeo categoria → tipo natural. Una categoría representa un evento de negocio
+ * con polaridad inherente: COMPRA siempre es egreso, VENTA siempre es ingreso.
+ * Si llega un movimiento manual con la polaridad inversa, lo rechazamos —
+ * casi siempre es un bug de UI (clasificación equivocada en el cliente).
+ *
+ * Categorías omitidas del map (sin polaridad fija) se aceptan con cualquier tipo.
+ */
+const CATEGORIA_ES_INGRESO: Partial<Record<CategoriaMovimientoCaja, boolean>> = {
+  // Ingresos puros
+  [CategoriaMovimientoCaja.VENTA]: true,
+  [CategoriaMovimientoCaja.PEDIDO_MARKETPLACE]: true,
+  [CategoriaMovimientoCaja.ADELANTO_SERVICIO]: true,
+  [CategoriaMovimientoCaja.OTRO_INGRESO]: true,
+  // Egresos puros
+  [CategoriaMovimientoCaja.COMPRA]: false,
+  [CategoriaMovimientoCaja.DEVOLUCION]: false,
+  [CategoriaMovimientoCaja.PAGO_PROVEEDOR]: false,
+  [CategoriaMovimientoCaja.GASTO_OPERATIVO]: false,
+  [CategoriaMovimientoCaja.OTRO_EGRESO]: false,
+  [CategoriaMovimientoCaja.REPOSICION_CAJA_CHICA]: false,
+  [CategoriaMovimientoCaja.COMISION_AGENTE]: false,
+  [CategoriaMovimientoCaja.PAGO_PLANILLA]: false,
+  [CategoriaMovimientoCaja.ADELANTO_EMPLEADO]: false,
+  [CategoriaMovimientoCaja.BONIFICACION_EMPLEADO]: false,
+  // DEPOSITO_AGENTE / RETIRO_AGENTE: pueden ser ambos según la dirección del
+  // efectivo respecto al banco — no se valida polaridad.
+};
+
 @Injectable()
 export class CajaService {
   private readonly logger = new Logger(CajaService.name);
@@ -28,6 +57,34 @@ export class CajaService {
     private readonly prisma: PrismaService,
     private readonly notificacionService: NotificacionService,
   ) {}
+
+  /**
+   * Valida coherencia entre `tipo` y `categoria`. Lanza BadRequest si la
+   * polaridad de la categoría es opuesta al tipo. Ver `CATEGORIA_ES_INGRESO`
+   * para la tabla de polaridades.
+   *
+   * Este guard nace de un bug real (2026-05-19): el cliente Flutter clasificaba
+   * COMPRA/DEVOLUCION como categorías de INGRESO, y los cajeros las elegían
+   * para registrar egresos. Resultado: tipo=INGRESO + categoria=COMPRA →
+   * el monto SUMABA al saldo en lugar de RESTAR. El cliente arregló su lado
+   * pero acá dejamos la red defensiva.
+   */
+  private _validarCoherenciaTipoCategoria(
+    tipo: TipoMovimientoCaja,
+    categoria: CategoriaMovimientoCaja,
+  ): void {
+    const esIngreso = CATEGORIA_ES_INGRESO[categoria];
+    if (esIngreso === undefined) return; // categoría sin polaridad fija
+    const esIngresoTipo = tipo === TipoMovimientoCaja.INGRESO;
+    if (esIngreso !== esIngresoTipo) {
+      const polaridadCat = esIngreso ? 'INGRESO' : 'EGRESO';
+      throw new BadRequestException(
+        `Categoría ${categoria} es de polaridad ${polaridadCat}, ` +
+          `no puede registrarse como tipo=${tipo}. ` +
+          `Revisa la selección de tipo/categoría en el formulario.`,
+      );
+    }
+  }
 
   /**
    * Abrir una nueva caja.
@@ -177,6 +234,8 @@ export class CajaService {
     if (!caja) {
       throw new NotFoundException('Caja no encontrada o no está abierta');
     }
+
+    this._validarCoherenciaTipoCategoria(dto.tipo, dto.categoria);
 
     const movimiento = await this.prisma.movimientoCaja.create({
       data: {
@@ -642,6 +701,172 @@ export class CajaService {
   }
 
   /**
+   * Auditoría completa de una caja (abierta o cerrada).
+   *
+   * Devuelve TODO lo necesario para que el cliente arme la pantalla de
+   * "Caja desde Apertura → Cierre":
+   *  - Datos de la caja + sede + cajero + duración
+   *  - Cierre (si CERRADA) o snapshot de saldos en vivo (si ABIERTA)
+   *  - Arqueos intermedios (RUTINARIO/SORPRESIVO/RELEVO) con sus diferencias
+   *  - TODOS los movimientos: incluye anulados y contrapartidas (con flags),
+   *    para que el auditor vea la historia completa sin omisiones.
+   *
+   * Diferencia clave vs `getMovimientos`: aquel oculta contrapartidas para
+   * limpiar la UI del dashboard; esta auditoría las muestra explícitamente
+   * con `esContrapartida=true` para trazabilidad de anulaciones.
+   */
+  async getAuditoria(empresaId: string, cajaId: string) {
+    const caja = await this.prisma.caja.findFirst({
+      where: { id: cajaId, empresaId },
+      include: {
+        sede: { select: { id: true, nombre: true, codigo: true } },
+        usuario: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        cerradoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        cierre: true,
+      },
+    });
+
+    if (!caja) {
+      throw new NotFoundException('Caja no encontrada');
+    }
+
+    // Movimientos completos (incluye anulados y contrapartidas con flags).
+    const movimientosRaw = await this.prisma.movimientoCaja.findMany({
+      where: { cajaId },
+      orderBy: { fechaMovimiento: 'asc' },
+      include: {
+        venta: { select: { id: true, codigo: true } },
+        pedidoMarketplace: { select: { id: true, codigo: true } },
+        compra: { select: { id: true, codigo: true } },
+        devolucion: { select: { id: true, codigo: true } },
+        categoriaGasto: { select: { id: true, nombre: true, tipo: true, icono: true, color: true } },
+        registradoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        anuladoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+      },
+    });
+
+    const movimientos = movimientosRaw.map((m) => ({
+      ...m,
+      esContrapartida: m.movimientoContrapartidaId !== null,
+    }));
+
+    // Totales en vivo (siempre, abierta o cerrada — útil para comparar contra
+    // el cierre snapshot si está cerrada, o para mostrar saldo actual si abierta).
+    const totales = await this.prisma.movimientoCaja.groupBy({
+      by: ['metodoPago', 'tipo'],
+      where: { cajaId, anulado: false },
+      _sum: { monto: true },
+    });
+
+    let totalIngresos = 0;
+    let totalEgresos = 0;
+    let ingresosEfectivo = 0;
+    let egresosEfectivo = 0;
+    for (const row of totales) {
+      const monto = Number(row._sum.monto ?? 0);
+      if (row.tipo === TipoMovimientoCaja.INGRESO) {
+        totalIngresos += monto;
+        if (row.metodoPago === MetodoPagoVenta.EFECTIVO) ingresosEfectivo += monto;
+      } else {
+        totalEgresos += monto;
+        if (row.metodoPago === MetodoPagoVenta.EFECTIVO) egresosEfectivo += monto;
+      }
+    }
+
+    const montoApertura = Number(caja.montoApertura);
+    const saldoActual = montoApertura + totalIngresos - totalEgresos;
+    const saldoEfectivo = montoApertura + ingresosEfectivo - egresosEfectivo;
+
+    // Detalle por método: incluye apertura imputada a EFECTIVO. Excluye MIXTO.
+    const detallesPorMetodo = Object.values(MetodoPagoVenta)
+      .filter((m) => m !== MetodoPagoVenta.MIXTO)
+      .map((metodo) => {
+        const ingresos = Number(
+          totales.find(
+            (r) => r.metodoPago === metodo && r.tipo === TipoMovimientoCaja.INGRESO,
+          )?._sum.monto ?? 0,
+        );
+        const egresos = Number(
+          totales.find(
+            (r) => r.metodoPago === metodo && r.tipo === TipoMovimientoCaja.EGRESO,
+          )?._sum.monto ?? 0,
+        );
+        const apertura = metodo === MetodoPagoVenta.EFECTIVO ? montoApertura : 0;
+        return {
+          metodoPago: metodo,
+          apertura,
+          ingresos,
+          egresos,
+          saldo: apertura + ingresos - egresos,
+        };
+      });
+
+    // Arqueos intermedios (no afectan saldo, son snapshots).
+    const arqueos = await this.prisma.arqueoCaja.findMany({
+      where: { cajaId },
+      orderBy: { fechaArqueo: 'asc' },
+      include: {
+        realizadoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        autorizadoPor: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        turnoEntregadoA: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+      },
+    });
+
+    return {
+      caja,
+      // Snapshot en vivo de la caja (refleja BD actual con filtro anulado).
+      // Si caja está CERRADA, comparar contra caja.cierre para detectar drift
+      // (ej: si se anuló un movimiento DESPUÉS del cierre).
+      resumenActual: {
+        montoApertura,
+        totalIngresos,
+        totalEgresos,
+        saldoActual,
+        saldoEfectivo,
+        detallesPorMetodo,
+      },
+      cierre: caja.cierre, // null si caja está abierta
+      arqueos,
+      movimientos,
+    };
+  }
+
+  /**
    * Historial de cajas cerradas
    */
   async getHistorial(
@@ -768,9 +993,14 @@ export class CajaService {
 
         const montoApertura = Number(caja.montoApertura);
 
-        // Último movimiento
+        // Último movimiento (excluye anulados y contrapartidas para no
+        // mostrar líneas "fantasma" tras una anulación reciente).
         const ultimoMovimiento = await this.prisma.movimientoCaja.findFirst({
-          where: { cajaId: caja.id },
+          where: {
+            cajaId: caja.id,
+            anulado: false,
+            contrapartidaDe: { is: null },
+          },
           orderBy: { fechaMovimiento: 'desc' },
           select: {
             tipo: true,
@@ -812,6 +1042,186 @@ export class CajaService {
       },
       cajas: cajasConTotales,
     };
+  }
+
+  /**
+   * Reversar TODOS los MovimientoCaja originados por una venta/devolución/compra.
+   *
+   * Política (importante para que la caja cuadre):
+   *
+   *  - Para cada INGRESO original `anulado=false` vinculado al `ventaId`/`devolucionId`/`compraId`:
+   *    - Si la caja origen está ABIERTA → se crea contrapartida EGRESO con
+   *      `anulado=true` en LA MISMA caja, se marca el original `anulado=true`
+   *      y se linkea vía `movimientoContrapartidaId`. Ambos quedan excluidos
+   *      del saldo. Sin desfase entre cajas.
+   *    - Si la caja origen está CERRADA → el cierre histórico es inmutable.
+   *      Se marca el original `anulado=true` para auditoría (no afecta el
+   *      cierre snapshot guardado). Si quien anula tiene caja abierta, se
+   *      crea EGRESO ajuste ahí (NO anulado, sí cuenta) con descripción que
+   *      indica el origen. Si NO tiene caja, se loggea warning y queda pendiente.
+   *
+   *  - Caso edge: la venta fue cobrada cuando no había caja activa (no hay
+   *    MovimientoCaja para esa venta). Si el caller pasa `fallback`, se crea
+   *    el ajuste en la caja del que anula con esos datos. Sin `fallback`, no
+   *    se hace nada.
+   *
+   * Devuelve contadores para que el caller pueda loggear/notificar.
+   *
+   * IMPORTANTE: el caller pasa un `tx` activo; el helper opera enteramente
+   * dentro de esa transacción.
+   */
+  async reversarMovimientosDeOrigen(
+    empresaId: string,
+    criterio: { ventaId?: string; devolucionId?: string; compraId?: string },
+    usuarioIdQuienAnula: string,
+    motivo: string,
+    fallback: {
+      sedeId: string;
+      pagos: Array<{ metodoPago: MetodoPagoVenta; monto: number }>;
+    } | null,
+    tx: Prisma.TransactionClient,
+  ): Promise<{
+    reversadosEnCajaOriginal: number;
+    ajustesEnCajaActual: number;
+    sinCompensar: number;
+  }> {
+    const where: Prisma.MovimientoCajaWhereInput = {
+      empresaId,
+      anulado: false,
+      tipo: TipoMovimientoCaja.INGRESO,
+    };
+    if (criterio.ventaId) where.ventaId = criterio.ventaId;
+    if (criterio.devolucionId) where.devolucionId = criterio.devolucionId;
+    if (criterio.compraId) where.compraId = criterio.compraId;
+
+    const originales = await tx.movimientoCaja.findMany({
+      where,
+      include: {
+        caja: {
+          select: { id: true, estado: true, sedeId: true, usuarioId: true, codigo: true },
+        },
+      },
+    });
+
+    const cajaActualDelQueAnula = await tx.caja.findFirst({
+      where: { empresaId, usuarioId: usuarioIdQuienAnula, estado: EstadoCaja.ABIERTA },
+      select: { id: true, sedeId: true, codigo: true },
+    });
+
+    let reversadosEnCajaOriginal = 0;
+    let ajustesEnCajaActual = 0;
+    let sinCompensar = 0;
+
+    for (const orig of originales) {
+      const descrBase = `[ANULACION ${motivo}] Reverso de ${orig.descripcion ?? orig.categoria}`;
+
+      if (orig.caja.estado === EstadoCaja.ABIERTA) {
+        // Caja origen sigue abierta — reverso limpio en la misma caja.
+        const contrapartida = await tx.movimientoCaja.create({
+          data: {
+            cajaId: orig.caja.id,
+            empresaId,
+            tipo: TipoMovimientoCaja.EGRESO,
+            categoria: CategoriaMovimientoCaja.DEVOLUCION,
+            metodoPago: orig.metodoPago,
+            monto: orig.monto,
+            descripcion: descrBase,
+            ventaId: orig.ventaId,
+            devolucionId: orig.devolucionId,
+            compraId: orig.compraId,
+            esManual: false,
+            registradoPorId: usuarioIdQuienAnula,
+            anulado: true,
+          },
+        });
+
+        await tx.movimientoCaja.update({
+          where: { id: orig.id },
+          data: {
+            anulado: true,
+            motivoAnulacion: motivo,
+            anuladoPorId: usuarioIdQuienAnula,
+            fechaAnulacion: new Date(),
+            movimientoContrapartidaId: contrapartida.id,
+          },
+        });
+
+        reversadosEnCajaOriginal++;
+      } else {
+        // Caja origen ya cerrada — cierre snapshot inmutable.
+        // Marcamos original anulado SOLO para auditoría en el listado.
+        await tx.movimientoCaja.update({
+          where: { id: orig.id },
+          data: {
+            anulado: true,
+            motivoAnulacion: `${motivo} | Caja origen ${orig.caja.codigo} ya cerrada; ajuste compensatorio aparte`,
+            anuladoPorId: usuarioIdQuienAnula,
+            fechaAnulacion: new Date(),
+          },
+        });
+
+        if (cajaActualDelQueAnula) {
+          await tx.movimientoCaja.create({
+            data: {
+              cajaId: cajaActualDelQueAnula.id,
+              empresaId,
+              tipo: TipoMovimientoCaja.EGRESO,
+              categoria: CategoriaMovimientoCaja.DEVOLUCION,
+              metodoPago: orig.metodoPago,
+              monto: orig.monto,
+              descripcion: `${descrBase} | Caja origen ${orig.caja.codigo} cerrada — ajuste contable aquí`,
+              ventaId: orig.ventaId,
+              devolucionId: orig.devolucionId,
+              compraId: orig.compraId,
+              esManual: false,
+              registradoPorId: usuarioIdQuienAnula,
+              anulado: false,
+            },
+          });
+          ajustesEnCajaActual++;
+        } else {
+          sinCompensar++;
+          this.logger.warn(
+            `reversarMovimientosDeOrigen: original ${orig.id} (caja ${orig.caja.codigo} CERRADA) marcado anulado pero NO compensado — quien anula (${usuarioIdQuienAnula}) no tiene caja abierta. Tesorería debe ajustar.`,
+          );
+        }
+      }
+    }
+
+    // Sin movimientos originales pero sí hubo cobranza física → usar fallback.
+    // Casos: venta cobrada cuando no había caja activa, o cobranza vía
+    // sistema externo. El caller decide si pasarlo.
+    if (originales.length === 0 && fallback && fallback.pagos.length > 0) {
+      if (cajaActualDelQueAnula) {
+        for (const p of fallback.pagos) {
+          await tx.movimientoCaja.create({
+            data: {
+              cajaId: cajaActualDelQueAnula.id,
+              empresaId,
+              tipo: TipoMovimientoCaja.EGRESO,
+              categoria: CategoriaMovimientoCaja.DEVOLUCION,
+              metodoPago: p.metodoPago,
+              monto: p.monto,
+              descripcion: `[ANULACION ${motivo}] Sin movimiento de caja original; ajuste compensatorio`,
+              ventaId: criterio.ventaId,
+              devolucionId: criterio.devolucionId,
+              compraId: criterio.compraId,
+              esManual: false,
+              registradoPorId: usuarioIdQuienAnula,
+              anulado: false,
+            },
+          });
+          ajustesEnCajaActual++;
+        }
+      } else {
+        sinCompensar += fallback.pagos.length;
+        this.logger.warn(
+          `reversarMovimientosDeOrigen: sin movimientos originales, con pagos fallback (${fallback.pagos.length}), pero quien anula (${usuarioIdQuienAnula}) no tiene caja abierta. Nada compensado.`,
+        );
+      }
+    }
+
+    return { reversadosEnCajaOriginal, ajustesEnCajaActual, sinCompensar };
   }
 
   /**

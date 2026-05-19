@@ -122,6 +122,7 @@ export class MetaFinancieraService {
     const movimientos = await this.prisma.movimientoCaja.findMany({
       where: {
         empresaId,
+        anulado: false,
         tipo: 'INGRESO',
         fechaMovimiento: { gte: desde, lte: hasta },
       },
@@ -145,6 +146,7 @@ export class MetaFinancieraService {
     const movimientos = await this.prisma.movimientoCaja.findMany({
       where: {
         empresaId,
+        anulado: false,
         tipo: 'EGRESO',
         fechaMovimiento: { gte: desde, lte: hasta },
       },

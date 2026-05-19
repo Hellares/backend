@@ -190,7 +190,7 @@ export class ResumenFinancieroService {
 
     const movimientosHoy = await this.prisma.movimientoCaja.groupBy({
       by: ['tipo'],
-      where: { empresaId, fechaMovimiento: { gte: hoy } },
+      where: { empresaId, anulado: false, fechaMovimiento: { gte: hoy } },
       _sum: { monto: true },
       _count: true,
     });
@@ -240,6 +240,7 @@ export class ResumenFinancieroService {
       this.prisma.movimientoCaja.findMany({
         where: {
           empresaId,
+          anulado: false,
           fechaMovimiento: { gte: desde, lte: hasta },
         },
         select: { tipo: true, monto: true, fechaMovimiento: true },
@@ -331,6 +332,7 @@ export class ResumenFinancieroService {
     const movimientos = await this.prisma.movimientoCaja.findMany({
       where: {
         empresaId,
+        anulado: false,
         fechaMovimiento: { gte: desde, lte: hasta },
         // Solo categorías que NO se cuentan en otras secciones del resumen
         categoria: { in: ['OTRO_INGRESO', 'GASTO_OPERATIVO', 'ADELANTO_SERVICIO', 'OTRO_EGRESO', 'DEVOLUCION'] },
