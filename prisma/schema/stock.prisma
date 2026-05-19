@@ -36,9 +36,12 @@ model ProductoStock {
 
   // Precios por sede (opcionales - pueden configurarse después de crear el stock)
   // Esto permite que cada sede maneje sus propios precios de forma independiente
-  precio       Decimal? @db.Decimal(10, 2) // Precio de venta en esta sede
-  precioCosto  Decimal? @db.Decimal(10, 2) // Precio de costo en esta sede (para cálculo de márgenes)
-  precioOferta Decimal? @db.Decimal(10, 2) // Precio de oferta específico de la sede
+  // 4 decimales en precios para soportar productos con unidad atómica
+  // chica (ej: arroz por gramo a S/0.003/gr). Totales y subtotales
+  // siguen redondeando a 2 decimales en cálculos.
+  precio       Decimal? @db.Decimal(14, 4) // Precio de venta en esta sede
+  precioCosto  Decimal? @db.Decimal(14, 4) // Precio de costo en esta sede (para cálculo de márgenes)
+  precioOferta Decimal? @db.Decimal(14, 4) // Precio de oferta específico de la sede
 
   // Control de ofertas por sede
   enOferta          Boolean   @default(false) // Si está en oferta en esta sede
@@ -48,7 +51,7 @@ model ProductoStock {
   // Liquidación (remate por debajo de costo, autorizado por gerencia)
   // Diferente a oferta: tiene motivo justificado y acepta margen negativo.
   enLiquidacion              Boolean            @default(false)
-  precioLiquidacion          Decimal?           @db.Decimal(10, 2)
+  precioLiquidacion          Decimal?           @db.Decimal(14, 4)
   motivoLiquidacion          MotivoLiquidacion?
   observacionesLiquidacion   String?            @db.Text
   fechaInicioLiquidacion     DateTime?

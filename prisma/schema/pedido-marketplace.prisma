@@ -117,7 +117,7 @@ model PedidoMarketplaceDetalle {
 
   descripcion    String
   cantidad       Int
-  precioUnitario Decimal @db.Decimal(10, 2)
+  precioUnitario Decimal @db.Decimal(14, 4)
   subtotal       Decimal @db.Decimal(10, 2)
   imagenUrl      String?
 

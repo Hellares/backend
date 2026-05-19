@@ -110,7 +110,7 @@ model OrdenCompraDetalle {
   // (PAQUETE/KG/...), el service convierte antes de persistir.
   descripcion    String
   cantidad       Int
-  precioUnitario Decimal @db.Decimal(12, 2)
+  precioUnitario Decimal @db.Decimal(14, 4)
   descuento      Decimal @default(0) @db.Decimal(12, 2)
 
   // ─── Snapshot Unidad de Compra ────────────────────────────────
@@ -245,7 +245,7 @@ model CompraDetalle {
   // UI muestre la doble vista.
   descripcion    String
   cantidad       Int
-  precioUnitario Decimal @db.Decimal(12, 2)
+  precioUnitario Decimal @db.Decimal(14, 4)
   descuento      Decimal @default(0) @db.Decimal(12, 2)
 
   // ─── Snapshot Unidad de Compra ────────────────────────────────
@@ -303,7 +303,7 @@ model Lote {
   numeroLote String? // Número de lote del fabricante
 
   // Costo unitario de ESTE lote
-  precioCosto Decimal @db.Decimal(12, 2)
+  precioCosto Decimal @db.Decimal(14, 4)
   moneda      String  @default("PEN")
 
   // Cantidades

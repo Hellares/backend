@@ -19,7 +19,7 @@ model PrecioNivel {
 
   // Precio o descuento
   tipoPrecio     TipoPrecioNivel // PRECIO_FIJO o PORCENTAJE_DESCUENTO
-  precio         Decimal?        @db.Decimal(10, 2) // Si es PRECIO_FIJO
+  precio         Decimal?        @db.Decimal(14, 4) // Si es PRECIO_FIJO
   porcentajeDesc Decimal?        @db.Decimal(5, 2) // Si es PORCENTAJE_DESCUENTO (0-100)
 
   // Metadata

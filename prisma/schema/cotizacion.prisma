@@ -85,7 +85,7 @@ model CotizacionDetalle {
   // Datos del item (snapshot)
   descripcion    String
   cantidad       Decimal @db.Decimal(10, 2)
-  precioUnitario Decimal @db.Decimal(10, 2)
+  precioUnitario Decimal @db.Decimal(14, 4)
   descuento      Decimal @default(0) @db.Decimal(10, 2)
 
   // Impuesto

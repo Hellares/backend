@@ -205,8 +205,8 @@ model DetalleComprobante {
   descripcion     String
   unidadMedida    String                 @default("NIU") // Código SUNAT directo (para compatibilidad)
   cantidad        Decimal                @db.Decimal(12, 2)
-  valorUnitario   Decimal                @db.Decimal(12, 2)
-  precioUnitario  Decimal                @db.Decimal(12, 2)
+  valorUnitario   Decimal                @db.Decimal(14, 4)
+  precioUnitario  Decimal                @db.Decimal(14, 4)
   tipoAfectacion  String                 @default("10")
   porcentajeIGV   Decimal                @default(18.00) @db.Decimal(5, 2)
   igv             Decimal                @default(0) @db.Decimal(12, 2)

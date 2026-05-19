@@ -175,10 +175,10 @@ model ProductoPrecioHistorial {
   varianteId String?
 
   // Precios (registro del cambio)
-  precioAnterior      Decimal? @db.Decimal(10, 2)
-  precioNuevo         Decimal  @db.Decimal(10, 2)
-  precioCostoAnterior Decimal? @db.Decimal(10, 2)
-  precioCostoNuevo    Decimal? @db.Decimal(10, 2)
+  precioAnterior      Decimal? @db.Decimal(14, 4)
+  precioNuevo         Decimal  @db.Decimal(14, 4)
+  precioCostoAnterior Decimal? @db.Decimal(14, 4)
+  precioCostoNuevo    Decimal? @db.Decimal(14, 4)
 
   // Contexto del cambio
   tipoCambio   TipoCambioPrecio // MANUAL, OFERTA, COSTO, MASIVO, etc.
@@ -211,12 +211,12 @@ model ProductoPrecioHistorialSede {
   sedeId          String
 
   // Precios (registro del cambio)
-  precioAnterior       Decimal? @db.Decimal(10, 2)
-  precioNuevo          Decimal? @db.Decimal(10, 2)
-  precioCostoAnterior  Decimal? @db.Decimal(10, 2)
-  precioCostoNuevo     Decimal? @db.Decimal(10, 2)
-  precioOfertaAnterior Decimal? @db.Decimal(10, 2)
-  precioOfertaNuevo    Decimal? @db.Decimal(10, 2)
+  precioAnterior       Decimal? @db.Decimal(14, 4)
+  precioNuevo          Decimal? @db.Decimal(14, 4)
+  precioCostoAnterior  Decimal? @db.Decimal(14, 4)
+  precioCostoNuevo     Decimal? @db.Decimal(14, 4)
+  precioOfertaAnterior Decimal? @db.Decimal(14, 4)
+  precioOfertaNuevo    Decimal? @db.Decimal(14, 4)
 
   // Contexto del cambio
   tipoCambio   TipoCambioPrecio // MANUAL, OFERTA, COSTO, MASIVO, etc.
@@ -502,7 +502,7 @@ model ProductoCombo {
   // Precio del componente dentro del combo (override opcional)
   // Si es null, se usa el precio regular del producto desde ProductoStock
   // Ejemplo: producto vale 100 en general, pero dentro del combo vale 95
-  precioEnCombo Decimal? @db.Decimal(10, 2)
+  precioEnCombo Decimal? @db.Decimal(14, 4)
 
   // Permitir personalización (para PCs ensamblables)
   esPersonalizable    Boolean @default(false)
