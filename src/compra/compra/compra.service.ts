@@ -115,6 +115,7 @@ export class CompraService {
               cantidadOriginal: d.cantidadOriginal,
               unidadOriginalSimbolo: d.unidadOriginalSimbolo,
               factorAplicado: d.factorAplicado,
+              nuevoPrecioVenta: d.nuevoPrecioVenta,
             })),
           },
         },
@@ -177,6 +178,7 @@ export class CompraService {
         cantidadOriginal: number | null;
         unidadOriginalSimbolo: string | null;
         factorAplicado: number | null;
+        nuevoPrecioVenta: number | null;
       }> = [];
 
       for (const [index, linea] of dto.lineas.entries()) {
@@ -234,6 +236,7 @@ export class CompraService {
           cantidadOriginal,
           unidadOriginalSimbolo: detalleOc.unidadOriginalSimbolo,
           factorAplicado: ocFactor,
+          nuevoPrecioVenta: linea.nuevoPrecioVenta ?? null,
         });
       }
 
@@ -287,6 +290,7 @@ export class CompraService {
               cantidadOriginal: d.cantidadOriginal,
               unidadOriginalSimbolo: d.unidadOriginalSimbolo,
               factorAplicado: d.factorAplicado,
+              nuevoPrecioVenta: d.nuevoPrecioVenta,
             })),
           },
         },
@@ -411,14 +415,67 @@ export class CompraService {
 
         const nuevoStock = stockAnterior + detalle.cantidad;
 
-        // c. Actualizar ProductoStock
+        // Si la línea trae un nuevo precio de venta, lo aplicamos
+        // dentro del mismo update del ProductoStock + registramos
+        // en ProductoPrecioHistorialSede para auditoría.
+        const nuevoPrecioVenta =
+          detalle.nuevoPrecioVenta != null
+            ? Number(detalle.nuevoPrecioVenta)
+            : null;
+        const aplicarNuevoPrecio = nuevoPrecioVenta != null;
+
+        // Cargar precio anterior antes de pisarlo (solo si vamos a
+        // cambiarlo, para no pegar query extra cuando no aplica).
+        let precioVentaAnterior: number | null = null;
+        if (aplicarNuevoPrecio) {
+          const stockConPrecio = await tx.productoStock.findUnique({
+            where: { id: productoStock.id },
+            select: { precio: true },
+          });
+          precioVentaAnterior =
+            stockConPrecio?.precio != null
+              ? Number(stockConPrecio.precio)
+              : null;
+        }
+
+        // c. Actualizar ProductoStock (stock + costo + opcional precio venta)
         await tx.productoStock.update({
           where: { id: productoStock.id },
           data: {
             stockActual: nuevoStock,
             precioCosto: nuevoCosto,
+            ...(aplicarNuevoPrecio
+              ? {
+                  precio: nuevoPrecioVenta,
+                  // Si el producto no tenía precio configurado todavía,
+                  // marcarlo como configurado al setearle uno desde compra.
+                  precioConfigurado: true,
+                }
+              : {}),
           },
         });
+
+        // c.1 Registrar cambio de precio venta en historial (solo si cambió).
+        if (
+          aplicarNuevoPrecio &&
+          nuevoPrecioVenta !== precioVentaAnterior
+        ) {
+          await tx.productoPrecioHistorialSede.create({
+            data: {
+              productoStockId: productoStock.id,
+              sedeId: compra.sedeId,
+              tipoCambio: 'MANUAL',
+              precioAnterior:
+                precioVentaAnterior != null
+                  ? new Prisma.Decimal(precioVentaAnterior)
+                  : null,
+              precioNuevo: new Prisma.Decimal(nuevoPrecioVenta!),
+              razon: `Ajuste en compra ${compra.codigo}`,
+              origenModulo: 'COMPRA',
+              usuarioId,
+            },
+          });
+        }
 
         // d. Crear MovimientoStock
         await tx.movimientoStock.create({
@@ -1152,6 +1209,7 @@ export class CompraService {
             cantidadOriginal: d.cantidadOriginal,
             unidadOriginalSimbolo: d.unidadOriginalSimbolo,
             factorAplicado: d.factorAplicado,
+            nuevoPrecioVenta: d.nuevoPrecioVenta,
           })),
         });
 
@@ -1338,6 +1396,7 @@ export class CompraService {
       cantidadOriginal,
       factorAplicado,
       unidadOriginalSimbolo,
+      nuevoPrecioVenta: dto.nuevoPrecioVenta ?? null,
     };
   }
 

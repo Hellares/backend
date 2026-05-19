@@ -73,4 +73,16 @@ export class CreateCompraDetalleDto {
   @IsBoolean()
   @Type(() => Boolean)
   usaUnidadCompra?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Nuevo precio de venta a aplicar al confirmar la compra. Si está presente, al confirmar se actualiza ProductoStock.precio del producto en la sede de la compra + se registra en historial. Si null/omitido, el precio venta no cambia.',
+    example: 3.50,
+    minimum: 0,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0)
+  nuevoPrecioVenta?: number;
 }

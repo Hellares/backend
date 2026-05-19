@@ -33,6 +33,17 @@ export class LineaRecepcionOcDto {
   @Min(0)
   @Type(() => Number)
   precioUnitario?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Nuevo precio de venta a aplicar al confirmar la compra. Si está presente, al confirmar se actualiza ProductoStock.precio.',
+    example: 3.5,
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0)
+  @Type(() => Number)
+  nuevoPrecioVenta?: number;
 }
 
 export class CreateCompraDesdeOcDto {
