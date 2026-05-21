@@ -400,6 +400,7 @@ export class ProductoStockService {
       tipo?: string;
       fechaDesde?: string;
       fechaHasta?: string;
+      documento?: string;
     },
   ) {
     const limit = filtros?.limit ?? 100;
@@ -419,6 +420,24 @@ export class ProductoStockService {
       if (filtros?.fechaHasta) {
         where.creadoEn.lte = new Date(filtros.fechaHasta);
       }
+    }
+
+    // Filtro por código de documento: busca en numeroDocumento del propio
+    // movimiento y en codigo de los documentos relacionados (venta/compra/
+    // transferencia/devolución). El user puede tipear "VEN-001" o solo "001".
+    const docQuery = filtros?.documento?.trim();
+    if (docQuery) {
+      where.OR = [
+        { numeroDocumento: { contains: docQuery, mode: 'insensitive' } },
+        { venta: { codigo: { contains: docQuery, mode: 'insensitive' } } },
+        { compra: { codigo: { contains: docQuery, mode: 'insensitive' } } },
+        {
+          transferencia: {
+            codigo: { contains: docQuery, mode: 'insensitive' },
+          },
+        },
+        { devolucion: { codigo: { contains: docQuery, mode: 'insensitive' } } },
+      ];
     }
 
     // Pedimos `limit + 1` para detectar si hay más sin requerir un count
@@ -1755,7 +1774,12 @@ export class ProductoStockService {
    */
   async exportKardex(
     productoStockId: string,
-    filtros: { tipo?: string; fechaDesde?: string; fechaHasta?: string },
+    filtros: {
+      tipo?: string;
+      fechaDesde?: string;
+      fechaHasta?: string;
+      documento?: string;
+    },
     res: any,
   ) {
     const data = await this.getHistorialMovimientos(productoStockId, {

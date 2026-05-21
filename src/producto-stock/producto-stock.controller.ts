@@ -275,9 +275,14 @@ export class ProductoStockController {
     @Query('tipo') tipo?: string,
     @Query('fechaDesde') fechaDesde?: string,
     @Query('fechaHasta') fechaHasta?: string,
+    @Query('documento') documento?: string,
     @Res() res?: Response,
   ) {
-    return this.stockService.exportKardex(id, { tipo, fechaDesde, fechaHasta }, res);
+    return this.stockService.exportKardex(
+      id,
+      { tipo, fechaDesde, fechaHasta, documento },
+      res,
+    );
   }
 
   @Get(':id/movimientos')
@@ -291,6 +296,7 @@ export class ProductoStockController {
     @Query('tipo') tipo?: string,
     @Query('fechaDesde') fechaDesde?: string,
     @Query('fechaHasta') fechaHasta?: string,
+    @Query('documento') documento?: string,
   ) {
     return this.stockService.getHistorialMovimientos(id, {
       limit: limit ? parseInt(limit) : undefined,
@@ -298,6 +304,7 @@ export class ProductoStockController {
       tipo,
       fechaDesde,
       fechaHasta,
+      documento,
     });
   }
 
