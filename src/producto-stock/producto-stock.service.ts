@@ -14,6 +14,7 @@ import { QueryHistorialPreciosDto } from './dto/query-historial-precios.dto';
 import { ActivarLiquidacionDto } from './dto/activar-liquidacion.dto';
 import {
   CampoPrecio,
+  ComparacionPrecio,
   FiltroStock,
   ModoVerificacion,
   VerificarPreciosDto,
@@ -2668,31 +2669,49 @@ export class ProductoStockService {
     empresaId: string,
     dto: VerificarPreciosDto,
   ): Prisma.ProductoStockWhereInput {
-    const campo = dto.campo ?? CampoPrecio.COSTO;
-    const modo = dto.modo ?? ModoVerificacion.RANGO;
-
-    const campoMap: Record<CampoPrecio, keyof Prisma.ProductoStockWhereInput> = {
-      [CampoPrecio.PRECIO]: 'precio',
-      [CampoPrecio.COSTO]: 'precioCosto',
-      [CampoPrecio.OFERTA]: 'precioOferta',
-      [CampoPrecio.LIQUIDACION]: 'precioLiquidacion',
-    };
-    const campoKey = campoMap[campo];
-
     const where: Prisma.ProductoStockWhereInput = { empresaId };
     if (dto.sedeId) where.sedeId = dto.sedeId;
 
-    // Filtro por valor del campo seleccionado
-    if (modo === ModoVerificacion.SIN_VALOR) {
-      (where as any)[campoKey] = null;
-    } else if (modo === ModoVerificacion.EXACTO && dto.exacto != null) {
-      (where as any)[campoKey] = new Prisma.Decimal(dto.exacto);
-    } else if (modo === ModoVerificacion.RANGO) {
-      const filtroRango: any = { not: null };
-      if (dto.min != null) filtroRango.gte = new Prisma.Decimal(dto.min);
-      if (dto.max != null) filtroRango.lte = new Prisma.Decimal(dto.max);
-      // Si no se pasa min/max el modo RANGO trae todos los que tienen valor.
-      (where as any)[campoKey] = filtroRango;
+    // Cuando hay filtro de comparación, ignoramos campo/modo/min/max/exacto
+    // y aplicamos solo el guard de NOT NULL que necesita el modo. La
+    // comparación columna-vs-columna se hace post-fetch (Prisma no soporta
+    // comparar dos columnas en el where).
+    if (dto.comparacion) {
+      if (dto.comparacion === ComparacionPrecio.SIN_COSTO) {
+        where.precio = { not: null };
+        where.precioCosto = null;
+      } else {
+        // PERDIDA / SIN_MARGEN / MARGEN_BAJO: ambos necesarios para comparar
+        where.precio = { not: null };
+        where.precioCosto = { not: null };
+      }
+    } else {
+      const campo = dto.campo ?? CampoPrecio.COSTO;
+      const modo = dto.modo ?? ModoVerificacion.RANGO;
+
+      const campoMap: Record<
+        CampoPrecio,
+        keyof Prisma.ProductoStockWhereInput
+      > = {
+        [CampoPrecio.PRECIO]: 'precio',
+        [CampoPrecio.COSTO]: 'precioCosto',
+        [CampoPrecio.OFERTA]: 'precioOferta',
+        [CampoPrecio.LIQUIDACION]: 'precioLiquidacion',
+      };
+      const campoKey = campoMap[campo];
+
+      // Filtro por valor del campo seleccionado
+      if (modo === ModoVerificacion.SIN_VALOR) {
+        (where as any)[campoKey] = null;
+      } else if (modo === ModoVerificacion.EXACTO && dto.exacto != null) {
+        (where as any)[campoKey] = new Prisma.Decimal(dto.exacto);
+      } else if (modo === ModoVerificacion.RANGO) {
+        const filtroRango: any = { not: null };
+        if (dto.min != null) filtroRango.gte = new Prisma.Decimal(dto.min);
+        if (dto.max != null) filtroRango.lte = new Prisma.Decimal(dto.max);
+        // Si no se pasa min/max el modo RANGO trae todos los que tienen valor.
+        (where as any)[campoKey] = filtroRango;
+      }
     }
 
     // Filtros sobre el producto relacionado (categoría, marca, activo).
@@ -2722,6 +2741,47 @@ export class ProductoStockService {
   }
 
   /**
+   * Filtra en JS las comparaciones que Prisma no expresa en `where`
+   * (columna vs columna). Se aplica DESPUÉS del findMany. Las filas ya
+   * vienen pre-filtradas por NOT NULL desde el where, así que precio y
+   * precioCosto son seguros de leer (excepto en SIN_COSTO, que no
+   * requiere comparación).
+   */
+  private _aplicarComparacionPrecio<
+    T extends {
+      precio: DecimalType | null;
+      precioCosto: DecimalType | null;
+    },
+  >(
+    stocks: T[],
+    comparacion: ComparacionPrecio | undefined,
+    margenMinimo: number,
+  ): T[] {
+    if (!comparacion || comparacion === ComparacionPrecio.SIN_COSTO) {
+      // SIN_COSTO ya queda resuelto por el where (precio NOT NULL, costo NULL).
+      return stocks;
+    }
+    return stocks.filter((s) => {
+      const precio = s.precio != null ? Number(s.precio) : null;
+      const costo = s.precioCosto != null ? Number(s.precioCosto) : null;
+      if (precio == null || costo == null) return false;
+      switch (comparacion) {
+        case ComparacionPrecio.PERDIDA:
+          return costo > precio;
+        case ComparacionPrecio.SIN_MARGEN:
+          return costo === precio;
+        case ComparacionPrecio.MARGEN_BAJO: {
+          if (precio === 0) return false; // evita división por cero
+          const margenPct = ((precio - costo) / precio) * 100;
+          return margenPct < margenMinimo;
+        }
+        default:
+          return false;
+      }
+    });
+  }
+
+  /**
    * Lista de productos+sede para auditoría de precios. Response plano y
    * liviano (sin paginar — se limita por `limit`, default 500). Pensado
    * para localizar precios mal cargados via filtros por valor.
@@ -2729,13 +2789,20 @@ export class ProductoStockService {
   async verificarPrecios(empresaId: string, dto: VerificarPreciosDto) {
     const where = this._buildVerificacionWhere(empresaId, dto);
     const limit = Number(dto.limit ?? 500);
+    // Cuando hay comparación columna-vs-columna (PERDIDA/SIN_MARGEN/
+    // MARGEN_BAJO) filtramos post-fetch; el `take` del DB no sabe cuántas
+    // filas pasan el filtro. Subimos el cap a 5000 para no quedar cortos
+    // en empresas grandes. Para los demás casos mantenemos `take = limit`.
+    const requiereComparacionPostFetch =
+      dto.comparacion != null && dto.comparacion !== ComparacionPrecio.SIN_COSTO;
+    const fetchTake = requiereComparacionPostFetch ? 5000 : limit;
     // OPTIMIZACIÓN: el orderBy por relación (producto.nombre + sede.nombre)
     // dispara subqueries caros en Postgres sin índice compuesto. Para
     // datasets ≤5k filas conviene traer sin orden y ordenar en JS. Reduce
     // el query de ~800ms a ~150ms en empresas con muchos productos.
-    const stocks = await this.prisma.productoStock.findMany({
+    const stocksRaw = await this.prisma.productoStock.findMany({
       where,
-      take: limit,
+      take: fetchTake,
       include: {
         producto: {
           select: { id: true, nombre: true, codigoEmpresa: true },
@@ -2744,17 +2811,30 @@ export class ProductoStockService {
         sede: { select: { id: true, nombre: true } },
       },
     });
-    stocks.sort((a, b) => {
+    const stocksFiltrados = this._aplicarComparacionPrecio(
+      stocksRaw,
+      dto.comparacion,
+      Number(dto.margenMinimo ?? 10),
+    );
+    stocksFiltrados.sort((a, b) => {
       const pn = (a.producto?.nombre ?? '').localeCompare(
         b.producto?.nombre ?? '',
       );
       if (pn !== 0) return pn;
       return (a.sede?.nombre ?? '').localeCompare(b.sede?.nombre ?? '');
     });
+    // Trim al límite visible y marcamos limitAlcanzado si:
+    //  - sin comparación: cuando `stocksRaw.length === limit` (= take = limit)
+    //  - con comparación: cuando hay más resultados post-filtro que `limit`
+    //    o cuando llenamos el cap de 5000 (puede haber más candidatos sin evaluar)
+    const limitAlcanzado = requiereComparacionPostFetch
+      ? stocksFiltrados.length > limit || stocksRaw.length === fetchTake
+      : stocksFiltrados.length === limit;
+    const stocks = stocksFiltrados.slice(0, limit);
 
     return {
       total: stocks.length,
-      limitAlcanzado: stocks.length === limit,
+      limitAlcanzado,
       items: stocks.map((s) => ({
         id: s.id,
         productoId: s.productoId,
@@ -2791,7 +2871,11 @@ export class ProductoStockService {
     const where = this._buildVerificacionWhere(empresaId, dto);
     const limit = Number(dto.limit ?? 5000);
     // Mismo criterio que verificarPrecios: orderBy en JS, no en DB.
-    const stocks = await this.prisma.productoStock.findMany({
+    // Cuando hay comparación post-fetch evaluamos hasta el `limit` directo
+    // (que para export ya es alto, default 5000) — no necesitamos un cap
+    // extra como en verificarPrecios porque acá el "límite visible" y el
+    // "límite de evaluación" coinciden.
+    const stocksRaw = await this.prisma.productoStock.findMany({
       where,
       take: limit,
       include: {
@@ -2800,6 +2884,11 @@ export class ProductoStockService {
         sede: { select: { nombre: true } },
       },
     });
+    const stocks = this._aplicarComparacionPrecio(
+      stocksRaw,
+      dto.comparacion,
+      Number(dto.margenMinimo ?? 10),
+    );
     stocks.sort((a, b) => {
       const pn = (a.producto?.nombre ?? '').localeCompare(
         b.producto?.nombre ?? '',

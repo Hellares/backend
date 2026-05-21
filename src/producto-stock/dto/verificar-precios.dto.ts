@@ -21,6 +21,13 @@ export enum FiltroStock {
   AMBOS = 'AMBOS',
 }
 
+export enum ComparacionPrecio {
+  PERDIDA = 'PERDIDA', // precioCosto > precio (vendés más barato de lo que te costó)
+  SIN_MARGEN = 'SIN_MARGEN', // precioCosto == precio (margen cero)
+  MARGEN_BAJO = 'MARGEN_BAJO', // margen % < margenMinimo
+  SIN_COSTO = 'SIN_COSTO', // precio definido pero costo null (no se puede calcular margen)
+}
+
 /**
  * Query DTO para el endpoint de auditoría/verificación de precios.
  * Pensado para localizar productos con precios mal cargados (ej. costo
@@ -97,6 +104,26 @@ export class VerificarPreciosDto {
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)
   soloActivos?: boolean = true;
+
+  @ApiPropertyOptional({
+    description:
+      'Filtro por comparación precio/costo. Cuando se setea, ignora campo/modo/min/max/exacto.',
+    enum: ComparacionPrecio,
+  })
+  @IsOptional()
+  @IsEnum(ComparacionPrecio)
+  comparacion?: ComparacionPrecio;
+
+  @ApiPropertyOptional({
+    description:
+      'Margen mínimo en % aceptable para MARGEN_BAJO (ej 10 = se listan los productos con margen < 10%). Default 10.',
+    default: 10,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  margenMinimo?: number = 10;
 
   @ApiPropertyOptional({ description: 'Límite de resultados', default: 500 })
   @IsOptional()
