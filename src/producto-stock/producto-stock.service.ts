@@ -431,10 +431,12 @@ export class ProductoStockService {
       },
     });
 
-    // Calculate totals
+    // Resumen agregado por tipo. Usa el MISMO `where` que la lista para
+    // que el resumen respete tipo/fechaDesde/fechaHasta — antes era
+    // global y descuadraba con lo visible cuando había filtros activos.
     const resumen = await this.prisma.movimientoStock.groupBy({
       by: ['tipo'],
-      where: { productoStockId },
+      where,
       _sum: { cantidad: true },
       _count: { id: true },
     });
