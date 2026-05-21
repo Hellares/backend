@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { Prisma } from '@prisma/client';
 import {
   CrearComponenteDto,
@@ -418,21 +419,19 @@ export class ProductoComponenteService {
           where: { id: stock.id },
           data: { stockActual: stockNuevo },
         });
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: dto.sedeId,
-            empresaId,
-            productoStockId: stock.id,
-            tipo: 'PRODUCCION_SALIDA',
-            tipoDocumento: 'PRODUCCION',
-            numeroDocumento,
-            cantidadAnterior: stockAnterior,
-            cantidad: -c.cantidadConsumidaEntera,
-            cantidadNueva: stockNuevo,
-            motivo: motivoSalida,
-            observaciones: dto.observaciones,
-            usuarioId,
-          },
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: dto.sedeId,
+          empresaId,
+          productoStockId: stock.id,
+          tipo: 'PRODUCCION_SALIDA',
+          tipoDocumento: 'PRODUCCION',
+          numeroDocumento,
+          cantidadAnterior: stockAnterior,
+          cantidad: -c.cantidadConsumidaEntera,
+          cantidadNueva: stockNuevo,
+          motivo: motivoSalida,
+          observaciones: dto.observaciones,
+          usuarioId,
         });
         movimientosSalida.push({
           componenteId: c.componenteId,
@@ -542,21 +541,19 @@ export class ProductoComponenteService {
         });
       }
 
-      await tx.movimientoStock.create({
-        data: {
-          sedeId: dto.sedeId,
-          empresaId,
-          productoStockId: stockFinal.id,
-          tipo: 'PRODUCCION_ENTRADA',
-          tipoDocumento: 'PRODUCCION',
-          numeroDocumento,
-          cantidadAnterior: stockFinalAnterior,
-          cantidad: dto.cantidad,
-          cantidadNueva: stockFinalNuevo,
-          motivo: motivoEntrada,
-          observaciones: dto.observaciones,
-          usuarioId,
-        },
+      await crearMovimientoStockConValoracion(tx, {
+        sedeId: dto.sedeId,
+        empresaId,
+        productoStockId: stockFinal.id,
+        tipo: 'PRODUCCION_ENTRADA',
+        tipoDocumento: 'PRODUCCION',
+        numeroDocumento,
+        cantidadAnterior: stockFinalAnterior,
+        cantidad: dto.cantidad,
+        cantidadNueva: stockFinalNuevo,
+        motivo: motivoEntrada,
+        observaciones: dto.observaciones,
+        usuarioId,
       });
 
       return {

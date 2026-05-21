@@ -135,6 +135,13 @@ model MovimientoStock {
   // Usuario responsable
   usuarioId String
 
+  // Valoración monetaria: snapshot del costo unitario al momento del
+  // movimiento y valor total (|cantidad| × costo). Nullable porque los
+  // movimientos previos a esta migración no tienen snapshot — la UI
+  // muestra "—" en ese caso. Para movs nuevos siempre se popula.
+  precioCostoUnitario Decimal? @db.Decimal(14, 4)
+  valorMovimiento     Decimal? @db.Decimal(14, 2)
+
   // Auditoría
   creadoEn DateTime @default(now())
 

@@ -11,6 +11,7 @@ import { ProductoComboService } from '../producto/producto-combo.service';
 import { PrecioNivelService } from '../producto/precio-nivel.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
@@ -912,6 +913,7 @@ export class VentaService {
               nuevoStock: number;
               cantidad: number;
               descripcion: string;
+              precioCostoSnapshot: number;
             };
             const pendingUpdates: PendingUpdate[] = [];
 
@@ -957,6 +959,7 @@ export class VentaService {
                 nuevoStock: stockAnterior - cantidad,
                 cantidad,
                 descripcion: detalle.descripcion,
+                precioCostoSnapshot: detalle.precioCostoSnapshot ?? 0,
               });
             }
 
@@ -978,14 +981,16 @@ export class VentaService {
               });
             }
 
-            // 4d. Aplicar updates + movimientos en batch.
-            const movimientosData: Array<any> = [];
+            // 4d. Aplicar updates + movimientos. Antes era un createMany
+            // batch pero el helper de valoración necesita crear de a uno
+            // (calcula valorMovimiento = |cantidad| × precioCostoSnapshot).
+            // Para una venta POS son pocos items (<20), overhead despreciable.
             for (const u of pendingUpdates) {
               await tx.productoStock.update({
                 where: { id: u.productoStockId },
                 data: { stockActual: u.nuevoStock },
               });
-              movimientosData.push({
+              await crearMovimientoStockConValoracion(tx, {
                 sedeId: dto.sedeId,
                 empresaId,
                 productoStockId: u.productoStockId,
@@ -998,11 +1003,8 @@ export class VentaService {
                 motivo: `Venta POS ${codigoVenta} - ${u.descripcion}`,
                 ventaId: venta.id,
                 usuarioId: cajeroId,
+                precioCostoUnitario: u.precioCostoSnapshot,
               });
-            }
-
-            if (movimientosData.length > 0) {
-              await tx.movimientoStock.createMany({ data: movimientosData });
             }
           }
         }
@@ -1695,21 +1697,20 @@ export class VentaService {
           data: { stockActual: nuevoStock },
         });
 
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: cotizacion.sedeId,
-            empresaId,
-            productoStockId: productoStock.id,
-            tipo: TipoMovimientoStock.SALIDA_VENTA,
-            tipoDocumento: 'VENTA',
-            numeroDocumento: codigoVenta,
-            cantidadAnterior: stockAnterior,
-            cantidad: -cantidad,
-            cantidadNueva: nuevoStock,
-            motivo: `Venta POS ${codigoVenta} - ${detalle.descripcion}`,
-            ventaId: venta.id,
-            usuarioId: cotizacion.vendedorId,
-          },
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: cotizacion.sedeId,
+          empresaId,
+          productoStockId: productoStock.id,
+          tipo: TipoMovimientoStock.SALIDA_VENTA,
+          tipoDocumento: 'VENTA',
+          numeroDocumento: codigoVenta,
+          cantidadAnterior: stockAnterior,
+          cantidad: -cantidad,
+          cantidadNueva: nuevoStock,
+          motivo: `Venta POS ${codigoVenta} - ${detalle.descripcion}`,
+          ventaId: venta.id,
+          usuarioId: cotizacion.vendedorId,
+          precioCostoUnitario: (detalle as any).precioCostoSnapshot ?? undefined,
         });
       }
 
@@ -2322,22 +2323,22 @@ export class VentaService {
           data: { stockActual: nuevoStock },
         });
 
-        // Crear MovimientoStock
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: venta.sedeId,
-            empresaId,
-            productoStockId: productoStock.id,
-            tipo: TipoMovimientoStock.SALIDA_VENTA,
-            tipoDocumento: 'VENTA',
-            numeroDocumento: venta.codigo,
-            cantidadAnterior: stockAnterior,
-            cantidad: -cantidad,
-            cantidadNueva: nuevoStock,
-            motivo: `Venta ${venta.codigo} - ${detalle.descripcion}`,
-            ventaId: venta.id,
-            usuarioId,
-          },
+        // Crear MovimientoStock (valorado al snapshot de costo del detalle)
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: venta.sedeId,
+          empresaId,
+          productoStockId: productoStock.id,
+          tipo: TipoMovimientoStock.SALIDA_VENTA,
+          tipoDocumento: 'VENTA',
+          numeroDocumento: venta.codigo,
+          cantidadAnterior: stockAnterior,
+          cantidad: -cantidad,
+          cantidadNueva: nuevoStock,
+          motivo: `Venta ${venta.codigo} - ${detalle.descripcion}`,
+          ventaId: venta.id,
+          usuarioId,
+          precioCostoUnitario:
+            (detalle as any).precioCostoSnapshot ?? undefined,
         });
       }
 
@@ -2619,21 +2620,23 @@ export class VentaService {
           data: { stockActual: nuevoStock },
         });
 
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: venta.sedeId,
-            empresaId,
-            productoStockId: productoStock.id,
-            tipo: TipoMovimientoStock.AJUSTE_SALIDA_VENTA,
-            tipoDocumento: 'VENTA',
-            numeroDocumento: venta.codigo,
-            cantidadAnterior: stockAnterior,
-            cantidad: cantidad,
-            cantidadNueva: nuevoStock,
-            motivo: `Anulacion venta ${venta.codigo} - ${detalle.descripcion}`,
-            ventaId: venta.id,
-            usuarioId,
-          },
+        // Anulación: revierte la salida con el mismo snapshot de costo
+        // que tenía el detalle (lo que se descontó originalmente).
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: venta.sedeId,
+          empresaId,
+          productoStockId: productoStock.id,
+          tipo: TipoMovimientoStock.AJUSTE_SALIDA_VENTA,
+          tipoDocumento: 'VENTA',
+          numeroDocumento: venta.codigo,
+          cantidadAnterior: stockAnterior,
+          cantidad: cantidad,
+          cantidadNueva: nuevoStock,
+          motivo: `Anulacion venta ${venta.codigo} - ${detalle.descripcion}`,
+          ventaId: venta.id,
+          usuarioId,
+          precioCostoUnitario:
+            (detalle as any).precioCostoSnapshot ?? undefined,
         });
       }
 

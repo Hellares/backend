@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CajaService } from '../caja/caja.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
@@ -278,21 +279,19 @@ export class DevolucionVentaService {
         const cantidad = item.cantidad;
 
         const createMov = (tipo: TipoMovimientoStock, motivo: string) =>
-          tx.movimientoStock.create({
-            data: {
-              sedeId: devolucion.sedeId,
-              empresaId,
-              productoStockId: productoStock.id,
-              tipo,
-              tipoDocumento: 'DEVOLUCION',
-              numeroDocumento: devolucion.codigo,
-              cantidadAnterior: stockAnterior,
-              cantidad,
-              cantidadNueva: stockAnterior + cantidad,
-              motivo: `Devolucion ${devolucion.codigo} - ${motivo}`,
-              devolucionId: devolucion.id,
-              usuarioId: userId,
-            },
+          crearMovimientoStockConValoracion(tx, {
+            sedeId: devolucion.sedeId,
+            empresaId,
+            productoStockId: productoStock.id,
+            tipo,
+            tipoDocumento: 'DEVOLUCION',
+            numeroDocumento: devolucion.codigo,
+            cantidadAnterior: stockAnterior,
+            cantidad,
+            cantidadNueva: stockAnterior + cantidad,
+            motivo: `Devolucion ${devolucion.codigo} - ${motivo}`,
+            devolucionId: devolucion.id,
+            usuarioId: userId,
           });
 
         switch (item.accion) {
@@ -352,21 +351,19 @@ export class DevolucionVentaService {
                   where: { id: reemplazoStock.id },
                   data: { stockActual: { decrement: cantidad } },
                 });
-                await tx.movimientoStock.create({
-                  data: {
-                    sedeId: devolucion.sedeId,
-                    empresaId,
-                    productoStockId: reemplazoStock.id,
-                    tipo: TipoMovimientoStock.SALIDA_VENTA,
-                    tipoDocumento: 'DEVOLUCION',
-                    numeroDocumento: devolucion.codigo,
-                    cantidadAnterior: stockAnteriorReemplazo,
-                    cantidad,
-                    cantidadNueva: stockAnteriorReemplazo - cantidad,
-                    motivo: `Devolucion ${devolucion.codigo} - Entrega producto reemplazo`,
-                    devolucionId: devolucion.id,
-                    usuarioId: userId,
-                  },
+                await crearMovimientoStockConValoracion(tx, {
+                  sedeId: devolucion.sedeId,
+                  empresaId,
+                  productoStockId: reemplazoStock.id,
+                  tipo: TipoMovimientoStock.SALIDA_VENTA,
+                  tipoDocumento: 'DEVOLUCION',
+                  numeroDocumento: devolucion.codigo,
+                  cantidadAnterior: stockAnteriorReemplazo,
+                  cantidad,
+                  cantidadNueva: stockAnteriorReemplazo - cantidad,
+                  motivo: `Devolucion ${devolucion.codigo} - Entrega producto reemplazo`,
+                  devolucionId: devolucion.id,
+                  usuarioId: userId,
                 });
               }
             }
@@ -712,21 +709,19 @@ export class DevolucionVentaService {
             where: { id: stock.id },
             data: { stockActual: { increment: item.cantidad } },
           });
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: venta.sedeId,
-              empresaId,
-              productoStockId: stock.id,
-              tipo: TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
-              tipoDocumento: 'DEVOLUCION',
-              numeroDocumento: dev.codigo,
-              cantidadAnterior: stockAnterior,
-              cantidad: item.cantidad,
-              cantidadNueva: stockAnterior + item.cantidad,
-              motivo: `Reversión total ${dev.codigo} — venta ${venta.codigo} anulada`,
-              devolucionId: dev.id,
-              usuarioId: userId,
-            },
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: venta.sedeId,
+            empresaId,
+            productoStockId: stock.id,
+            tipo: TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
+            tipoDocumento: 'DEVOLUCION',
+            numeroDocumento: dev.codigo,
+            cantidadAnterior: stockAnterior,
+            cantidad: item.cantidad,
+            cantidadNueva: stockAnterior + item.cantidad,
+            motivo: `Reversión total ${dev.codigo} — venta ${venta.codigo} anulada`,
+            devolucionId: dev.id,
+            usuarioId: userId,
           });
         }
 

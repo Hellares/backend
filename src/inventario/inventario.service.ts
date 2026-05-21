@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import {
   EstadoInventario,
   EstadoConteoItem,
@@ -606,21 +607,19 @@ export class InventarioService {
             ? TipoMovimientoStock.AJUSTE_ENTRADA
             : TipoMovimientoStock.AJUSTE_SALIDA;
 
-        const movimiento = await tx.movimientoStock.create({
-          data: {
-            empresaId,
-            sedeId: inventario.sedeId,
-            productoStockId: stock.id,
-            tipo: tipoMovimiento,
-            tipoDocumento: 'INVENTARIO',
-            numeroDocumento: inventario.codigo,
-            cantidadAnterior: stock.stockActual,
-            cantidad: item.diferencia,
-            cantidadNueva: item.cantidadContada,
-            motivo: `Ajuste por inventario: ${inventario.nombre}`,
-            observaciones: item.observaciones || undefined,
-            usuarioId,
-          },
+        const movimiento = await crearMovimientoStockConValoracion(tx, {
+          empresaId,
+          sedeId: inventario.sedeId,
+          productoStockId: stock.id,
+          tipo: tipoMovimiento,
+          tipoDocumento: 'INVENTARIO',
+          numeroDocumento: inventario.codigo,
+          cantidadAnterior: stock.stockActual,
+          cantidad: item.diferencia,
+          cantidadNueva: item.cantidadContada,
+          motivo: `Ajuste por inventario: ${inventario.nombre}`,
+          observaciones: item.observaciones || undefined,
+          usuarioId,
         });
 
         // Marcar item como ajustado

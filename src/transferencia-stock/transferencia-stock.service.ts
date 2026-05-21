@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { CrearTransferenciaDto } from './dto/crear-transferencia.dto';
 import { CrearTransferenciasMultiplesDto } from './dto/crear-transferencias-multiples.dto';
@@ -574,22 +575,20 @@ export class TransferenciaStockService {
         });
 
         // Registrar movimiento de salida
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: transferencia.sedeOrigenId,
-            empresaId,
-            productoStockId: stockOrigen.id,
-            tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
-            tipoDocumento: 'TRANSFERENCIA',
-            numeroDocumento: transferencia.codigo,
-            cantidadAnterior: stockOrigen.stockActual,
-            cantidad: -cantidadEnviar,
-            cantidadNueva: nuevoStockActual,
-            motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
-            observaciones: transferencia.observaciones,
-            transferenciaId: transferencia.id,
-            usuarioId,
-          },
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: transferencia.sedeOrigenId,
+          empresaId,
+          productoStockId: stockOrigen.id,
+          tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
+          tipoDocumento: 'TRANSFERENCIA',
+          numeroDocumento: transferencia.codigo,
+          cantidadAnterior: stockOrigen.stockActual,
+          cantidad: -cantidadEnviar,
+          cantidadNueva: nuevoStockActual,
+          motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
+          observaciones: transferencia.observaciones,
+          transferenciaId: transferencia.id,
+          usuarioId,
         });
 
         // Marcar item como enviado
@@ -749,22 +748,20 @@ export class TransferenciaStockService {
         });
 
         // Registrar movimiento de entrada
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: transferencia.sedeDestinoId,
-            empresaId,
-            productoStockId: stockDestino.id,
-            tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
-            tipoDocumento: 'TRANSFERENCIA',
-            numeroDocumento: transferencia.codigo,
-            cantidadAnterior: stockDestino.stockActual,
-            cantidad: cantidadRecibir,
-            cantidadNueva: nuevoStockDestino,
-            motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
-            observaciones: dto.observaciones,
-            transferenciaId: transferencia.id,
-            usuarioId,
-          },
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: transferencia.sedeDestinoId,
+          empresaId,
+          productoStockId: stockDestino.id,
+          tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
+          tipoDocumento: 'TRANSFERENCIA',
+          numeroDocumento: transferencia.codigo,
+          cantidadAnterior: stockDestino.stockActual,
+          cantidad: cantidadRecibir,
+          cantidadNueva: nuevoStockDestino,
+          motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
+          observaciones: dto.observaciones,
+          transferenciaId: transferencia.id,
+          usuarioId,
         });
 
         // Marcar item como recibido
@@ -931,22 +928,20 @@ export class TransferenciaStockService {
         });
 
         // Registrar movimiento de salida
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: transferencia.sedeOrigenId,
-            empresaId,
-            productoStockId: stockOrigen.id,
-            tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
-            tipoDocumento: 'TRANSFERENCIA',
-            numeroDocumento: transferencia.codigo,
-            cantidadAnterior: stockOrigen.stockActual,
-            cantidad: -cantidadEnviar,
-            cantidadNueva: nuevoStockActual,
-            motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
-            observaciones: dto?.observaciones,
-            transferenciaId: transferencia.id,
-            usuarioId,
-          },
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: transferencia.sedeOrigenId,
+          empresaId,
+          productoStockId: stockOrigen.id,
+          tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
+          tipoDocumento: 'TRANSFERENCIA',
+          numeroDocumento: transferencia.codigo,
+          cantidadAnterior: stockOrigen.stockActual,
+          cantidad: -cantidadEnviar,
+          cantidadNueva: nuevoStockActual,
+          motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
+          observaciones: dto?.observaciones,
+          transferenciaId: transferencia.id,
+          usuarioId,
         });
 
         // Marcar item como enviado
@@ -1027,22 +1022,20 @@ export class TransferenciaStockService {
         });
 
         // Registrar movimiento de entrada
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: transferencia.sedeDestinoId,
-            empresaId,
-            productoStockId: stockDestino.id,
-            tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
-            tipoDocumento: 'TRANSFERENCIA',
-            numeroDocumento: transferencia.codigo,
-            cantidadAnterior: stockDestino.stockActual,
-            cantidad: cantidadRecibir,
-            cantidadNueva: nuevoStockDestino,
-            motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
-            observaciones: dto?.observaciones,
-            transferenciaId: transferencia.id,
-            usuarioId,
-          },
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: transferencia.sedeDestinoId,
+          empresaId,
+          productoStockId: stockDestino.id,
+          tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
+          tipoDocumento: 'TRANSFERENCIA',
+          numeroDocumento: transferencia.codigo,
+          cantidadAnterior: stockDestino.stockActual,
+          cantidad: cantidadRecibir,
+          cantidadNueva: nuevoStockDestino,
+          motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
+          observaciones: dto?.observaciones,
+          transferenciaId: transferencia.id,
+          usuarioId,
         });
 
         // Marcar item como recibido
@@ -1546,42 +1539,39 @@ export class TransferenciaStockService {
 
         // Movimiento: Entrada física total (todo lo que llegó)
         if (cantidadRecibidaFisicamente > 0) {
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: transferencia.sedeDestinoId,
-              empresaId,
-              productoStockId: stockDestino.id,
-              tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
-              tipoDocumento: 'TRANSFERENCIA',
-              numeroDocumento: transferencia.codigo,
-              cantidadAnterior: stockDestino.stockActual,
-              cantidad: cantidadRecibidaFisicamente,
-              cantidadNueva: nuevoStockActualDestino,
-              motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
-              observaciones:
-                cantidadDanada > 0
-                  ? `${cantidadBuena} buenos + ${cantidadDanada} dañados. ${itemDto.observaciones || ''}`
-                  : itemDto.observaciones,
-              transferenciaId: transferencia.id,
-              usuarioId,
-            },
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: transferencia.sedeDestinoId,
+            empresaId,
+            productoStockId: stockDestino.id,
+            tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
+            tipoDocumento: 'TRANSFERENCIA',
+            numeroDocumento: transferencia.codigo,
+            cantidadAnterior: stockDestino.stockActual,
+            cantidad: cantidadRecibidaFisicamente,
+            cantidadNueva: nuevoStockActualDestino,
+            motivo: `Transferencia desde ${transferencia.sedeOrigen.nombre}`,
+            observaciones:
+              cantidadDanada > 0
+                ? `${cantidadBuena} buenos + ${cantidadDanada} dañados. ${itemDto.observaciones || ''}`
+                : itemDto.observaciones,
+            transferenciaId: transferencia.id,
+            usuarioId,
           });
         }
 
         // Movimiento: Segregación de productos dañados
         if (cantidadDanada > 0) {
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: transferencia.sedeDestinoId,
-              empresaId,
-              productoStockId: stockDestino.id,
-              tipo: TipoMovimientoStock.AJUSTE_MERMA,
-              tipoDocumento: 'TRANSFERENCIA',
-              numeroDocumento: transferencia.codigo,
-              cantidadAnterior: stockDestino.stockDanado,
-              cantidad: cantidadDanada,
-              cantidadNueva: nuevoStockDanadoDestino,
-              motivo: `Productos recibidos dañados en transferencia ${transferencia.codigo}`,
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: transferencia.sedeDestinoId,
+            empresaId,
+            productoStockId: stockDestino.id,
+            tipo: TipoMovimientoStock.AJUSTE_MERMA,
+            tipoDocumento: 'TRANSFERENCIA',
+            numeroDocumento: transferencia.codigo,
+            cantidadAnterior: stockDestino.stockDanado,
+            cantidad: cantidadDanada,
+            cantidadNueva: nuevoStockDanadoDestino,
+            motivo: `Productos recibidos dañados en transferencia ${transferencia.codigo}`,
               observaciones:
                 itemDto.incidencias
                   ?.filter((inc) =>
@@ -1591,9 +1581,8 @@ export class TransferenciaStockService {
                   )
                   .map((inc) => inc.descripcion)
                   .join('; ') || 'Daños en recepción',
-              transferenciaId: transferencia.id,
-              usuarioId,
-            },
+            transferenciaId: transferencia.id,
+            usuarioId,
           });
         }
 
@@ -1627,48 +1616,44 @@ export class TransferenciaStockService {
           });
 
           // Movimiento de salida en origen
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: transferencia.sedeOrigenId,
-              empresaId,
-              productoStockId: stockOrigen.id,
-              tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
-              tipoDocumento: 'TRANSFERENCIA',
-              numeroDocumento: transferencia.codigo,
-              cantidadAnterior: stockOrigen.stockActual,
-              cantidad: -cantidadRecibidaFisicamente,
-              cantidadNueva: nuevoStockOrigenActual,
-              motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
-              observaciones:
-                cantidadFaltante > 0
-                  ? `⚠️ ATENCIÓN: ${cantidadFaltante} productos marcados como faltantes en destino. Verificar inventario origen.`
-                  : undefined,
-              transferenciaId: transferencia.id,
-              usuarioId,
-            },
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: transferencia.sedeOrigenId,
+            empresaId,
+            productoStockId: stockOrigen.id,
+            tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
+            tipoDocumento: 'TRANSFERENCIA',
+            numeroDocumento: transferencia.codigo,
+            cantidadAnterior: stockOrigen.stockActual,
+            cantidad: -cantidadRecibidaFisicamente,
+            cantidadNueva: nuevoStockOrigenActual,
+            motivo: `Transferencia a ${transferencia.sedeDestino.nombre}`,
+            observaciones:
+              cantidadFaltante > 0
+                ? `⚠️ ATENCIÓN: ${cantidadFaltante} productos marcados como faltantes en destino. Verificar inventario origen.`
+                : undefined,
+            transferenciaId: transferencia.id,
+            usuarioId,
           });
 
           // Si hay faltantes, crear alerta de investigación en origen
           if (cantidadFaltante > 0) {
-            await tx.movimientoStock.create({
-              data: {
-                sedeId: transferencia.sedeOrigenId,
-                empresaId,
-                productoStockId: stockOrigen.id,
-                tipo: TipoMovimientoStock.AJUSTE_SALIDA,
-                tipoDocumento: 'INVESTIGACION',
-                numeroDocumento: `INV-${transferencia.codigo}`,
-                cantidadAnterior: nuevoStockOrigenActual,
-                cantidad: 0, // No cambiar stock aún
-                cantidadNueva: nuevoStockOrigenActual,
-                motivo: `⚠️ INVESTIGAR: ${cantidadFaltante} productos no llegaron a destino`,
-                observaciones:
-                  `Transferencia ${transferencia.codigo} reporta ${cantidadFaltante} faltantes. ` +
-                  `Verificar si quedaron en origen o se perdieron en tránsito. ` +
-                  `Acción pendiente: Ajustar inventario cuando se resuelva la incidencia.`,
-                transferenciaId: transferencia.id,
-                usuarioId,
-              },
+            await crearMovimientoStockConValoracion(tx, {
+              sedeId: transferencia.sedeOrigenId,
+              empresaId,
+              productoStockId: stockOrigen.id,
+              tipo: TipoMovimientoStock.AJUSTE_SALIDA,
+              tipoDocumento: 'INVESTIGACION',
+              numeroDocumento: `INV-${transferencia.codigo}`,
+              cantidadAnterior: nuevoStockOrigenActual,
+              cantidad: 0, // No cambiar stock aún
+              cantidadNueva: nuevoStockOrigenActual,
+              motivo: `⚠️ INVESTIGAR: ${cantidadFaltante} productos no llegaron a destino`,
+              observaciones:
+                `Transferencia ${transferencia.codigo} reporta ${cantidadFaltante} faltantes. ` +
+                `Verificar si quedaron en origen o se perdieron en tránsito. ` +
+                `Acción pendiente: Ajustar inventario cuando se resuelva la incidencia.`,
+              transferenciaId: transferencia.id,
+              usuarioId,
             });
           }
         }
@@ -1949,22 +1934,20 @@ export class TransferenciaStockService {
           });
 
           // Registrar movimiento
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: incidencia.transferencia.sedeDestinoId,
-              empresaId,
-              productoStockId: stockDestino.id,
-              tipo: TipoMovimientoStock.SALIDA_BAJA,
-              tipoDocumento: 'BAJA',
-              numeroDocumento: `BAJA-INC-${incidenciaId.slice(-6)}`,
-              cantidadAnterior: stockDestino.stockActual,
-              cantidad: -incidencia.cantidadAfectada,
-              cantidadNueva:
-                stockDestino.stockActual - incidencia.cantidadAfectada,
-              motivo: `Baja por incidencia en transferencia ${incidencia.transferencia.codigo}`,
-              observaciones: dto.observaciones,
-              usuarioId,
-            },
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: incidencia.transferencia.sedeDestinoId,
+            empresaId,
+            productoStockId: stockDestino.id,
+            tipo: TipoMovimientoStock.SALIDA_BAJA,
+            tipoDocumento: 'BAJA',
+            numeroDocumento: `BAJA-INC-${incidenciaId.slice(-6)}`,
+            cantidadAnterior: stockDestino.stockActual,
+            cantidad: -incidencia.cantidadAfectada,
+            cantidadNueva:
+              stockDestino.stockActual - incidencia.cantidadAfectada,
+            motivo: `Baja por incidencia en transferencia ${incidencia.transferencia.codigo}`,
+            observaciones: dto.observaciones,
+            usuarioId,
           });
           break;
 
@@ -1983,22 +1966,20 @@ export class TransferenciaStockService {
           });
 
           // Registrar movimiento
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: incidencia.transferencia.sedeDestinoId,
-              empresaId,
-              productoStockId: stockDestino.id,
-              tipo: TipoMovimientoStock.ENTRADA_GARANTIA,
-              tipoDocumento: 'GARANTIA',
-              numeroDocumento: `GAR-INC-${incidenciaId.slice(-6)}`,
-              cantidadAnterior: stockDestino.stockEnGarantia,
-              cantidad: incidencia.cantidadAfectada,
-              cantidadNueva:
-                stockDestino.stockEnGarantia + incidencia.cantidadAfectada,
-              motivo: `Enviado a reparación por incidencia en transferencia ${incidencia.transferencia.codigo}`,
-              observaciones: dto.observaciones,
-              usuarioId,
-            },
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: incidencia.transferencia.sedeDestinoId,
+            empresaId,
+            productoStockId: stockDestino.id,
+            tipo: TipoMovimientoStock.ENTRADA_GARANTIA,
+            tipoDocumento: 'GARANTIA',
+            numeroDocumento: `GAR-INC-${incidenciaId.slice(-6)}`,
+            cantidadAnterior: stockDestino.stockEnGarantia,
+            cantidad: incidencia.cantidadAfectada,
+            cantidadNueva:
+              stockDestino.stockEnGarantia + incidencia.cantidadAfectada,
+            motivo: `Enviado a reparación por incidencia en transferencia ${incidencia.transferencia.codigo}`,
+            observaciones: dto.observaciones,
+            usuarioId,
           });
           break;
 
@@ -2015,22 +1996,20 @@ export class TransferenciaStockService {
           });
 
           // Registrar movimiento
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: incidencia.transferencia.sedeDestinoId,
-              empresaId,
-              productoStockId: stockDestino.id,
-              tipo: TipoMovimientoStock.AJUSTE_REPARACION,
-              tipoDocumento: 'AJUSTE',
-              numeroDocumento: `AJU-INC-${incidenciaId.slice(-6)}`,
-              cantidadAnterior: stockDestino.stockDanado,
-              cantidad: -incidencia.cantidadAfectada,
-              cantidadNueva:
-                stockDestino.stockDanado - incidencia.cantidadAfectada,
-              motivo: `Productos dañados aceptados con descuento - Incidencia ${incidencia.transferencia.codigo}`,
-              observaciones: dto.observaciones,
-              usuarioId,
-            },
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: incidencia.transferencia.sedeDestinoId,
+            empresaId,
+            productoStockId: stockDestino.id,
+            tipo: TipoMovimientoStock.AJUSTE_REPARACION,
+            tipoDocumento: 'AJUSTE',
+            numeroDocumento: `AJU-INC-${incidenciaId.slice(-6)}`,
+            cantidadAnterior: stockDestino.stockDanado,
+            cantidad: -incidencia.cantidadAfectada,
+            cantidadNueva:
+              stockDestino.stockDanado - incidencia.cantidadAfectada,
+            motivo: `Productos dañados aceptados con descuento - Incidencia ${incidencia.transferencia.codigo}`,
+            observaciones: dto.observaciones,
+            usuarioId,
           });
           break;
 
@@ -2283,22 +2262,20 @@ export class TransferenciaStockService {
             });
 
             // Crear movimiento de ajuste
-            await tx.movimientoStock.create({
-              data: {
-                empresaId,
-                sedeId: transferencia.sedeDestinoId,
-                productoStockId: stock.id,
-                tipo: TipoMovimientoStock.AJUSTE_MERMA,
-                tipoDocumento: 'INCIDENCIA',
-                numeroDocumento: `INC-${incidencia.id.slice(-6)}`,
-                cantidadAnterior: stock.stockDanado,
-                cantidad: dto.cantidadAfectada,
-                cantidadNueva: stock.stockDanado + dto.cantidadAfectada,
-                motivo: `Incidencia posterior: ${dto.tipo} - ${dto.descripcion || 'Sin descripción'}`,
-                observaciones: dto.observaciones,
-                transferenciaId,
-                usuarioId,
-              },
+            await crearMovimientoStockConValoracion(tx, {
+              empresaId,
+              sedeId: transferencia.sedeDestinoId,
+              productoStockId: stock.id,
+              tipo: TipoMovimientoStock.AJUSTE_MERMA,
+              tipoDocumento: 'INCIDENCIA',
+              numeroDocumento: `INC-${incidencia.id.slice(-6)}`,
+              cantidadAnterior: stock.stockDanado,
+              cantidad: dto.cantidadAfectada,
+              cantidadNueva: stock.stockDanado + dto.cantidadAfectada,
+              motivo: `Incidencia posterior: ${dto.tipo} - ${dto.descripcion || 'Sin descripción'}`,
+              observaciones: dto.observaciones,
+              transferenciaId,
+              usuarioId,
             });
           }
         }

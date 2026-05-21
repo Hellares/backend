@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { ProductoComboService } from './producto-combo.service';
 
 /**
@@ -110,19 +111,17 @@ export class ProductoInventoryService {
       });
 
       // Registrar movimiento
-      await tx.movimientoStock.create({
-        data: {
-          sedeId,
-          empresaId,
-          productoStockId: productoStock.id,
-          tipo: operacion === 'agregar' ? 'ENTRADA_AJUSTE' : 'SALIDA_AJUSTE',
-          tipoDocumento: 'AJUSTE_MANUAL',
-          cantidadAnterior: stockAnterior,
-          cantidad: cantidadAjuste,
-          cantidadNueva: nuevoStock,
-          motivo: `Ajuste ${operacion === 'agregar' ? 'entrada' : 'salida'} manual`,
-          usuarioId,
-        },
+      await crearMovimientoStockConValoracion(tx, {
+        sedeId,
+        empresaId,
+        productoStockId: productoStock.id,
+        tipo: operacion === 'agregar' ? 'ENTRADA_AJUSTE' : 'SALIDA_AJUSTE',
+        tipoDocumento: 'AJUSTE_MANUAL',
+        cantidadAnterior: stockAnterior,
+        cantidad: cantidadAjuste,
+        cantidadNueva: nuevoStock,
+        motivo: `Ajuste ${operacion === 'agregar' ? 'entrada' : 'salida'} manual`,
+        usuarioId,
       });
 
       return { stockAnterior, nuevoStock, productoStockId: productoStock.id };

@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { crearMovimientoStockConValoracion } from '../../producto-stock/movimiento-stock.helper';
 import { CacheService } from '../../redis/cache.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../../configuracion-codigos/configuracion-codigos.service';
@@ -487,22 +488,22 @@ export class CompraService {
           });
         }
 
-        // d. Crear MovimientoStock
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: compra.sedeId,
-            empresaId,
-            productoStockId: productoStock.id,
-            tipo: TipoMovimientoStock.ENTRADA_COMPRA,
-            tipoDocumento: 'COMPRA',
-            numeroDocumento: compra.codigo,
-            cantidadAnterior: stockAnterior,
-            cantidad: detalle.cantidad,
-            cantidadNueva: nuevoStock,
-            motivo: `Compra ${compra.codigo} - ${detalle.descripcion}`,
-            compraId: compra.id,
-            usuarioId,
-          },
+        // d. Crear MovimientoStock (valorado al precio unitario de la línea)
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: compra.sedeId,
+          empresaId,
+          productoStockId: productoStock.id,
+          tipo: TipoMovimientoStock.ENTRADA_COMPRA,
+          tipoDocumento: 'COMPRA',
+          numeroDocumento: compra.codigo,
+          cantidadAnterior: stockAnterior,
+          cantidad: detalle.cantidad,
+          cantidadNueva: nuevoStock,
+          motivo: `Compra ${compra.codigo} - ${detalle.descripcion}`,
+          compraId: compra.id,
+          usuarioId,
+          // Lo que realmente costó esta unidad en esta compra.
+          precioCostoUnitario: detalle.precioUnitario,
         });
 
         // e. Crear Lote
@@ -690,21 +691,21 @@ export class CompraService {
 
         // ISSUE 7 FIX: Usar cantidadAReversar para mantener aritmética consistente
         // cantidadAnterior + cantidad === cantidadNueva
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: compra.sedeId,
-            empresaId,
-            productoStockId: productoStock.id,
-            tipo: TipoMovimientoStock.SALIDA_DEVOLUCION_PROVEEDOR,
-            tipoDocumento: 'ANULACION_COMPRA',
-            numeroDocumento: compra.codigo,
-            cantidadAnterior: stockAnterior,
-            cantidad: -cantidadAReversar,
-            cantidadNueva: nuevoStock,
-            motivo: `Anulación compra ${compra.codigo}`,
-            compraId: compra.id,
-            usuarioId,
-          },
+        // Valorado al precio original de la compra (lo que se reversa).
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: compra.sedeId,
+          empresaId,
+          productoStockId: productoStock.id,
+          tipo: TipoMovimientoStock.SALIDA_DEVOLUCION_PROVEEDOR,
+          tipoDocumento: 'ANULACION_COMPRA',
+          numeroDocumento: compra.codigo,
+          cantidadAnterior: stockAnterior,
+          cantidad: -cantidadAReversar,
+          cantidadNueva: nuevoStock,
+          motivo: `Anulación compra ${compra.codigo}`,
+          compraId: compra.id,
+          usuarioId,
+          precioCostoUnitario: precioCompra,
         });
 
         // BUG 2 FIX: Registrar historial de precio de costo por sede en anulación
@@ -955,23 +956,22 @@ export class CompraService {
           data: { stockActual: nuevoStockOrigen },
         });
 
-        // Movimiento SALIDA en origen
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: compra.sedeId,
-            empresaId,
-            productoStockId: psOrigen!.id,
-            tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
-            tipoDocumento: 'DISTRIBUCION_COMPRA',
-            numeroDocumento: compra.codigo,
-            cantidadAnterior: stockOrigenAnterior,
-            cantidad: -totalDistribuir,
-            cantidadNueva: nuevoStockOrigen,
-            motivo: `Distribución compra ${compra.codigo} - ${detalle.descripcion}` +
-              (dto.observaciones ? ` | ${dto.observaciones}` : ''),
-            compraId: compra.id,
-            usuarioId,
-          },
+        // Movimiento SALIDA en origen (valorado al costo del lote distribuido)
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: compra.sedeId,
+          empresaId,
+          productoStockId: psOrigen!.id,
+          tipo: TipoMovimientoStock.SALIDA_TRANSFERENCIA,
+          tipoDocumento: 'DISTRIBUCION_COMPRA',
+          numeroDocumento: compra.codigo,
+          cantidadAnterior: stockOrigenAnterior,
+          cantidad: -totalDistribuir,
+          cantidadNueva: nuevoStockOrigen,
+          motivo: `Distribución compra ${compra.codigo} - ${detalle.descripcion}` +
+            (dto.observaciones ? ` | ${dto.observaciones}` : ''),
+          compraId: compra.id,
+          usuarioId,
+          precioCostoUnitario: precioCostoLote,
         });
 
         // Actualizar lote origen
@@ -1018,23 +1018,23 @@ export class CompraService {
             },
           });
 
-          // Movimiento ENTRADA en destino
-          await tx.movimientoStock.create({
-            data: {
-              sedeId: dist.sedeDestinoId,
-              empresaId,
-              productoStockId: psDestino.id,
-              tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
-              tipoDocumento: 'DISTRIBUCION_COMPRA',
-              numeroDocumento: compra.codigo,
-              cantidadAnterior: stockDestinoAnterior,
-              cantidad: dist.cantidad,
-              cantidadNueva: nuevoStockDestino,
-              motivo: `Distribución compra ${compra.codigo} - ${detalle.descripcion}` +
-                (dto.observaciones ? ` | ${dto.observaciones}` : ''),
-              compraId: compra.id,
-              usuarioId,
-            },
+          // Movimiento ENTRADA en destino (mismo costo del lote para que
+          // origen y destino registren el mismo valor del traspaso).
+          await crearMovimientoStockConValoracion(tx, {
+            sedeId: dist.sedeDestinoId,
+            empresaId,
+            productoStockId: psDestino.id,
+            tipo: TipoMovimientoStock.ENTRADA_TRANSFERENCIA,
+            tipoDocumento: 'DISTRIBUCION_COMPRA',
+            numeroDocumento: compra.codigo,
+            cantidadAnterior: stockDestinoAnterior,
+            cantidad: dist.cantidad,
+            cantidadNueva: nuevoStockDestino,
+            motivo: `Distribución compra ${compra.codigo} - ${detalle.descripcion}` +
+              (dto.observaciones ? ` | ${dto.observaciones}` : ''),
+            compraId: compra.id,
+            usuarioId,
+            precioCostoUnitario: precioCostoLote,
           });
 
           // Crear lote en sede destino

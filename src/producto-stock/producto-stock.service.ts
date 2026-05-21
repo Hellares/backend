@@ -20,6 +20,7 @@ import {
   VerificarPreciosDto,
 } from './dto/verificar-precios.dto';
 import { Prisma, TipoCambioPrecio } from '@prisma/client';
+import { crearMovimientoStockConValoracion } from './movimiento-stock.helper';
 import { PromocionService } from '../promocion/promocion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import * as ExcelJS from 'exceljs';
@@ -197,19 +198,17 @@ export class ProductoStockService {
 
       // Registrar movimiento inicial si hay stock
       if (dto.stockActual > 0) {
-        await tx.movimientoStock.create({
-          data: {
-            sedeId: dto.sedeId,
-            empresaId,
-            productoStockId: stock.id,
-            tipo: 'ENTRADA_AJUSTE',
-            tipoDocumento: 'INICIAL',
-            cantidadAnterior: 0,
-            cantidad: dto.stockActual,
-            cantidadNueva: dto.stockActual,
-            motivo: 'Stock inicial',
-            usuarioId,
-          },
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: dto.sedeId,
+          empresaId,
+          productoStockId: stock.id,
+          tipo: 'ENTRADA_AJUSTE',
+          tipoDocumento: 'INICIAL',
+          cantidadAnterior: 0,
+          cantidad: dto.stockActual,
+          cantidadNueva: dto.stockActual,
+          motivo: 'Stock inicial',
+          usuarioId,
         });
       }
 
@@ -291,21 +290,19 @@ export class ProductoStockService {
       });
 
       // Registrar movimiento
-      await tx.movimientoStock.create({
-        data: {
-          sedeId: stockLocked.sedeId,
-          empresaId,
-          productoStockId,
-          tipo: dto.tipo,
-          tipoDocumento: dto.tipoDocumento,
-          numeroDocumento: dto.numeroDocumento,
-          cantidadAnterior: stockAnterior,
-          cantidad: dto.cantidad,
-          cantidadNueva: nuevoStock,
-          motivo: dto.motivo,
-          observaciones: dto.observaciones,
-          usuarioId,
-        },
+      await crearMovimientoStockConValoracion(tx, {
+        sedeId: stockLocked.sedeId,
+        empresaId,
+        productoStockId,
+        tipo: dto.tipo,
+        tipoDocumento: dto.tipoDocumento,
+        numeroDocumento: dto.numeroDocumento,
+        cantidadAnterior: stockAnterior,
+        cantidad: dto.cantidad,
+        cantidadNueva: nuevoStock,
+        motivo: dto.motivo,
+        observaciones: dto.observaciones,
+        usuarioId,
       });
 
       this.logger.log(
@@ -468,7 +465,7 @@ export class ProductoStockService {
     const resumen = await this.prisma.movimientoStock.groupBy({
       by: ['tipo'],
       where,
-      _sum: { cantidad: true },
+      _sum: { cantidad: true, valorMovimiento: true },
       _count: { id: true },
     });
 
@@ -479,6 +476,12 @@ export class ProductoStockService {
         tipo: r.tipo,
         totalCantidad: r._sum.cantidad ?? 0,
         totalMovimientos: r._count.id,
+        // Valor monetario agregado del grupo. null cuando ningún mov del
+        // grupo tiene snapshot (todos previos a la mig 20260521).
+        totalValor:
+          r._sum.valorMovimiento != null
+            ? Number(r._sum.valorMovimiento)
+            : null,
       })),
     };
   }
@@ -1808,6 +1811,8 @@ export class ProductoStockService {
       { header: 'Cant. Anterior', key: 'anterior', width: 15 },
       { header: 'Cantidad', key: 'cantidad', width: 12 },
       { header: 'Cant. Nueva', key: 'nueva', width: 15 },
+      { header: 'Costo Unit.', key: 'costoUnit', width: 13 },
+      { header: 'Valor', key: 'valor', width: 13 },
       { header: 'Motivo', key: 'motivo', width: 30 },
     ];
 
@@ -1827,9 +1832,20 @@ export class ProductoStockService {
         anterior: mov.cantidadAnterior,
         cantidad: mov.cantidad,
         nueva: mov.cantidadNueva,
+        // Snapshot del costo unitario al momento del movimiento (null
+        // para movs previos a la mig 20260521 → celda vacía).
+        costoUnit:
+          mov.precioCostoUnitario != null
+            ? Number(mov.precioCostoUnitario)
+            : null,
+        valor:
+          mov.valorMovimiento != null ? Number(mov.valorMovimiento) : null,
         motivo: mov.motivo || '',
       });
     }
+    // Format moneda para columnas valor
+    sheet.getColumn('costoUnit').numFmt = '#,##0.00';
+    sheet.getColumn('valor').numFmt = '#,##0.00';
 
     // Resumen sheet
     const resumenSheet = workbook.addWorksheet('Resumen');
@@ -1837,6 +1853,7 @@ export class ProductoStockService {
       { header: 'Tipo Movimiento', key: 'tipo', width: 30 },
       { header: 'Total Cantidad', key: 'totalCantidad', width: 15 },
       { header: 'Total Movimientos', key: 'totalMovimientos', width: 18 },
+      { header: 'Total Valor', key: 'totalValor', width: 15 },
     ];
     resumenSheet.getRow(1).eachCell((cell) => {
       cell.font = headerStyle.font;
@@ -1849,8 +1866,10 @@ export class ProductoStockService {
         tipo: r.tipo.replace(/_/g, ' '),
         totalCantidad: r.totalCantidad,
         totalMovimientos: r.totalMovimientos,
+        totalValor: r.totalValor ?? null,
       });
     }
+    resumenSheet.getColumn('totalValor').numFmt = '#,##0.00';
 
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

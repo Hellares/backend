@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { Prisma, TipoPrecioCombo, TipoCambioPrecio, TipoCambioComboConfig } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
@@ -1370,7 +1371,6 @@ export class ProductoComboService {
         }
 
         // Aplicar delta en stockReservadoCombo de cada componente y registrar movimientos
-        const movimientosData: any[] = [];
         for (const componente of componentes) {
           const stockRef = componente.componenteVariante
             ? componente.componenteVariante.stocksPorSede[0]
@@ -1386,7 +1386,10 @@ export class ProductoComboService {
             data: { stockReservadoCombo: { increment: cantidadDelta } },
           });
 
-          movimientosData.push({
+          // Antes era createMany batch; ahora pasamos por el helper que
+          // popula precioCostoUnitario + valorMovimiento. Para combos
+          // chicos (3-10 componentes) el overhead extra es despreciable.
+          await crearMovimientoStockConValoracion(tx, {
             sedeId,
             empresaId: locked.empresaId,
             productoStockId: stockRef.id,
@@ -1398,11 +1401,6 @@ export class ProductoComboService {
             cantidadNueva: locked.stockActual,
             motivo: `Reserva de combo ${comboId}: ${cantidad} unidades`,
           });
-        }
-
-        // Registrar todos los movimientos en bulk (1 query vs N)
-        if (movimientosData.length > 0) {
-          await tx.movimientoStock.createMany({ data: movimientosData });
         }
 
         // Crear o actualizar ComboReservacion
@@ -1688,8 +1686,9 @@ export class ProductoComboService {
           );
         }
 
-        // Descontar stock de cada componente usando los valores bloqueados
-        const movimientosVenta: any[] = [];
+        // Descontar stock de cada componente usando los valores bloqueados.
+        // Antes era createMany batch; ahora pasamos por el helper que
+        // popula precioCostoUnitario + valorMovimiento.
         for (const componente of componentes) {
           const stockRef = componente.componenteVariante
             ? componente.componenteVariante.stocksPorSede[0]
@@ -1705,7 +1704,7 @@ export class ProductoComboService {
             data: { stockActual: { decrement: cantidadDescontar } },
           });
 
-          movimientosVenta.push({
+          await crearMovimientoStockConValoracion(tx, {
             sedeId,
             empresaId: locked.empresaId,
             productoStockId: stockRef.id,
@@ -1717,11 +1716,6 @@ export class ProductoComboService {
             cantidadNueva: locked.stockActual - cantidadDescontar,
             motivo: `Venta de combo ${comboId}`,
           });
-        }
-
-        // Registrar todos los movimientos en bulk (1 query vs N)
-        if (movimientosVenta.length > 0) {
-          await tx.movimientoStock.createMany({ data: movimientosVenta });
         }
 
         // Decrementar stockReservadoCombo (ya validamos que reservacion existe arriba)

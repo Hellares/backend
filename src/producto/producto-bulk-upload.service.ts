@@ -5,6 +5,7 @@ import {
 import { Prisma, TipoCambioPrecio } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { AppLoggerService } from 'src/common/logger';
 import { CacheService } from '../redis/cache.service';
 import { RowError, BulkUploadResult } from './dto/bulk-upload-producto.dto';
@@ -765,18 +766,16 @@ export class ProductoBulkUploadService {
               }
 
               if (stockInicial > 0) {
-                await tx.movimientoStock.create({
-                  data: {
-                    empresaId,
-                    sedeId: sid,
-                    productoStockId: productoStock.id,
-                    tipo: 'AJUSTE_ENTRADA',
-                    cantidadAnterior: 0,
-                    cantidad: stockInicial,
-                    cantidadNueva: stockInicial,
-                    motivo: 'Stock inicial por carga masiva Excel',
-                    usuarioId: userId,
-                  },
+                await crearMovimientoStockConValoracion(tx, {
+                  empresaId,
+                  sedeId: sid,
+                  productoStockId: productoStock.id,
+                  tipo: 'AJUSTE_ENTRADA',
+                  cantidadAnterior: 0,
+                  cantidad: stockInicial,
+                  cantidadNueva: stockInicial,
+                  motivo: 'Stock inicial por carga masiva Excel',
+                  usuarioId: userId,
                 });
               }
             }

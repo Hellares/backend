@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import {
   EstadoReporteIncidencia,
   EstadoItemIncidencia,
@@ -708,21 +709,19 @@ export class ReporteIncidenciaService {
     });
 
     // Crear movimiento de stock
-    const movimiento = await tx.movimientoStock.create({
-      data: {
-        empresaId: item.empresaId,
-        sedeId: item.sedeId,
-        productoStockId: stock.id,
-        tipo: TipoMovimientoStock.AJUSTE_MERMA,
-        tipoDocumento: 'REPORTE_INCIDENCIA',
-        numeroDocumento: item.reporte.codigo,
-        cantidadAnterior: stock.stockDanado,
-        cantidad: item.cantidadAfectada,
-        cantidadNueva: stock.stockDanado + item.cantidadAfectada,
-        motivo: `Incidencia: ${item.tipo} - ${item.descripcion}`,
-        observaciones,
-        usuarioId,
-      },
+    const movimiento = await crearMovimientoStockConValoracion(tx, {
+      empresaId: item.empresaId,
+      sedeId: item.sedeId,
+      productoStockId: stock.id,
+      tipo: TipoMovimientoStock.AJUSTE_MERMA,
+      tipoDocumento: 'REPORTE_INCIDENCIA',
+      numeroDocumento: item.reporte.codigo,
+      cantidadAnterior: stock.stockDanado,
+      cantidad: item.cantidadAfectada,
+      cantidadNueva: stock.stockDanado + item.cantidadAfectada,
+      motivo: `Incidencia: ${item.tipo} - ${item.descripcion}`,
+      observaciones,
+      usuarioId,
     });
 
     return movimiento.id;
@@ -748,21 +747,19 @@ export class ReporteIncidenciaService {
     });
 
     // Crear movimiento de stock
-    const movimiento = await tx.movimientoStock.create({
-      data: {
-        empresaId: item.empresaId,
-        sedeId: item.sedeId,
-        productoStockId: stock.id,
-        tipo: TipoMovimientoStock.SALIDA_BAJA,
-        tipoDocumento: 'REPORTE_INCIDENCIA',
-        numeroDocumento: item.reporte.codigo,
-        cantidadAnterior: stock.stockActual,
-        cantidad: -item.cantidadAfectada,
-        cantidadNueva: stock.stockActual - item.cantidadAfectada,
-        motivo: `Baja por incidencia: ${item.tipo} - ${item.descripcion}`,
-        observaciones,
-        usuarioId,
-      },
+    const movimiento = await crearMovimientoStockConValoracion(tx, {
+      empresaId: item.empresaId,
+      sedeId: item.sedeId,
+      productoStockId: stock.id,
+      tipo: TipoMovimientoStock.SALIDA_BAJA,
+      tipoDocumento: 'REPORTE_INCIDENCIA',
+      numeroDocumento: item.reporte.codigo,
+      cantidadAnterior: stock.stockActual,
+      cantidad: -item.cantidadAfectada,
+      cantidadNueva: stock.stockActual - item.cantidadAfectada,
+      motivo: `Baja por incidencia: ${item.tipo} - ${item.descripcion}`,
+      observaciones,
+      usuarioId,
     });
 
     return movimiento.id;
@@ -788,21 +785,19 @@ export class ReporteIncidenciaService {
     });
 
     // Crear movimiento de stock
-    const movimiento = await tx.movimientoStock.create({
-      data: {
-        empresaId: item.empresaId,
-        sedeId: item.sedeId,
-        productoStockId: stock.id,
-        tipo: TipoMovimientoStock.SALIDA_GARANTIA,
-        tipoDocumento: 'REPORTE_INCIDENCIA',
-        numeroDocumento: item.reporte.codigo,
-        cantidadAnterior: stock.stockEnGarantia,
-        cantidad: item.cantidadAfectada,
-        cantidadNueva: stock.stockEnGarantia + item.cantidadAfectada,
-        motivo: `Envío a garantía: ${item.tipo} - ${item.descripcion}`,
-        observaciones,
-        usuarioId,
-      },
+    const movimiento = await crearMovimientoStockConValoracion(tx, {
+      empresaId: item.empresaId,
+      sedeId: item.sedeId,
+      productoStockId: stock.id,
+      tipo: TipoMovimientoStock.SALIDA_GARANTIA,
+      tipoDocumento: 'REPORTE_INCIDENCIA',
+      numeroDocumento: item.reporte.codigo,
+      cantidadAnterior: stock.stockEnGarantia,
+      cantidad: item.cantidadAfectada,
+      cantidadNueva: stock.stockEnGarantia + item.cantidadAfectada,
+      motivo: `Envío a garantía: ${item.tipo} - ${item.descripcion}`,
+      observaciones,
+      usuarioId,
     });
 
     return movimiento.id;
@@ -828,21 +823,19 @@ export class ReporteIncidenciaService {
     });
 
     // Crear movimiento de stock
-    const movimiento = await tx.movimientoStock.create({
-      data: {
-        empresaId: item.empresaId,
-        sedeId: item.sedeId,
-        productoStockId: stock.id,
-        tipo: TipoMovimientoStock.AJUSTE_PERDIDA,
-        tipoDocumento: 'REPORTE_INCIDENCIA',
-        numeroDocumento: item.reporte.codigo,
-        cantidadAnterior: stock.stockActual,
-        cantidad: -item.cantidadAfectada,
-        cantidadNueva: stock.stockActual - item.cantidadAfectada,
-        motivo: `Pérdida aceptada: ${item.tipo} - ${item.descripcion}`,
-        observaciones,
-        usuarioId,
-      },
+    const movimiento = await crearMovimientoStockConValoracion(tx, {
+      empresaId: item.empresaId,
+      sedeId: item.sedeId,
+      productoStockId: stock.id,
+      tipo: TipoMovimientoStock.AJUSTE_PERDIDA,
+      tipoDocumento: 'REPORTE_INCIDENCIA',
+      numeroDocumento: item.reporte.codigo,
+      cantidadAnterior: stock.stockActual,
+      cantidad: -item.cantidadAfectada,
+      cantidadNueva: stock.stockActual - item.cantidadAfectada,
+      motivo: `Pérdida aceptada: ${item.tipo} - ${item.descripcion}`,
+      observaciones,
+      usuarioId,
     });
 
     return movimiento.id;
