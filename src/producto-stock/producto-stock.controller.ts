@@ -287,12 +287,14 @@ export class ProductoStockController {
   async getHistorialMovimientos(
     @Param('id') id: string,
     @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
     @Query('tipo') tipo?: string,
     @Query('fechaDesde') fechaDesde?: string,
     @Query('fechaHasta') fechaHasta?: string,
   ) {
     return this.stockService.getHistorialMovimientos(id, {
       limit: limit ? parseInt(limit) : undefined,
+      offset: offset ? parseInt(offset) : undefined,
       tipo,
       fechaDesde,
       fechaHasta,

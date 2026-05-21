@@ -396,12 +396,14 @@ export class ProductoStockService {
     productoStockId: string,
     filtros?: {
       limit?: number;
+      offset?: number;
       tipo?: string;
       fechaDesde?: string;
       fechaHasta?: string;
     },
   ) {
     const limit = filtros?.limit ?? 100;
+    const offset = filtros?.offset ?? 0;
 
     const where: any = { productoStockId };
 
@@ -419,10 +421,14 @@ export class ProductoStockService {
       }
     }
 
-    const movimientos = await this.prisma.movimientoStock.findMany({
+    // Pedimos `limit + 1` para detectar si hay más sin requerir un count
+    // separado (más caro). Si volvieron limit+1, recortamos al límite y
+    // marcamos hasMore=true. El resumen sí cuenta el total real igual.
+    const movimientosRaw = await this.prisma.movimientoStock.findMany({
       where,
       orderBy: { creadoEn: 'desc' },
-      take: limit,
+      skip: offset,
+      take: limit + 1,
       include: {
         venta: { select: { id: true, codigo: true } },
         compra: { select: { id: true, codigo: true } },
@@ -430,10 +436,16 @@ export class ProductoStockService {
         devolucion: { select: { id: true, codigo: true } },
       },
     });
+    const hasMore = movimientosRaw.length > limit;
+    const movimientos = hasMore
+      ? movimientosRaw.slice(0, limit)
+      : movimientosRaw;
 
     // Resumen agregado por tipo. Usa el MISMO `where` que la lista para
     // que el resumen respete tipo/fechaDesde/fechaHasta — antes era
     // global y descuadraba con lo visible cuando había filtros activos.
+    // El resumen se calcula SIEMPRE sobre todo el histórico filtrado
+    // (no respeta offset/limit) — es el total real.
     const resumen = await this.prisma.movimientoStock.groupBy({
       by: ['tipo'],
       where,
@@ -443,6 +455,7 @@ export class ProductoStockService {
 
     return {
       movimientos,
+      hasMore,
       resumen: resumen.map((r) => ({
         tipo: r.tipo,
         totalCantidad: r._sum.cantidad ?? 0,
