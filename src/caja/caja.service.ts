@@ -154,6 +154,90 @@ export class CajaService {
   /**
    * Obtener caja activa del usuario
    */
+  /**
+   * Devuelve una caja por id con la misma forma agregada que `getCajaActiva`
+   * (sede, usuario, saldos, totales por método). Pensado para que un admin
+   * pueda abrir el dashboard de la caja de otro cajero desde el monitor
+   * y operarla (arqueo, cerrar) reusando la misma `CajaPage` del cajero.
+   *
+   * No filtra por `usuarioId` — el guard `VIEW_CAJA` ya autoriza el acceso
+   * a nivel empresa. La caja puede estar ABIERTA o CERRADA; el cliente
+   * decide qué mostrar según `caja.estado`.
+   */
+  async getCajaPorId(empresaId: string, cajaId: string) {
+    const caja = await this.prisma.caja.findFirst({
+      where: { id: cajaId, empresaId },
+      include: {
+        sede: { select: { id: true, nombre: true, codigo: true } },
+        sedeFacturacion: {
+          select: {
+            id: true,
+            nombre: true,
+            rucSede: true,
+            razonSocialSede: true,
+          },
+        },
+        usuario: {
+          select: {
+            id: true,
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+        cierre: true,
+        _count: { select: { movimientos: true } },
+      },
+    });
+
+    if (!caja) {
+      throw new NotFoundException('Caja no encontrada');
+    }
+
+    // Mismo cálculo de saldos que getCajaActiva (groupBy por método +
+    // tipo). Si la caja está cerrada, los movimientos siguen siendo los
+    // mismos; el cliente puede mostrar el cierre adjunto si existe.
+    const resumenPorMetodo = await this.prisma.movimientoCaja.groupBy({
+      by: ['metodoPago', 'tipo'],
+      where: { cajaId, anulado: false },
+      _sum: { monto: true },
+    });
+
+    const totalIngresos = resumenPorMetodo
+      .filter((r) => r.tipo === TipoMovimientoCaja.INGRESO)
+      .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
+
+    const totalEgresos = resumenPorMetodo
+      .filter((r) => r.tipo === TipoMovimientoCaja.EGRESO)
+      .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
+
+    const montoApertura = Number(caja.montoApertura);
+    const saldoActual = montoApertura + totalIngresos - totalEgresos;
+
+    const ingresosEfectivo = resumenPorMetodo
+      .filter(
+        (r) =>
+          r.tipo === TipoMovimientoCaja.INGRESO &&
+          r.metodoPago === MetodoPagoVenta.EFECTIVO,
+      )
+      .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
+    const egresosEfectivo = resumenPorMetodo
+      .filter(
+        (r) =>
+          r.tipo === TipoMovimientoCaja.EGRESO &&
+          r.metodoPago === MetodoPagoVenta.EFECTIVO,
+      )
+      .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
+    const saldoEfectivo = montoApertura + ingresosEfectivo - egresosEfectivo;
+
+    return {
+      ...caja,
+      totalIngresos,
+      totalEgresos,
+      saldoActual,
+      saldoEfectivo,
+      totalMovimientos: caja._count.movimientos,
+    };
+  }
+
   async getCajaActiva(empresaId: string, usuarioId: string) {
     const caja = await this.prisma.caja.findFirst({
       where: {

@@ -98,6 +98,23 @@ export class CajaController {
     return this.cajaService.getMovimientos(empresaId, cajaId);
   }
 
+  /**
+   * Devuelve la caja con saldos calculados — mismo shape que /caja/activa
+   * pero por id en vez de "mi caja activa". Lo usa el admin desde el monitor
+   * para abrir el dashboard de la caja de otro cajero y operarla
+   * (arqueo, cerrar) reusando la CajaPage del cajero.
+   */
+  @Get(':id')
+  @RequiresPermission(Permission.VIEW_CAJA)
+  @ApiOperation({ summary: 'Obtener una caja por id (vista admin)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getCajaPorId(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') cajaId: string,
+  ) {
+    return this.cajaService.getCajaPorId(empresaId, cajaId);
+  }
+
   @Post(':id/cerrar')
   @RequiresPermission(Permission.CERRAR_CAJA)
   @ApiOperation({ summary: 'Cerrar caja con conteo físico' })
