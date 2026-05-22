@@ -563,6 +563,37 @@ export class ProductoService {
   }
 
   /**
+   * Actualizar SOLO las imágenes de un producto — sin pasar por la
+   * lógica completa de `update`. Pensado para que roles sin
+   * MANAGE_PRODUCTS (vendedor/cajero) puedan subir o reemplazar fotos
+   * desde Venta Rápida.
+   *
+   * Reutiliza `ProductoCatalogService.actualizarImagenes` que
+   * desasocia las anteriores y asocia las nuevas en una sola
+   * transacción (idempotente respecto a IDs repetidos).
+   */
+  async updateImagenes(
+    id: string,
+    empresaId: string,
+    imagenesIds: string[],
+  ): Promise<void> {
+    // Verificar que el producto existe en esta empresa.
+    const producto = await this.prisma.producto.findFirst({
+      where: { id, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!producto) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+
+    await this.catalogService.actualizarImagenes(
+      id,
+      empresaId,
+      imagenesIds,
+    );
+  }
+
+  /**
    * Actualizar un producto existente
    * Método delegador (Facade) - orquesta llamadas a servicios especializados
    */

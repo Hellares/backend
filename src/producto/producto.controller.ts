@@ -42,6 +42,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
+import { UpdateImagenesProductoDto } from './dto/update-imagenes-producto.dto';
 import { QueryProductoDto } from './dto/query-producto.dto';
 import {
   ProductoResponseDto,
@@ -452,6 +453,34 @@ export class ProductoController {
       updateProductoDto,
       user.sub,
     );
+  }
+
+  /**
+   * Endpoint reducido para actualizar SOLO las imágenes de un producto.
+   * No requiere MANAGE_PRODUCTS — basta con VIEW_PRODUCTS, para que
+   * un vendedor/cajero pueda subir fotos desde Venta Rápida sin acceso
+   * al resto de campos del producto (precio, costo, etc.).
+   */
+  @Patch(':id/imagenes')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary:
+      'Actualizar SOLO las imágenes de un producto (no toca otros campos)',
+  })
+  @ApiResponse({ status: 200, description: 'Imágenes actualizadas' })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async updateImagenes(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: UpdateImagenesProductoDto,
+  ): Promise<{ ok: true }> {
+    await this.productoService.updateImagenes(id, empresaId, dto.imagenesIds);
+    return { ok: true };
   }
 
   @Delete(':id')
