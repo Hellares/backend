@@ -43,6 +43,10 @@ import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreateProductoDto } from './dto/create-producto.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { UpdateImagenesProductoDto } from './dto/update-imagenes-producto.dto';
+import {
+  SyncDeltasQueryDto,
+  SyncDeltasResponseDto,
+} from './dto/sync-deltas.dto';
 import { QueryProductoDto } from './dto/query-producto.dto';
 import {
   ProductoResponseDto,
@@ -399,6 +403,36 @@ export class ProductoController {
     @Body() dto: { productoIds: string[]; formato?: 'INTERNO' | 'EAN13' },
   ) {
     return this.productoService.generarCodigosBarras(empresaId, dto.productoIds, dto.formato);
+  }
+
+  /**
+   * Sync diferencial — Fase 3 del plan de carga rápida del catálogo.
+   *
+   * Devuelve solo los cambios desde `lastSync` (productos modificados
+   * y eliminados). El cliente aplica los deltas a su cache local en
+   * vez de re-descargar todo. Si `lastSync` es vacío/inválido/viejo o
+   * hay demasiados cambios, responde `fullSyncRequired: true` y el
+   * cliente debe llamar al endpoint estándar `GET /productos`.
+   *
+   * IMPORTANTE: ubicado antes de `:id` para que NestJS no matchee
+   * "sync" como un id.
+   */
+  @Get('sync')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Sync diferencial del catálogo (deltas desde lastSync)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Deltas del catálogo o flag fullSyncRequired',
+    type: SyncDeltasResponseDto,
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async syncDeltas(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: SyncDeltasQueryDto,
+  ): Promise<SyncDeltasResponseDto> {
+    return this.productoService.syncDeltas(empresaId, query);
   }
 
   // =========================================

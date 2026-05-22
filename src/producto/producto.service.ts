@@ -13,6 +13,10 @@ import {
   ProductoResponseDto,
   PaginatedProductoResponseDto,
 } from './dto/producto-response.dto';
+import {
+  SyncDeltasQueryDto,
+  SyncDeltasResponseDto,
+} from './dto/sync-deltas.dto';
 import { AppLoggerService } from 'src/common/logger';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
 import { SedeContextHelper } from '../common/helpers/sede-context.helper';
@@ -560,6 +564,142 @@ export class ProductoService {
 
     // 3. Convertir a DTO (delegar a CatalogService)
     return this.catalogService.toResponseDto(producto, archivos);
+  }
+
+  /**
+   * Sync diferencial del catálogo (Fase 3 del plan de carga rápida).
+   *
+   * Devuelve solo los productos modificados/eliminados desde la fecha
+   * `lastSync` para que el cliente aplique los deltas sobre su cache
+   * local en vez de re-descargar todo el catálogo (200KB → 1-5KB
+   * típicamente).
+   *
+   * Reglas de fallback a full sync:
+   *  - `lastSync` no provisto → cliente no tiene cache previo
+   *  - `lastSync` muy viejo (> 7 días) → el delta sería demasiado grande
+   *  - Cantidad de updates supera el tope → mejor traer todo
+   *
+   * En esos casos respondemos con `fullSyncRequired: true` + arrays
+   * vacíos para que el cliente llame al endpoint normal de getProductos.
+   */
+  async syncDeltas(
+    empresaId: string,
+    query: SyncDeltasQueryDto,
+  ): Promise<SyncDeltasResponseDto> {
+    const serverTime = new Date();
+    const TOPE_UPDATES = 200; // Si hay más, mejor full sync
+    const MAX_AGE_DAYS = 7; // Cache local mayor a esto → full
+
+    // Caso 1: sin lastSync (cliente nuevo o primera sesión)
+    if (!query.lastSync) {
+      return {
+        updated: [],
+        deleted: [],
+        serverTime: serverTime.toISOString(),
+        fullSyncRequired: true,
+      };
+    }
+
+    const since = new Date(query.lastSync);
+    if (Number.isNaN(since.getTime())) {
+      // Fecha inválida → full
+      return {
+        updated: [],
+        deleted: [],
+        serverTime: serverTime.toISOString(),
+        fullSyncRequired: true,
+      };
+    }
+
+    const ageDays =
+      (serverTime.getTime() - since.getTime()) / (1000 * 60 * 60 * 24);
+    if (ageDays > MAX_AGE_DAYS) {
+      return {
+        updated: [],
+        deleted: [],
+        serverTime: serverTime.toISOString(),
+        fullSyncRequired: true,
+      };
+    }
+
+    // Query 1: productos creados o modificados desde lastSync
+    // (excluye eliminados; esos van en `deleted`).
+    const productosModificados = await this.prisma.producto.findMany({
+      where: {
+        empresaId,
+        deletedAt: null,
+        actualizadoEn: { gt: since },
+      },
+      take: TOPE_UPDATES + 1, // +1 para detectar overflow
+      orderBy: { actualizadoEn: 'asc' },
+      include: this.catalogService.buildIncludeClause(true, true, false, true),
+    });
+
+    if (productosModificados.length > TOPE_UPDATES) {
+      // Demasiados cambios — mejor full sync (cubre caso de
+      // importación masiva del admin).
+      return {
+        updated: [],
+        deleted: [],
+        serverTime: serverTime.toISOString(),
+        fullSyncRequired: true,
+      };
+    }
+
+    // Query 2: productos soft-deleted desde lastSync (solo IDs).
+    const deletedRows = await this.prisma.producto.findMany({
+      where: {
+        empresaId,
+        deletedAt: { gt: since },
+      },
+      select: { id: true },
+    });
+
+    // Cargar archivos en bulk (mismo patrón que findAll) si hay
+    // productos modificados, para que `toResponseDto` los incluya.
+    const updatedDtos: ProductoResponseDto[] = [];
+    if (productosModificados.length > 0) {
+      const productosIds = productosModificados.map((p) => p.id);
+      const archivos = await this.prisma.archivo.findMany({
+        where: {
+          empresaId,
+          entidadTipo: 'PRODUCTO',
+          entidadId: { in: productosIds },
+          isActive: true,
+          deletedAt: null,
+        },
+        orderBy: [{ orden: 'asc' }, { creadoEn: 'asc' }],
+        select: {
+          id: true,
+          url: true,
+          urlThumbnail: true,
+          categoria: true,
+          orden: true,
+          entidadId: true,
+        },
+      });
+      const archivosPorProducto = new Map<string, any[]>();
+      for (const a of archivos) {
+        const arr = archivosPorProducto.get(a.entidadId!) ?? [];
+        arr.push(a);
+        archivosPorProducto.set(a.entidadId!, arr);
+      }
+
+      for (const p of productosModificados) {
+        const dto = this.catalogService.toResponseDto(
+          p,
+          archivosPorProducto.get(p.id) ?? [],
+        );
+        updatedDtos.push(dto);
+      }
+    }
+
+    return {
+      updated: updatedDtos,
+      deleted: deletedRows.map((r) => r.id),
+      serverTime: serverTime.toISOString(),
+      fullSyncRequired: false,
+    };
   }
 
   /**
