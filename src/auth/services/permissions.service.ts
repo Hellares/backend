@@ -12,15 +12,22 @@ import { GranularPermissionId } from './granular-permissions.catalog';
  * IMPORTANTE: Si necesitas agregar/modificar permisos, hazlo AQUÍ.
  */
 /**
- * Overrides individuales por sede que pueden ampliar los permisos
- * derivados del rol. Hoy soporta caja granular (`puedeAbrirCaja` /
- * `puedeCerrarCaja`). Si en alguna sede de la empresa el usuario tiene
- * el flag, el permiso se concede a nivel global de empresa (el guard a
- * nivel sede específica se valida en el endpoint si aplica).
+ * Overrides individuales por sede que amplían los permisos derivados
+ * del rol. Si el usuario tiene el flag/permiso en CUALQUIER sede de la
+ * empresa, se concede a nivel global (el guard a nivel sede específica
+ * se valida en el endpoint si aplica).
+ *
+ * - `puedeAbrirCaja` / `puedeCerrarCaja`: flags legacy en columnas de
+ *   `UsuarioSedeRol`. Pendientes de drop en Fase B (cuando el backfill
+ *   esté consolidado en `permisos[]`).
+ * - `permisos`: array consolidado de IDs del catálogo granular
+ *   (`UsuarioSedeRol.permisos`). Es el sistema nuevo. Hoy se hace OR
+ *   contra los flags legacy para que ambos lados resuelvan igual.
  */
 export interface PermissionsOverrides {
   puedeAbrirCaja?: boolean;
   puedeCerrarCaja?: boolean;
+  permisos?: readonly string[];
 }
 
 @Injectable()
@@ -55,10 +62,18 @@ export class PermissionsService {
     const isViewer = isLectura; // solo lectura, nunca MANAGE
 
     // Overrides granulares: se aplican como OR sobre el rol base. Si el
-    // usuario tiene el flag en cualquier sede de la empresa, le otorgamos
-    // el permiso correspondiente.
+    // usuario tiene el flag legacy O el ID en el array granular en
+    // cualquier sede de la empresa, le otorgamos el permiso. La doble
+    // fuente permite migrar gradualmente: Fase A hace OR, Fase B dropea
+    // los flags cuando el backfill esté validado.
     const puedeAbrirCajaPorFlag = overrides?.puedeAbrirCaja === true;
     const puedeCerrarCajaPorFlag = overrides?.puedeCerrarCaja === true;
+    const tieneCajaAbrirGranular =
+      overrides?.permisos?.includes(GranularPermissionId.CAJA_ABRIR) ?? false;
+    const tieneCajaCerrarGranular =
+      overrides?.permisos?.includes(GranularPermissionId.CAJA_CERRAR) ?? false;
+    const puedeAbrirCaja = puedeAbrirCajaPorFlag || tieneCajaAbrirGranular;
+    const puedeCerrarCaja = puedeCerrarCajaPorFlag || tieneCajaCerrarGranular;
 
     return {
       // ==================== USUARIOS ====================
@@ -149,15 +164,16 @@ export class PermissionsService {
       // ==================== CAJA ====================
       canViewCaja:
         isAnyAdmin || isCajero || isContador ||
-        puedeAbrirCajaPorFlag || puedeCerrarCajaPorFlag,
+        puedeAbrirCaja || puedeCerrarCaja,
       canManageCaja:
         isAnyAdmin || isCajero ||
-        puedeAbrirCajaPorFlag || puedeCerrarCajaPorFlag,
-      // Granulares: permiten abrir y/o cerrar por separado vía flag.
+        puedeAbrirCaja || puedeCerrarCaja,
+      // Granulares: permiten abrir y/o cerrar por separado vía flag
+      // legacy o vía catálogo (caja.abrir / caja.cerrar).
       canAbrirCaja:
-        isAnyAdmin || isCajero || puedeAbrirCajaPorFlag,
+        isAnyAdmin || isCajero || puedeAbrirCaja,
       canCerrarCaja:
-        isAnyAdmin || isCajero || puedeCerrarCajaPorFlag,
+        isAnyAdmin || isCajero || puedeCerrarCaja,
 
       // ==================== RRHH - EMPLEADOS ====================
       canViewEmpleados:

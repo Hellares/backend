@@ -102,11 +102,6 @@ export class PermissionsGuard implements CanActivate {
       },
     });
 
-    const overrides = {
-      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
-      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
-    };
-
     // Unión de permisos granulares entre todas las sedes (deduplicado).
     // Lo dejamos en el request para que endpoints que validan permisos
     // granulares no necesiten re-consultar la BD.
@@ -114,6 +109,15 @@ export class PermissionsGuard implements CanActivate {
       new Set(sedeRoles.flatMap((s) => s.permisos)),
     );
     request._granularPermissions = granularPermissions;
+
+    const overrides = {
+      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
+      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
+      // El array granular se incluye para que calculatePermissions
+      // resuelva `caja.abrir` / `caja.cerrar` por catálogo además del
+      // flag legacy (Fase A — dropear flags en Fase B).
+      permisos: granularPermissions,
+    };
 
     // 5. Calcular permisos combinando roles + overrides individuales.
     const permissions = this.permissionsService.calculatePermissions(

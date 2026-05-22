@@ -1001,10 +1001,6 @@ export class EmpresaService {
         permisos: true,
       },
     });
-    const overrides = {
-      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
-      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
-    };
     // Unión de todos los IDs ocultos en cualquier sede del usuario.
     // Si está oculto en alguna sede, se considera oculto. (Si en algún
     // futuro hay diferencias por sede, este consolidado debe ajustarse.)
@@ -1017,6 +1013,13 @@ export class EmpresaService {
     const granularPermissions = Array.from(
       new Set(sedeRoles.flatMap((s) => s.permisos)),
     );
+    const overrides = {
+      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
+      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
+      // Incluido para que calculatePermissions resuelva `caja.abrir` /
+      // `caja.cerrar` por catálogo además del flag legacy (Fase A).
+      permisos: granularPermissions,
+    };
     const permissions = this.calculatePermissions(userRoles, overrides);
     permissions.accesosRapidosOcultos = accesosRapidosOcultos;
     permissions.granularPermissions = granularPermissions;
@@ -1127,7 +1130,11 @@ export class EmpresaService {
    */
   private calculatePermissions(
     userRoles: EmpresaUsuarioRol[],
-    overrides?: { puedeAbrirCaja?: boolean; puedeCerrarCaja?: boolean },
+    overrides?: {
+      puedeAbrirCaja?: boolean;
+      puedeCerrarCaja?: boolean;
+      permisos?: readonly string[];
+    },
   ): EmpresaPermissionsDto {
     const roles = userRoles.map(r => r.rol);
     return this.permissionsService.calculatePermissions(roles, overrides);
