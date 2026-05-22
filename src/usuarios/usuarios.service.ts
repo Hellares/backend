@@ -13,10 +13,11 @@ import {
 import { AppLoggerService } from '../common/logger';
 import { generatePaginationMeta } from '../common/utils/pagination.util';
 import * as bcrypt from 'bcryptjs';
-import { Rol, SedeRole } from '@prisma/client';
+import { Prisma, Rol, SedeRole } from '@prisma/client';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CacheService } from '../redis/cache.service';
 import { AuthSessionService } from '../auth/auth.session.service';
+import { VALID_GRANULAR_PERMISSION_IDS } from '../auth/services/granular-permissions.catalog';
 
 @Injectable()
 export class UsuariosService {
@@ -52,10 +53,11 @@ export class UsuariosService {
       );
     }
 
-    // Validar que las sedes pertenezcan a la empresa
-    if (sedeIds && sedeIds.length > 0) {
-      await this.validarSedesEmpresa(sedeIds, empresaId);
-    }
+    // (Validación de sedes movida a cada CASO, dentro de su $transaction
+    // — cierra TOCTOU contra un admin desactivando sede entre check y use.)
+
+    // Log de drift de catálogo (no bloqueante).
+    this.logIdsDesconocidos(createUsuarioDto.permisos, 'registrarUsuario');
 
     // Buscar si existe una persona con este DNI
     const personaExistente = await this.prisma.persona.findUnique({
@@ -106,35 +108,82 @@ export class UsuariosService {
         yaEraEmpleadoEmpresa = false;
         mensaje = 'Cliente promovido a empleado exitosamente';
 
-        // Actualizar el rol de CLIENTE al nuevo rol
-        await this.prisma.empresaUsuarioRol.update({
-          where: { id: empresaRol.id },
-          data: {
-            rol,
-            registradoPor,
-          },
+        const usuarioPromovidoId = personaExistente.usuario!.id;
+        const personaIdPromovido = personaExistente.id;
+
+        // Toda la promoción en un solo $transaction: si cualquiera de
+        // los 4 pasos falla, no queda el rol parcialmente promovido
+        // sin sedes ni con EmpresaPersona/rolGlobal desincronizados.
+        await this.prisma.$transaction(async (prisma) => {
+          // Validar sedes adentro de la tx para cerrar TOCTOU contra
+          // un admin que desactiva la sede entre check y upsert.
+          if (sedeIds && sedeIds.length > 0) {
+            await this.validarSedesEmpresa(sedeIds, empresaId, prisma);
+          }
+
+          // 1) Rol en EmpresaUsuarioRol
+          await prisma.empresaUsuarioRol.update({
+            where: { id: empresaRol.id },
+            data: { rol, registradoPor },
+          });
+
+          // 2) Rol en EmpresaPersona (estaba como CLIENTE → EMPLEADO).
+          //    Sin este sync, consultas que filtran por EmpresaPersona.rol
+          //    siguen viendo al usuario como cliente.
+          await prisma.empresaPersona.updateMany({
+            where: { personaId: personaIdPromovido, empresaId },
+            data: { rol: 'EMPLEADO' },
+          });
+
+          // 3) rolGlobal del Usuario. El JWT y guards globales lo leen
+          //    desde acá; sin esto seguiría siendo CLIENTE.
+          await prisma.usuario.update({
+            where: { id: usuarioPromovidoId },
+            data: { rolGlobal: rol },
+          });
+
+          // 4) Asignar sedes (upsert para soportar UsuarioSedeRol
+          //    soft-deleted previo: createMany reventaría con el
+          //    unique constraint (usuarioId, sedeId) que no filtra por
+          //    deletedAt).
+          if (sedeIds && sedeIds.length > 0) {
+            const sedeRole = this.mapRolToSedeRole(rol);
+            for (const sedeId of sedeIds) {
+              await prisma.usuarioSedeRol.upsert({
+                where: {
+                  usuarioId_sedeId: { usuarioId: usuarioPromovidoId, sedeId },
+                },
+                create: {
+                  usuarioId: usuarioPromovidoId,
+                  sedeId,
+                  rol: sedeRole,
+                  puedeAbrirCaja: createUsuarioDto.puedeAbrirCaja ?? false,
+                  puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
+                  limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
+                  permisos: createUsuarioDto.permisos ?? [],
+                  accesosRapidosOcultos:
+                    createUsuarioDto.accesosRapidosOcultos ?? [],
+                  creadoPor: registradoPor,
+                },
+                update: {
+                  rol: sedeRole,
+                  puedeAbrirCaja: createUsuarioDto.puedeAbrirCaja ?? false,
+                  puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
+                  limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
+                  permisos: createUsuarioDto.permisos ?? [],
+                  accesosRapidosOcultos:
+                    createUsuarioDto.accesosRapidosOcultos ?? [],
+                  // Reactivar si previamente estaba soft-deleted.
+                  deletedAt: null,
+                  isActive: true,
+                  modificadoPor: registradoPor,
+                },
+              });
+            }
+          }
         });
 
-        // Asignar sedes si se proporcionaron
-        if (sedeIds && sedeIds.length > 0) {
-          const sedeRole = this.mapRolToSedeRole(rol);
-
-          await this.prisma.usuarioSedeRol.createMany({
-            data: sedeIds.map((sedeId) => ({
-              usuarioId: personaExistente.usuario!.id,
-              sedeId,
-              rol: sedeRole,
-              puedeAbrirCaja: createUsuarioDto.puedeAbrirCaja ?? false,
-              puedeCerrarCaja: createUsuarioDto.puedeCerrarCaja ?? false,
-              limiteCreditoVenta: createUsuarioDto.limiteCreditoVenta,
-              permisos: createUsuarioDto.permisos ?? [],
-              accesosRapidosOcultos: createUsuarioDto.accesosRapidosOcultos ?? [],
-              creadoPor: registradoPor,
-            })),
-          });
-        }
-
-        usuario = { id: personaExistente.usuario!.id };
+        usuario = { id: usuarioPromovidoId };
 
         this.logger.log(
           `Cliente (${dni}) promovido a empleado con rol ${rol} en empresa ${empresaId} por usuario ${registradoPor}`,
@@ -236,17 +285,45 @@ export class UsuariosService {
   }
 
   /**
-   * Valida que email y teléfono sean únicos
+   * Loguea warning si el payload trae IDs de `permisos` que no están
+   * en el catálogo granular. No rechaza para no romper deploys donde
+   * el cliente Flutter va adelante del backend (o viceversa), pero
+   * deja huella en logs para detectar drift de catálogo o llamadas
+   * mal-formadas. `accesosRapidosOcultos` no se valida porque su
+   * catálogo vive solo en Flutter (UI-only).
+   */
+  private logIdsDesconocidos(
+    permisos: string[] | undefined,
+    contexto: string,
+  ): void {
+    if (!permisos || permisos.length === 0) return;
+    const desconocidos = permisos.filter(
+      (p) => !VALID_GRANULAR_PERMISSION_IDS.has(p),
+    );
+    if (desconocidos.length > 0) {
+      this.logger.warn(
+        `[${contexto}] IDs de permiso granular fuera de catálogo: ${desconocidos.join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Valida que email y teléfono sean únicos tanto en Usuario como en
+   * Persona. Sin el check en Persona, el CASO 3 (persona existente sin
+   * usuario, donde el flujo termina haciendo `persona.update({ email })`)
+   * reventaba con unique constraint cruda de Prisma en lugar de un
+   * ConflictException amigable.
    */
   private async validarEmailTelefonoUnicos(
     email?: string,
     telefono?: string,
   ): Promise<void> {
     if (email) {
-      const usuarioConEmail = await this.prisma.usuario.findUnique({
-        where: { email },
-      });
-      if (usuarioConEmail) {
+      const [usuarioConEmail, personaConEmail] = await Promise.all([
+        this.prisma.usuario.findUnique({ where: { email } }),
+        this.prisma.persona.findFirst({ where: { email } }),
+      ]);
+      if (usuarioConEmail || personaConEmail) {
         throw new ConflictException(
           'Ya existe un usuario registrado con ese email',
         );
@@ -254,10 +331,11 @@ export class UsuariosService {
     }
 
     if (telefono) {
-      const usuarioConTelefono = await this.prisma.usuario.findUnique({
-        where: { telefono },
-      });
-      if (usuarioConTelefono) {
+      const [usuarioConTelefono, personaConTelefono] = await Promise.all([
+        this.prisma.usuario.findUnique({ where: { telefono } }),
+        this.prisma.persona.findFirst({ where: { telefono } }),
+      ]);
+      if (usuarioConTelefono || personaConTelefono) {
         throw new ConflictException(
           'Ya existe un usuario registrado con ese teléfono',
         );
@@ -266,13 +344,18 @@ export class UsuariosService {
   }
 
   /**
-   * Valida que todas las sedes pertenezcan a la empresa
+   * Valida que todas las sedes pertenezcan a la empresa. Acepta un
+   * cliente prisma transaccional opcional para correr el check dentro
+   * de la misma tx que el upsert/createMany de UsuarioSedeRol y cerrar
+   * la ventana TOCTOU (otro admin desactivando sede entre check y use).
    */
   private async validarSedesEmpresa(
     sedeIds: string[],
     empresaId: string,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
-    const sedesValidas = await this.prisma.sede.findMany({
+    const client = tx ?? this.prisma;
+    const sedesValidas = await client.sede.findMany({
       where: {
         id: { in: sedeIds },
         empresaId,
@@ -302,6 +385,11 @@ export class UsuariosService {
     registradoPor?: string,
   ) {
     return this.prisma.$transaction(async (prisma) => {
+      // Validar sedes adentro de la tx (cierra TOCTOU).
+      if (sedeIds && sedeIds.length > 0) {
+        await this.validarSedesEmpresa(sedeIds, empresaId, prisma);
+      }
+
       // Crear EmpresaPersona (relación persona-empresa como empleado)
       await prisma.empresaPersona.create({
         data: {
@@ -365,6 +453,11 @@ export class UsuariosService {
     const passwordHash = await bcrypt.hash(dni, 12);
 
     return this.prisma.$transaction(async (prisma) => {
+      // Validar sedes adentro de la tx (cierra TOCTOU).
+      if (sedeIds && sedeIds.length > 0) {
+        await this.validarSedesEmpresa(sedeIds, empresaId, prisma);
+      }
+
       // Actualizar persona para marcarla como usuario
       await prisma.persona.update({
         where: { id: personaId },
@@ -473,6 +566,11 @@ export class UsuariosService {
     const passwordHash = await bcrypt.hash(personaData.dni, 12);
 
     return this.prisma.$transaction(async (prisma) => {
+      // Validar sedes adentro de la tx (cierra TOCTOU).
+      if (sedeIds && sedeIds.length > 0) {
+        await this.validarSedesEmpresa(sedeIds, empresaId, prisma);
+      }
+
       // Crear persona
       const persona = await prisma.persona.create({
         data: {
@@ -941,6 +1039,19 @@ export class UsuariosService {
       aliasTicket,
     } = updateUsuarioDto;
 
+    // No permitir degradar empleados a CLIENTE desde este endpoint.
+    // El módulo de clientes maneja su propio ciclo de vida y este PATCH
+    // dejaría al usuario en estado inconsistente (CLIENTE con
+    // UsuarioSedeRol activos, flags de caja, etc.).
+    if (rol === Rol.CLIENTE) {
+      throw new BadRequestException(
+        'No se puede asignar el rol CLIENTE desde este endpoint. Use el módulo de clientes.',
+      );
+    }
+
+    // Log de drift de catálogo (no bloqueante).
+    this.logIdsDesconocidos(permisos, 'actualizarUsuario');
+
     // Validar email único (si está cambiando)
     if (email && email !== empresaUsuario.usuario.email) {
       const usuarioConEmail = await this.prisma.usuario.findUnique({
@@ -965,13 +1076,27 @@ export class UsuariosService {
       }
     }
 
-    // Validar sedes si se están actualizando
-    if (sedeIds && sedeIds.length > 0) {
-      await this.validarSedesEmpresa(sedeIds, empresaId);
-    }
+    // Detectar si el cambio impacta permisos/rol → revocar sesiones
+    // post-tx para que el JWT/sesión activa no siga con permisos viejos
+    // (la invalidación de cache sola no alcanza, el JWT vive hasta
+    // expirar). Sobre-revocamos si el admin reenvía el mismo valor,
+    // pero es operación poco frecuente y la revocación es barata.
+    const rolCambia = rol !== undefined && rol !== empresaUsuario.rol;
+    const permisosOFlagsTocados =
+      permisos !== undefined ||
+      accesosRapidosOcultos !== undefined ||
+      puedeAbrirCaja !== undefined ||
+      puedeCerrarCaja !== undefined;
+    const debeRevocarSesiones = rolCambia || permisosOFlagsTocados;
 
     // Actualizar en transacción
     await this.prisma.$transaction(async (prisma) => {
+      // Validar sedes adentro de la tx — cierra TOCTOU contra admin
+      // desactivando sede entre el check y el upsert.
+      if (sedeIds && sedeIds.length > 0) {
+        await this.validarSedesEmpresa(sedeIds, empresaId, prisma);
+      }
+
       // Actualizar datos de la persona si hay cambios
       if (nombres || apellidos || email || telefono || direccion !== undefined || distrito !== undefined || provincia !== undefined || departamento !== undefined) {
         await prisma.persona.update({
@@ -1013,6 +1138,13 @@ export class UsuariosService {
             rol,
             modificadoPor,
           },
+        });
+
+        // Sincronizar Usuario.rolGlobal — el JWT y guards globales lo
+        // leen desde acá, sin esto seguiría con el rol viejo.
+        await prisma.usuario.update({
+          where: { id: usuarioId },
+          data: { rolGlobal: rol },
         });
       }
 
@@ -1102,8 +1234,23 @@ export class UsuariosService {
     // Invalidar caché de acceso (rol pudo haber cambiado)
     await this.cache.invalidateTenantAccess(usuarioId, empresaId);
 
+    // Si cambió rol/permisos, revocar sesiones del usuario en esta
+    // empresa. Sin esto el JWT activo sigue con permisos viejos hasta
+    // expirar — el cache solo aplica a checks server-side, no al JWT.
+    let sesionesRevocadas = 0;
+    if (debeRevocarSesiones) {
+      sesionesRevocadas =
+        await this.authSessionService.revokeUserSessionsByTenant(
+          usuarioId,
+          empresaId,
+        );
+    }
+
     this.logger.log(
-      `Usuario ${usuarioId} actualizado en empresa ${empresaId} por usuario ${modificadoPor}`,
+      `Usuario ${usuarioId} actualizado en empresa ${empresaId} por usuario ${modificadoPor}` +
+        (debeRevocarSesiones
+          ? `. Sesiones revocadas por cambio de rol/permisos: ${sesionesRevocadas}`
+          : ''),
     );
 
     // Retornar usuario actualizado
