@@ -41,6 +41,93 @@ export class StorageController {
     private readonly cache: CacheService,
   ) {}
 
+  /**
+   * Endpoint reducido para subir imágenes de PRODUCTO desde Venta
+   * Rápida. Permite a vendedores/cajeros (VIEW_PRODUCTS) sin acceso
+   * a MANAGE_SETTINGS. Fuerza `entidadTipo='PRODUCTO'` y rechaza
+   * cualquier otro tipo para que no pueda usarse como puerta para
+   * subir archivos arbitrarios (logos, etc.).
+   */
+  @Post('upload-producto-imagen')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Subir imagen de producto (rol vendedor/cajero)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiResponse({
+    status: 201,
+    description: 'Imagen subida',
+    type: ArchivoResponseDto,
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadProductoImagen(
+    @UploadedFile() file: any,
+    @Body() uploadDto: UploadArchivoDto,
+    @CurrentUser() user: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó ningún archivo');
+    }
+    // Validar mime/extensión rápido: solo imágenes.
+    const mime = (file.mimetype as string | undefined) ?? '';
+    if (!mime.startsWith('image/')) {
+      throw new BadRequestException(
+        'Solo se permiten archivos de imagen (jpg, png, webp, etc.)',
+      );
+    }
+
+    const result = await this.storageService.uploadArchivo({
+      empresaId: uploadDto.empresaId,
+      file,
+      // Forzamos contexto a PRODUCTO — no aceptamos el del DTO.
+      entidadTipo: 'PRODUCTO',
+      entidadId: uploadDto.entidadId || undefined,
+      categoria: uploadDto.categoria || undefined,
+      orden: uploadDto.orden,
+      subidoPor: user.sub,
+    });
+
+    // Invalidar caches del catálogo.
+    await this.cache.invalidateProductosLists(uploadDto.empresaId);
+    await this.cache.invalidateEmpresa(uploadDto.empresaId);
+
+    return result;
+  }
+
+  /**
+   * Eliminar una imagen de PRODUCTO con permiso laxo (VIEW_PRODUCTS).
+   * Antes de borrar valida que el archivo realmente pertenezca a
+   * `entidadTipo='PRODUCTO'` — si es de otra entidad (LOGO_EMPRESA,
+   * etc.) devuelve 403, evitando que se use como atajo para borrar
+   * archivos sensibles.
+   */
+  @Delete('producto-imagen/:archivoId')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Eliminar imagen de producto (rol vendedor/cajero)' })
+  async deleteProductoImagen(
+    @Param('archivoId') archivoId: string,
+    @Query('empresaId') empresaId: string,
+  ) {
+    const archivo = await this.storageService['prisma'].archivo.findUnique({
+      where: { id: archivoId },
+      select: { entidadTipo: true, empresaId: true },
+    });
+    if (!archivo) {
+      throw new BadRequestException('Archivo no encontrado');
+    }
+    if (archivo.entidadTipo !== 'PRODUCTO') {
+      // No es imagen de producto → este endpoint no aplica.
+      throw new BadRequestException(
+        'Este endpoint solo elimina imágenes de producto. Usá DELETE /storage/:archivoId con MANAGE_SETTINGS.',
+      );
+    }
+    if (archivo.empresaId !== empresaId) {
+      throw new BadRequestException('Archivo de otra empresa');
+    }
+    const result = await this.storageService.deleteArchivo(archivoId, empresaId);
+    await this.cache.invalidateProductosLists(empresaId);
+    await this.cache.invalidateEmpresa(empresaId);
+    return result;
+  }
+
   @Post('upload')
   @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiOperation({ summary: 'Subir un archivo' })
