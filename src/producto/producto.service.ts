@@ -624,11 +624,20 @@ export class ProductoService {
 
     // Query 1: productos creados o modificados desde lastSync
     // (excluye eliminados; esos van en `deleted`).
+    //
+    // IMPORTANTE: matcheamos por `Producto.actualizadoEn` PERO TAMBIÉN
+    // por `stocksPorSede.actualizadoEn`. El stock y precio por sede
+    // viven en `ProductoStock` (tabla aparte) y cambian sin tocar el
+    // Producto padre. Sin el OR, los FCM de STOCK_CAMBIADO no
+    // resultaban en deltas → la UI quedaba stale aunque el FCM llegara.
     const productosModificados = await this.prisma.producto.findMany({
       where: {
         empresaId,
         deletedAt: null,
-        actualizadoEn: { gt: since },
+        OR: [
+          { actualizadoEn: { gt: since } },
+          { stocksPorSede: { some: { actualizadoEn: { gt: since } } } },
+        ],
       },
       take: TOPE_UPDATES + 1, // +1 para detectar overflow
       orderBy: { actualizadoEn: 'asc' },
