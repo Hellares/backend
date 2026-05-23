@@ -1158,6 +1158,9 @@ export class CotizacionService {
       total: c.total ? Number(c.total) : 0,
       moneda: c.moneda,
       totalItems: c._count.detalles,
+      tieneReservaActiva: c.detalles.some(
+        (d) => d.reservaEstado === ReservaCotizacionEstado.ACTIVA,
+      ),
       detalles: c.detalles.map((d) => ({
         id: d.id,
         producto: d.producto?.nombre || d.variante?.nombre || d.descripcion,
