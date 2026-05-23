@@ -145,6 +145,32 @@ export class RealtimeInvalidationService {
       });
   }
 
+  /// Un producto existente cambió de forma estructural (nombre, descripción,
+  /// categoría, marca, isActive, soft delete, restore, variantes, combos,
+  /// bulk-update). Cliente debe descartar lastSync y hacer fetch full para
+  /// que el backend re-aplique filtros (isActive, deletedAt, etc.) y para
+  /// que el producto aparezca/desaparezca/reordene correctamente.
+  ///
+  /// Si `productoId` es null, es señal de "catálogo masivo cambió" — bulk
+  /// upload, importación, etc.
+  notifyProductoActualizado(args: {
+    empresaId: string;
+    productoId?: string | null;
+  }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'PRODUCTO_ACTUALIZADO',
+          empresaId: args.empresaId,
+          productoId: args.productoId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`PRODUCTO_ACTUALIZADO send failed: ${err?.message}`);
+      });
+  }
+
   /// Las imágenes de un producto cambiaron (upload/delete). Cliente debe
   /// refrescar el catálogo para mostrar la nueva URL. Sin esto, el
   /// syncDeltas no detecta el cambio porque `Producto.actualizadoEn`

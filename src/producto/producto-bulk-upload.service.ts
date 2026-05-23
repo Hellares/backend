@@ -8,6 +8,7 @@ import { ConfiguracionCodigosService } from '../configuracion-codigos/configurac
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { AppLoggerService } from 'src/common/logger';
 import { CacheService } from '../redis/cache.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { RowError, BulkUploadResult } from './dto/bulk-upload-producto.dto';
 import * as ExcelJS from 'exceljs';
 
@@ -57,6 +58,7 @@ export class ProductoBulkUploadService {
     private readonly prisma: PrismaService,
     private readonly configCodigosService: ConfiguracionCodigosService,
     private readonly cache: CacheService,
+    private readonly realtime: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -818,6 +820,11 @@ export class ProductoBulkUploadService {
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.logger.warn(`Error al invalidar cache tras carga masiva: ${errorMessage}`);
       }
+
+      // Notificar a otros devices: 1 solo evento masivo (productoId null
+      // = "el catálogo entero cambió"). Listeners harán reload completo
+      // sin importar cuántos productos hayan entrado.
+      this.realtime.notifyProductoActualizado({ empresaId, productoId: null });
 
       this.logger.log(
         `Carga masiva: ${productosCreados.length} productos creados para empresa ${empresaId}`,

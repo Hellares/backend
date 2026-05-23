@@ -1187,6 +1187,11 @@ export class ProductoService {
         this.realtime.notifyImagenCambiada({ empresaId, productoId: id });
       }
 
+      // Notificar cambio estructural (nombre/desc/categoría/marca/isActive/
+      // etc). Los clientes harán fetch full para que el backend re-aplique
+      // filtros — si se desactivó debe desaparecer del listado.
+      this.realtime.notifyProductoActualizado({ empresaId, productoId: id });
+
       // 9. Obtener archivos actualizados para respuesta
       const archivos = await this.catalogService.getProductoArchivos(id, empresaId);
 
@@ -1233,6 +1238,11 @@ export class ProductoService {
 
     // Invalidar cache de estadísticas de la empresa
     await this.invalidateEmpresaStats(empresaId);
+
+    // El producto desaparece del catálogo público — los devices deben
+    // dejar de mostrarlo. Reload full para que el filtro deletedAt del
+    // backend lo excluya en clientes con cache local.
+    this.realtime.notifyProductoActualizado({ empresaId, productoId: id });
 
     return { success: true };
   }
@@ -1291,6 +1301,10 @@ export class ProductoService {
     await this.invalidateEmpresaStats(empresaId);
     await this.cache.invalidateProductosLists(empresaId);
 
+    // El producto vuelve a aparecer en el catálogo — los devices deben
+    // recargar para incluirlo en su orden natural.
+    this.realtime.notifyProductoActualizado({ empresaId, productoId: id });
+
     return { success: true };
   }
 
@@ -1328,6 +1342,10 @@ export class ProductoService {
     );
     await this.invalidateEmpresaStats(empresaId);
     await this.cache.invalidateProductosLists(empresaId);
+
+    // Toggle isActive afecta visibilidad — reload para que el backend
+    // re-aplique filtros del catálogo en los devices.
+    this.realtime.notifyProductoActualizado({ empresaId, productoId: id });
 
     return { success: true, isActive: nuevoEstado };
   }

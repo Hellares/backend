@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
@@ -17,6 +18,7 @@ export class ProductoVarianteService {
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
     private readonly configCodigosService: ConfiguracionCodigosService,
+    private readonly realtime: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -170,6 +172,10 @@ export class ProductoVarianteService {
 
     // Invalidar cache de productos
     await this.cache.invalidateProductosLists(empresaId);
+
+    // Notificar a otros devices: la variante nueva cambia la estructura
+    // del producto padre. Los listeners harán reload para incluirla.
+    this.realtime.notifyProductoActualizado({ empresaId, productoId });
 
     this.logger.success('Product variant created', { varianteId });
 
@@ -337,6 +343,13 @@ export class ProductoVarianteService {
     // Invalidar cache
     await this.cache.invalidateProductosLists(empresaId);
 
+    // Notificar a otros devices: cambio estructural en la variante
+    // (nombre/sku/isActive/atributos/imágenes) requiere reload del padre.
+    this.realtime.notifyProductoActualizado({
+      empresaId,
+      productoId: existing.productoId,
+    });
+
     this.logger.success('Variant updated', { varianteId });
 
     return this.mapToResponseDto(varianteFinal);
@@ -415,6 +428,12 @@ export class ProductoVarianteService {
 
     // Invalidar cache de productos
     await this.cache.invalidateProductosLists(empresaId);
+
+    // Notificar a otros devices: variante borrada → el padre cambió.
+    this.realtime.notifyProductoActualizado({
+      empresaId,
+      productoId: variante.productoId,
+    });
 
     this.logger.success('Variant deleted', { varianteId });
   }
@@ -858,6 +877,10 @@ export class ProductoVarianteService {
 
     // Invalidar cache
     await this.cache.invalidateProductosLists(empresaId);
+
+    // Notificar: bulk de variantes → un solo evento del producto padre
+    // (los listeners colapsan en debounce y hacen reload completo).
+    this.realtime.notifyProductoActualizado({ empresaId, productoId });
 
     this.logger.success(`${variantesCreadas.length} variant combinations generated`, { productoId });
 

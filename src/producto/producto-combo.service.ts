@@ -4,6 +4,7 @@ import { CacheService } from '../redis/cache.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { Prisma, TipoPrecioCombo, TipoCambioPrecio, TipoCambioComboConfig } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CreateComponenteComboDto } from './dto/create-producto-combo.dto';
 import { UpdateComponenteComboDto } from './dto/update-producto-combo.dto';
@@ -26,6 +27,7 @@ export class ProductoComboService {
     private prisma: PrismaService,
     private configCodigosService: ConfiguracionCodigosService,
     private cacheService: CacheService,
+    private realtime: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -185,6 +187,13 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Combo creado: ${combo.id} - ${combo.nombre}`);
+
+      // Notificar a otros devices: combo nuevo (es un producto con
+      // esCombo=true) — listeners harán reload completo.
+      this.realtime.notifyProductoCreado({
+        empresaId: combo.empresaId,
+        productoId: combo.id,
+      });
 
       return {
         id: combo.id,
@@ -383,6 +392,13 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Componente agregado al combo ${comboId}`);
+
+      // Notificar: la receta del combo cambió.
+      this.realtime.notifyProductoActualizado({
+        empresaId,
+        productoId: comboId,
+      });
+
       return this.mapToResponseDto(componente, sedeId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -621,6 +637,13 @@ export class ProductoComboService {
       this.logger.log(
         `${componentesCreados.length} componentes agregados al combo ${comboId}`,
       );
+
+      // Notificar (1 solo evento, el debounce del listener colapsa).
+      this.realtime.notifyProductoActualizado({
+        empresaId,
+        productoId: comboId,
+      });
+
       return componentesCreados.map((c) => this.mapToResponseDto(c, sedeId));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -969,6 +992,13 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Componente ${componenteId} actualizado`);
+
+      // Notificar: la receta del combo cambió (cantidad/precio/orden).
+      this.realtime.notifyProductoActualizado({
+        empresaId,
+        productoId: componente.comboId,
+      });
+
       return this.mapToResponseDto(actualizado, sedeId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -982,6 +1012,7 @@ export class ProductoComboService {
    */
   async eliminarComponente(componenteId: string, empresaId: string): Promise<void> {
     try {
+      let comboId: string | null = null;
       await this.prisma.$transaction(async (tx) => {
         const componente = await tx.productoCombo.findFirst({
           where: { id: componenteId },
@@ -995,6 +1026,8 @@ export class ProductoComboService {
         if (!componente || componente.combo.empresaId !== empresaId) {
           throw new NotFoundException('Componente de combo no encontrado');
         }
+
+        comboId = componente.comboId;
 
         // Si el combo tiene reservas activas, liberar stockReservadoCombo de este componente
         const reservaciones = await tx.comboReservacion.findMany({
@@ -1024,6 +1057,14 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Componente ${componenteId} eliminado del combo`);
+
+      // Notificar: receta del combo cambió.
+      if (comboId) {
+        this.realtime.notifyProductoActualizado({
+          empresaId,
+          productoId: comboId,
+        });
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al eliminar componente: ${errorMessage}`);
@@ -1037,6 +1078,7 @@ export class ProductoComboService {
    */
   async eliminarComponentesBatch(componenteIds: string[], empresaId: string): Promise<void> {
     try {
+      const comboIdsAfectados = new Set<string>();
       if (!componenteIds || componenteIds.length === 0) {
         throw new BadRequestException('Debe proporcionar al menos un componenteId');
       }
@@ -1076,6 +1118,7 @@ export class ProductoComboService {
 
         // Agrupar componentes por comboId para buscar reservaciones eficientemente
         const comboIds = [...new Set(componentes.map(c => c.comboId))];
+        for (const cid of comboIds) comboIdsAfectados.add(cid);
         const reservaciones = await tx.comboReservacion.findMany({
           where: { comboId: { in: comboIds } },
         });
@@ -1109,6 +1152,12 @@ export class ProductoComboService {
       }, { timeout: 20000 }); // 20 segundos de timeout
 
       this.logger.log(`${componenteIds.length} componentes eliminados en batch`);
+
+      // Notificar a otros devices: uno por combo afectado (debounce
+      // colapsa en el listener).
+      for (const cid of comboIdsAfectados) {
+        this.realtime.notifyProductoActualizado({ empresaId, productoId: cid });
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error al eliminar componentes en batch: ${errorMessage}`);
@@ -2014,6 +2063,14 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Precio de combo ${comboId} actualizado`);
+
+      // Notificar cambio de precio del combo a otros devices.
+      this.realtime.notifyPrecioCambiado({
+        empresaId,
+        productoId: comboId,
+        sedeId,
+      });
+
       return this.getComboCompleto(comboId, empresaId, sedeId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2138,6 +2195,14 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Oferta de combo ${comboId} actualizada`);
+
+      // Notificar: oferta cambió → precio efectivo cambió.
+      this.realtime.notifyPrecioCambiado({
+        empresaId,
+        productoId: comboId,
+        sedeId,
+      });
+
       return this.getComboCompleto(comboId, empresaId, sedeId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2218,6 +2283,14 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Oferta de combo ${comboId} desactivada`);
+
+      // Notificar: oferta off → precio efectivo cambió.
+      this.realtime.notifyPrecioCambiado({
+        empresaId,
+        productoId: comboId,
+        sedeId,
+      });
+
       return this.getComboCompleto(comboId, empresaId, sedeId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2412,6 +2485,14 @@ export class ProductoComboService {
       });
 
       this.logger.log(`Precio fijo de combo ${comboId} actualizado en sede ${sedeId}`);
+
+      // Notificar cambio de precio por sede.
+      this.realtime.notifyPrecioCambiado({
+        empresaId,
+        productoId: comboId,
+        sedeId,
+      });
+
       return this.getComboCompleto(comboId, empresaId, sedeId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
