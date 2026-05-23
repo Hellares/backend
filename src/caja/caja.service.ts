@@ -721,16 +721,16 @@ export class CajaService {
       _count: { id: true },
     });
 
-    // Egreso por anulación de venta: EGRESO + categoría DEVOLUCION +
-    // ventaId NOT NULL. La categoría DEVOLUCION en esta caja se crea
-    // exclusivamente desde `reversarMovimientosDeOrigen` (helper de
-    // anulación), así que cualquier match acá representa dinero que salió
-    // de la caja por anular una venta. Sirve para que el cajero vea
-    // separadamente cuánto perdió por anulaciones.
+    // Egreso por anulación de venta: contrapartidas EGRESO creadas por
+    // `reversarMovimientosDeOrigen` cuando se anula una venta cuya caja
+    // origen sigue abierta. El helper las nace con `anulado: true` para
+    // que no afecten el saldo (el INGRESO original también queda anulado;
+    // ambos se cancelan), así que NO filtramos por `anulado` acá.
+    // La firma (EGRESO + categoría DEVOLUCION + ventaId NOT NULL) solo
+    // la produce ese helper — no hay falsos positivos.
     const egresoAnulacionAgg = await this.prisma.movimientoCaja.aggregate({
       where: {
         cajaId,
-        anulado: false,
         tipo: TipoMovimientoCaja.EGRESO,
         categoria: CategoriaMovimientoCaja.DEVOLUCION,
         ventaId: { not: null },
