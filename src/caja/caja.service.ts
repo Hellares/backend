@@ -930,6 +930,39 @@ export class CajaService {
       _sum: { monto: true },
     });
 
+    // Mismas dos agregaciones que getResumen para que la auditoría
+    // muestre el mismo desglose: anulaciones de venta + egresos por
+    // categoría real. Ver getResumen para el racional de los filtros.
+    const egresoAnulacionAgg = await this.prisma.movimientoCaja.aggregate({
+      where: {
+        cajaId,
+        tipo: TipoMovimientoCaja.EGRESO,
+        categoria: CategoriaMovimientoCaja.DEVOLUCION,
+        ventaId: { not: null },
+      },
+      _sum: { monto: true },
+      _count: { id: true },
+    });
+    const egresoAnulacionVenta = Number(egresoAnulacionAgg._sum.monto ?? 0);
+    const cantidadAnulaciones = egresoAnulacionAgg._count.id;
+
+    const auditoriaPorCategoria = await this.prisma.movimientoCaja.groupBy({
+      by: ['categoria', 'tipo'],
+      where: { cajaId, anulado: false },
+      _sum: { monto: true },
+      _count: { id: true },
+    });
+    const egresosPorCategoria = auditoriaPorCategoria
+      .filter((r) => r.tipo === TipoMovimientoCaja.EGRESO)
+      .map((r) => ({
+        categoria: r.categoria,
+        label: this.labelCategoria(r.categoria),
+        total: Number(r._sum.monto ?? 0),
+        cantidad: r._count.id,
+      }))
+      .filter((r) => r.total > 0)
+      .sort((a, b) => b.total - a.total);
+
     let totalIngresos = 0;
     let totalEgresos = 0;
     let ingresosEfectivo = 0;
@@ -1011,6 +1044,9 @@ export class CajaService {
         saldoActual,
         saldoEfectivo,
         detallesPorMetodo,
+        egresoAnulacionVenta,
+        cantidadAnulaciones,
+        egresosPorCategoria,
       },
       cierre: caja.cierre, // null si caja está abierta
       arqueos,
