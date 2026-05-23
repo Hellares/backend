@@ -120,4 +120,28 @@ export class RealtimeInvalidationService {
         this.logger.warn(`NIVELES_CAMBIADOS send failed: ${err?.message}`);
       });
   }
+
+  /// Las imágenes de un producto cambiaron (upload/delete). Cliente debe
+  /// refrescar el catálogo para mostrar la nueva URL. Sin esto, el
+  /// syncDeltas no detecta el cambio porque `Producto.actualizadoEn`
+  /// no se toca al insertar/borrar filas en `Archivo`.
+  notifyImagenCambiada(args: {
+    empresaId: string;
+    productoId?: string | null;
+    varianteId?: string | null;
+  }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'IMAGEN_CAMBIADA',
+          empresaId: args.empresaId,
+          productoId: args.productoId,
+          varianteId: args.varianteId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`IMAGEN_CAMBIADA send failed: ${err?.message}`);
+      });
+  }
 }

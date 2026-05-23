@@ -29,6 +29,7 @@ import { ProductoVarianteService } from './producto-variante.service';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoComboService } from './producto-combo.service';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 
 /**
  * ProductoService - FACADE (Orquestador)
@@ -57,6 +58,7 @@ export class ProductoService {
     private sedeContextHelper: SedeContextHelper,
     private configCodigosService: ConfiguracionCodigosService,
     private planLimitsService: PlanLimitsService,
+    private realtime: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -622,6 +624,33 @@ export class ProductoService {
       };
     }
 
+    // Query auxiliar: IDs de productos con archivos modificados desde
+    // lastSync. `Archivo` es polimórfico (no hay relación Prisma directa
+    // a Producto), así que no podemos meterlo en un `some:` del OR.
+    // Defensa en profundidad — el camino feliz bumpea
+    // `Producto.actualizadoEn` desde el caller, pero si alguien olvida
+    // hacerlo (upload directo vía /storage, etc.) este query lo
+    // captura igual.
+    const archivosModificados = await this.prisma.archivo.findMany({
+      where: {
+        empresaId,
+        entidadTipo: { in: ['PRODUCTO', 'PRODUCTO_VARIANTE'] },
+        actualizadoEn: { gt: since },
+        entidadId: { not: null },
+      },
+      select: { entidadTipo: true, entidadId: true },
+    });
+    const idsProductoPorArchivo = new Set<string>();
+    const idsVariantePorArchivo = new Set<string>();
+    for (const a of archivosModificados) {
+      if (!a.entidadId) continue;
+      if (a.entidadTipo === 'PRODUCTO') {
+        idsProductoPorArchivo.add(a.entidadId);
+      } else if (a.entidadTipo === 'PRODUCTO_VARIANTE') {
+        idsVariantePorArchivo.add(a.entidadId);
+      }
+    }
+
     // Query 1: productos creados o modificados desde lastSync
     // (excluye eliminados; esos van en `deleted`).
     //
@@ -630,6 +659,8 @@ export class ProductoService {
     // viven en `ProductoStock` (tabla aparte) y cambian sin tocar el
     // Producto padre. Sin el OR, los FCM de STOCK_CAMBIADO no
     // resultaban en deltas → la UI quedaba stale aunque el FCM llegara.
+    // También incluimos productos cuyos archivos (imágenes) cambiaron
+    // — ver query auxiliar arriba.
     const productosModificados = await this.prisma.producto.findMany({
       where: {
         empresaId,
@@ -637,6 +668,18 @@ export class ProductoService {
         OR: [
           { actualizadoEn: { gt: since } },
           { stocksPorSede: { some: { actualizadoEn: { gt: since } } } },
+          ...(idsProductoPorArchivo.size > 0
+            ? [{ id: { in: Array.from(idsProductoPorArchivo) } }]
+            : []),
+          ...(idsVariantePorArchivo.size > 0
+            ? [
+                {
+                  variantes: {
+                    some: { id: { in: Array.from(idsVariantePorArchivo) } },
+                  },
+                },
+              ]
+            : []),
         ],
       },
       take: TOPE_UPDATES + 1, // +1 para detectar overflow
@@ -740,6 +783,18 @@ export class ProductoService {
       empresaId,
       imagenesIds,
     );
+
+    // Bumpear actualizadoEn para que /productos/sync detecte el cambio
+    // — `actualizarImagenes` toca `Archivo` pero no `Producto`, y el
+    // syncDeltas filtra por `Producto.actualizadoEn`.
+    await this.prisma.producto.update({
+      where: { id },
+      data: { actualizadoEn: new Date() },
+    });
+
+    await this.invalidateEmpresaStats(empresaId);
+
+    this.realtime.notifyImagenCambiada({ empresaId, productoId: id });
   }
 
   /**
@@ -1117,6 +1172,13 @@ export class ProductoService {
 
       // 8. Invalidar cache (fuera de transacción, no es crítico)
       await this.invalidateEmpresaStats(empresaId);
+
+      // Si el update tocó imágenes, notificar a otros devices para que
+      // refresquen el catálogo (el bump de actualizadoEn ya lo hizo
+      // Prisma vía @updatedAt al hacer el update interno).
+      if (imagenesIds !== undefined) {
+        this.realtime.notifyImagenCambiada({ empresaId, productoId: id });
+      }
 
       // 9. Obtener archivos actualizados para respuesta
       const archivos = await this.catalogService.getProductoArchivos(id, empresaId);

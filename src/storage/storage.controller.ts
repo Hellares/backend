@@ -22,6 +22,8 @@ import {
 } from '@nestjs/swagger';
 import { StorageService } from './storage.service';
 import { CacheService } from '../redis/cache.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -39,7 +41,58 @@ export class StorageController {
   constructor(
     private readonly storageService: StorageService,
     private readonly cache: CacheService,
+    private readonly prisma: PrismaService,
+    private readonly realtime: RealtimeInvalidationService,
   ) {}
+
+  /// Tras crear/borrar un Archivo asociado a un producto (o variante),
+  /// bumpear `Producto.actualizadoEn` para que `GET /productos/sync`
+  /// detecte el cambio, e invitar a los clientes a refrescar vía FCM.
+  /// Sin esto, los clientes con cache Fase 3 no se enteran de imágenes
+  /// nuevas porque `Archivo` es una tabla aparte (polimórfica) y no
+  /// dispara `@updatedAt` del producto.
+  private async bumpProductoImagen(
+    empresaId: string,
+    entidadTipo: string | null | undefined,
+    entidadId: string | null | undefined,
+  ): Promise<void> {
+    if (!entidadId) return;
+
+    let productoId: string | null = null;
+    let varianteId: string | null = null;
+
+    if (entidadTipo === 'PRODUCTO') {
+      productoId = entidadId;
+    } else if (entidadTipo === 'PRODUCTO_VARIANTE') {
+      varianteId = entidadId;
+      const variante = await this.prisma.productoVariante.findUnique({
+        where: { id: entidadId },
+        select: { productoId: true },
+      });
+      productoId = variante?.productoId ?? null;
+    } else {
+      return;
+    }
+
+    if (!productoId) return;
+
+    // Bump fire-and-forget — si el producto fue borrado el update
+    // falla silenciosamente y no rompe el upload.
+    try {
+      await this.prisma.producto.update({
+        where: { id: productoId },
+        data: { actualizadoEn: new Date() },
+      });
+    } catch {
+      // ignore
+    }
+
+    this.realtime.notifyImagenCambiada({
+      empresaId,
+      productoId,
+      varianteId,
+    });
+  }
 
   /**
    * Endpoint reducido para subir imágenes de PRODUCTO desde Venta
@@ -89,6 +142,14 @@ export class StorageController {
     await this.cache.invalidateProductosLists(uploadDto.empresaId);
     await this.cache.invalidateEmpresa(uploadDto.empresaId);
 
+    // Bumpear actualizadoEn del producto + emitir FCM para que los
+    // clientes con cache local sepan que hay una nueva imagen.
+    await this.bumpProductoImagen(
+      uploadDto.empresaId,
+      'PRODUCTO',
+      uploadDto.entidadId,
+    );
+
     return result;
   }
 
@@ -122,9 +183,15 @@ export class StorageController {
     if (archivo.empresaId !== empresaId) {
       throw new BadRequestException('Archivo de otra empresa');
     }
+    // Capturamos entidadId antes del delete para poder bumpear el padre.
+    const archivoCompleto = await this.storageService['prisma'].archivo.findUnique({
+      where: { id: archivoId },
+      select: { entidadId: true },
+    });
     const result = await this.storageService.deleteArchivo(archivoId, empresaId);
     await this.cache.invalidateProductosLists(empresaId);
     await this.cache.invalidateEmpresa(empresaId);
+    await this.bumpProductoImagen(empresaId, 'PRODUCTO', archivoCompleto?.entidadId);
     return result;
   }
 
@@ -177,6 +244,11 @@ export class StorageController {
     // Invalidar caches
     if (uploadDto.entidadTipo === 'PRODUCTO' || uploadDto.entidadTipo === 'PRODUCTO_VARIANTE') {
       await this.cache.invalidateProductosLists(uploadDto.empresaId);
+      await this.bumpProductoImagen(
+        uploadDto.empresaId,
+        uploadDto.entidadTipo,
+        uploadDto.entidadId,
+      );
     }
     await this.cache.invalidateEmpresa(uploadDto.empresaId);
 
@@ -194,7 +266,7 @@ export class StorageController {
     // Obtener el archivo antes de eliminarlo para saber su entidadTipo
     const archivo = await this.storageService['prisma'].archivo.findUnique({
       where: { id: archivoId },
-      select: { entidadTipo: true },
+      select: { entidadTipo: true, entidadId: true },
     });
 
     const result = await this.storageService.deleteArchivo(archivoId, empresaId);
@@ -202,6 +274,7 @@ export class StorageController {
     // Invalidar caches
     if (archivo?.entidadTipo === 'PRODUCTO' || archivo?.entidadTipo === 'PRODUCTO_VARIANTE') {
       await this.cache.invalidateProductosLists(empresaId);
+      await this.bumpProductoImagen(empresaId, archivo.entidadTipo, archivo.entidadId);
     }
     await this.cache.invalidateEmpresa(empresaId);
 
