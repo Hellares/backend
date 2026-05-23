@@ -121,6 +121,30 @@ export class RealtimeInvalidationService {
       });
   }
 
+  /// Un producto nuevo fue creado. Cliente debe refrescar el catálogo
+  /// para incluirlo. Sin esto, los devices que ya tienen `productos_page`
+  /// (o el selector de VR/Cotización) abierta no se enteran hasta que
+  /// hacen pull-to-refresh o re-navegan; el bump de `actualizadoEn`
+  /// del propio create solo es útil cuando el cliente decide pegarle al
+  /// server.
+  notifyProductoCreado(args: {
+    empresaId: string;
+    productoId?: string | null;
+  }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'PRODUCTO_CREADO',
+          empresaId: args.empresaId,
+          productoId: args.productoId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`PRODUCTO_CREADO send failed: ${err?.message}`);
+      });
+  }
+
   /// Las imágenes de un producto cambiaron (upload/delete). Cliente debe
   /// refrescar el catálogo para mostrar la nueva URL. Sin esto, el
   /// syncDeltas no detecta el cambio porque `Producto.actualizadoEn`

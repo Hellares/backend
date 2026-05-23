@@ -367,6 +367,13 @@ export class ProductoService {
       // 12. Invalidar cache de estadísticas de la empresa (mantener en Facade)
       await this.invalidateEmpresaStats(empresaId);
 
+      // 12.1 Notificar a otros devices conectados a esta empresa que
+      // hay un producto nuevo, para que refresquen el catálogo sin
+      // esperar a un pull-to-refresh manual. Uno por sede afectada.
+      for (const p of productosCreados) {
+        this.realtime.notifyProductoCreado({ empresaId, productoId: p.id });
+      }
+
       // 13. Obtener producto completo con archivos para respuesta (delegar a CatalogService)
       const archivos = await this.catalogService.getProductoArchivos(producto.id, empresaId);
 
