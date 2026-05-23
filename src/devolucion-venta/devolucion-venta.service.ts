@@ -9,6 +9,7 @@ import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { CreateDevolucionVentaDto } from './dto/create-devolucion-venta.dto';
 import { QueryDevolucionVentaDto } from './dto/query-devolucion-venta.dto';
 import {
@@ -36,6 +37,7 @@ export class DevolucionVentaService {
     private readonly cacheService: CacheService,
     private readonly cajaService: CajaService,
     private readonly notificacionService: NotificacionService,
+    private readonly realtimeInvalidation: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -377,25 +379,55 @@ export class DevolucionVentaService {
 
       // Registrar movimiento en caja según tipoReembolso
       if (devolucion.tipoReembolso === 'EFECTIVO') {
-        // Calcular monto desde items de la venta original — devolucion en efectivo
+        // Calcular monto prorrateando el `total` (que incluye
+        // descuento + IGV) por la cantidad devuelta. Antes se usaba
+        // `precioUnitario * cantidad` que ignoraba descuentos e IGV
+        // y devolvía menos de lo cobrado al cliente.
         let montoDevolucion = 0;
+        let metodoPagoOriginal: 'EFECTIVO' | 'YAPE' | 'PLIN' | 'TARJETA' | 'TRANSFERENCIA' = 'EFECTIVO';
         if (devolucion.ventaId) {
           const ventaOriginal = await tx.venta.findUnique({
             where: { id: devolucion.ventaId },
-            include: { detalles: true },
+            include: {
+              detalles: true,
+              pagos: { select: { metodoPago: true, monto: true } },
+            },
           });
           if (ventaOriginal) {
             for (const item of devolucion.items) {
               const detalleVenta = ventaOriginal.detalles.find(
-                (d) => d.productoId === item.productoId && d.varianteId === item.varianteId,
+                (d) =>
+                  d.productoId === item.productoId &&
+                  d.varianteId === item.varianteId,
               );
-              if (detalleVenta) {
-                montoDevolucion += Number(detalleVenta.precioUnitario) * item.cantidad;
+              if (detalleVenta && Number(detalleVenta.cantidad) > 0) {
+                const totalLinea = Number(detalleVenta.total);
+                const cantLinea = Number(detalleVenta.cantidad);
+                montoDevolucion += (totalLinea / cantLinea) * item.cantidad;
+              }
+            }
+            // Heredar método de pago: si la venta tiene un único
+            // pago no-CREDITO, usar ese. Si hay múltiples métodos o
+            // todo fue crédito, fallback EFECTIVO (cajero lo ajusta
+            // manualmente si lo necesita).
+            const pagosNoCredito = (ventaOriginal.pagos ?? []).filter(
+              (p) => p.metodoPago !== 'CREDITO',
+            );
+            const metodosUnicos = new Set(
+              pagosNoCredito.map((p) => p.metodoPago),
+            );
+            if (metodosUnicos.size === 1) {
+              const m = pagosNoCredito[0].metodoPago;
+              if (m === 'EFECTIVO' || m === 'YAPE' || m === 'PLIN' || m === 'TARJETA' || m === 'TRANSFERENCIA') {
+                metodoPagoOriginal = m;
               }
             }
           }
         }
         if (montoDevolucion > 0) {
+          // Redondeo a 2 decimales para evitar arrastrar centavos
+          // del prorrateo.
+          montoDevolucion = Math.round(montoDevolucion * 100) / 100;
           try {
             await this.cajaService.registrarMovimientoSiHayCaja(
               empresaId,
@@ -404,7 +436,7 @@ export class DevolucionVentaService {
               {
                 tipo: 'EGRESO',
                 categoria: 'DEVOLUCION',
-                metodoPago: 'EFECTIVO',
+                metodoPago: metodoPagoOriginal,
                 monto: montoDevolucion,
                 descripcion: `Devolución ${devolucion.codigo}`,
                 devolucionId: devolucion.id,
@@ -491,6 +523,48 @@ export class DevolucionVentaService {
 
     // Invalidar cache de productos después de modificar stock por devolución
     await this.invalidateProductCache(empresaId);
+
+    // Notificar realtime — al procesar una devolución el stock vuelve
+    // (o pasa a dañado/garantía/baja), y en CAMBIO_PRODUCTO también
+    // sale stock del producto de reemplazo. Emitimos STOCK_CAMBIADO
+    // por cada (productoId, varianteId) único afectado para que los
+    // devices conectados refresquen.
+    try {
+      const productosNotificados = new Set<string>();
+      const notify = (productoId: string | null, varianteId: string | null) => {
+        if (!productoId && !varianteId) return;
+        const key = `${productoId ?? ''}::${varianteId ?? ''}`;
+        if (productosNotificados.has(key)) return;
+        productosNotificados.add(key);
+        this.realtimeInvalidation.notifyStockCambiado({
+          empresaId,
+          productoId,
+          varianteId,
+          sedeId: result.sedeId,
+        });
+      };
+      for (const item of result.items ?? []) {
+        notify(
+          (item as any).productoId ?? null,
+          (item as any).varianteId ?? null,
+        );
+        // Para CAMBIO_PRODUCTO, también el reemplazo cambió de stock.
+        notify(
+          (item as any).productoReemplazoId ?? null,
+          (item as any).varianteReemplazoId ?? null,
+        );
+      }
+      if (productosNotificados.size === 0) {
+        this.realtimeInvalidation.notifyStockCambiado({
+          empresaId,
+          sedeId: result.sedeId,
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `Error notificando realtime devolución ${result.codigo}: ${err?.message ?? err}`,
+      );
+    }
 
     return result;
   }
