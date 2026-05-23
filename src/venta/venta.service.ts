@@ -2719,6 +2719,40 @@ export class VentaService {
     // Invalidar cache de productos después de restaurar stock
     await this.invalidateProductCache(empresaId);
 
+    // Notificar realtime — los devices conectados ven el stock
+    // actualizado tras la anulación. Emitimos un evento por
+    // (productoId, varianteId) único de la venta para que cada device
+    // pueda refrescar el detalle correcto si lo tiene abierto.
+    try {
+      const productosNotificados = new Set<string>();
+      for (const detalle of result.detalles ?? []) {
+        const productoId = (detalle as any).productoId as string | null;
+        const varianteId = (detalle as any).varianteId as string | null;
+        if (!productoId && !varianteId) continue;
+        const key = `${productoId ?? ''}::${varianteId ?? ''}`;
+        if (productosNotificados.has(key)) continue;
+        productosNotificados.add(key);
+        this.realtimeInvalidation.notifyStockCambiado({
+          empresaId,
+          productoId,
+          varianteId,
+          sedeId: result.sedeId,
+        });
+      }
+      // Fallback: si por alguna razón no hubo detalles con producto
+      // (ej. venta solo de servicios) emitir uno genérico por sede.
+      if (productosNotificados.size === 0) {
+        this.realtimeInvalidation.notifyStockCambiado({
+          empresaId,
+          sedeId: result.sedeId,
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `Error notificando realtime anulación venta ${result.codigo}: ${err?.message ?? err}`,
+      );
+    }
+
     return result;
   }
 
