@@ -28,6 +28,58 @@ const ROLES_ESCAPE_CAJA: Set<Rol> = new Set<Rol>([
   Rol.SEDE_ADMIN,
 ]);
 
+/**
+ * Matriz de coherencia estadoProducto ↔ accion. Solo se permiten las
+ * combinaciones que tengan sentido físico:
+ *
+ * - BUENO: producto en estado vendible. Se puede REINGRESAR_STOCK,
+ *   pedir CAMBIO_PRODUCTO (vuelve a stock vendible), DEVOLVER_PROVEEDOR
+ *   (si por contrato vuelve igual), DAR_DE_BAJA (decisión del negocio).
+ * - DANADO: no vendible. MARCAR_DANADO, DAR_DE_BAJA, DEVOLVER_PROVEEDOR
+ *   (garantía), CAMBIO_PRODUCTO (deja el dañado y entrega uno nuevo).
+ * - REPARABLE: puede repararse. ENVIAR_REPARACION, DEVOLVER_PROVEEDOR
+ *   (servicio técnico del proveedor), DAR_DE_BAJA, CAMBIO_PRODUCTO.
+ * - VENCIDO: no vendible. DAR_DE_BAJA, DEVOLVER_PROVEEDOR, MARCAR_DANADO
+ *   (depósito temporal antes de baja), CAMBIO_PRODUCTO.
+ * - INCOMPLETO: faltan piezas. ENVIAR_REPARACION (recompletar),
+ *   DEVOLVER_PROVEEDOR, DAR_DE_BAJA, MARCAR_DANADO, CAMBIO_PRODUCTO.
+ *
+ * Lo prohibido: reingresar al stock vendible un producto no-BUENO.
+ */
+const COMBINACIONES_PERMITIDAS: Record<string, Set<string>> = {
+  BUENO: new Set([
+    'REINGRESAR_STOCK',
+    'DEVOLVER_PROVEEDOR',
+    'DAR_DE_BAJA',
+    'CAMBIO_PRODUCTO',
+  ]),
+  DANADO: new Set([
+    'MARCAR_DANADO',
+    'DEVOLVER_PROVEEDOR',
+    'DAR_DE_BAJA',
+    'CAMBIO_PRODUCTO',
+  ]),
+  REPARABLE: new Set([
+    'ENVIAR_REPARACION',
+    'DEVOLVER_PROVEEDOR',
+    'DAR_DE_BAJA',
+    'CAMBIO_PRODUCTO',
+  ]),
+  VENCIDO: new Set([
+    'DAR_DE_BAJA',
+    'DEVOLVER_PROVEEDOR',
+    'MARCAR_DANADO',
+    'CAMBIO_PRODUCTO',
+  ]),
+  INCOMPLETO: new Set([
+    'ENVIAR_REPARACION',
+    'DEVOLVER_PROVEEDOR',
+    'DAR_DE_BAJA',
+    'MARCAR_DANADO',
+    'CAMBIO_PRODUCTO',
+  ]),
+};
+
 @Injectable()
 export class DevolucionVentaService {
   private readonly logger: AppLoggerService;
@@ -265,6 +317,20 @@ export class DevolucionVentaService {
         );
       }
 
+      // Guard de coherencia: rechazar combinaciones imposibles antes
+      // de tocar nada. Si llega un item con estadoProducto=DANADO y
+      // accion=REINGRESAR_STOCK, dejaríamos producto roto en stock
+      // vendible — preferimos fallar rápido.
+      for (const item of devolucion.items) {
+        const permitidas = COMBINACIONES_PERMITIDAS[item.estadoProducto];
+        if (!permitidas || !permitidas.has(item.accion)) {
+          throw new BadRequestException(
+            `Combinación inválida en item ${item.id}: estadoProducto=${item.estadoProducto} no admite accion=${item.accion}. ` +
+              `Acciones válidas: ${Array.from(permitidas ?? []).join(', ') || '(ninguna)'}.`,
+          );
+        }
+      }
+
       for (const item of devolucion.items) {
         if (!item.productoId && !item.varianteId) continue;
 
@@ -319,22 +385,61 @@ export class DevolucionVentaService {
             await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Enviado a reparacion');
             break;
           case 'DAR_DE_BAJA':
+            // El item ya estaba descontado por la venta original. Acá
+            // solo documentamos la baja sin tocar stock — el producto
+            // físico se descarta y no vuelve al inventario.
             await createMov(TipoMovimientoStock.SALIDA_BAJA, 'Dado de baja');
             break;
+          case 'DEVOLVER_PROVEEDOR':
+            // El producto vuelve físicamente al local pero NO se
+            // vende — queda en stockDanado como buffer hasta que se
+            // gestione el envío al proveedor (otro flujo separado).
+            // Si en el futuro se necesita un campo dedicado
+            // (stockParaProveedor), se puede migrar sin romper UI.
+            await tx.productoStock.update({
+              where: { id: productoStock.id },
+              data: { stockDanado: { increment: cantidad } },
+            });
+            await createMov(
+              TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
+              'Pendiente devolución a proveedor',
+            );
+            break;
           case 'CAMBIO_PRODUCTO': {
-            // 1. Restock original product (BUENO) or mark as damaged
+            // 1. Reingresar el producto original según su estado físico:
+            //    BUENO → stock vendible
+            //    REPARABLE / INCOMPLETO → stock en garantía (puede recuperarse)
+            //    DANADO / VENCIDO → stock dañado
             if (item.estadoProducto === 'BUENO') {
               await tx.productoStock.update({
                 where: { id: productoStock.id },
                 data: { stockActual: { increment: cantidad } },
               });
-              await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Reingreso por cambio de producto');
+              await createMov(
+                TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
+                'Reingreso por cambio de producto',
+              );
+            } else if (
+              item.estadoProducto === 'REPARABLE' ||
+              item.estadoProducto === 'INCOMPLETO'
+            ) {
+              await tx.productoStock.update({
+                where: { id: productoStock.id },
+                data: { stockEnGarantia: { increment: cantidad } },
+              });
+              await createMov(
+                TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
+                `Cambio de producto - a garantía (${item.estadoProducto.toLowerCase()})`,
+              );
             } else {
               await tx.productoStock.update({
                 where: { id: productoStock.id },
                 data: { stockDanado: { increment: cantidad } },
               });
-              await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Marcado como danado por cambio de producto');
+              await createMov(
+                TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
+                `Cambio de producto - marcado dañado (${item.estadoProducto.toLowerCase()})`,
+              );
             }
 
             // 2. Deduct replacement product from stock

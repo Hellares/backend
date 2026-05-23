@@ -528,7 +528,7 @@ enum AccionDevolucion {
   REINGRESAR_STOCK // Producto vuelve a stock disponible
   MARCAR_DANADO // Va a stockDanado
   ENVIAR_REPARACION // Va a stockEnGarantia
-  DAR_DE_BAJA // Descarte definitivo (reduce stockActual)
+  DAR_DE_BAJA // Descarte definitivo (documenta baja, NO reingresa stock — el item ya estaba descontado por la venta original)
   DEVOLVER_PROVEEDOR // Se devolverá al proveedor
   CAMBIO_PRODUCTO // Se cambia por otro (gestiona venta + devolución)
 }
