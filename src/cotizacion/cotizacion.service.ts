@@ -433,7 +433,7 @@ export class CotizacionService {
       ];
     }
 
-    return this.prisma.cotizacion.findMany({
+    const cotizaciones = await this.prisma.cotizacion.findMany({
       where,
       include: {
         sede: { select: { id: true, nombre: true } },
@@ -454,6 +454,26 @@ export class CotizacionService {
       },
       orderBy: { creadoEn: 'desc' },
     });
+
+    // Calcular `tieneReservaActiva` en una sola query batch (sin N+1).
+    // Buscamos qué cotizaciones del set tienen al menos un detalle con
+    // `reservaEstado = ACTIVA`. Constante, no escala con N.
+    if (cotizaciones.length === 0) return [];
+    const ids = cotizaciones.map((c) => c.id);
+    const conReserva = await this.prisma.cotizacionDetalle.findMany({
+      where: {
+        cotizacionId: { in: ids },
+        reservaEstado: ReservaCotizacionEstado.ACTIVA,
+      },
+      select: { cotizacionId: true },
+      distinct: ['cotizacionId'],
+    });
+    const setConReserva = new Set(conReserva.map((d) => d.cotizacionId));
+
+    return cotizaciones.map((c) => ({
+      ...c,
+      tieneReservaActiva: setConReserva.has(c.id),
+    }));
   }
 
   /**
@@ -492,7 +512,13 @@ export class CotizacionService {
       throw new NotFoundException('Cotizacion no encontrada');
     }
 
-    return cotizacion;
+    // Derivado: si algún detalle tiene reserva activa, el flag es true.
+    return {
+      ...cotizacion,
+      tieneReservaActiva: cotizacion.detalles.some(
+        (d) => d.reservaEstado === ReservaCotizacionEstado.ACTIVA,
+      ),
+    };
   }
 
   /**
