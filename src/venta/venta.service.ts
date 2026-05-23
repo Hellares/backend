@@ -2070,7 +2070,46 @@ export class VentaService {
       throw new NotFoundException('Venta no encontrada');
     }
 
-    return venta;
+    // Fetch separado de devoluciones asociadas — solo el detalle las
+    // necesita, no queremos inflar el getInclude() compartido. Limita
+    // a devoluciones PROCESADAS (las pendientes/rechazadas no afectan
+    // la presentación contable). Trae los items con FK a ventaDetalle
+    // para que el frontend pueda matchear línea por línea.
+    const devoluciones = await this.prisma.devolucion.findMany({
+      where: {
+        ventaId: id,
+        estado: 'PROCESADA',
+      },
+      select: {
+        id: true,
+        codigo: true,
+        tipoReembolso: true,
+        estado: true,
+        procesadoEn: true,
+        creadoEn: true,
+        items: {
+          select: {
+            id: true,
+            ventaDetalleId: true,
+            productoId: true,
+            varianteId: true,
+            cantidad: true,
+            accion: true,
+            estadoProducto: true,
+            motivo: true,
+            productoReemplazoId: true,
+            varianteReemplazoId: true,
+            precioReemplazo: true,
+            diferenciaPrecio: true,
+            productoReemplazo: { select: { id: true, nombre: true } },
+            varianteReemplazo: { select: { id: true, nombre: true, sku: true } },
+          },
+        },
+      },
+      orderBy: { creadoEn: 'asc' },
+    });
+
+    return { ...venta, devoluciones };
   }
 
   /**
