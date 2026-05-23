@@ -192,6 +192,7 @@ export class ProductoCatalogService {
             - (stock.stockReservado || 0)
             - (stock.stockReservadoVenta || 0)
             - (stock.stockReservadoCombo || 0)
+            - (stock.stockReservadoCotizacion || 0)
             - (stock.stockDanado || 0)
             - (stock.stockEnGarantia || 0);
           return sum + Math.max(0, disponible);
@@ -204,6 +205,7 @@ export class ProductoCatalogService {
           - (stock.stockReservado || 0)
           - (stock.stockReservadoVenta || 0)
           - (stock.stockReservadoCombo || 0)
+          - (stock.stockReservadoCotizacion || 0)
           - (stock.stockDanado || 0)
           - (stock.stockEnGarantia || 0);
         return {
@@ -239,6 +241,7 @@ export class ProductoCatalogService {
                   - (stock.stockReservado || 0)
                   - (stock.stockReservadoVenta || 0)
                   - (stock.stockReservadoCombo || 0)
+                  - (stock.stockReservadoCotizacion || 0)
                   - (stock.stockDanado || 0)
                   - (stock.stockEnGarantia || 0);
                 return varianteSum + Math.max(0, disponible);
@@ -791,6 +794,7 @@ export class ProductoCatalogService {
             stockReservado: true,
             stockReservadoVenta: true,
             stockReservadoCombo: true,
+            stockReservadoCotizacion: true,
             stockDanado: true,
             stockEnGarantia: true,
             stockMinimo: true,
@@ -848,6 +852,7 @@ export class ProductoCatalogService {
           stockReservado: true,
           stockReservadoVenta: true,
           stockReservadoCombo: true,
+          stockReservadoCotizacion: true,
           stockDanado: true,
           stockEnGarantia: true,
           stockMinimo: true,

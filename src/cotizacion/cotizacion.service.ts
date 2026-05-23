@@ -12,9 +12,19 @@ import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
 import { UpdateEstadoCotizacionDto } from './dto/update-estado-cotizacion.dto';
 import { CreateCotizacionDetalleDto } from './dto/create-cotizacion-detalle.dto';
-import { EstadoCotizacion, Prisma, Rol, TipoNotificacion } from '@prisma/client';
+import {
+  CategoriaMovimientoCaja,
+  EstadoCotizacion,
+  MetodoPagoVenta,
+  Prisma,
+  ReservaCotizacionEstado,
+  Rol,
+  TipoMovimientoCaja,
+  TipoNotificacion,
+} from '@prisma/client';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 
 @Injectable()
 export class CotizacionService {
@@ -27,6 +37,7 @@ export class CotizacionService {
     private readonly planLimitsService: PlanLimitsService,
     private readonly notificacionService: NotificacionService,
     private readonly precioNivelService: PrecioNivelService,
+    private readonly realtime: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -88,7 +99,18 @@ export class CotizacionService {
     // Verificar límite de cotizaciones del plan de suscripción
     await this.planLimitsService.checkCotizacionesLimit(empresaId);
 
-    return this.prisma.$transaction(async (tx) => {
+    // ── Validar inputs de reserva/adelanto ANTES de transacción ──
+    const reservarStock = dto.reservarStock === true;
+    const adelantoMonto = dto.adelantoMonto != null && dto.adelantoMonto > 0
+        ? Number(dto.adelantoMonto)
+        : 0;
+    if (adelantoMonto > 0 && !dto.cajaId) {
+      throw new BadRequestException(
+        'Se requiere cajaId para registrar el pago adelantado',
+      );
+    }
+
+    const cotizacion = await this.prisma.$transaction(async (tx) => {
       // Generar codigo
       const { codigoCotizacion } =
         await this.configuracionCodigos.generarCodigoCotizacion(
@@ -135,6 +157,74 @@ export class CotizacionService {
         }
       }
 
+      // ── Reserva de stock ──
+      // Si `reservarStock=true`, validamos disponibilidad y preparamos
+      // el mapeo de cada item a su `productoStockId` para guardarlo en
+      // el detalle. Items de servicio o manuales (sin productoId ni
+      // varianteId) NO reservan stock. La validación se hace ANTES de
+      // crear la cotización para que un error de stock no deje datos
+      // huérfanos.
+      //
+      // Mapeo de cada index → { productoStockId, cantidadReservada }
+      // o null si ese item no reserva.
+      const reservaInfo: Array<{ productoStockId: string; cantidad: number } | null> = [];
+      if (reservarStock) {
+        for (const d of detallesCalculados) {
+          const isProducto = d.productoId != null || d.varianteId != null;
+          if (!isProducto) {
+            reservaInfo.push(null);
+            continue;
+          }
+          const stock = await tx.productoStock.findFirst({
+            where: {
+              empresaId,
+              sedeId: dto.sedeId,
+              productoId: d.varianteId ? null : d.productoId,
+              varianteId: d.varianteId ?? null,
+            },
+            select: {
+              id: true,
+              stockActual: true,
+              stockReservado: true,
+              stockReservadoVenta: true,
+              stockReservadoCombo: true,
+              stockReservadoCotizacion: true,
+              stockDanado: true,
+              stockEnGarantia: true,
+            },
+          });
+          if (!stock) {
+            throw new BadRequestException(
+              `No hay stock registrado en esta sede para "${d.descripcion}"`,
+            );
+          }
+          const disponible =
+            stock.stockActual -
+            stock.stockReservado -
+            stock.stockReservadoVenta -
+            stock.stockReservadoCombo -
+            stock.stockReservadoCotizacion -
+            stock.stockDanado -
+            stock.stockEnGarantia;
+          const cantidadInt = Math.ceil(d.cantidad);
+          if (disponible < cantidadInt) {
+            throw new BadRequestException(
+              `Stock insuficiente para reservar "${d.descripcion}": ` +
+                `solicitado ${cantidadInt}, disponible ${disponible}`,
+            );
+          }
+          reservaInfo.push({
+            productoStockId: stock.id,
+            cantidad: cantidadInt,
+          });
+        }
+      } else {
+        // Sin reserva: igualmente push de nulls para mantener el index alineado.
+        for (let i = 0; i < detallesCalculados.length; i++) {
+          reservaInfo.push(null);
+        }
+      }
+
       // Calcular totales del header
       const subtotal = detallesCalculados.reduce(
         (sum, d) => sum + d.subtotal,
@@ -174,23 +264,30 @@ export class CotizacionService {
             : null,
           observaciones: dto.observaciones,
           condiciones: dto.condiciones,
+          adelantoMonto: adelantoMonto > 0 ? adelantoMonto : null,
           detalles: {
-            create: detallesCalculados.map((d) => ({
-              productoId: d.productoId,
-              varianteId: d.varianteId,
-              servicioId: d.servicioId,
-              descripcion: d.descripcion,
-              cantidad: d.cantidad,
-              precioUnitario: d.precioUnitario,
-              descuento: d.descuento,
-              tipoAfectacion: d.tipoAfectacion,
-              porcentajeIGV: d.porcentajeIGV,
-              igv: d.igv,
-              icbper: d.icbper,
-              subtotal: d.subtotal,
-              total: d.total,
-              orden: d.orden,
-            })),
+            create: detallesCalculados.map((d, idx) => {
+              const info = reservaInfo[idx];
+              return {
+                productoId: d.productoId,
+                varianteId: d.varianteId,
+                servicioId: d.servicioId,
+                descripcion: d.descripcion,
+                cantidad: d.cantidad,
+                precioUnitario: d.precioUnitario,
+                descuento: d.descuento,
+                tipoAfectacion: d.tipoAfectacion,
+                porcentajeIGV: d.porcentajeIGV,
+                igv: d.igv,
+                icbper: d.icbper,
+                subtotal: d.subtotal,
+                total: d.total,
+                orden: d.orden,
+                productoStockId: info?.productoStockId,
+                cantidadReservada: info?.cantidad,
+                reservaEstado: info ? ReservaCotizacionEstado.ACTIVA : null,
+              };
+            }),
           },
         },
         include: {
@@ -219,9 +316,74 @@ export class CotizacionService {
         },
       });
 
-      this.logger.log(`Cotizacion creada: ${cotizacion.codigo}`);
+      // ── Aplicar reserva de stock (incrementar stockReservadoCotizacion) ──
+      if (reservarStock) {
+        for (const info of reservaInfo) {
+          if (info == null) continue;
+          await tx.productoStock.update({
+            where: { id: info.productoStockId },
+            data: {
+              stockReservadoCotizacion: { increment: info.cantidad },
+            },
+          });
+        }
+      }
+
+      // ── Registrar pago adelantado en caja (si aplica) ──
+      if (adelantoMonto > 0) {
+        // Validar caja abierta perteneciente al vendedor en la sede.
+        const caja = await tx.caja.findFirst({
+          where: {
+            id: dto.cajaId,
+            empresaId,
+            sedeId: dto.sedeId,
+            estado: 'ABIERTA',
+          },
+          select: { id: true },
+        });
+        if (!caja) {
+          throw new BadRequestException(
+            'La caja indicada no existe, no pertenece a esta sede o está cerrada',
+          );
+        }
+        const movimiento = await tx.movimientoCaja.create({
+          data: {
+            cajaId: caja.id,
+            empresaId,
+            tipo: TipoMovimientoCaja.INGRESO,
+            categoria: CategoriaMovimientoCaja.ADELANTO_COTIZACION,
+            metodoPago: MetodoPagoVenta.EFECTIVO,
+            monto: adelantoMonto,
+            descripcion: `Adelanto cotización ${cotizacion.codigo}`,
+            cotizacionId: cotizacion.id,
+            registradoPorId: dto.vendedorId,
+            esManual: true,
+          },
+        });
+        await tx.cotizacion.update({
+          where: { id: cotizacion.id },
+          data: { movimientoCajaId: movimiento.id },
+        });
+      }
+
+      this.logger.log(
+        `Cotizacion creada: ${cotizacion.codigo}` +
+          (reservarStock ? ' [stock reservado]' : '') +
+          (adelantoMonto > 0 ? ` [adelanto S/${adelantoMonto.toFixed(2)}]` : ''),
+      );
       return cotizacion;
     });
+
+    // Emitir FCM fuera de la transacción: si se reservó stock, los
+    // otros devices deben actualizar la disponibilidad mostrada.
+    if (reservarStock) {
+      this.realtime.notifyStockCambiado({
+        empresaId,
+        sedeId: dto.sedeId,
+      });
+    }
+
+    return cotizacion;
   }
 
   /**
@@ -503,6 +665,7 @@ export class CotizacionService {
     id: string,
     empresaId: string,
     dto: UpdateEstadoCotizacionDto,
+    actorUserId: string,
   ) {
     const cotizacion = await this.prisma.cotizacion.findFirst({
       where: { id, empresaId },
@@ -520,23 +683,43 @@ export class CotizacionService {
       );
     }
 
-    const updated = await this.prisma.cotizacion.update({
-      where: { id },
-      data: {
-        estado: dto.estado,
-        ...(dto.comprobanteId && { comprobanteId: dto.comprobanteId }),
-      },
-      include: {
-        sede: { select: { id: true, nombre: true } },
-        vendedor: {
-          select: {
-            id: true,
-            aliasTicket: true,
-            persona: { select: { nombres: true, apellidos: true } },
+    // Estados terminales que liberan/convierten reservas si las había:
+    // - RECHAZADA/VENCIDA → liberar (stock devuelto + adelanto devuelto)
+    // - CONVERTIDA       → marcar como CONVERTIDA (stock pasa a la venta)
+    const motivoReserva: 'LIBERAR' | 'CONVERTIR' | null =
+      dto.estado === EstadoCotizacion.RECHAZADA ||
+      dto.estado === EstadoCotizacion.VENCIDA
+        ? 'LIBERAR'
+        : dto.estado === EstadoCotizacion.CONVERTIDA
+          ? 'CONVERTIR'
+          : null;
+
+    const { updated, huboReservas } = await this.prisma.$transaction(
+      async (tx) => {
+        const huboReservas =
+          motivoReserva != null
+            ? await this._liberarReservas(tx, id, motivoReserva, actorUserId)
+            : false;
+        const updated = await tx.cotizacion.update({
+          where: { id },
+          data: {
+            estado: dto.estado,
+            ...(dto.comprobanteId && { comprobanteId: dto.comprobanteId }),
           },
-        },
+          include: {
+            sede: { select: { id: true, nombre: true } },
+            vendedor: {
+              select: {
+                id: true,
+                aliasTicket: true,
+                persona: { select: { nombres: true, apellidos: true } },
+              },
+            },
+          },
+        });
+        return { updated, huboReservas };
       },
-    });
+    );
 
     // Notificar cajeros cuando se aprueba (cola POS)
     if (dto.estado === EstadoCotizacion.APROBADA) {
@@ -547,13 +730,22 @@ export class CotizacionService {
       ).catch(() => {});
     }
 
+    // Emitir FCM si se liberó/convirtió stock — otros devices deben
+    // actualizar la disponibilidad mostrada.
+    if (huboReservas) {
+      this.realtime.notifyStockCambiado({
+        empresaId,
+        sedeId: cotizacion.sedeId,
+      });
+    }
+
     return updated;
   }
 
   /**
    * Eliminar cotizacion (solo BORRADOR)
    */
-  async remove(id: string, empresaId: string) {
+  async remove(id: string, empresaId: string, actorUserId: string) {
     const cotizacion = await this.prisma.cotizacion.findFirst({
       where: { id, empresaId },
     });
@@ -568,9 +760,25 @@ export class CotizacionService {
       );
     }
 
-    await this.prisma.cotizacion.delete({
-      where: { id },
+    // Si tenía reservas activas o adelanto, liberar/devolver antes de
+    // borrar (Cascade dejaría stock "perdido" en stockReservadoCotizacion).
+    const huboReservas = await this.prisma.$transaction(async (tx) => {
+      const result = await this._liberarReservas(
+        tx,
+        id,
+        'LIBERAR',
+        actorUserId,
+      );
+      await tx.cotizacion.delete({ where: { id } });
+      return result;
     });
+
+    if (huboReservas) {
+      this.realtime.notifyStockCambiado({
+        empresaId,
+        sedeId: cotizacion.sedeId,
+      });
+    }
 
     return { message: 'Cotizacion eliminada exitosamente' };
   }
@@ -737,6 +945,113 @@ export class CotizacionService {
   /**
    * Validar transicion de estado
    */
+  /// Libera las reservas de stock activas de una cotización. Decrementa
+  /// `stockReservadoCotizacion` en cada `ProductoStock` afectado y marca
+  /// los detalles con `reservaEstado` actualizado.
+  ///
+  /// - `motivo: 'LIBERAR'` → la reserva se devuelve al stock disponible
+  ///   (cotización anulada, rechazada o vencida).
+  /// - `motivo: 'CONVERTIR'` → la reserva pasa a la venta (la venta
+  ///   misma decrementará `stockActual` cuando se cree).
+  ///
+  /// Si la cotización tenía `movimientoCajaId` (adelanto registrado) y
+  /// `motivo === 'LIBERAR'`, crea un movimiento de contrapartida tipo
+  /// `DEVOLUCION_ADELANTO_COTIZACION` para que el cajero tenga el dinero
+  /// en caja para devolver al cliente. Para `'CONVERTIR'` el adelanto
+  /// queda como ingreso de caja y el cajero lo aplica manualmente a la
+  /// venta resultante.
+  ///
+  /// Devuelve `true` si había reservas activas (para que el caller emita
+  /// FCM STOCK_CAMBIADO).
+  private async _liberarReservas(
+    tx: Prisma.TransactionClient,
+    cotizacionId: string,
+    motivo: 'LIBERAR' | 'CONVERTIR',
+    actorUserId: string,
+  ): Promise<boolean> {
+    const detallesConReserva = await tx.cotizacionDetalle.findMany({
+      where: {
+        cotizacionId,
+        reservaEstado: ReservaCotizacionEstado.ACTIVA,
+      },
+      select: {
+        id: true,
+        productoStockId: true,
+        cantidadReservada: true,
+      },
+    });
+    if (detallesConReserva.length === 0) return false;
+
+    const nuevoEstado =
+      motivo === 'LIBERAR'
+        ? ReservaCotizacionEstado.LIBERADA
+        : ReservaCotizacionEstado.CONVERTIDA;
+
+    for (const d of detallesConReserva) {
+      if (!d.productoStockId || !d.cantidadReservada) continue;
+      await tx.productoStock.update({
+        where: { id: d.productoStockId },
+        data: {
+          stockReservadoCotizacion: { decrement: d.cantidadReservada },
+        },
+      });
+      await tx.cotizacionDetalle.update({
+        where: { id: d.id },
+        data: { reservaEstado: nuevoEstado },
+      });
+    }
+
+    // Devolución del adelanto solo si se libera (no se convierte).
+    if (motivo === 'LIBERAR') {
+      const cotizacion = await tx.cotizacion.findUnique({
+        where: { id: cotizacionId },
+        select: {
+          empresaId: true,
+          codigo: true,
+          movimientoCajaId: true,
+          adelantoMonto: true,
+        },
+      });
+      if (
+        cotizacion?.movimientoCajaId &&
+        cotizacion.adelantoMonto != null &&
+        Number(cotizacion.adelantoMonto) > 0
+      ) {
+        const ingresoOriginal = await tx.movimientoCaja.findUnique({
+          where: { id: cotizacion.movimientoCajaId },
+          select: { cajaId: true, anulado: true },
+        });
+        // Solo crear contrapartida si la caja sigue abierta y el ingreso
+        // no fue anulado previamente.
+        if (ingresoOriginal && !ingresoOriginal.anulado) {
+          const caja = await tx.caja.findUnique({
+            where: { id: ingresoOriginal.cajaId },
+            select: { estado: true },
+          });
+          if (caja?.estado === 'ABIERTA') {
+            await tx.movimientoCaja.create({
+              data: {
+                cajaId: ingresoOriginal.cajaId,
+                empresaId: cotizacion.empresaId,
+                tipo: TipoMovimientoCaja.EGRESO,
+                categoria:
+                  CategoriaMovimientoCaja.DEVOLUCION_ADELANTO_COTIZACION,
+                metodoPago: MetodoPagoVenta.EFECTIVO,
+                monto: cotizacion.adelantoMonto,
+                descripcion: `Devolución adelanto cotización ${cotizacion.codigo}`,
+                cotizacionId,
+                registradoPorId: actorUserId,
+                esManual: true,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    return true;
+  }
+
   private validarTransicionEstado(
     actual: EstadoCotizacion,
     nuevo: EstadoCotizacion,

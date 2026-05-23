@@ -15,9 +15,10 @@ model ProductoStock {
   stockActual Int // Stock físico total en la sede
 
   // ========== RESERVAS ==========
-  stockReservado      Int @default(0) // Reservado para transferencias aprobadas
-  stockReservadoVenta Int @default(0) // Apartado por clientes (pre-ventas, pedidos)
-  stockReservadoCombo Int @default(0) // Apartado para ensamble de combos reservados
+  stockReservado            Int @default(0) // Reservado para transferencias aprobadas
+  stockReservadoVenta       Int @default(0) // Apartado por clientes (pre-ventas, pedidos)
+  stockReservadoCombo       Int @default(0) // Apartado para ensamble de combos reservados
+  stockReservadoCotizacion  Int @default(0) // Apartado por cotizaciones con flag de reserva
 
   // ========== MERMA Y ESTADO ==========
   stockDanado     Int @default(0) // Productos defectuosos/dañados (no vendibles)
@@ -28,7 +29,7 @@ model ProductoStock {
   stockMaximo Int?
 
   // ========== STOCK CALCULADOS (runtime, no se guardan en BD) ==========
-  // stockDisponibleVenta = stockActual - stockReservado - stockReservadoVenta - stockReservadoCombo - stockDanado - stockEnGarantia
+  // stockDisponibleVenta = stockActual - stockReservado - stockReservadoVenta - stockReservadoCombo - stockReservadoCotizacion - stockDanado - stockEnGarantia
   // stockDisponibleTransferencia = stockActual - stockReservado
 
   // Ubicación dentro de la sede
@@ -79,6 +80,7 @@ model ProductoStock {
   itemsReporteIncidencia   ReporteIncidenciaItem[] // Items de reportes de incidencias
   itemsInventario          InventarioItem[] // Items de inventarios
   lotes                    Lote[] // Lotes de producto en esta sede
+  cotizacionDetalles       CotizacionDetalle[] // Items de cotizaciones con reserva activa sobre este stock
   liquidacionAutorizadaPor Usuario?                      @relation("ProductoStockLiquidacionAutorizadaPor", fields: [liquidacionAutorizadaPorId], references: [id])
 
   @@unique([sedeId, productoId, varianteId])

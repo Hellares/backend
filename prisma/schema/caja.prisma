@@ -25,6 +25,8 @@ enum CategoriaMovimientoCaja {
   COMPRA
   DEVOLUCION
   ADELANTO_SERVICIO
+  ADELANTO_COTIZACION
+  DEVOLUCION_ADELANTO_COTIZACION
   OTRO_INGRESO
   PAGO_PROVEEDOR
   GASTO_OPERATIVO
@@ -97,6 +99,7 @@ model MovimientoCaja {
   devolucionId        String?
   boletaPagoId        String?
   adelantoPagoId      String?
+  cotizacionId        String? // Para movimientos tipo ADELANTO_COTIZACION o DEVOLUCION_ADELANTO_COTIZACION
 
   esManual        Boolean  @default(true)
   registradoPorId String
@@ -128,6 +131,7 @@ model MovimientoCaja {
   contrapartidaDe         MovimientoCaja?      @relation("MovimientoContrapartida")
   boletaPago              BoletaPago?          @relation("MovimientoCajaBoletaPago", fields: [boletaPagoId], references: [id])
   adelantoPago            AdelantoPago?        @relation("MovimientoCajaAdelanto", fields: [adelantoPagoId], references: [id])
+  cotizacion              Cotizacion?          @relation("MovimientoCajaCotizacion", fields: [cotizacionId], references: [id])
   pagoGastoRecurrente     PagoGastoRecurrente?
   rendicionesCajaChica    RendicionCajaChica[]
   operacionesAgente       OperacionAgente[]

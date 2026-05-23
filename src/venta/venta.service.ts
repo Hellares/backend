@@ -880,12 +880,14 @@ export class VentaService {
                 stockReservado: number;
                 stockReservadoVenta: number;
                 stockReservadoCombo: number;
+                stockReservadoCotizacion: number;
                 stockDanado: number;
                 stockEnGarantia: number;
               }>
             >(
               `SELECT id, "stockActual", "stockReservado", "stockReservadoVenta",
-                      "stockReservadoCombo", "stockDanado", "stockEnGarantia"
+                      "stockReservadoCombo", "stockReservadoCotizacion",
+                      "stockDanado", "stockEnGarantia"
                FROM "ProductoStock" WHERE id = ANY($1) FOR UPDATE`,
               stockIds,
             );
@@ -938,6 +940,7 @@ export class VentaService {
                 locked.stockReservado -
                 locked.stockReservadoVenta -
                 locked.stockReservadoCombo -
+                locked.stockReservadoCotizacion -
                 locked.stockDanado -
                 locked.stockEnGarantia;
 
@@ -1665,11 +1668,13 @@ export class VentaService {
             stockReservado: number;
             stockReservadoVenta: number;
             stockReservadoCombo: number;
+            stockReservadoCotizacion: number;
             stockDanado: number;
             stockEnGarantia: number;
           }>
         >`SELECT id, "stockActual", "stockReservado", "stockReservadoVenta",
-                "stockReservadoCombo", "stockDanado", "stockEnGarantia"
+                "stockReservadoCombo", "stockReservadoCotizacion",
+                "stockDanado", "stockEnGarantia"
          FROM "ProductoStock" WHERE id = ${productoStock.id} FOR UPDATE`;
 
         if (!stockLocked) continue;
@@ -1681,6 +1686,7 @@ export class VentaService {
           stockLocked.stockReservado -
           stockLocked.stockReservadoVenta -
           stockLocked.stockReservadoCombo -
+          stockLocked.stockReservadoCotizacion -
           stockLocked.stockDanado -
           stockLocked.stockEnGarantia;
 
@@ -2305,6 +2311,7 @@ export class VentaService {
           productoStock.stockReservado -
           productoStock.stockReservadoVenta -
           productoStock.stockReservadoCombo -
+          productoStock.stockReservadoCotizacion -
           productoStock.stockDanado -
           productoStock.stockEnGarantia;
 

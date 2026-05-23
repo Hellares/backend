@@ -121,8 +121,9 @@ export class CotizacionController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @Body() dto: UpdateEstadoCotizacionDto,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.cotizacionService.updateEstado(id, empresaId, dto);
+    return this.cotizacionService.updateEstado(id, empresaId, dto, userId);
   }
 
   @Post(':id/duplicar')
@@ -168,7 +169,8 @@ export class CotizacionController {
   async remove(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.cotizacionService.remove(id, empresaId);
+    return this.cotizacionService.remove(id, empresaId, userId);
   }
 }

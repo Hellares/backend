@@ -40,6 +40,18 @@ model Cotizacion {
   // Referencia a venta (cuando se convierte a venta)
   ventaId String?
 
+  // Reserva de stock + pago adelantado.
+  // - Si algún `CotizacionDetalle` tiene `reservaEstado = ACTIVA`, esta
+  //   cotización está "apartando" stock. Se calcula en runtime vía
+  //   detalles (no flag global, evita desincronización).
+  // - `adelantoMonto` es el pago que dejó el cliente al crear la
+  //   cotización; se registra como MovimientoCaja(ADELANTO_COTIZACION).
+  // - Al convertir a venta, ese adelanto se aplica como pago parcial.
+  // - Al anular, se libera el stock y se devuelve el adelanto vía
+  //   MovimientoCaja(DEVOLUCION_ADELANTO).
+  adelantoMonto    Decimal? @db.Decimal(10, 2)
+  movimientoCajaId String?  // FK al INGRESO del adelanto (si aplica)
+
   // Observaciones
   observaciones String?
   condiciones   String?
@@ -49,15 +61,16 @@ model Cotizacion {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  empresa         Empresa               @relation(fields: [empresaId], references: [id])
-  sede            Sede                  @relation(fields: [sedeId], references: [id])
-  cliente         EmpresaPersona?       @relation(fields: [clienteId], references: [id])
-  clienteEmpresa  ClienteEmpresa?       @relation(fields: [clienteEmpresaId], references: [id])
-  vendedor        Usuario               @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
-  venta           Venta?                @relation("CotizacionVenta", fields: [ventaId], references: [id])
-  ventasOrigen    Venta[]               @relation("VentaCotizacion") // Back-relation: ventas created from this cotizacion
-  detalles        CotizacionDetalle[]
-  solicitudOrigen SolicitudCotizacion[] @relation("SolicitudCotizacionRespuesta")
+  empresa            Empresa               @relation(fields: [empresaId], references: [id])
+  sede               Sede                  @relation(fields: [sedeId], references: [id])
+  cliente            EmpresaPersona?       @relation(fields: [clienteId], references: [id])
+  clienteEmpresa     ClienteEmpresa?       @relation(fields: [clienteEmpresaId], references: [id])
+  vendedor           Usuario               @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
+  venta              Venta?                @relation("CotizacionVenta", fields: [ventaId], references: [id])
+  ventasOrigen       Venta[]               @relation("VentaCotizacion") // Back-relation: ventas created from this cotizacion
+  detalles           CotizacionDetalle[]
+  solicitudOrigen    SolicitudCotizacion[] @relation("SolicitudCotizacionRespuesta")
+  movimientosCaja    MovimientoCaja[]      @relation("MovimientoCajaCotizacion") // ADELANTO_COTIZACION + DEVOLUCION_ADELANTO_COTIZACION
 
   @@unique([empresaId, codigo])
   @@index([empresaId])
@@ -101,19 +114,33 @@ model CotizacionDetalle {
   // Orden
   orden Int @default(0)
 
+  // Reserva de stock por item. Solo aplica a items con producto/variante
+  // (los items manuales o de servicio no reservan stock).
+  // - `productoStockId`: FK a la fila de stock concreta por sede.
+  // - `cantidadReservada`: cantidad apartada por esta cotización.
+  // - `reservaEstado`: ACTIVA mientras el stock está apartado,
+  //   LIBERADA si se anula o vence, CONVERTIDA al convertir a venta.
+  productoStockId    String?
+  cantidadReservada  Int?
+  reservaEstado      ReservaCotizacionEstado?
+
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  cotizacion Cotizacion        @relation(fields: [cotizacionId], references: [id], onDelete: Cascade)
-  producto   Producto?         @relation(fields: [productoId], references: [id])
-  variante   ProductoVariante? @relation(fields: [varianteId], references: [id])
-  servicio   Servicio?         @relation(fields: [servicioId], references: [id])
+  cotizacion    Cotizacion        @relation(fields: [cotizacionId], references: [id], onDelete: Cascade)
+  producto      Producto?         @relation(fields: [productoId], references: [id])
+  variante      ProductoVariante? @relation(fields: [varianteId], references: [id])
+  servicio      Servicio?         @relation(fields: [servicioId], references: [id])
+  productoStock ProductoStock?    @relation(fields: [productoStockId], references: [id])
 
   @@index([cotizacionId])
   @@index([productoId])
   @@index([varianteId])
   @@index([servicioId])
+  @@index([productoStockId])
+  // Para el EXISTS rápido de "cotizaciones con reserva activa"
+  @@index([cotizacionId, reservaEstado])
 }
 
 enum EstadoCotizacion {
@@ -123,4 +150,10 @@ enum EstadoCotizacion {
   RECHAZADA
   VENCIDA
   CONVERTIDA
+}
+
+enum ReservaCotizacionEstado {
+  ACTIVA      // El stock está apartado actualmente
+  LIBERADA    // La cotización fue anulada o venció (stock devuelto)
+  CONVERTIDA  // La cotización se convirtió en venta (stock consumido)
 }

@@ -7,6 +7,8 @@ import {
   ValidateNested,
   ArrayMinSize,
   IsDateString,
+  IsBoolean,
+  Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -90,4 +92,32 @@ export class CreateCotizacionDto {
   @ValidateNested({ each: true })
   @Type(() => CreateCotizacionDetalleDto)
   detalles: CreateCotizacionDetalleDto[];
+
+  // ── Reserva de stock + pago adelantado (opcional) ──
+  // Si `reservarStock=true`, el backend aparta el stock de cada item
+  // del catálogo (incrementa `ProductoStock.stockReservadoCotizacion`)
+  // y guarda `productoStockId`+`cantidadReservada`+`reservaEstado=ACTIVA`
+  // en cada `CotizacionDetalle`. Al anular se libera; al convertir a
+  // venta se consume.
+  @ApiPropertyOptional({ description: 'Apartar stock para esta cotización' })
+  @IsOptional()
+  @IsBoolean()
+  reservarStock?: boolean;
+
+  // Monto del pago adelantado del cliente. Si > 0, se crea un
+  // MovimientoCaja(INGRESO, ADELANTO_COTIZACION) vinculado a esta
+  // cotización. Requiere `cajaId`.
+  @ApiPropertyOptional({ description: 'Monto del pago adelantado del cliente' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  adelantoMonto?: number;
+
+  // ID de la caja donde se registra el adelanto. Obligatorio si
+  // `adelantoMonto > 0`.
+  @ApiPropertyOptional({ description: 'ID de la caja para registrar el adelanto' })
+  @IsOptional()
+  @IsString()
+  cajaId?: string;
 }
