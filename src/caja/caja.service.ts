@@ -721,6 +721,26 @@ export class CajaService {
       _count: { id: true },
     });
 
+    // Egreso por anulación de venta: EGRESO + categoría DEVOLUCION +
+    // ventaId NOT NULL. La categoría DEVOLUCION en esta caja se crea
+    // exclusivamente desde `reversarMovimientosDeOrigen` (helper de
+    // anulación), así que cualquier match acá representa dinero que salió
+    // de la caja por anular una venta. Sirve para que el cajero vea
+    // separadamente cuánto perdió por anulaciones.
+    const egresoAnulacionAgg = await this.prisma.movimientoCaja.aggregate({
+      where: {
+        cajaId,
+        anulado: false,
+        tipo: TipoMovimientoCaja.EGRESO,
+        categoria: CategoriaMovimientoCaja.DEVOLUCION,
+        ventaId: { not: null },
+      },
+      _sum: { monto: true },
+      _count: { id: true },
+    });
+    const egresoAnulacionVenta = Number(egresoAnulacionAgg._sum.monto ?? 0);
+    const cantidadAnulaciones = egresoAnulacionAgg._count.id;
+
     // Totales generales
     const totalIngresos = resumenPorMetodo
       .filter((r) => r.tipo === TipoMovimientoCaja.INGRESO)
@@ -776,6 +796,8 @@ export class CajaService {
       totalEgresos,
       saldoActual,
       saldoEfectivo,
+      egresoAnulacionVenta,
+      cantidadAnulaciones,
       // Alias `saldo` para el shape que consume ResumenCajaModel del Flutter.
       saldo: saldoActual,
       detalles,
