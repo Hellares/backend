@@ -678,6 +678,34 @@ export class CajaService {
     return result;
   }
 
+  /// Mapea el enum a un label legible. Single source of truth para los
+  /// labels que se muestran al cajero — Flutter consume estos strings
+  /// directos, así que si agregás una categoría nueva al schema, basta
+  /// con sumarla acá.
+  private labelCategoria(c: CategoriaMovimientoCaja): string {
+    const map: Record<CategoriaMovimientoCaja, string> = {
+      VENTA: 'Venta',
+      PEDIDO_MARKETPLACE: 'Pedido Marketplace',
+      COMPRA: 'Compra',
+      DEVOLUCION: 'Devolución',
+      ADELANTO_SERVICIO: 'Adelanto Servicio',
+      ADELANTO_COTIZACION: 'Adelanto Cotización',
+      DEVOLUCION_ADELANTO_COTIZACION: 'Devolución Adelanto Cotización',
+      OTRO_INGRESO: 'Otro Ingreso',
+      PAGO_PROVEEDOR: 'Pago Proveedor',
+      GASTO_OPERATIVO: 'Gasto Operativo',
+      OTRO_EGRESO: 'Otro Egreso',
+      REPOSICION_CAJA_CHICA: 'Reposición Caja Chica',
+      DEPOSITO_AGENTE: 'Depósito Agente',
+      RETIRO_AGENTE: 'Retiro Agente',
+      COMISION_AGENTE: 'Comisión Agente',
+      PAGO_PLANILLA: 'Pago Planilla',
+      ADELANTO_EMPLEADO: 'Adelanto Empleado',
+      BONIFICACION_EMPLEADO: 'Bonificación Empleado',
+    };
+    return map[c] ?? c;
+  }
+
   /**
    * Obtener resumen de una caja: totales generales + detalle por método
    * de pago. El cliente Flutter (cerrar_caja_page) consume `detalles[]`
@@ -789,6 +817,23 @@ export class CajaService {
     );
     const saldoEfectivo = detalleEfectivo?.saldo ?? montoApertura;
 
+    // Desglose de Total Egresos por categoría real (manual) — sin
+    // anuladas (que serían las contrapartidas de anulación). Ordenado
+    // descendente por monto para que el cajero vea primero lo más grande.
+    // Mandamos `label` formateado para que Flutter no tenga que mantener
+    // un enum paralelo (hay categorías nuevas como ADELANTO_COTIZACION,
+    // PAGO_PLANILLA, etc. que el enum del Flutter no contempla).
+    const egresosPorCategoria = resumenPorCategoria
+      .filter((r) => r.tipo === TipoMovimientoCaja.EGRESO)
+      .map((r) => ({
+        categoria: r.categoria,
+        label: this.labelCategoria(r.categoria),
+        total: Number(r._sum.monto ?? 0),
+        cantidad: r._count.id,
+      }))
+      .filter((r) => r.total > 0)
+      .sort((a, b) => b.total - a.total);
+
     return {
       caja,
       montoApertura,
@@ -798,6 +843,7 @@ export class CajaService {
       saldoEfectivo,
       egresoAnulacionVenta,
       cantidadAnulaciones,
+      egresosPorCategoria,
       // Alias `saldo` para el shape que consume ResumenCajaModel del Flutter.
       saldo: saldoActual,
       detalles,
