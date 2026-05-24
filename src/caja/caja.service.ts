@@ -536,6 +536,10 @@ export class CajaService {
         pedidoMarketplace: { select: { id: true, codigo: true } },
         compra: { select: { id: true, codigo: true } },
         devolucion: { select: { id: true, codigo: true } },
+        // Estado de la cotizacion permite que el cliente muestre badge
+        // "DEVUELTO" en el ADELANTO_COTIZACION cuando la cotizacion
+        // termino en RECHAZADA con devolucion registrada.
+        cotizacion: { select: { id: true, codigo: true, estado: true } },
         categoriaGasto: { select: { id: true, nombre: true, tipo: true, icono: true, color: true } },
         registradoPor: {
           select: {
@@ -979,6 +983,7 @@ export class CajaService {
         pedidoMarketplace: { select: { id: true, codigo: true } },
         compra: { select: { id: true, codigo: true } },
         devolucion: { select: { id: true, codigo: true } },
+        cotizacion: { select: { id: true, codigo: true, estado: true } },
         categoriaGasto: { select: { id: true, nombre: true, tipo: true, icono: true, color: true } },
         registradoPor: {
           select: {
@@ -2138,6 +2143,7 @@ export class CajaService {
           venta: { select: { id: true, codigo: true } },
           compra: { select: { id: true, codigo: true } },
           devolucion: { select: { id: true, codigo: true } },
+          cotizacion: { select: { id: true, codigo: true, estado: true } },
         },
       }),
       this.prisma.movimientoCaja.count({ where }),
