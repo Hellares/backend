@@ -197,9 +197,20 @@ export class CajaService {
     // Mismo cálculo de saldos que getCajaActiva (groupBy por método +
     // tipo). Si la caja está cerrada, los movimientos siguen siendo los
     // mismos; el cliente puede mostrar el cierre adjunto si existe.
+    // Excluimos DEPOSITO/RETIRO_TESORERIA (barrido auto del cierre)
+    // para que el saldo recalculado coincida con el snapshot.
     const resumenPorMetodo = await this.prisma.movimientoCaja.groupBy({
       by: ['metodoPago', 'tipo'],
-      where: { cajaId, anulado: false },
+      where: {
+        cajaId,
+        anulado: false,
+        categoria: {
+          notIn: [
+            CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+            CategoriaMovimientoCaja.RETIRO_TESORERIA,
+          ],
+        },
+      },
       _sum: { monto: true },
     });
 
@@ -274,7 +285,16 @@ export class CajaService {
     // debe contar al cerrar.
     const totales = await this.prisma.movimientoCaja.groupBy({
       by: ['metodoPago', 'tipo'],
-      where: { cajaId: caja.id, anulado: false },
+      where: {
+        cajaId: caja.id,
+        anulado: false,
+        categoria: {
+          notIn: [
+            CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+            CategoriaMovimientoCaja.RETIRO_TESORERIA,
+          ],
+        },
+      },
       _sum: { monto: true },
     });
 
@@ -817,16 +837,33 @@ export class CajaService {
       throw new NotFoundException('Caja no encontrada');
     }
 
+    // Excluimos DEPOSITO/RETIRO_TESORERIA: son movimientos auto-generados
+    // por el cierre (barrido a Caja Central) y no representan actividad
+    // operativa de la caja. Para caja abierta no aparecen aún; para caja
+    // cerrada los ocultamos del resumen visible al cajero — el efectivo
+    // que muestra coincide con lo "que debe tener" al momento del cierre,
+    // antes del barrido.
+    const filtroSinBarrido = {
+      cajaId,
+      anulado: false,
+      categoria: {
+        notIn: [
+          CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+          CategoriaMovimientoCaja.RETIRO_TESORERIA,
+        ],
+      },
+    };
+
     const resumenPorMetodo = await this.prisma.movimientoCaja.groupBy({
       by: ['metodoPago', 'tipo'],
-      where: { cajaId, anulado: false },
+      where: filtroSinBarrido,
       _sum: { monto: true },
       _count: { id: true },
     });
 
     const resumenPorCategoria = await this.prisma.movimientoCaja.groupBy({
       by: ['categoria', 'tipo'],
-      where: { cajaId, anulado: false },
+      where: filtroSinBarrido,
       _sum: { monto: true },
       _count: { id: true },
     });
@@ -1007,9 +1044,24 @@ export class CajaService {
 
     // Totales en vivo (siempre, abierta o cerrada — útil para comparar contra
     // el cierre snapshot si está cerrada, o para mostrar saldo actual si abierta).
+    // Excluimos DEPOSITO/RETIRO_TESORERIA: son movimientos auto-generados
+    // por el propio cierre (barrido a Caja Central). El snapshot del cierre
+    // se calcula ANTES de inyectarlos, así que incluirlos al recalcular
+    // generaría un drift falso siempre que hubo barrido. Las anulaciones
+    // genuinas post-cierre (categoría DEVOLUCION/etc.) sí se reflejan
+    // porque el original queda con `anulado: true` y el filtro las excluye.
     const totales = await this.prisma.movimientoCaja.groupBy({
       by: ['metodoPago', 'tipo'],
-      where: { cajaId, anulado: false },
+      where: {
+        cajaId,
+        anulado: false,
+        categoria: {
+          notIn: [
+            CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+            CategoriaMovimientoCaja.RETIRO_TESORERIA,
+          ],
+        },
+      },
       _sum: { monto: true },
     });
 
@@ -1031,7 +1083,18 @@ export class CajaService {
 
     const auditoriaPorCategoria = await this.prisma.movimientoCaja.groupBy({
       by: ['categoria', 'tipo'],
-      where: { cajaId, anulado: false },
+      where: {
+        cajaId,
+        anulado: false,
+        // Mismo motivo que en `totales`: el barrido al cerrar no debe
+        // aparecer como egreso operativo.
+        categoria: {
+          notIn: [
+            CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+            CategoriaMovimientoCaja.RETIRO_TESORERIA,
+          ],
+        },
+      },
       _sum: { monto: true },
       _count: { id: true },
     });
@@ -1246,7 +1309,16 @@ export class CajaService {
       cajasAbiertas.map(async (caja) => {
         const totales = await this.prisma.movimientoCaja.groupBy({
           by: ['metodoPago', 'tipo'],
-          where: { cajaId: caja.id, anulado: false },
+          where: {
+            cajaId: caja.id,
+            anulado: false,
+            categoria: {
+              notIn: [
+                CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+                CategoriaMovimientoCaja.RETIRO_TESORERIA,
+              ],
+            },
+          },
           _sum: { monto: true },
         });
 
