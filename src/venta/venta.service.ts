@@ -1538,14 +1538,32 @@ export class VentaService {
         totalVenta = Number(cotizacion.total);
       }
 
+      // Adelanto previo de la cotización (categoria ADELANTO_COTIZACION).
+      // Si existe, se aplica como pago previo de la venta — el cliente
+      // solo debe cubrir el saldo restante hoy. NO se duplica en caja:
+      // el MovimientoCaja del adelanto sigue existiendo en su caja del
+      // día original (que probablemente ya cerró). Acá solo se vincula
+      // a la venta nueva y se registra como PagoVenta adicional.
+      const adelantoAplicado = Number(cotizacion.adelantoMonto ?? 0);
+      const totalAPagarHoy = Math.max(0, totalVenta - adelantoAplicado);
+
       const montoCambio =
-        dto.montoRecibido && dto.montoRecibido > totalVenta
-          ? Math.round((dto.montoRecibido - totalVenta) * 100) / 100
+        dto.montoRecibido && dto.montoRecibido > totalAPagarHoy
+          ? Math.round((dto.montoRecibido - totalAPagarHoy) * 100) / 100
           : null;
 
-      // Determinar estado de la venta
+      // Determinar estado de la venta. Considera adelanto + pagos del día.
       const esCredito = dto.esCredito ?? false;
-      const estaPagada = !esCredito && dto.montoRecibido && dto.montoRecibido >= totalVenta;
+      const totalPagadoEnEstaTx = !esCredito
+        ? ((dto.pagos && dto.pagos.length > 0)
+            ? dto.pagos
+                .filter((p) => p.metodoPago !== 'CREDITO')
+                .reduce((s, p) => s + Number(p.monto), 0)
+            : Number(dto.montoRecibido ?? 0))
+        : 0;
+      const estaPagada =
+        !esCredito &&
+        (adelantoAplicado + totalPagadoEnEstaTx) >= totalVenta - 0.005;
 
       // 4. Crear venta con datos de la cotización
       const venta = await tx.venta.create({
@@ -1787,9 +1805,39 @@ export class VentaService {
           data: {
             ventaId: venta.id,
             metodoPago: dto.metodoPago || 'EFECTIVO',
-            monto: Math.min(dto.montoRecibido, totalVenta),
+            monto: Math.min(dto.montoRecibido, totalAPagarHoy),
           },
         });
+      }
+
+      // 6b. Si la cotización tenía adelanto, registrarlo como PagoVenta
+      // adicional heredando metodoPago + fechaPago del MovimientoCaja
+      // original (que ya existe en su caja del día — probablemente cerrada
+      // — desde el momento de la cotización). Vinculamos ese movimiento
+      // a la venta nueva manteniendo la traza con la cotización.
+      let movAdelantoData: { metodoPago: any; fechaMovimiento: Date } | null =
+        null;
+      if (adelantoAplicado > 0 && cotizacion.movimientoCajaId) {
+        const movAdelanto = await tx.movimientoCaja.findUnique({
+          where: { id: cotizacion.movimientoCajaId },
+          select: { metodoPago: true, fechaMovimiento: true },
+        });
+        if (movAdelanto) {
+          movAdelantoData = movAdelanto;
+          await tx.pagoVenta.create({
+            data: {
+              ventaId: venta.id,
+              metodoPago: movAdelanto.metodoPago,
+              monto: new Prisma.Decimal(adelantoAplicado.toFixed(2)),
+              fechaPago: movAdelanto.fechaMovimiento,
+              referencia: `Adelanto cotización ${cotizacion.codigo}`,
+            },
+          });
+          await tx.movimientoCaja.update({
+            where: { id: cotizacion.movimientoCajaId },
+            data: { ventaId: venta.id },
+          });
+        }
       }
 
       // 7. Crear comprobante electrónico (solo BOLETA o FACTURA, no TICKET)
@@ -1902,11 +1950,13 @@ export class VentaService {
 
         // Registrar pago del comprobante (registro tributario).
         // Multi-medio: 1 PagoComprobante por cada PagoVenta no-CREDITO.
+        // El monto del día se calcula contra `totalAPagarHoy` (no contra
+        // `totalVenta`) — el adelanto se agrega como una fila aparte.
         const montoPagoLegacy = esCredito
           ? 0
-          : Math.min(dto.montoRecibido || totalVenta, totalVenta);
+          : Math.min(dto.montoRecibido || totalAPagarHoy, totalAPagarHoy);
 
-        const pagosComprobanteData = (!esCredito && dto.pagos && dto.pagos.length > 0)
+        const pagosComprobanteData: any[] = (!esCredito && dto.pagos && dto.pagos.length > 0)
           ? dto.pagos
               .filter((p) => p.metodoPago !== 'CREDITO')
               .map((p) => ({
@@ -1922,6 +1972,18 @@ export class VentaService {
               monto: new Prisma.Decimal(montoPagoLegacy.toFixed(2)),
               estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
             }];
+
+        // Si hubo adelanto, agregamos su registro tributario para que la
+        // suma de pagos del comprobante cuadre con el total.
+        if (adelantoAplicado > 0 && movAdelantoData) {
+          pagosComprobanteData.push({
+            comprobanteId: comprobante.id,
+            metodoPago: movAdelantoData.metodoPago,
+            monto: new Prisma.Decimal(adelantoAplicado.toFixed(2)),
+            referencia: `Adelanto cotización ${cotizacion.codigo}`,
+            estado: 'COMPLETADO',
+          });
+        }
 
         await tx.pagoComprobante.createMany({ data: pagosComprobanteData });
 
