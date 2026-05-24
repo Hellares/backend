@@ -129,7 +129,7 @@ export class CajaService {
 
       const codigo = await this._generarCodigoCaja(tx, empresaId);
 
-      return tx.caja.create({
+      const caja = await tx.caja.create({
         data: {
           empresaId,
           sedeId: dto.sedeId,
@@ -150,6 +150,41 @@ export class CajaService {
           },
         },
       });
+
+      // Si la apertura tiene seed > 0, el dinero sale de la Caja Central
+      // (tesorería) de la sede. EGRESO RETIRO_TESORERIA en la central; NO
+      // se crea INGRESO espejo en la operativa (el campo Caja.montoApertura
+      // ya trackea el seed para el cálculo del esperado al cerrar).
+      // Al cerrar, el barrido devuelve el conteo físico completo (seed +
+      // ventas - egresos efectivo) a la central → ciclo cuadrado.
+      const montoAperturaNum = Number(dto.montoApertura);
+      if (montoAperturaNum > 0) {
+        const central = await this.getOrCreateCajaCentral(
+          empresaId,
+          dto.sedeId,
+          tx,
+        );
+        await tx.movimientoCaja.create({
+          data: {
+            cajaId: central.id,
+            empresaId,
+            tipo: TipoMovimientoCaja.EGRESO,
+            categoria: CategoriaMovimientoCaja.RETIRO_TESORERIA,
+            metodoPago: MetodoPagoVenta.EFECTIVO,
+            monto: montoAperturaNum,
+            descripcion: `Retiro para apertura ${caja.codigo}`,
+            esManual: false,
+            registradoPorId: usuarioId,
+            metadata: {
+              cajaAperturaId: caja.id,
+              cajaAperturaCodigo: caja.codigo,
+              esRetiroApertura: true,
+            },
+          },
+        });
+      }
+
+      return caja;
     });
   }
 
