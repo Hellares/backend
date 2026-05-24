@@ -25,6 +25,7 @@ import {
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
+import { CajaService } from '../caja/caja.service';
 
 @Injectable()
 export class CotizacionService {
@@ -38,6 +39,7 @@ export class CotizacionService {
     private readonly notificacionService: NotificacionService,
     private readonly precioNivelService: PrecioNivelService,
     private readonly realtime: RealtimeInvalidationService,
+    private readonly cajaService: CajaService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -1045,16 +1047,22 @@ export class CotizacionService {
       ) {
         const ingresoOriginal = await tx.movimientoCaja.findUnique({
           where: { id: cotizacion.movimientoCajaId },
-          select: { cajaId: true, anulado: true },
+          select: {
+            id: true,
+            cajaId: true,
+            anulado: true,
+            metodoPago: true,
+            caja: { select: { estado: true, sedeId: true, codigo: true } },
+          },
         });
-        // Solo crear contrapartida si la caja sigue abierta y el ingreso
-        // no fue anulado previamente.
+        // Crear contrapartida solo si el ingreso original no fue anulado.
         if (ingresoOriginal && !ingresoOriginal.anulado) {
-          const caja = await tx.caja.findUnique({
-            where: { id: ingresoOriginal.cajaId },
-            select: { estado: true },
-          });
-          if (caja?.estado === 'ABIERTA') {
+          const cajaAbierta =
+            ingresoOriginal.caja.estado === 'ABIERTA';
+
+          if (cajaAbierta) {
+            // Caso A: la caja del adelanto sigue abierta → EGRESO en la
+            // misma caja (cajero tiene el efectivo ahí para devolver).
             await tx.movimientoCaja.create({
               data: {
                 cajaId: ingresoOriginal.cajaId,
@@ -1062,12 +1070,45 @@ export class CotizacionService {
                 tipo: TipoMovimientoCaja.EGRESO,
                 categoria:
                   CategoriaMovimientoCaja.DEVOLUCION_ADELANTO_COTIZACION,
-                metodoPago: MetodoPagoVenta.EFECTIVO,
+                // Espejamos el metodo del ingreso original (antes hardcoded
+                // EFECTIVO — incorrecto si el adelanto fue YAPE/transferencia).
+                metodoPago: ingresoOriginal.metodoPago,
                 monto: cotizacion.adelantoMonto,
                 descripcion: `Devolución adelanto cotización ${cotizacion.codigo}`,
                 cotizacionId,
                 registradoPorId: actorUserId,
                 esManual: true,
+              },
+            });
+          } else {
+            // Caso B: caja origen CERRADA → EGRESO sale de la Caja Central
+            // (Tesoreria) de la sede del adelanto. El cierre histórico de
+            // esa caja queda inmutable; el dinero efectivamente ya pasó a
+            // tesorería al cerrar (vía el barrido). Ahora sale desde ahí.
+            const central = await this.cajaService.getOrCreateCajaCentral(
+              cotizacion.empresaId,
+              ingresoOriginal.caja.sedeId,
+              tx,
+            );
+            await tx.movimientoCaja.create({
+              data: {
+                cajaId: central.id,
+                empresaId: cotizacion.empresaId,
+                tipo: TipoMovimientoCaja.EGRESO,
+                categoria:
+                  CategoriaMovimientoCaja.DEVOLUCION_ADELANTO_COTIZACION,
+                metodoPago: ingresoOriginal.metodoPago,
+                monto: cotizacion.adelantoMonto,
+                descripcion: `[TESORERIA] Devolución adelanto cotización ${cotizacion.codigo} (${ingresoOriginal.caja.codigo} cerrada)`,
+                cotizacionId,
+                registradoPorId: actorUserId,
+                esManual: false,
+                metadata: {
+                  movimientoOriginalId: ingresoOriginal.id,
+                  cajaOrigenId: ingresoOriginal.cajaId,
+                  cajaOrigenCodigo: ingresoOriginal.caja.codigo,
+                  esDevolucionAdelantoCajaCerrada: true,
+                },
               },
             });
           }

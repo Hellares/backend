@@ -8,6 +8,7 @@ import { AuthModule } from '../auth/auth.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
 import { ProductoModule } from '../producto/producto.module';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
+import { CajaModule } from '../caja/caja.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { PlanLimitsService } from '../common/services/plan-limits.service';
     AuthModule,
     ConfiguracionCodigosModule,
     ProductoModule,
+    CajaModule,
   ],
   controllers: [CotizacionController],
   providers: [CotizacionService, CotizacionTasksService, PlanLimitsService],
