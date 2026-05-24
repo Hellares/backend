@@ -359,7 +359,9 @@ export class CotizacionService {
             descripcion: `Adelanto cotización ${cotizacion.codigo}`,
             cotizacionId: cotizacion.id,
             registradoPorId: dto.vendedorId,
-            esManual: true,
+            // Generado por el flujo de crear cotización, no por el form
+            // de "Nuevo Movimiento" del cajero → esManual=false.
+            esManual: false,
           },
         });
         await tx.cotizacion.update({
@@ -1077,7 +1079,8 @@ export class CotizacionService {
                 descripcion: `Devolución adelanto cotización ${cotizacion.codigo}`,
                 cotizacionId,
                 registradoPorId: actorUserId,
-                esManual: true,
+                // Generado por el flujo de anular cotización, no manual.
+                esManual: false,
               },
             });
           } else {
