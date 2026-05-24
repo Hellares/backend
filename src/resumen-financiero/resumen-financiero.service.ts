@@ -181,7 +181,7 @@ export class ResumenFinancieroService {
 
   private async _resumenCaja(empresaId: string) {
     const cajasAbiertas = await this.prisma.caja.count({
-      where: { empresaId, estado: 'ABIERTA' },
+      where: { empresaId, estado: 'ABIERTA', esCajaCentral: false },
     });
 
     // Movimientos del día — usa inicio del día hora Perú (no UTC).
@@ -191,7 +191,14 @@ export class ResumenFinancieroService {
 
     const movimientosHoy = await this.prisma.movimientoCaja.groupBy({
       by: ['tipo'],
-      where: { empresaId, anulado: false, fechaMovimiento: { gte: hoy } },
+      where: {
+        empresaId,
+        anulado: false,
+        fechaMovimiento: { gte: hoy },
+        // Excluir transferencias internas operativa↔central para no
+        // doble-contar (el par DEPOSITO_TESORERIA suma ambos lados).
+        categoria: { notIn: ['DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'] },
+      },
       _sum: { monto: true },
       _count: true,
     });
@@ -243,6 +250,8 @@ export class ResumenFinancieroService {
           empresaId,
           anulado: false,
           fechaMovimiento: { gte: desde, lte: hasta },
+          // Excluir transferencias internas (par espejo operativa↔central).
+          categoria: { notIn: ['DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'] },
         },
         select: { tipo: true, monto: true, fechaMovimiento: true },
         orderBy: { fechaMovimiento: 'asc' },

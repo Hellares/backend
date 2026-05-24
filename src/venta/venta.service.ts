@@ -2745,7 +2745,7 @@ export class VentaService {
           tx,
         );
         this.logger.log(
-          `Reverso caja venta ${venta.codigo}: ${r.reversadosEnCajaOriginal} en caja origen, ${r.ajustesEnCajaActual} ajustes, ${r.sinCompensar} sin compensar`,
+          `Reverso caja venta ${venta.codigo}: ${r.reversadosEnCajaOriginal} en caja origen, ${r.compensadosEnTesoreria} compensados en Tesorería, ${r.sinCompensar} sin compensar`,
         );
       } catch (e: any) {
         this.logger.warn(`Error reversando caja para anulación ${venta.codigo}: ${e?.message ?? e}`);

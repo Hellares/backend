@@ -38,6 +38,12 @@ enum CategoriaMovimientoCaja {
   PAGO_PLANILLA
   ADELANTO_EMPLEADO
   BONIFICACION_EMPLEADO
+  // Tesoreria (Caja Central): movimientos del barrido al cerrar caja operativa,
+  // reversos de cajas cerradas, y ajustes manuales del admin.
+  DEPOSITO_TESORERIA
+  RETIRO_TESORERIA
+  AJUSTE_TESORERIA
+  REVERSO_CAJA_CERRADA
 }
 
 /// Caja (apertura/cierre de caja registradora)
@@ -45,7 +51,8 @@ model Caja {
   id                    String     @id @default(cuid())
   empresaId             String
   sedeId                String
-  usuarioId             String
+  /// Cajero asignado. NULL para Caja Central (tesoreria por sede, sin cajero).
+  usuarioId             String?
   codigo                String
   montoApertura         Decimal    @db.Decimal(10, 2)
   fechaApertura         DateTime   @default(now())
@@ -54,6 +61,13 @@ model Caja {
   estado                EstadoCaja @default(ABIERTA)
   observacionesApertura String?
   observacionesCierre   String?
+
+  /// Marca la Caja Central de tesoreria de la sede. Perpetua (no se cierra),
+  /// sin cajero asignado. Absorbe el barrido de cajas operativas al cierre y
+  /// los EGRESOs de reverso cuando se anula/devuelve una venta de caja cerrada.
+  /// Restriccion: UNIQUE parcial por sede (indice creado en migracion SQL,
+  /// no expresable directo en Prisma schema).
+  esCajaCentral Boolean @default(false)
 
   // Emisor por defecto: sede/RUC con el que esta caja factura
   sedeFacturacionId String?
@@ -65,7 +79,7 @@ model Caja {
   // Relaciones
   empresa         Empresa          @relation(fields: [empresaId], references: [id])
   sede            Sede             @relation(fields: [sedeId], references: [id])
-  usuario         Usuario          @relation("CajaUsuario", fields: [usuarioId], references: [id])
+  usuario         Usuario?         @relation("CajaUsuario", fields: [usuarioId], references: [id])
   cerradoPor      Usuario?         @relation("CajaCerradoPor", fields: [cerradoPorId], references: [id])
   sedeFacturacion Sede?            @relation("CajaSedeFacturacion", fields: [sedeFacturacionId], references: [id])
   movimientos     MovimientoCaja[]
@@ -75,6 +89,7 @@ model Caja {
   @@unique([empresaId, codigo])
   @@index([empresaId, sedeId, estado])
   @@index([empresaId, usuarioId, estado])
+  @@index([sedeId, esCajaCentral])
 }
 
 /// Movimiento de caja (ingreso o egreso)

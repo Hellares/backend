@@ -276,6 +276,7 @@ export class AlertasFinancierasTasksService {
           empresaId,
           estado: 'ABIERTA',
           fechaApertura: { lt: hace24h },
+          esCajaCentral: false, // central es perpetua; alerta no aplica
         },
         include: {
           sede: { select: { nombre: true } },

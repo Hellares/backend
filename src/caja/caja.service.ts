@@ -19,6 +19,7 @@ import { AbrirCajaDto } from './dto/abrir-caja.dto';
 import { CerrarCajaDto } from './dto/cerrar-caja.dto';
 import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
 import { CrearArqueoDto } from './dto/crear-arqueo.dto';
+import { AjusteTesoreriaDto } from './dto/ajuste-tesoreria.dto';
 
 /**
  * Mapeo categoria → tipo natural. Una categoría representa un evento de negocio
@@ -110,6 +111,7 @@ export class CajaService {
           empresaId,
           usuarioId,
           estado: EstadoCaja.ABIERTA,
+          esCajaCentral: false, // la central no tiene cajero, defensa
         },
         select: {
           id: true,
@@ -244,6 +246,7 @@ export class CajaService {
         empresaId,
         usuarioId,
         estado: EstadoCaja.ABIERTA,
+        esCajaCentral: false, // la central no tiene cajero, defensa
       },
       include: {
         sede: { select: { id: true, nombre: true, codigo: true } },
@@ -563,6 +566,12 @@ export class CajaService {
       throw new NotFoundException('Caja no encontrada o no está abierta');
     }
 
+    if (caja.esCajaCentral) {
+      throw new BadRequestException(
+        'La Caja Central de Tesorería es perpetua y no se cierra. Solo cajas operativas pueden cerrarse.',
+      );
+    }
+
     // Calcular totales por método de pago y tipo
     const movimientos = await this.prisma.movimientoCaja.groupBy({
       by: ['metodoPago', 'tipo'],
@@ -672,6 +681,71 @@ export class CajaService {
         },
       });
 
+      // ── Barrido a Caja Central (Tesoreria) ──
+      // Por cada metodo con conteoFisico > 0, generamos el par espejo:
+      //   EGRESO en la caja operativa  (sale el dinero declarado)
+      //   INGRESO en la Caja Central   (lo recibe la tesoreria de la sede)
+      // Vinculo: descripcion rica + metadata.movimientoEspejoId/cierreId.
+      // NO usamos `movimientoContrapartidaId` porque ese campo esta
+      // reservado para el par INGRESO↔EGRESO de ANULACIONES (el filtro
+      // `contrapartidaDe.is:null` que usa el listado las oculta — acá
+      // queremos que ambos lados SI sean visibles en su caja).
+      // Solo barremos el conteo declarado. Si hay diferencia con el
+      // esperado, queda registrada en `cierre.diferencia` pero NO se
+      // arrastra al barrido (la tesoreria recibe lo que el cajero
+      // realmente entrego, no lo teorico).
+      const central = await this.getOrCreateCajaCentral(
+        empresaId,
+        caja.sedeId,
+        tx,
+      );
+
+      for (const metodo of metodosPago) {
+        const conteoFisico =
+          dto.conteos.find((c) => c.metodoPago === metodo)?.conteoFisico ?? 0;
+        if (conteoFisico <= 0) continue;
+
+        const egreso = await tx.movimientoCaja.create({
+          data: {
+            cajaId,
+            empresaId,
+            tipo: TipoMovimientoCaja.EGRESO,
+            categoria: CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+            metodoPago: metodo,
+            monto: conteoFisico,
+            descripcion: `[BARRIDO -> TESORERIA] Depósito de cierre ${caja.codigo}`,
+            esManual: false,
+            registradoPorId: usuarioId,
+            metadata: {
+              cajaEspejoId: central.id,
+              cierreId: cierre.id,
+              barrido: true,
+            },
+          },
+        });
+
+        await tx.movimientoCaja.create({
+          data: {
+            cajaId: central.id,
+            empresaId,
+            tipo: TipoMovimientoCaja.INGRESO,
+            categoria: CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+            metodoPago: metodo,
+            monto: conteoFisico,
+            descripcion: `[BARRIDO <- ${caja.codigo}] Recepción de cierre`,
+            esManual: false,
+            registradoPorId: usuarioId,
+            metadata: {
+              cajaEspejoId: cajaId,
+              cajaOrigenCodigo: caja.codigo,
+              movimientoEspejoId: egreso.id,
+              cierreId: cierre.id,
+              barrido: true,
+            },
+          },
+        });
+      }
+
       return { caja: cajaActualizada, cierre };
     });
 
@@ -702,6 +776,10 @@ export class CajaService {
       PAGO_PLANILLA: 'Pago Planilla',
       ADELANTO_EMPLEADO: 'Adelanto Empleado',
       BONIFICACION_EMPLEADO: 'Bonificación Empleado',
+      DEPOSITO_TESORERIA: 'Depósito a Tesorería',
+      RETIRO_TESORERIA: 'Retiro de Tesorería',
+      AJUSTE_TESORERIA: 'Ajuste de Tesorería',
+      REVERSO_CAJA_CERRADA: 'Reverso (Caja Cerrada)',
     };
     return map[c] ?? c;
   }
@@ -1066,6 +1144,7 @@ export class CajaService {
     const where: Prisma.CajaWhereInput = {
       empresaId,
       estado: EstadoCaja.CERRADA,
+      esCajaCentral: false, // la central nunca se cierra, defensa
     };
 
     if (sedeId) {
@@ -1130,6 +1209,8 @@ export class CajaService {
     const where: Prisma.CajaWhereInput = {
       empresaId,
       estado: EstadoCaja.ABIERTA,
+      esCajaCentral: false, // critico: la central tambien esta ABIERTA, no debe
+      // aparecer en el monitor operativo (tiene su propia pantalla de tesoreria).
     };
 
     if (sedeId) {
@@ -1235,25 +1316,28 @@ export class CajaService {
   /**
    * Reversar TODOS los MovimientoCaja originados por una venta/devolución/compra.
    *
-   * Política (importante para que la caja cuadre):
+   * Política (modelo Caja Central):
    *
    *  - Para cada INGRESO original `anulado=false` vinculado al `ventaId`/`devolucionId`/`compraId`:
    *    - Si la caja origen está ABIERTA → se crea contrapartida EGRESO con
    *      `anulado=true` en LA MISMA caja, se marca el original `anulado=true`
    *      y se linkea vía `movimientoContrapartidaId`. Ambos quedan excluidos
-   *      del saldo. Sin desfase entre cajas.
+   *      del saldo. Sin desfase entre cajas. Categoría DEVOLUCION.
    *    - Si la caja origen está CERRADA → el cierre histórico es inmutable.
-   *      Se marca el original `anulado=true` para auditoría (no afecta el
-   *      cierre snapshot guardado). Si quien anula tiene caja abierta, se
-   *      crea EGRESO ajuste ahí (NO anulado, sí cuenta) con descripción que
-   *      indica el origen. Si NO tiene caja, se loggea warning y queda pendiente.
+   *      Se marca el original `anulado=true` SOLO para auditoría (no afecta
+   *      el snapshot guardado). El EGRESO compensatorio sale de la
+   *      CAJA CENTRAL DE LA SEDE DEL ORIGINAL (no de quien anula). Esto
+   *      preserva la caja del admin/supervisor limpia y respeta multi-sede:
+   *      si anulan venta de sede B desde sede A, la tesorería de B absorbe.
+   *      Categoría REVERSO_CAJA_CERRADA, `anulado=false` (cuenta en saldo).
    *
    *  - Caso edge: la venta fue cobrada cuando no había caja activa (no hay
-   *    MovimientoCaja para esa venta). Si el caller pasa `fallback`, se crea
-   *    el ajuste en la caja del que anula con esos datos. Sin `fallback`, no
-   *    se hace nada.
+   *    MovimientoCaja para esa venta). Si el caller pasa `fallback`, el EGRESO
+   *    va a la Caja Central de la sede del fallback (donde se hizo la venta).
    *
-   * Devuelve contadores para que el caller pueda loggear/notificar.
+   * Devuelve contadores para que el caller pueda loggear/notificar. Con la
+   * Caja Central auto-creada por sede, `sinCompensar` solo crece si la sede
+   * no existe — escenario muy improbable.
    *
    * IMPORTANTE: el caller pasa un `tx` activo; el helper opera enteramente
    * dentro de esa transacción.
@@ -1270,7 +1354,7 @@ export class CajaService {
     tx: Prisma.TransactionClient,
   ): Promise<{
     reversadosEnCajaOriginal: number;
-    ajustesEnCajaActual: number;
+    compensadosEnTesoreria: number;
     sinCompensar: number;
   }> {
     const where: Prisma.MovimientoCajaWhereInput = {
@@ -1286,18 +1370,20 @@ export class CajaService {
       where,
       include: {
         caja: {
-          select: { id: true, estado: true, sedeId: true, usuarioId: true, codigo: true },
+          select: {
+            id: true,
+            estado: true,
+            sedeId: true,
+            usuarioId: true,
+            codigo: true,
+            fechaCierre: true,
+          },
         },
       },
     });
 
-    const cajaActualDelQueAnula = await tx.caja.findFirst({
-      where: { empresaId, usuarioId: usuarioIdQuienAnula, estado: EstadoCaja.ABIERTA },
-      select: { id: true, sedeId: true, codigo: true },
-    });
-
     let reversadosEnCajaOriginal = 0;
-    let ajustesEnCajaActual = 0;
+    let compensadosEnTesoreria = 0;
     let sinCompensar = 0;
 
     for (const orig of originales) {
@@ -1305,6 +1391,7 @@ export class CajaService {
 
       if (orig.caja.estado === EstadoCaja.ABIERTA) {
         // Caja origen sigue abierta — reverso limpio en la misma caja.
+        // Par INGRESO original anulado=true ↔ EGRESO contrapartida anulado=true.
         const contrapartida = await tx.movimientoCaja.create({
           data: {
             cajaId: orig.caja.id,
@@ -1336,80 +1423,99 @@ export class CajaService {
 
         reversadosEnCajaOriginal++;
       } else {
-        // Caja origen ya cerrada — cierre snapshot inmutable.
-        // Marcamos original anulado SOLO para auditoría en el listado.
+        // Caja origen ya CERRADA — cierre snapshot inmutable.
+        // Marcamos el original anulado=true solo para auditoría (recalculados
+        // recalcularán sin él vs snapshot congelado → drift visible). El
+        // EGRESO compensatorio sale de la Caja Central de la SEDE DEL ORIGINAL
+        // (no de la caja del que anula) — preserva la caja del admin limpia
+        // y respeta multi-sede.
         await tx.movimientoCaja.update({
           where: { id: orig.id },
           data: {
             anulado: true,
-            motivoAnulacion: `${motivo} | Caja origen ${orig.caja.codigo} ya cerrada; ajuste compensatorio aparte`,
+            motivoAnulacion: `${motivo} | Caja origen ${orig.caja.codigo} ya cerrada; egreso compensatorio en Tesorería de la sede`,
             anuladoPorId: usuarioIdQuienAnula,
             fechaAnulacion: new Date(),
           },
         });
 
-        if (cajaActualDelQueAnula) {
-          await tx.movimientoCaja.create({
-            data: {
-              cajaId: cajaActualDelQueAnula.id,
-              empresaId,
-              tipo: TipoMovimientoCaja.EGRESO,
-              categoria: CategoriaMovimientoCaja.DEVOLUCION,
-              metodoPago: orig.metodoPago,
-              monto: orig.monto,
-              descripcion: `${descrBase} | Caja origen ${orig.caja.codigo} cerrada — ajuste contable aquí`,
-              ventaId: orig.ventaId,
-              devolucionId: orig.devolucionId,
-              compraId: orig.compraId,
-              esManual: false,
-              registradoPorId: usuarioIdQuienAnula,
-              anulado: false,
+        const central = await this.getOrCreateCajaCentral(
+          empresaId,
+          orig.caja.sedeId,
+          tx,
+        );
+
+        const fechaCierreStr = orig.caja.fechaCierre
+          ? orig.caja.fechaCierre.toISOString().slice(0, 10)
+          : 'desconocida';
+
+        await tx.movimientoCaja.create({
+          data: {
+            cajaId: central.id,
+            empresaId,
+            tipo: TipoMovimientoCaja.EGRESO,
+            categoria: CategoriaMovimientoCaja.REVERSO_CAJA_CERRADA,
+            metodoPago: orig.metodoPago,
+            monto: orig.monto,
+            descripcion: `[REVERSO ${motivo}] ${orig.caja.codigo} cerrada ${fechaCierreStr} — devolución desde Tesorería`,
+            ventaId: orig.ventaId,
+            devolucionId: orig.devolucionId,
+            compraId: orig.compraId,
+            esManual: false,
+            registradoPorId: usuarioIdQuienAnula,
+            anulado: false,
+            metadata: {
+              movimientoOriginalId: orig.id,
+              cajaOrigenId: orig.caja.id,
+              cajaOrigenCodigo: orig.caja.codigo,
+              fechaCierreOriginal: fechaCierreStr,
+              esReversoCajaCerrada: true,
             },
-          });
-          ajustesEnCajaActual++;
-        } else {
-          sinCompensar++;
-          this.logger.warn(
-            `reversarMovimientosDeOrigen: original ${orig.id} (caja ${orig.caja.codigo} CERRADA) marcado anulado pero NO compensado — quien anula (${usuarioIdQuienAnula}) no tiene caja abierta. Tesorería debe ajustar.`,
-          );
-        }
+          },
+        });
+
+        compensadosEnTesoreria++;
       }
     }
 
     // Sin movimientos originales pero sí hubo cobranza física → usar fallback.
-    // Casos: venta cobrada cuando no había caja activa, o cobranza vía
-    // sistema externo. El caller decide si pasarlo.
+    // Casos: venta cobrada cuando no había caja activa, o cobranza vía sistema
+    // externo. El EGRESO va a la Caja Central de la sede del fallback (donde
+    // se hizo la venta), no a la caja del que anula.
     if (originales.length === 0 && fallback && fallback.pagos.length > 0) {
-      if (cajaActualDelQueAnula) {
-        for (const p of fallback.pagos) {
-          await tx.movimientoCaja.create({
-            data: {
-              cajaId: cajaActualDelQueAnula.id,
-              empresaId,
-              tipo: TipoMovimientoCaja.EGRESO,
-              categoria: CategoriaMovimientoCaja.DEVOLUCION,
-              metodoPago: p.metodoPago,
-              monto: p.monto,
-              descripcion: `[ANULACION ${motivo}] Sin movimiento de caja original; ajuste compensatorio`,
-              ventaId: criterio.ventaId,
-              devolucionId: criterio.devolucionId,
-              compraId: criterio.compraId,
-              esManual: false,
-              registradoPorId: usuarioIdQuienAnula,
-              anulado: false,
+      const central = await this.getOrCreateCajaCentral(
+        empresaId,
+        fallback.sedeId,
+        tx,
+      );
+      for (const p of fallback.pagos) {
+        await tx.movimientoCaja.create({
+          data: {
+            cajaId: central.id,
+            empresaId,
+            tipo: TipoMovimientoCaja.EGRESO,
+            categoria: CategoriaMovimientoCaja.REVERSO_CAJA_CERRADA,
+            metodoPago: p.metodoPago,
+            monto: p.monto,
+            descripcion: `[REVERSO ${motivo}] Sin caja original — devolución desde Tesorería`,
+            ventaId: criterio.ventaId,
+            devolucionId: criterio.devolucionId,
+            compraId: criterio.compraId,
+            esManual: false,
+            registradoPorId: usuarioIdQuienAnula,
+            anulado: false,
+            metadata: {
+              sinMovimientoOriginal: true,
+              sedeIdFallback: fallback.sedeId,
+              esReversoCajaCerrada: true,
             },
-          });
-          ajustesEnCajaActual++;
-        }
-      } else {
-        sinCompensar += fallback.pagos.length;
-        this.logger.warn(
-          `reversarMovimientosDeOrigen: sin movimientos originales, con pagos fallback (${fallback.pagos.length}), pero quien anula (${usuarioIdQuienAnula}) no tiene caja abierta. Nada compensado.`,
-        );
+          },
+        });
+        compensadosEnTesoreria++;
       }
     }
 
-    return { reversadosEnCajaOriginal, ajustesEnCajaActual, sinCompensar };
+    return { reversadosEnCajaOriginal, compensadosEnTesoreria, sinCompensar };
   }
 
   /**
@@ -1806,6 +1912,288 @@ export class CajaService {
       data: { requiereCajaParaVender },
     });
     return this.getConfiguracion(empresaId);
+  }
+
+  // ─── Helper: obtener o crear Caja Central de la sede ───
+
+  /**
+   * Obtiene (o crea idempotentemente) la Caja Central de tesoreria de la
+   * sede. Existe una sola por sede, perpetua (no se cierra), sin cajero
+   * asignado. Absorbe:
+   *  - El barrido de efectivo al cerrar caja operativa (Fase 2).
+   *  - El EGRESO de compensacion cuando se anula/devuelve una venta cuya
+   *    caja origen ya esta CERRADA (Fase 3).
+   *  - Ajustes manuales del administrador (deposito/retiro/ajuste).
+   *
+   * Race-safe: el UNIQUE PARCIAL (sedeId) WHERE esCajaCentral=true
+   * impide duplicados a nivel BD. Si dos transacciones concurrentes
+   * intentan crearla, una recibe P2002 y refetchea la existente.
+   *
+   * El caller debe pasar `tx` activo — el helper opera dentro de esa
+   * transaccion para que su efecto sea atomico con el flujo que la usa.
+   */
+  async getOrCreateCajaCentral(
+    empresaId: string,
+    sedeId: string,
+    tx: Prisma.TransactionClient,
+  ) {
+    const existente = await tx.caja.findFirst({
+      where: { empresaId, sedeId, esCajaCentral: true },
+    });
+    if (existente) return existente;
+
+    // Codigo previsible: TESORERIA-<sedeCodigo>. Si por algun motivo la
+    // sede no tiene codigo (legacy), usamos un sufijo del id como fallback.
+    const sede = await tx.sede.findUnique({
+      where: { id: sedeId },
+      select: { codigo: true },
+    });
+    const codigo = `TESORERIA-${sede?.codigo ?? sedeId.slice(-6).toUpperCase()}`;
+
+    try {
+      return await tx.caja.create({
+        data: {
+          empresaId,
+          sedeId,
+          usuarioId: null,
+          codigo,
+          montoApertura: 0,
+          estado: EstadoCaja.ABIERTA,
+          esCajaCentral: true,
+          observacionesApertura:
+            'Caja Central de Tesoreria (auto-creada). Acumula el efectivo recaudado de la sede y absorbe egresos de cajas cerradas.',
+        },
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        const concurrente = await tx.caja.findFirst({
+          where: { empresaId, sedeId, esCajaCentral: true },
+        });
+        if (concurrente) return concurrente;
+      }
+      throw e;
+    }
+  }
+
+  // ─── Tesoreria (Caja Central) ───
+
+  /**
+   * Resumen de la Caja Central de una sede: saldos por bucket (efectivo y
+   * digital separados, segun decision de diseno), totales y ultimo
+   * movimiento. Auto-crea la central si no existe.
+   */
+  async getTesoreriaResumen(empresaId: string, sedeId: string) {
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: sedeId, empresaId },
+      select: { id: true, nombre: true, codigo: true },
+    });
+    if (!sede) {
+      throw new NotFoundException('Sede no encontrada');
+    }
+
+    const central = await this.prisma.$transaction((tx) =>
+      this.getOrCreateCajaCentral(empresaId, sedeId, tx),
+    );
+
+    const totales = await this.prisma.movimientoCaja.groupBy({
+      by: ['metodoPago', 'tipo'],
+      where: { cajaId: central.id, anulado: false },
+      _sum: { monto: true },
+    });
+
+    let totalIngresos = 0;
+    let totalEgresos = 0;
+    let ingresosEfectivo = 0;
+    let egresosEfectivo = 0;
+    let ingresosDigital = 0;
+    let egresosDigital = 0;
+
+    for (const row of totales) {
+      const monto = Number(row._sum.monto ?? 0);
+      const esEfectivo = row.metodoPago === MetodoPagoVenta.EFECTIVO;
+      if (row.tipo === TipoMovimientoCaja.INGRESO) {
+        totalIngresos += monto;
+        if (esEfectivo) ingresosEfectivo += monto;
+        else ingresosDigital += monto;
+      } else {
+        totalEgresos += monto;
+        if (esEfectivo) egresosEfectivo += monto;
+        else egresosDigital += monto;
+      }
+    }
+
+    const saldoEfectivo = ingresosEfectivo - egresosEfectivo;
+    const saldoDigital = ingresosDigital - egresosDigital;
+    const saldoTotal = saldoEfectivo + saldoDigital;
+
+    const ultimoMovimiento = await this.prisma.movimientoCaja.findFirst({
+      where: { cajaId: central.id, anulado: false },
+      orderBy: { fechaMovimiento: 'desc' },
+      select: {
+        id: true,
+        tipo: true,
+        categoria: true,
+        monto: true,
+        metodoPago: true,
+        descripcion: true,
+        fechaMovimiento: true,
+      },
+    });
+
+    const totalMovimientos = await this.prisma.movimientoCaja.count({
+      where: { cajaId: central.id },
+    });
+
+    return {
+      caja: {
+        id: central.id,
+        codigo: central.codigo,
+        sedeId: central.sedeId,
+        esCajaCentral: true,
+        fechaApertura: central.fechaApertura,
+      },
+      sede,
+      saldoEfectivo: Math.round(saldoEfectivo * 100) / 100,
+      saldoDigital: Math.round(saldoDigital * 100) / 100,
+      saldoTotal: Math.round(saldoTotal * 100) / 100,
+      totalIngresos: Math.round(totalIngresos * 100) / 100,
+      totalEgresos: Math.round(totalEgresos * 100) / 100,
+      totalMovimientos,
+      ultimoMovimiento,
+    };
+  }
+
+  /**
+   * Listado paginado de movimientos de la Caja Central de una sede, con
+   * filtros opcionales (tipo, metodo, categoria, fechas, busqueda libre).
+   */
+  async getTesoreriaMovimientos(
+    empresaId: string,
+    sedeId: string,
+    filtros: {
+      tipo?: string;
+      metodoPago?: string;
+      categoria?: string;
+      fechaDesde?: string;
+      fechaHasta?: string;
+      q?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ) {
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: sedeId, empresaId },
+      select: { id: true },
+    });
+    if (!sede) {
+      throw new NotFoundException('Sede no encontrada');
+    }
+
+    const central = await this.prisma.$transaction((tx) =>
+      this.getOrCreateCajaCentral(empresaId, sedeId, tx),
+    );
+
+    const page = Math.max(1, filtros.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, filtros.pageSize ?? 50));
+
+    const where: Prisma.MovimientoCajaWhereInput = {
+      cajaId: central.id,
+      empresaId,
+    };
+    if (filtros.tipo) {
+      where.tipo = filtros.tipo as TipoMovimientoCaja;
+    }
+    if (filtros.metodoPago) {
+      where.metodoPago = filtros.metodoPago as MetodoPagoVenta;
+    }
+    if (filtros.categoria) {
+      where.categoria = filtros.categoria as CategoriaMovimientoCaja;
+    }
+    if (filtros.fechaDesde || filtros.fechaHasta) {
+      where.fechaMovimiento = {};
+      if (filtros.fechaDesde) {
+        where.fechaMovimiento.gte = new Date(filtros.fechaDesde);
+      }
+      if (filtros.fechaHasta) {
+        where.fechaMovimiento.lte = new Date(filtros.fechaHasta);
+      }
+    }
+    if (filtros.q) {
+      where.descripcion = { contains: filtros.q, mode: 'insensitive' };
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.movimientoCaja.findMany({
+        where,
+        orderBy: { fechaMovimiento: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          registradoPor: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+          venta: { select: { id: true, codigo: true } },
+          compra: { select: { id: true, codigo: true } },
+          devolucion: { select: { id: true, codigo: true } },
+        },
+      }),
+      this.prisma.movimientoCaja.count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
+
+  /**
+   * Ajuste manual en la Caja Central de una sede. Crea un movimiento con
+   * categoria=AJUSTE_TESORERIA (visible como deposito o retiro segun
+   * `tipo`). Pensado para que el admin compense diferencias post-cierre,
+   * registre retiros de tesoreria a banco, o haga correcciones contables.
+   *
+   * NO usa el guard `_validarCoherenciaTipoCategoria` porque AJUSTE_TESORERIA
+   * es ambigua por diseño (acepta INGRESO y EGRESO).
+   */
+  async crearAjusteTesoreria(
+    empresaId: string,
+    sedeId: string,
+    usuarioId: string,
+    dto: AjusteTesoreriaDto,
+  ) {
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: sedeId, empresaId },
+      select: { id: true },
+    });
+    if (!sede) {
+      throw new NotFoundException('Sede no encontrada');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const central = await this.getOrCreateCajaCentral(empresaId, sedeId, tx);
+
+      return tx.movimientoCaja.create({
+        data: {
+          cajaId: central.id,
+          empresaId,
+          tipo: dto.tipo,
+          categoria: CategoriaMovimientoCaja.AJUSTE_TESORERIA,
+          metodoPago: dto.metodoPago,
+          monto: dto.monto,
+          descripcion: dto.descripcion,
+          categoriaGastoId: dto.categoriaGastoId,
+          esManual: true,
+          registradoPorId: usuarioId,
+          metadata: { ajusteTesoreria: true },
+        },
+      });
+    });
   }
 
   // ─── Helper: generar código de caja ───

@@ -28,6 +28,7 @@ import { CerrarCajaDto } from './dto/cerrar-caja.dto';
 import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
 import { AnularMovimientoDto } from './dto/anular-movimiento.dto';
 import { CrearArqueoDto } from './dto/crear-arqueo.dto';
+import { AjusteTesoreriaDto } from './dto/ajuste-tesoreria.dto';
 
 @ApiTags('Caja')
 @Controller('caja')
@@ -203,6 +204,76 @@ export class CajaController {
     @Body() body: { requiereCajaParaVender: boolean },
   ) {
     return this.cajaService.updateConfiguracion(empresaId, body.requiereCajaParaVender);
+  }
+
+  // ───── Caja Central (Tesoreria) por sede ─────
+  // IMPORTANTE: los endpoints 'tesoreria/:sedeId*' deben declararse ANTES
+  // del comodín ':id' para que NestJS no los capture como id.
+
+  @Get('tesoreria/:sedeId')
+  @RequiresPermission(Permission.VIEW_CAJA)
+  @ApiOperation({
+    summary:
+      'Resumen de la Caja Central (Tesorería) de una sede: saldo efectivo, saldo digital, totales y último movimiento. Auto-crea la central si no existe.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getTesoreriaResumen(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('sedeId') sedeId: string,
+  ) {
+    return this.cajaService.getTesoreriaResumen(empresaId, sedeId);
+  }
+
+  @Get('tesoreria/:sedeId/movimientos')
+  @RequiresPermission(Permission.VIEW_CAJA)
+  @ApiOperation({
+    summary:
+      'Movimientos de la Caja Central de una sede con filtros opcionales (tipo, método, categoría, fechas, búsqueda) y paginación.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getTesoreriaMovimientos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('sedeId') sedeId: string,
+    @Query('tipo') tipo?: string,
+    @Query('metodoPago') metodoPago?: string,
+    @Query('categoria') categoria?: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.cajaService.getTesoreriaMovimientos(empresaId, sedeId, {
+      tipo,
+      metodoPago,
+      categoria,
+      fechaDesde,
+      fechaHasta,
+      q,
+      page: page ? parseInt(page, 10) : undefined,
+      pageSize: pageSize ? parseInt(pageSize, 10) : undefined,
+    });
+  }
+
+  @Post('tesoreria/:sedeId/ajuste')
+  @RequiresPermission(Permission.MANAGE_CAJA)
+  @ApiOperation({
+    summary:
+      'Ajuste manual en la Caja Central (depósito o retiro). Categoria AJUSTE_TESORERIA. Solo admin/gerente.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async crearAjusteTesoreria(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('sedeId') sedeId: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() dto: AjusteTesoreriaDto,
+  ) {
+    return this.cajaService.crearAjusteTesoreria(
+      empresaId,
+      sedeId,
+      usuarioId,
+      dto,
+    );
   }
 
   /**

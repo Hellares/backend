@@ -906,15 +906,10 @@ export class DevolucionVentaService {
 
         // 3. Reverso de caja: el helper busca cada MovimientoCaja(INGRESO)
         // original de esta venta y crea su contrapartida EN LA MISMA caja si
-        // sigue abierta, o ajuste en la caja actual del que procesa si está
-        // cerrada. Esto evita el bug histórico donde el EGRESO espejo caía en
-        // la caja del admin que procesaba (cuando el cajero original ya cerró)
-        // y el INGRESO de la caja original quedaba huérfano.
-        //
-        // Si no hay caja del que procesa Y no hay movimientos originales en
-        // cajas abiertas, el helper deja `sinCompensar>0` y se loggea warning.
-        // El flag `pendienteRegistroCaja=true` ya marcado en la Devolución
-        // sirve como recordatorio para que tesorería ajuste.
+        // sigue abierta, o EGRESO en la Caja Central (Tesorería) de la sede
+        // del original si la caja origen está cerrada. La caja del que procesa
+        // no se toca — esto preserva la caja del admin/supervisor limpia y
+        // respeta multi-sede.
         const fallbackPagos = (venta.pagos ?? [])
           .filter((p) => p.metodoPago !== 'CREDITO')
           .map((p) => ({
@@ -934,7 +929,7 @@ export class DevolucionVentaService {
             tx,
           );
           this.logger.log(
-            `Reverso caja reversión ${dev.codigo}: ${r.reversadosEnCajaOriginal} en caja origen, ${r.ajustesEnCajaActual} ajustes, ${r.sinCompensar} sin compensar`,
+            `Reverso caja reversión ${dev.codigo}: ${r.reversadosEnCajaOriginal} en caja origen, ${r.compensadosEnTesoreria} compensados en Tesorería, ${r.sinCompensar} sin compensar`,
           );
         } catch (e: any) {
           this.logger.warn(

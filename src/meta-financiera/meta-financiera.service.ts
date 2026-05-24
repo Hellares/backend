@@ -125,6 +125,9 @@ export class MetaFinancieraService {
         anulado: false,
         tipo: 'INGRESO',
         fechaMovimiento: { gte: desde, lte: hasta },
+        // DEPOSITO_TESORERIA: lado INGRESO del par espejo operativa→central
+        // (barrido al cerrar caja). Es transferencia interna, no ingreso real.
+        categoria: { notIn: ['DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'] },
       },
       select: { monto: true },
     });
@@ -149,6 +152,9 @@ export class MetaFinancieraService {
         anulado: false,
         tipo: 'EGRESO',
         fechaMovimiento: { gte: desde, lte: hasta },
+        // DEPOSITO_TESORERIA: lado EGRESO del par operativa→central. Idem RETIRO.
+        // Transferencias internas, no egresos reales.
+        categoria: { notIn: ['DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'] },
       },
       select: { monto: true },
     });

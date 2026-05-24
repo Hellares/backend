@@ -166,8 +166,14 @@ export class LibroContableService {
         empresaId,
         anulado: false,
         fechaMovimiento: { gte: desde, lte: hasta },
-        // Excluir VENTA y COMPRA para evitar doble conteo con _getVentas/_getCompras
-        categoria: { notIn: ['VENTA', 'COMPRA'] },
+        // Excluir VENTA y COMPRA para evitar doble conteo con _getVentas/_getCompras.
+        // Excluir DEPOSITO_TESORERIA y RETIRO_TESORERIA: son transferencias
+        // internas operativa↔central, no movimientos contables reales
+        // (sumarlos doble-contaria, ya que ambos lados del par existen en BD).
+        // AJUSTE_TESORERIA y REVERSO_CAJA_CERRADA SI cuentan (son movs reales).
+        categoria: {
+          notIn: ['VENTA', 'COMPRA', 'DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'],
+        },
       },
       select: {
         id: true,
