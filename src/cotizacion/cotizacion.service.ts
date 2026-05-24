@@ -1054,7 +1054,18 @@ export class CotizacionService {
             cajaId: true,
             anulado: true,
             metodoPago: true,
-            caja: { select: { estado: true, sedeId: true, codigo: true } },
+            caja: {
+              select: {
+                estado: true,
+                sedeId: true,
+                codigo: true,
+                usuario: {
+                  select: {
+                    persona: { select: { nombres: true, apellidos: true } },
+                  },
+                },
+              },
+            },
           },
         });
         // Crear contrapartida solo si el ingreso original no fue anulado.
@@ -1110,6 +1121,9 @@ export class CotizacionService {
                   movimientoOriginalId: ingresoOriginal.id,
                   cajaOrigenId: ingresoOriginal.cajaId,
                   cajaOrigenCodigo: ingresoOriginal.caja.codigo,
+                  cajaOrigenUsuarioNombre: ingresoOriginal.caja.usuario?.persona
+                    ? `${ingresoOriginal.caja.usuario.persona.nombres ?? ''} ${ingresoOriginal.caja.usuario.persona.apellidos ?? ''}`.trim()
+                    : null,
                   esDevolucionAdelantoCajaCerrada: true,
                 },
               },

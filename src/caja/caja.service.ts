@@ -619,6 +619,13 @@ export class CajaService {
   ) {
     const caja = await this.prisma.caja.findFirst({
       where: { id: cajaId, empresaId, estado: EstadoCaja.ABIERTA },
+      include: {
+        usuario: {
+          select: {
+            persona: { select: { nombres: true, apellidos: true } },
+          },
+        },
+      },
     });
 
     if (!caja) {
@@ -797,6 +804,9 @@ export class CajaService {
             metadata: {
               cajaEspejoId: cajaId,
               cajaOrigenCodigo: caja.codigo,
+              cajaOrigenUsuarioNombre: caja.usuario?.persona
+                ? `${caja.usuario.persona.nombres ?? ''} ${caja.usuario.persona.apellidos ?? ''}`.trim()
+                : null,
               movimientoEspejoId: egreso.id,
               cierreId: cierre.id,
               barrido: true,
@@ -1489,6 +1499,11 @@ export class CajaService {
             usuarioId: true,
             codigo: true,
             fechaCierre: true,
+            usuario: {
+              select: {
+                persona: { select: { nombres: true, apellidos: true } },
+              },
+            },
           },
         },
       },
@@ -1580,6 +1595,9 @@ export class CajaService {
               movimientoOriginalId: orig.id,
               cajaOrigenId: orig.caja.id,
               cajaOrigenCodigo: orig.caja.codigo,
+              cajaOrigenUsuarioNombre: orig.caja.usuario?.persona
+                ? `${orig.caja.usuario.persona.nombres ?? ''} ${orig.caja.usuario.persona.apellidos ?? ''}`.trim()
+                : null,
               fechaCierreOriginal: fechaCierreStr,
               esReversoCajaCerrada: true,
             },
