@@ -521,6 +521,80 @@ export class CajaService {
   }
 
   /**
+   * Registra movimiento en la caja del usuario. Si no tiene caja abierta,
+   * cae a la Caja Central (Tesorería) de la sede — NUNCA se pierde el
+   * movimiento. Usar para operaciones donde el egreso/ingreso DEBE quedar
+   * registrado (devoluciones, etc.).
+   */
+  async registrarMovimientoEnCajaOTesoreria(
+    empresaId: string,
+    sedeId: string,
+    usuarioId: string,
+    data: {
+      tipo: TipoMovimientoCaja;
+      categoria: CategoriaMovimientoCaja;
+      metodoPago: MetodoPagoVenta;
+      monto: number;
+      descripcion?: string;
+      ventaId?: string;
+      devolucionId?: string;
+      compraId?: string;
+      cotizacionId?: string;
+      metadata?: any;
+    },
+    tx: Prisma.TransactionClient,
+  ) {
+    const cajaActiva = await tx.caja.findFirst({
+      where: { empresaId, sedeId, usuarioId, estado: EstadoCaja.ABIERTA, esCajaCentral: false },
+    });
+
+    if (cajaActiva) {
+      return tx.movimientoCaja.create({
+        data: {
+          cajaId: cajaActiva.id,
+          empresaId,
+          tipo: data.tipo,
+          categoria: data.categoria,
+          metodoPago: data.metodoPago,
+          monto: data.monto,
+          descripcion: data.descripcion,
+          ventaId: data.ventaId,
+          devolucionId: data.devolucionId,
+          compraId: data.compraId,
+          cotizacionId: data.cotizacionId,
+          esManual: false,
+          registradoPorId: usuarioId,
+          metadata: data.metadata ?? undefined,
+        },
+      });
+    }
+
+    const central = await this.getOrCreateCajaCentral(empresaId, sedeId, tx);
+    return tx.movimientoCaja.create({
+      data: {
+        cajaId: central.id,
+        empresaId,
+        tipo: data.tipo,
+        categoria: data.categoria,
+        metodoPago: data.metodoPago,
+        monto: data.monto,
+        descripcion: `[TESORERÍA] ${data.descripcion ?? data.categoria}`,
+        ventaId: data.ventaId,
+        devolucionId: data.devolucionId,
+        compraId: data.compraId,
+        cotizacionId: data.cotizacionId,
+        esManual: false,
+        registradoPorId: usuarioId,
+        metadata: {
+          ...(data.metadata ?? {}),
+          sinCajaOperativa: true,
+          usuarioOriginalId: usuarioId,
+        },
+      },
+    });
+  }
+
+  /**
    * Valida que el usuario tenga caja abierta en la sede ANTES de iniciar
    * una venta. Solo se aplica si `empresa.requiereCajaParaVender = true`.
    *

@@ -530,30 +530,23 @@ export class DevolucionVentaService {
           }
         }
         if (montoDevolucion > 0) {
-          // Redondeo a 2 decimales para evitar arrastrar centavos
-          // del prorrateo.
           montoDevolucion = Math.round(montoDevolucion * 100) / 100;
-          try {
-            await this.cajaService.registrarMovimientoSiHayCaja(
-              empresaId,
-              devolucion.sedeId,
-              userId,
-              {
-                tipo: 'EGRESO',
-                categoria: 'DEVOLUCION',
-                metodoPago: metodoPagoOriginal,
-                monto: montoDevolucion,
-                descripcion: `Devolución ${devolucion.codigo}`,
-                devolucionId: devolucion.id,
-              },
-              tx,
-            );
-          } catch (e) {
-            this.logger.warn(`Error registrando egreso caja para devolución ${devolucion.codigo}: ${e?.message ?? e}`);
-          }
+          await this.cajaService.registrarMovimientoEnCajaOTesoreria(
+            empresaId,
+            devolucion.sedeId,
+            userId,
+            {
+              tipo: 'EGRESO',
+              categoria: 'DEVOLUCION',
+              metodoPago: metodoPagoOriginal,
+              monto: montoDevolucion,
+              descripcion: `Devolución ${devolucion.codigo}`,
+              devolucionId: devolucion.id,
+            },
+            tx,
+          );
         }
       } else if (devolucion.tipoReembolso === 'CAMBIO_PRODUCTO') {
-        // Calculate net difference from all CAMBIO items
         let diferenciaNeta = 0;
         for (const item of devolucion.items) {
           if (item.accion === 'CAMBIO_PRODUCTO' && item.diferenciaPrecio !== null) {
@@ -562,47 +555,36 @@ export class DevolucionVentaService {
         }
 
         if (diferenciaNeta > 0) {
-          // Customer pays difference (replacement is more expensive) — INGRESO
-          try {
-            await this.cajaService.registrarMovimientoSiHayCaja(
-              empresaId,
-              devolucion.sedeId,
-              userId,
-              {
-                tipo: 'INGRESO',
-                categoria: 'DEVOLUCION',
-                metodoPago: 'EFECTIVO',
-                monto: diferenciaNeta,
-                descripcion: `Diferencia cambio producto - Devolución ${devolucion.codigo}`,
-                devolucionId: devolucion.id,
-              },
-              tx,
-            );
-          } catch (e) {
-            this.logger.warn(`Error registrando ingreso caja para devolución ${devolucion.codigo}: ${e?.message ?? e}`);
-          }
+          await this.cajaService.registrarMovimientoEnCajaOTesoreria(
+            empresaId,
+            devolucion.sedeId,
+            userId,
+            {
+              tipo: 'INGRESO',
+              categoria: 'DEVOLUCION',
+              metodoPago: 'EFECTIVO',
+              monto: diferenciaNeta,
+              descripcion: `Diferencia cambio producto - Devolución ${devolucion.codigo}`,
+              devolucionId: devolucion.id,
+            },
+            tx,
+          );
         } else if (diferenciaNeta < 0) {
-          // Refund difference (replacement is cheaper) — EGRESO
-          try {
-            await this.cajaService.registrarMovimientoSiHayCaja(
-              empresaId,
-              devolucion.sedeId,
-              userId,
-              {
-                tipo: 'EGRESO',
-                categoria: 'DEVOLUCION',
-                metodoPago: 'EFECTIVO',
-                monto: Math.abs(diferenciaNeta),
-                descripcion: `Diferencia cambio producto - Devolución ${devolucion.codigo}`,
-                devolucionId: devolucion.id,
-              },
-              tx,
-            );
-          } catch (e) {
-            this.logger.warn(`Error registrando egreso caja para devolución ${devolucion.codigo}: ${e?.message ?? e}`);
-          }
+          await this.cajaService.registrarMovimientoEnCajaOTesoreria(
+            empresaId,
+            devolucion.sedeId,
+            userId,
+            {
+              tipo: 'EGRESO',
+              categoria: 'DEVOLUCION',
+              metodoPago: 'EFECTIVO',
+              monto: Math.abs(diferenciaNeta),
+              descripcion: `Diferencia cambio producto - Devolución ${devolucion.codigo}`,
+              devolucionId: devolucion.id,
+            },
+            tx,
+          );
         }
-        // If diferenciaNeta === 0, no caja movement needed
       }
 
       return tx.devolucion.update({
