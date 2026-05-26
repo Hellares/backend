@@ -3613,6 +3613,7 @@ export class VentaService {
         documentoCliente: true,
         total: true,
         moneda: true,
+        montoCambio: true,
         fechaVenta: true,
         esCredito: true,
         cotizacionId: true,
@@ -3776,7 +3777,9 @@ export class VentaService {
     }
 
     // 5. Pagos
+    const montoCambio = venta.montoCambio ? Number(venta.montoCambio) : 0;
     for (const pago of venta.pagos || []) {
+      const esEfectivo = pago.metodoPago === 'EFECTIVO';
       ventaNodo.hijos.push({
         tipo: 'PAGO',
         icono: 'payments',
@@ -3787,6 +3790,7 @@ export class VentaService {
         monto: pago.monto,
         moneda: venta.moneda,
         detalle: pago.referencia || null,
+        ...(esEfectivo && montoCambio > 0 ? { vuelto: montoCambio } : {}),
         ruta: null,
         hijos: [],
       });
