@@ -1241,9 +1241,17 @@ export class VentaService {
         // Así el cierre Z agrupa correctamente sin necesidad de tocar el groupBy.
         if (montoPagadoInmediato > 0) {
           const pagosParaCaja = (dto.pagos && dto.pagos.length > 0)
-            ? dto.pagos
-                .filter((p) => p.metodoPago !== 'CREDITO')
-                .map((p) => ({ metodoPago: p.metodoPago, monto: p.monto }))
+            ? (() => {
+                let acumulado = 0;
+                return dto.pagos
+                  .filter((p) => p.metodoPago !== 'CREDITO')
+                  .map((p) => {
+                    const montoReal = Math.max(0, Math.min(p.monto, totalVenta - acumulado));
+                    acumulado += montoReal;
+                    return { metodoPago: p.metodoPago, monto: montoReal };
+                  })
+                  .filter((p) => p.monto > 0);
+              })()
             : [{
                 metodoPago: dto.metodoPago || 'EFECTIVO',
                 monto: Math.min(montoPagadoInmediato, totalVenta),
@@ -2011,9 +2019,17 @@ export class VentaService {
       if (montoPagadoInmediato > 0 && cajeroId) {
         // Multi-medio: un MovimientoCaja por cada PagoVenta no-CREDITO.
         const pagosParaCaja = (dto.pagos && dto.pagos.length > 0)
-          ? dto.pagos
-              .filter((p) => p.metodoPago !== 'CREDITO')
-              .map((p) => ({ metodoPago: p.metodoPago, monto: p.monto }))
+          ? (() => {
+              let acumulado = 0;
+              return dto.pagos
+                .filter((p) => p.metodoPago !== 'CREDITO')
+                .map((p) => {
+                  const montoReal = Math.max(0, Math.min(p.monto, totalVenta - acumulado));
+                  acumulado += montoReal;
+                  return { metodoPago: p.metodoPago, monto: montoReal };
+                })
+                .filter((p) => p.monto > 0);
+            })()
           : [{
               metodoPago: dto.metodoPago || 'EFECTIVO',
               monto: Math.min(montoPagadoInmediato, totalVenta),
