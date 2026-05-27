@@ -1594,6 +1594,7 @@ export class EmpresaService {
         ...(data.etiquetaNumeroSerie !== undefined && { etiquetaNumeroSerie: data.etiquetaNumeroSerie }),
         ...(data.etiquetaCondicionEquipo !== undefined && { etiquetaCondicionEquipo: data.etiquetaCondicionEquipo }),
         ...(data.mostrarSeccionEquipo !== undefined && { mostrarSeccionEquipo: data.mostrarSeccionEquipo }),
+        ...(data.ventaCreditoHabilitada !== undefined && { ventaCreditoHabilitada: data.ventaCreditoHabilitada }),
         ...(data.interesHabilitado !== undefined && { interesHabilitado: data.interesHabilitado }),
         ...(data.porcentajeInteresDefault !== undefined && { porcentajeInteresDefault: data.porcentajeInteresDefault }),
         ...(data.interesEsEditable !== undefined && { interesEsEditable: data.interesEsEditable }),
