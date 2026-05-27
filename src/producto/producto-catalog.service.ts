@@ -185,7 +185,7 @@ export class ProductoCatalogService {
     let stockTotal = 0;
     let stocksPorSede: any[] | undefined = undefined;
 
-    if (producto.stocksPorSede && producto.stocksPorSede.length > 0) {
+    if (producto.stocksPorSede && producto.stocksPorSede.length > 0 && !producto.tieneVariantes) {
       stockTotal = producto.stocksPorSede.reduce(
         (sum: number, stock: any) => {
           const disponible = stock.stockActual
@@ -231,28 +231,51 @@ export class ProductoCatalogService {
       };
       });
     } else if (producto.tieneVariantes && producto.variantes?.length > 0) {
-      // Calcular stock total desde stocksPorSede de las variantes
-      stockTotal = producto.variantes.reduce(
-        (sum: number, variante: any) => {
-          if (variante.stocksPorSede && variante.stocksPorSede.length > 0) {
-            return sum + variante.stocksPorSede.reduce(
-              (varianteSum: number, stock: any) => {
-                const disponible = stock.stockActual
-                  - (stock.stockReservado || 0)
-                  - (stock.stockReservadoVenta || 0)
-                  - (stock.stockReservadoCombo || 0)
-                  - (stock.stockReservadoCotizacion || 0)
-                  - (stock.stockDanado || 0)
-                  - (stock.stockEnGarantia || 0);
-                return varianteSum + Math.max(0, disponible);
-              },
-              0,
-            );
+      // Consolidar stock por sede sumando todas las variantes. El producto
+      // base hereda el precio de la primera variante con precio configurado
+      // en cada sede (para mostrar en la card de la lista).
+      const sedeMap = new Map<string, any>();
+      for (const variante of producto.variantes) {
+        if (!variante.stocksPorSede) continue;
+        for (const stock of variante.stocksPorSede) {
+          const sid = stock.sede.id;
+          const disponible = stock.stockActual
+            - (stock.stockReservado || 0)
+            - (stock.stockReservadoVenta || 0)
+            - (stock.stockReservadoCombo || 0)
+            - (stock.stockReservadoCotizacion || 0)
+            - (stock.stockDanado || 0)
+            - (stock.stockEnGarantia || 0);
+          const existing = sedeMap.get(sid);
+          if (existing) {
+            existing.cantidad += Math.max(0, disponible);
+          } else {
+            sedeMap.set(sid, {
+              sedeId: stock.sede.id,
+              sedeNombre: stock.sede.nombre,
+              sedeCodigo: stock.sede.codigo,
+              cantidad: Math.max(0, disponible),
+              stockMinimo: null,
+              stockMaximo: null,
+              ubicacion: null,
+              precio: stock.precio ? Number(stock.precio) : null,
+              precioCosto: stock.precioCosto ? Number(stock.precioCosto) : null,
+              precioOferta: stock.precioOferta ? Number(stock.precioOferta) : null,
+              enOferta: stock.enOferta ?? false,
+              fechaInicioOferta: stock.fechaInicioOferta,
+              fechaFinOferta: stock.fechaFinOferta,
+              enLiquidacion: stock.enLiquidacion ?? false,
+              precioLiquidacion: stock.precioLiquidacion ? Number(stock.precioLiquidacion) : null,
+              fechaInicioLiquidacion: stock.fechaInicioLiquidacion,
+              fechaFinLiquidacion: stock.fechaFinLiquidacion,
+              precioConfigurado: stock.precioConfigurado ?? false,
+              precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
+            });
           }
-          return sum;
-        },
-        0,
-      );
+        }
+      }
+      stocksPorSede = Array.from(sedeMap.values());
+      stockTotal = stocksPorSede.reduce((sum: number, s: any) => sum + s.cantidad, 0);
     }
 
     // Desestructurar para excluir campos relacionados
