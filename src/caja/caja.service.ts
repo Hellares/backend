@@ -258,7 +258,7 @@ export class CajaService {
       .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
 
     const montoApertura = Number(caja.montoApertura);
-    const saldoActual = montoApertura + totalIngresos - totalEgresos;
+    const saldoActual = Math.round((montoApertura + totalIngresos - totalEgresos) * 100) / 100;
 
     const ingresosEfectivo = resumenPorMetodo
       .filter(
@@ -274,7 +274,7 @@ export class CajaService {
           r.metodoPago === MetodoPagoVenta.EFECTIVO,
       )
       .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
-    const saldoEfectivo = montoApertura + ingresosEfectivo - egresosEfectivo;
+    const saldoEfectivo = Math.round((montoApertura + ingresosEfectivo - egresosEfectivo) * 100) / 100;
 
     return {
       ...caja,
@@ -354,8 +354,8 @@ export class CajaService {
       ...caja,
       totalIngresos,
       totalEgresos,
-      saldoActual: montoApertura + totalIngresos - totalEgresos,
-      saldoEfectivo: montoApertura + ingresosEfectivo - egresosEfectivo,
+      saldoActual: Math.round((montoApertura + totalIngresos - totalEgresos) * 100) / 100,
+      saldoEfectivo: Math.round((montoApertura + ingresosEfectivo - egresosEfectivo) * 100) / 100,
     };
   }
 
@@ -766,7 +766,7 @@ export class CajaService {
 
       const apertura =
         metodo === MetodoPagoVenta.EFECTIVO ? montoApertura : 0;
-      const esperado = apertura + ingresos - egresos;
+      const esperado = Math.round((apertura + ingresos - egresos) * 100) / 100;
       const conteo = dto.conteos.find((c) => c.metodoPago === metodo);
       const conteoFisico = conteo?.conteoFisico ?? 0;
 
@@ -776,16 +776,16 @@ export class CajaService {
         egresos,
         esperado,
         conteoFisico,
-        diferencia: conteoFisico - esperado,
+        diferencia: Math.round((conteoFisico - esperado) * 100) / 100,
       };
     }
 
-    const totalEsperado = montoApertura + totalIngresos - totalEgresos;
+    const totalEsperado = Math.round((montoApertura + totalIngresos - totalEgresos) * 100) / 100;
     const totalConteoFisico = dto.conteos.reduce(
       (sum, c) => sum + c.conteoFisico,
       0,
     );
-    const diferencia = totalConteoFisico - totalEsperado;
+    const diferencia = Math.round((totalConteoFisico - totalEsperado) * 100) / 100;
 
     // Crear cierre y actualizar caja en transacción
     const result = await this.prisma.$transaction(async (tx) => {
@@ -1017,7 +1017,7 @@ export class CajaService {
       .reduce((sum, r) => sum + Number(r._sum.monto ?? 0), 0);
 
     const montoApertura = Number(caja.montoApertura);
-    const saldoActual = montoApertura + totalIngresos - totalEgresos;
+    const saldoActual = Math.round((montoApertura + totalIngresos - totalEgresos) * 100) / 100;
 
     // Detalle por método agregado (lo que consume Flutter en cerrar_caja).
     // Para cada método incluye totalIngresos, totalEgresos y saldo, sumando
@@ -1043,7 +1043,7 @@ export class CajaService {
         apertura,
         totalIngresos: ingresos,
         totalEgresos: egresos,
-        saldo: apertura + ingresos - egresos,
+        saldo: Math.round((apertura + ingresos - egresos) * 100) / 100,
       };
     });
 
@@ -1244,8 +1244,8 @@ export class CajaService {
     }
 
     const montoApertura = Number(caja.montoApertura);
-    const saldoActual = montoApertura + totalIngresos - totalEgresos;
-    const saldoEfectivo = montoApertura + ingresosEfectivo - egresosEfectivo;
+    const saldoActual = Math.round((montoApertura + totalIngresos - totalEgresos) * 100) / 100;
+    const saldoEfectivo = Math.round((montoApertura + ingresosEfectivo - egresosEfectivo) * 100) / 100;
 
     // Detalle por método: incluye apertura imputada a EFECTIVO. Excluye MIXTO.
     const detallesPorMetodo = Object.values(MetodoPagoVenta)
@@ -1267,7 +1267,7 @@ export class CajaService {
           apertura,
           ingresos,
           egresos,
-          saldo: apertura + ingresos - egresos,
+          saldo: Math.round((apertura + ingresos - egresos) * 100) / 100,
         };
       });
 
@@ -1480,8 +1480,8 @@ export class CajaService {
           ...caja,
           totalIngresos,
           totalEgresos,
-          saldoActual: montoApertura + totalIngresos - totalEgresos,
-          saldoEfectivo: montoApertura + ingresosEfectivo - egresosEfectivo,
+          saldoActual: Math.round((montoApertura + totalIngresos - totalEgresos) * 100) / 100,
+          saldoEfectivo: Math.round((montoApertura + ingresosEfectivo - egresosEfectivo) * 100) / 100,
           ultimoMovimiento,
         };
       }),
@@ -1907,7 +1907,7 @@ export class CajaService {
       totalEgresos += egresos;
 
       const apertura = metodo === MetodoPagoVenta.EFECTIVO ? montoApertura : 0;
-      const esperado = apertura + ingresos - egresos;
+      const esperado = Math.round((apertura + ingresos - egresos) * 100) / 100;
       const conteo = dto.conteos.find((c) => c.metodoPago === metodo);
       const conteoFisico = conteo?.conteoFisico ?? 0;
 
@@ -1917,16 +1917,16 @@ export class CajaService {
         egresos,
         esperado,
         conteoFisico,
-        diferencia: conteoFisico - esperado,
+        diferencia: Math.round((conteoFisico - esperado) * 100) / 100,
       };
     }
 
-    const totalEsperado = montoApertura + totalIngresos - totalEgresos;
+    const totalEsperado = Math.round((montoApertura + totalIngresos - totalEgresos) * 100) / 100;
     const totalConteoFisico = dto.conteos.reduce(
       (sum, c) => sum + c.conteoFisico,
       0,
     );
-    const diferencia = totalConteoFisico - totalEsperado;
+    const diferencia = Math.round((totalConteoFisico - totalEsperado) * 100) / 100;
 
     // ── Validar desglose efectivo (si se envia) ──
     // Suma de (denominacion * cantidad) debe coincidir con el conteo
