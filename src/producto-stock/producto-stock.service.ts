@@ -2497,9 +2497,9 @@ export class ProductoStockService {
         'El producto no tiene precio de costo configurado. Configúralo antes de liquidar.',
       );
     }
-    if (dto.precioLiquidacion >= Number(stock.precioCosto)) {
+    if (dto.precioLiquidacion > Number(stock.precioCosto)) {
       throw new BadRequestException(
-        'El precio de liquidación debe ser menor al precio de costo (S/' +
+        'El precio de liquidación debe ser menor o igual al precio de costo (S/' +
           Number(stock.precioCosto).toFixed(2) +
           '). Si el precio es mayor al costo, usa una oferta normal.',
       );
