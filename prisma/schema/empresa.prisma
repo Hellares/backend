@@ -584,7 +584,8 @@ model ConfiguracionEmpresa {
   etiquetaCondicionEquipo String? // "Condición del equipo", "Estado del vehículo", etc.
   mostrarSeccionEquipo    Boolean @default(true) // Permite ocultar la sección completa
 
-  // Configuración de interés por crédito
+  // Configuración de venta a crédito
+  ventaCreditoHabilitada   Boolean  @default(false)
   interesHabilitado        Boolean  @default(false)
   porcentajeInteresDefault Decimal? @default(0) @db.Decimal(5, 2) // 5.00 = 5%
   interesEsEditable        Boolean  @default(true) // Vendedor puede cambiar %

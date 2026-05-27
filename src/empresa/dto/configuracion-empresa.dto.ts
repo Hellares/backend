@@ -95,7 +95,12 @@ export class ConfiguracionEmpresaDto {
   @IsBoolean()
   mostrarSeccionEquipo?: boolean;
 
-  // Interés por crédito
+  // Venta a crédito
+  @ApiPropertyOptional({ description: 'Habilitar venta a crédito', default: false })
+  @IsOptional()
+  @IsBoolean()
+  ventaCreditoHabilitada?: boolean;
+
   @ApiPropertyOptional({ description: 'Habilitar interés por crédito', default: false })
   @IsOptional()
   @IsBoolean()
