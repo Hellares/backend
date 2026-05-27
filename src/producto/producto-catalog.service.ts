@@ -231,10 +231,50 @@ export class ProductoCatalogService {
       };
       });
     } else if (producto.tieneVariantes && producto.variantes?.length > 0) {
-      // Consolidar stock por sede sumando todas las variantes. El producto
-      // base hereda el precio de la primera variante con precio configurado
-      // en cada sede (para mostrar en la card de la lista).
+      // Consolidar stock por sede sumando todas las variantes + stock
+      // residual del producto base (puede tener stock de devoluciones
+      // de ventas anteriores a la conversión a variantes).
       const sedeMap = new Map<string, any>();
+
+      // Primero: stock residual del producto base (devoluciones pre-variantes)
+      if (producto.stocksPorSede) {
+        for (const stock of producto.stocksPorSede) {
+          if (!stock.stockActual || stock.stockActual <= 0) continue;
+          const sid = stock.sede.id;
+          const disponible = stock.stockActual
+            - (stock.stockReservado || 0)
+            - (stock.stockReservadoVenta || 0)
+            - (stock.stockReservadoCombo || 0)
+            - (stock.stockReservadoCotizacion || 0)
+            - (stock.stockDanado || 0)
+            - (stock.stockEnGarantia || 0);
+          if (disponible > 0) {
+            sedeMap.set(sid, {
+              sedeId: stock.sede.id,
+              sedeNombre: stock.sede.nombre,
+              sedeCodigo: stock.sede.codigo,
+              cantidad: disponible,
+              stockMinimo: null,
+              stockMaximo: null,
+              ubicacion: null,
+              precio: stock.precio ? Number(stock.precio) : null,
+              precioCosto: stock.precioCosto ? Number(stock.precioCosto) : null,
+              precioOferta: null,
+              enOferta: false,
+              fechaInicioOferta: null,
+              fechaFinOferta: null,
+              enLiquidacion: false,
+              precioLiquidacion: null,
+              fechaInicioLiquidacion: null,
+              fechaFinLiquidacion: null,
+              precioConfigurado: stock.precioConfigurado ?? false,
+              precioIncluyeIgv: stock.precioIncluyeIgv ?? false,
+            });
+          }
+        }
+      }
+
+      // Luego: stock de variantes (sobrescribe precios si la sede ya existe)
       for (const variante of producto.variantes) {
         if (!variante.stocksPorSede) continue;
         for (const stock of variante.stocksPorSede) {
@@ -249,6 +289,11 @@ export class ProductoCatalogService {
           const existing = sedeMap.get(sid);
           if (existing) {
             existing.cantidad += Math.max(0, disponible);
+            if (stock.precioConfigurado && stock.precio) {
+              existing.precio = Number(stock.precio);
+              existing.precioCosto = stock.precioCosto ? Number(stock.precioCosto) : existing.precioCosto;
+              existing.precioConfigurado = true;
+            }
           } else {
             sedeMap.set(sid, {
               sedeId: stock.sede.id,
