@@ -512,6 +512,59 @@ export class VentaService {
     return 'MIXTO' as MetodoPagoVenta;
   }
 
+  /**
+   * Construye los montos por método de pago a registrar en caja (1 MovimientoCaja
+   * por método) a partir de los pagos de la venta.
+   *
+   * Regla de oro: **el vuelto SIEMPRE se entrega en efectivo**, nunca en un medio
+   * digital. Por eso el efectivo neto que queda en la caja es lo recibido menos el
+   * cambio devuelto; los medios digitales (YAPE/PLIN/TARJETA/...) se registran a
+   * valor nominal porque jamás son fuente de vuelto.
+   *
+   * Reemplaza el antiguo "clamp acumulativo" que recortaba el excedente por orden
+   * del array y terminaba restando el vuelto al medio digital (corría el desglose
+   * +vuelto en efectivo / −vuelto en digital → diferencia fantasma al cerrar caja).
+   *
+   * Robusto frente a:
+   *  - Múltiples líneas de efectivo (reparte el vuelto en orden hasta agotarlo).
+   *  - Vuelto declarado sin línea de efectivo (no toca los digitales).
+   *  - Excedente residual sobre el total (lo absorbe el efectivo, nunca el digital).
+   */
+  private construirPagosParaCaja(
+    pagos: Array<{ metodoPago: string; monto: number }>,
+    totalACobrar: number,
+    vuelto: number,
+  ): Array<{ metodoPago: string; monto: number }> {
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    let vueltoRestante = Math.max(0, round2(vuelto));
+
+    const resultado = pagos
+      .filter((p) => p.metodoPago !== 'CREDITO')
+      .map((p) => {
+        let monto = p.monto;
+        // El vuelto sale del efectivo: descontamos lo que se devolvió.
+        if (p.metodoPago === 'EFECTIVO' && vueltoRestante > 0) {
+          const descuenta = Math.min(monto, vueltoRestante);
+          monto = round2(monto - descuenta);
+          vueltoRestante = round2(vueltoRestante - descuenta);
+        }
+        return { metodoPago: p.metodoPago, monto };
+      });
+
+    // Safety: si tras netear el vuelto el efectivo aún excede lo cobrado hoy
+    // (overpago no capturado como vuelto), recortamos del EFECTIVO — nunca del
+    // digital, que siempre se paga exacto.
+    let exceso = round2(resultado.reduce((s, p) => s + p.monto, 0) - totalACobrar);
+    for (let i = resultado.length - 1; i >= 0 && exceso > 0; i--) {
+      if (resultado[i].metodoPago !== 'EFECTIVO') continue;
+      const recorta = Math.min(resultado[i].monto, exceso);
+      resultado[i].monto = round2(resultado[i].monto - recorta);
+      exceso = round2(exceso - recorta);
+    }
+
+    return resultado.filter((p) => p.monto > 0);
+  }
+
   async create(empresaId: string, dto: CreateVentaDto, cajeroId?: string) {
     this.logger.info('Creando venta', { empresaId, sede: dto.sedeId });
 
@@ -1241,17 +1294,7 @@ export class VentaService {
         // Así el cierre Z agrupa correctamente sin necesidad de tocar el groupBy.
         if (montoPagadoInmediato > 0) {
           const pagosParaCaja = (dto.pagos && dto.pagos.length > 0)
-            ? (() => {
-                let acumulado = 0;
-                return dto.pagos
-                  .filter((p) => p.metodoPago !== 'CREDITO')
-                  .map((p) => {
-                    const montoReal = Math.max(0, Math.min(p.monto, totalVenta - acumulado));
-                    acumulado += montoReal;
-                    return { metodoPago: p.metodoPago, monto: montoReal };
-                  })
-                  .filter((p) => p.monto > 0);
-              })()
+            ? this.construirPagosParaCaja(dto.pagos, totalVenta, montoCambio)
             : [{
                 metodoPago: dto.metodoPago || 'EFECTIVO',
                 monto: Math.min(montoPagadoInmediato, totalVenta),
@@ -2019,20 +2062,10 @@ export class VentaService {
       if (montoPagadoInmediato > 0 && cajeroId) {
         // Multi-medio: un MovimientoCaja por cada PagoVenta no-CREDITO.
         const pagosParaCaja = (dto.pagos && dto.pagos.length > 0)
-          ? (() => {
-              let acumulado = 0;
-              return dto.pagos
-                .filter((p) => p.metodoPago !== 'CREDITO')
-                .map((p) => {
-                  const montoReal = Math.max(0, Math.min(p.monto, totalVenta - acumulado));
-                  acumulado += montoReal;
-                  return { metodoPago: p.metodoPago, monto: montoReal };
-                })
-                .filter((p) => p.monto > 0);
-            })()
+          ? this.construirPagosParaCaja(dto.pagos, totalAPagarHoy, montoCambio ?? 0)
           : [{
               metodoPago: dto.metodoPago || 'EFECTIVO',
-              monto: Math.min(montoPagadoInmediato, totalVenta),
+              monto: Math.min(montoPagadoInmediato, totalAPagarHoy),
             }];
 
         for (const p of pagosParaCaja) {
@@ -2666,7 +2699,10 @@ export class VentaService {
               tipo: 'INGRESO',
               categoria: 'VENTA',
               metodoPago: dto.metodoPago,
-              monto: dto.monto,
+              // El vuelto sale del efectivo: registramos el neto que queda en caja.
+              monto: dto.metodoPago === 'EFECTIVO'
+                ? Math.max(0, Math.round((dto.monto - montoCambio) * 100) / 100)
+                : dto.monto,
               descripcion: `Pago venta ${venta.codigo}`,
               ventaId: venta.id,
               metadata: totalMoraAplicada > 0 || totalInteresAplicado > 0 ? {
@@ -2801,16 +2837,22 @@ export class VentaService {
       const pagosACobrar = (venta.pagos ?? []).filter(
         (p) => p.metodoPago !== 'CREDITO',
       );
+      // El INGRESO original ya se registró NETO de vuelto (efectivo = recibido −
+      // cambio). La contrapartida del fallback debe espejar eso, no el bruto del
+      // PagoVenta, para que el EGRESO cuadre con lo que físicamente entró.
+      const vueltoVenta = Number(venta.montoCambio ?? 0);
       const fallbackPagos = pagosACobrar.length > 0
-        ? pagosACobrar.map((p) => ({
-            metodoPago: p.metodoPago as any,
-            monto: Number(p.monto),
-          }))
+        ? this.construirPagosParaCaja(
+            pagosACobrar.map((p) => ({ metodoPago: p.metodoPago, monto: Number(p.monto) })),
+            Number(venta.total),
+            vueltoVenta,
+          )
         : (Number(venta.montoRecibido ?? 0) > 0
-            ? [{
-                metodoPago: (venta.metodoPago ?? 'EFECTIVO') as any,
-                monto: Number(venta.montoRecibido),
-              }]
+            ? this.construirPagosParaCaja(
+                [{ metodoPago: (venta.metodoPago ?? 'EFECTIVO'), monto: Number(venta.montoRecibido) }],
+                Number(venta.total),
+                vueltoVenta,
+              )
             : []);
 
       try {
@@ -2819,7 +2861,7 @@ export class VentaService {
           { ventaId: venta.id },
           usuarioId,
           dto?.motivo ?? `Anulación ${venta.codigo}`,
-          fallbackPagos.length > 0 ? { sedeId: venta.sedeId, pagos: fallbackPagos } : null,
+          fallbackPagos.length > 0 ? { sedeId: venta.sedeId, pagos: fallbackPagos as any } : null,
           tx,
         );
         this.logger.log(
