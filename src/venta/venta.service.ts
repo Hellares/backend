@@ -1116,14 +1116,24 @@ export class VentaService {
               componenteVarianteId: true,
             },
           });
-          // Tomar cualquier item para calcular cuántos combos representa.
-          const primerItem = items[0];
-          const compMatch = componentes.find(c =>
-            (c.componenteProductoId && c.componenteProductoId === primerItem.productoId) ||
-            (c.componenteVarianteId && c.componenteVarianteId === primerItem.varianteId),
-          );
-          if (!compMatch || compMatch.cantidad <= 0) continue;
-          const cantidadCombos = Number(primerItem.cantidad) / compMatch.cantidad;
+          // Buscar un item que SIGA siendo componente original del combo —
+          // la receta pudo modificarse en el carrito (sustituir/quitar el
+          // primer componente). Con cualquiera original inferimos cuántos
+          // combos representa la venta. Si ninguno original quedó (combo
+          // totalmente custom), no consumimos reservación.
+          let itemMatch: (typeof items)[number] | undefined;
+          let compMatch:
+            | { cantidad: number; componenteProductoId: string | null; componenteVarianteId: string | null }
+            | undefined;
+          for (const it of items) {
+            const c = componentes.find(c =>
+              (c.componenteProductoId && c.componenteProductoId === it.productoId) ||
+              (c.componenteVarianteId && c.componenteVarianteId === it.varianteId),
+            );
+            if (c && c.cantidad > 0) { itemMatch = it; compMatch = c; break; }
+          }
+          if (!itemMatch || !compMatch) continue;
+          const cantidadCombos = Number(itemMatch.cantidad) / compMatch.cantidad;
           await this.comboService.consumirReservacionCombo(
             tx,
             origenComboId,
@@ -1840,13 +1850,22 @@ export class VentaService {
             componenteVarianteId: true,
           },
         });
-        const primerItem = items[0];
-        const compMatch = componentes.find(c =>
-          (c.componenteProductoId && c.componenteProductoId === primerItem.productoId) ||
-          (c.componenteVarianteId && c.componenteVarianteId === primerItem.varianteId),
-        );
-        if (!compMatch || compMatch.cantidad <= 0) continue;
-        const cantidadCombos = Number(primerItem.cantidad) / compMatch.cantidad;
+        // Buscar un item que siga siendo componente original (la receta
+        // pudo modificarse en el carrito). Con cualquiera inferimos cuántos
+        // combos representa la venta.
+        let itemMatch: any;
+        let compMatch:
+          | { cantidad: number; componenteProductoId: string | null; componenteVarianteId: string | null }
+          | undefined;
+        for (const it of items) {
+          const c = componentes.find(c =>
+            (c.componenteProductoId && c.componenteProductoId === it.productoId) ||
+            (c.componenteVarianteId && c.componenteVarianteId === it.varianteId),
+          );
+          if (c && c.cantidad > 0) { itemMatch = it; compMatch = c; break; }
+        }
+        if (!itemMatch || !compMatch) continue;
+        const cantidadCombos = Number(itemMatch.cantidad) / compMatch.cantidad;
         await this.comboService.consumirReservacionCombo(
           tx,
           origenComboId,
