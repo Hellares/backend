@@ -675,6 +675,11 @@ export class ProductoService {
         OR: [
           { actualizadoEn: { gt: since } },
           { stocksPorSede: { some: { actualizadoEn: { gt: since } } } },
+          // Red de seguridad: variantes soft-deleted desde lastSync. El
+          // caller (variante.remove) ya bumpea el padre, pero esto cubre
+          // cualquier borrado que no lo haya hecho — sin esto el cliente
+          // seguiría mostrando una variante eliminada.
+          { variantes: { some: { deletedAt: { gt: since } } } },
           ...(idsProductoPorArchivo.size > 0
             ? [{ id: { in: Array.from(idsProductoPorArchivo) } }]
             : []),

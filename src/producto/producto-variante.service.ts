@@ -427,9 +427,19 @@ export class ProductoVarianteService {
       throw new NotFoundException(`Variante ${varianteId} no encontrada`);
     }
 
-    await this.prisma.productoVariante.update({
-      where: { id: varianteId },
-      data: { deletedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.productoVariante.update({
+        where: { id: varianteId },
+        data: { deletedAt: new Date() },
+      });
+      // Bumpear el Producto padre: el soft-delete de la variante NO toca
+      // `Producto.actualizadoEn`, así que sin esto el delta-sync no traería
+      // el producto actualizado (sin la variante) y los clientes la seguirían
+      // mostrando hasta un refresh full. @updatedAt lo lleva a NOW().
+      await tx.producto.update({
+        where: { id: variante.productoId },
+        data: { actualizadoEn: new Date() },
+      });
     });
 
     // Invalidar cache de productos
