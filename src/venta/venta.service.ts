@@ -138,8 +138,13 @@ export class VentaService {
           motivoLiquidacionSnapshot:
             (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
           // Etiqueta del precio aplicado; null si fue precio base.
+          // Componentes de combo expandido (origenComboId) van con precio
+          // regular + descuento prorrateado del combo, NO con un nivel real:
+          // su ahorro se traza por `descuento`/`origenComboId`, no por nivel.
           nivelAplicadoSnapshot:
-            calc.nivelAplicado && calc.nivelAplicado !== 'Precio base'
+            !d.origenComboId &&
+            calc.nivelAplicado &&
+            calc.nivelAplicado !== 'Precio base'
               ? calc.nivelAplicado
               : null,
         });
