@@ -393,6 +393,8 @@ export class ProductoComboService {
 
       this.logger.log(`Componente agregado al combo ${comboId}`);
 
+      // Bump para que el combo entre en los deltas + notificar FCM.
+      await this._tocarComboParaSync(this.prisma, comboId);
       // Notificar: la receta del combo cambió.
       this.realtime.notifyProductoActualizado({
         empresaId,
@@ -638,6 +640,8 @@ export class ProductoComboService {
         `${componentesCreados.length} componentes agregados al combo ${comboId}`,
       );
 
+      // Bump para que el combo entre en los deltas + notificar FCM.
+      await this._tocarComboParaSync(this.prisma, comboId);
       // Notificar (1 solo evento, el debounce del listener colapsa).
       this.realtime.notifyProductoActualizado({
         empresaId,
@@ -993,6 +997,8 @@ export class ProductoComboService {
 
       this.logger.log(`Componente ${componenteId} actualizado`);
 
+      // Bump para que el combo entre en los deltas + notificar FCM.
+      await this._tocarComboParaSync(this.prisma, componente.comboId);
       // Notificar: la receta del combo cambió (cantidad/precio/orden).
       this.realtime.notifyProductoActualizado({
         empresaId,
@@ -1060,6 +1066,8 @@ export class ProductoComboService {
 
       // Notificar: receta del combo cambió.
       if (comboId) {
+        // Bump para que el combo entre en los deltas + notificar FCM.
+        await this._tocarComboParaSync(this.prisma, comboId);
         this.realtime.notifyProductoActualizado({
           empresaId,
           productoId: comboId,
@@ -1156,6 +1164,8 @@ export class ProductoComboService {
       // Notificar a otros devices: uno por combo afectado (debounce
       // colapsa en el listener).
       for (const cid of comboIdsAfectados) {
+        // Bump para que el combo entre en los deltas + notificar FCM.
+        await this._tocarComboParaSync(this.prisma, cid);
         this.realtime.notifyProductoActualizado({ empresaId, productoId: cid });
       }
     } catch (error) {
@@ -1463,6 +1473,8 @@ export class ProductoComboService {
             data: { comboId, sedeId, cantidad },
           });
         }
+
+        await this._tocarComboParaSync(tx, comboId);
 
         this.logger.log(`Reserva de combo ${comboId} actualizada a ${cantidad} en sede ${sedeId}`);
         return { cantidad };
@@ -1797,6 +1809,8 @@ export class ProductoComboService {
           }
         }
 
+        await this._tocarComboParaSync(tx, comboId);
+
         this.logger.log(`Stock descontado para ${cantidad} unidad(es) del combo ${comboId} en sede ${sedeId}`);
       });
 
@@ -1890,9 +1904,33 @@ export class ProductoComboService {
       });
     }
 
+    await this._tocarComboParaSync(tx, comboId);
+
     this.logger.log(
       `Reservación de combo ${comboId} consumida: -${cantidadLiberar} (de ${reservado} → ${nuevaCantReserva}) en sede ${sedeId}`,
     );
+  }
+
+  /**
+   * Bumpea `Producto.actualizadoEn` del combo para que entre en los deltas
+   * de sincronización (`syncDeltas` filtra por `Producto.actualizadoEn` y
+   * `ProductoStock.actualizadoEn`).
+   *
+   * El stock vendible de un combo en el catálogo = su `ComboReservacion`,
+   * que vive en una tabla aparte que `syncDeltas` NO observa, y el combo no
+   * tiene `ProductoStock` propio. Sin este toque, tras vender/reservar/
+   * liberar, el combo no aparece en el delta y el cliente lo muestra stale
+   * (o lo pierde de la grilla en VR) hasta un refresh full manual.
+   *
+   * Se hace por SQL crudo porque `actualizadoEn` es `@updatedAt`: un
+   * `update` normal lo bumpea, pero el raw deja la intención explícita y
+   * evita ambigüedades al setear un campo gestionado por Prisma.
+   */
+  private async _tocarComboParaSync(
+    client: Prisma.TransactionClient,
+    comboId: string,
+  ): Promise<void> {
+    await client.$executeRaw`UPDATE "Producto" SET "actualizadoEn" = NOW() WHERE id = ${comboId}`;
   }
 
   // =====================================================
