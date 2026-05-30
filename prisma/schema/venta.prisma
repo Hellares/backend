@@ -183,6 +183,11 @@ model VentaDetalle {
   // (snapshot) para reportería. Null cuando margen no fue negativo o
   // cuando la venta bajo costo se autorizó manualmente sin liquidación.
   motivoLiquidacionSnapshot MotivoLiquidacion?
+  // Etiqueta del precio aplicado al momento de vender (snapshot): nombre
+  // del nivel por volumen ("Por Mayor"), "Oferta" o "Liquidación". Null si
+  // se vendió a precio base. Para reportería/trazabilidad por nivel sin
+  // depender de la config actual (que puede cambiar o eliminarse).
+  nivelAplicadoSnapshot     String?
 
   // Impuesto
   tipoAfectacion String  @default("10") // SUNAT Cat.07: 10=Gravado, 20=Exonerado, 30=Inafecto

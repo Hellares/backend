@@ -41,6 +41,7 @@ import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.
 type DetalleConSnapshot = CreateVentaDetalleDto & {
   precioCostoSnapshot: number;
   motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+  nivelAplicadoSnapshot: string | null;
 };
 
 @Injectable()
@@ -105,7 +106,7 @@ export class VentaService {
       const productoIdParaNivel = d.productoId ?? d.comboId ?? null;
       if (!productoIdParaNivel && !d.varianteId) {
         // Servicio puro o item sin producto — no aplica niveles ni snapshot.
-        result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
+        result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
         continue;
       }
       try {
@@ -136,6 +137,11 @@ export class VentaService {
           precioCostoSnapshot: calc.precioCosto ?? 0,
           motivoLiquidacionSnapshot:
             (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
+          // Etiqueta del precio aplicado; null si fue precio base.
+          nivelAplicadoSnapshot:
+            calc.nivelAplicado && calc.nivelAplicado !== 'Precio base'
+              ? calc.nivelAplicado
+              : null,
         });
       } catch (err) {
         // Producto sin precio configurado en sede, etc. — caso edge donde el
@@ -146,7 +152,7 @@ export class VentaService {
           `No se pudo recalcular precio para "${d.descripcion}": ${msg}. ` +
             `Usando precio del cliente como fallback.`,
         );
-        result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
+        result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
       }
     }
 
@@ -690,6 +696,7 @@ export class VentaService {
               precioCostoSnapshot: d.precioCostoSnapshot,
               margenSnapshot: d.margenSnapshot,
               motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
+              nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
             })),
           },
         },
@@ -887,6 +894,7 @@ export class VentaService {
                 precioCostoSnapshot: d.precioCostoSnapshot,
                 margenSnapshot: d.margenSnapshot,
                 motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
+                nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
               })),
             },
           },
@@ -1521,6 +1529,7 @@ export class VentaService {
           precioCostoSnapshot: new Prisma.Decimal(snap.precioCostoSnapshot.toFixed(2)),
           margenSnapshot: new Prisma.Decimal((Math.round(margenUnit * 100) / 100).toFixed(2)),
           motivoLiquidacionSnapshot: snap.motivoLiquidacionSnapshot,
+          nivelAplicadoSnapshot: snap.nivelAplicadoSnapshot,
           // Guardar valores numéricos para stock + guard
           _cantidad: cantidad,
           _subtotal: subtotal,
@@ -1682,6 +1691,8 @@ export class VentaService {
                 ),
                 motivoLiquidacionSnapshot:
                   snapshotsCotizacion[i].motivoLiquidacionSnapshot,
+                nivelAplicadoSnapshot:
+                  snapshotsCotizacion[i].nivelAplicadoSnapshot,
               })),
               ...itemsAdicionales.map((d, i) => ({
                 productoId: d.productoId,
@@ -1701,6 +1712,7 @@ export class VentaService {
                 precioCostoSnapshot: d.precioCostoSnapshot,
                 margenSnapshot: d.margenSnapshot,
                 motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
+                nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
               })),
             ],
           },
@@ -2347,6 +2359,7 @@ export class VentaService {
             precioCostoSnapshot: d.precioCostoSnapshot,
             margenSnapshot: d.margenSnapshot,
             motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
+            nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
           })),
         });
 
@@ -3039,15 +3052,17 @@ export class VentaService {
     precioCostoSnapshot: number;
     margenSnapshot: number;
     motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+    nivelAplicadoSnapshot: string | null;
   }>> {
     const result: Array<{
       precioCostoSnapshot: number;
       margenSnapshot: number;
       motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+      nivelAplicadoSnapshot: string | null;
     }> = [];
     for (const d of detalles) {
       if (!d.productoId && !d.varianteId) {
-        result.push({ precioCostoSnapshot: 0, margenSnapshot: 0, motivoLiquidacionSnapshot: null });
+        result.push({ precioCostoSnapshot: 0, margenSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
         continue;
       }
       try {
@@ -3067,13 +3082,17 @@ export class VentaService {
           margenSnapshot: Math.round(margenUnit * 100) / 100,
           motivoLiquidacionSnapshot:
             (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
+          nivelAplicadoSnapshot:
+            calc.nivelAplicado && calc.nivelAplicado !== 'Precio base'
+              ? calc.nivelAplicado
+              : null,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(
           `No se pudo hidratar snapshot para "${d.descripcion}" en cotizacion: ${msg}`,
         );
-        result.push({ precioCostoSnapshot: 0, margenSnapshot: 0, motivoLiquidacionSnapshot: null });
+        result.push({ precioCostoSnapshot: 0, margenSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
       }
     }
     return result;
@@ -3094,14 +3113,16 @@ export class VentaService {
   ): Promise<Array<{
     precioCostoSnapshot: number;
     motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+    nivelAplicadoSnapshot: string | null;
   }>> {
     const result: Array<{
       precioCostoSnapshot: number;
       motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+      nivelAplicadoSnapshot: string | null;
     }> = [];
     for (const item of items) {
       if (!item.productoId && !item.varianteId) {
-        result.push({ precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
+        result.push({ precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
         continue;
       }
       try {
@@ -3115,9 +3136,13 @@ export class VentaService {
           precioCostoSnapshot: calc.precioCosto ?? 0,
           motivoLiquidacionSnapshot:
             (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
+          nivelAplicadoSnapshot:
+            calc.nivelAplicado && calc.nivelAplicado !== 'Precio base'
+              ? calc.nivelAplicado
+              : null,
         });
       } catch (err) {
-        result.push({ precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null });
+        result.push({ precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
       }
     }
     return result;
@@ -3246,6 +3271,8 @@ export class VentaService {
       'precioCostoSnapshot' in dto ? dto.precioCostoSnapshot : 0;
     const motivoLiquidacionSnapshot =
       'motivoLiquidacionSnapshot' in dto ? dto.motivoLiquidacionSnapshot : null;
+    const nivelAplicadoSnapshot =
+      'nivelAplicadoSnapshot' in dto ? dto.nivelAplicadoSnapshot : null;
     const descuentoUnitario = cantidad > 0 ? descuento / cantidad : 0;
     const ingresoNetoUnitario = precioUnitario - descuentoUnitario;
     const margenSnapshot = ingresoNetoUnitario - precioCostoSnapshot;
@@ -3272,6 +3299,7 @@ export class VentaService {
       precioCostoSnapshot: Math.round(precioCostoSnapshot * 100) / 100,
       margenSnapshot: Math.round(margenSnapshot * 100) / 100,
       motivoLiquidacionSnapshot,
+      nivelAplicadoSnapshot,
     };
   }
 
