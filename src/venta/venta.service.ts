@@ -770,8 +770,14 @@ export class VentaService {
           dto.ventaBajoCostoAutorizadaPorId ?? null,
         );
 
-        // 2c. Validar descuentos máximos por producto
-        const detallesConDescuento = detallesCalculados.filter(d => d.descuento > 0 && d.productoId);
+        // 2c. Validar descuentos máximos por producto.
+        // Las líneas de combo (origenComboId) se EXIMEN: su descuento es el
+        // ahorro prorrateado del combo (+ descuento manual ya autorizado vía
+        // APLICAR_DESCUENTO en el cliente), un deal intencional del bundle —
+        // no debe chocar con el descuentoMaximo del producto componente.
+        const detallesConDescuento = detallesCalculados.filter(
+          (d) => d.descuento > 0 && d.productoId && !d.origenComboId,
+        );
         if (detallesConDescuento.length > 0) {
           const productoIds = [...new Set(detallesConDescuento.map(d => d.productoId!))];
           const productosConLimite = await tx.producto.findMany({
