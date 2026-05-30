@@ -116,23 +116,44 @@ export class PrecioNivelService {
       dto.cantidadMaxima,
     );
 
-    // Crear el nivel de precio
-    const precioNivel = await this.prisma.precioNivel.create({
-      data: {
-        productoId,
-        varianteId,
-        nombre: dto.nombre,
+    // Crear (o REACTIVAR) el nivel de precio. `remove` hace soft-delete
+    // (isActive=false) y existe @@unique([productoId/varianteId, cantidadMinima]).
+    // Si quedó una fila inactiva con esa misma cantidadMinima, un `create`
+    // chocaría con el unique → 500. En su lugar la reactivamos/actualizamos.
+    const dataNivel = {
+      nombre: dto.nombre,
+      cantidadMaxima: dto.cantidadMaxima,
+      tipoPrecio: dto.tipoPrecio,
+      precio: dto.precio ? new Decimal(dto.precio) : null,
+      porcentajeDesc: dto.porcentajeDesc
+        ? new Decimal(dto.porcentajeDesc)
+        : null,
+      descripcion: dto.descripcion,
+      orden: dto.orden ?? 0,
+      isActive: true,
+    };
+
+    const existente = await this.prisma.precioNivel.findFirst({
+      where: {
+        ...(productoId ? { productoId } : {}),
+        ...(varianteId ? { varianteId } : {}),
         cantidadMinima: dto.cantidadMinima,
-        cantidadMaxima: dto.cantidadMaxima,
-        tipoPrecio: dto.tipoPrecio,
-        precio: dto.precio ? new Decimal(dto.precio) : null,
-        porcentajeDesc: dto.porcentajeDesc
-          ? new Decimal(dto.porcentajeDesc)
-          : null,
-        descripcion: dto.descripcion,
-        orden: dto.orden ?? 0,
       },
     });
+
+    const precioNivel = existente
+      ? await this.prisma.precioNivel.update({
+          where: { id: existente.id },
+          data: dataNivel,
+        })
+      : await this.prisma.precioNivel.create({
+          data: {
+            productoId,
+            varianteId,
+            cantidadMinima: dto.cantidadMinima,
+            ...dataNivel,
+          },
+        });
 
     this.logger.info('Precio nivel created successfully', {
       id: precioNivel.id,
