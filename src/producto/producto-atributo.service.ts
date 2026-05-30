@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { CacheService } from '../redis/cache.service';
 import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
 import { UpdateProductoAtributoDto } from './dto/update-producto-atributo.dto';
 import { AtributoTipo } from '@prisma/client';
@@ -32,9 +33,45 @@ export class ProductoAtributoService {
   constructor(
     private readonly prisma: PrismaService,
     loggerService: AppLoggerService,
+    private readonly cacheService: CacheService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ProductoAtributoService.name);
+  }
+
+  /**
+   * Tras cambiar un atributo (nombre/clave/valores), los productos y variantes
+   * que lo usan muestran el dato VIEJO porque el nombre del atributo viaja
+   * embebido en el catálogo cacheado (y en la copia local del app). El atributo
+   * en sí no guarda el nombre por variante: vive en ProductoAtributo y se resuelve
+   * por join. Por eso, al renombrarlo, hay que:
+   *  1. "Tocar" el actualizadoEn de los productos afectados (base + vía variante)
+   *     para que el delta-sync del app baje el cambio.
+   *  2. Invalidar la caché Redis del catálogo de la empresa.
+   */
+  private async propagarCambioAtributo(
+    atributoId: string,
+    empresaId: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE "Producto" SET "actualizadoEn" = now()
+        WHERE id IN (
+          SELECT av."productoId" FROM "ProductoAtributoValor" av
+            WHERE av."atributoId" = ${atributoId} AND av."productoId" IS NOT NULL
+          UNION
+          SELECT v."productoId" FROM "ProductoAtributoValor" av
+            JOIN "ProductoVariante" v ON v.id = av."varianteId"
+            WHERE av."atributoId" = ${atributoId}
+        )`;
+      await this.cacheService.invalidateProductosLists(empresaId);
+    } catch (e) {
+      this.logger.warn(
+        `No se pudo propagar el cambio del atributo ${atributoId}: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
   }
 
   /**
@@ -230,6 +267,40 @@ export class ProductoAtributoService {
 
     this.logger.success('Attribute updated', { atributoId });
 
+    // Cascada de rename de VALOR: el valor que cada variante/producto tiene
+    // guardado (ProductoAtributoValor.valor) es un string independiente de la
+    // lista de opciones (ProductoAtributo.valores). Si se renombró un valor de
+    // la lista, las asignaciones existentes quedarían con el string viejo. Se
+    // detecta un rename simple (un valor sale, uno entra) y se propaga a todas
+    // las asignaciones. Cambios múltiples no se cascadean (ambigüedad).
+    if (dto.valores) {
+      const viejos = existing.valores ?? [];
+      const nuevos = dto.valores;
+      const removidos = viejos.filter((v) => !nuevos.includes(v));
+      const agregados = nuevos.filter((v) => !viejos.includes(v));
+      if (removidos.length === 1 && agregados.length === 1) {
+        const res = await this.prisma.productoAtributoValor.updateMany({
+          where: { atributoId, valor: removidos[0] },
+          data: { valor: agregados[0] },
+        });
+        if (res.count > 0) {
+          this.logger.info(
+            `Cascada de rename de valor "${removidos[0]}" → "${agregados[0]}" en ${res.count} asignación(es)`,
+          );
+        }
+      } else if (removidos.length > 0 && agregados.length > 0) {
+        this.logger.warn(
+          `Cambio múltiple de valores en atributo ${atributoId} ` +
+            `(removidos: ${removidos.length}, agregados: ${agregados.length}). ` +
+            `No se aplica cascada automática para evitar ambigüedad.`,
+        );
+      }
+    }
+
+    // Propagar el cambio: invalidar caché + tocar actualizadoEn de los
+    // productos afectados para que el rename llegue al app.
+    await this.propagarCambioAtributo(atributoId, empresaId);
+
     return this.mapToResponse(atributo);
   }
 
@@ -272,6 +343,8 @@ export class ProductoAtributoService {
     });
 
     this.logger.success('Attribute soft-deleted', { atributoId });
+
+    await this.propagarCambioAtributo(atributoId, empresaId);
   }
 
   /**
