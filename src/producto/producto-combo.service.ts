@@ -1635,14 +1635,20 @@ export class ProductoComboService {
         precioEfectivo = Number(stock.precioLiquidacion);
       }
 
-      // El override `precioEnCombo` (admin lo fija explicitamente) gana
-      // sobre todo. Si admin no lo definio, usar precioEfectivo.
+      // El override `precioEnCombo` (admin lo fija) es el precio "normal" del
+      // componente en el combo. PERO la liquidación gana SIEMPRE, incluso
+      // sobre el override — un componente en remate no puede salir más caro
+      // dentro del combo que comprándolo suelto.
       const precioOverride = componente.precioEnCombo !== null && componente.precioEnCombo !== undefined
         ? Number(componente.precioEnCombo)
         : null;
+      let precioComponente = precioOverride ?? precioEfectivo;
+      if (liquidacionVigente && Number(stock.precioLiquidacion) < precioComponente) {
+        precioComponente = Number(stock.precioLiquidacion);
+      }
 
       precioRegularTotal += precioEfectivo * componente.cantidad;
-      precioCalculado += (precioOverride ?? precioEfectivo) * componente.cantidad;
+      precioCalculado += precioComponente * componente.cantidad;
     }
 
     return { precioCalculado, precioRegularTotal };
@@ -2653,16 +2659,22 @@ export class ProductoComboService {
         (!stock?.fechaFinOferta || stock.fechaFinOferta >= now));
     const efectivoInfo = (stock: any) => {
       const base = stock?.precio ? Number(stock.precio) : 0;
-      let efectivo = base;
-      if (ofertaVigente(stock) && Number(stock.precioOferta) < efectivo) {
+      // Precio "normal" del componente dentro del combo: override del admin
+      // (precioEnCombo) si existe; si no, base con oferta vigente.
+      let efectivo = precioEnCombo ?? base;
+      if (precioEnCombo == null &&
+        ofertaVigente(stock) &&
+        Number(stock.precioOferta) < efectivo) {
         efectivo = Number(stock.precioOferta);
       }
+      // Liquidación gana SIEMPRE, incluso sobre el override: un componente en
+      // remate no puede salir más caro dentro del combo que comprándolo suelto.
       const liq = liqVigente(stock);
       if (liq && Number(stock.precioLiquidacion) < efectivo) {
         efectivo = Number(stock.precioLiquidacion);
       }
       return {
-        precioEfectivo: precioEnCombo ?? efectivo,
+        precioEfectivo: efectivo,
         enLiquidacion: liq,
         precioLiquidacion: stock?.precioLiquidacion
           ? Number(stock.precioLiquidacion)
