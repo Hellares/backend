@@ -753,6 +753,49 @@ export class ProductoService {
       }
     }
 
+    // Enriquecer combos con stock/precio/reservación (igual que findAll).
+    // `toResponseDto` NO los calcula: el stock vendible de un combo = su
+    // ComboReservacion y el precio se deriva de los componentes. Sin esto,
+    // un combo que entra por el delta (ahora que bumpeamos su actualizadoEn)
+    // llega con stock 0 / sin precio / reservado 0 y la card queda "vacía"
+    // en el catálogo hasta un refresh full manual.
+    if (query.sedeId) {
+      const comboIdsDelta = new Set(
+        productosModificados.filter((p) => p.esCombo).map((p) => p.id),
+      );
+      if (comboIdsDelta.size > 0) {
+        const combosBulk = await this.comboService.getCombosBulkData(
+          Array.from(comboIdsDelta),
+          query.sedeId,
+        );
+        for (const dto of updatedDtos) {
+          if (!comboIdsDelta.has(dto.id)) continue;
+          const stockCombo = combosBulk.stocks.get(dto.id) ?? 0;
+          const precioCombo = combosBulk.precios.get(dto.id);
+          const reservaCombo = combosBulk.reservaciones.get(dto.id) ?? 0;
+
+          dto.stock = stockCombo;
+          dto.comboReservado = reservaCombo;
+          if (precioCombo != null) {
+            dto.precio = precioCombo;
+          }
+
+          if (dto.stocksPorSede) {
+            const stockSede = (dto.stocksPorSede as any[]).find(
+              (s) => s.sedeId === query.sedeId,
+            );
+            if (stockSede) {
+              stockSede.cantidad = stockCombo;
+              if (precioCombo != null) {
+                stockSede.precio = precioCombo;
+                stockSede.precioConfigurado = true;
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Total autoritativo del catálogo base para el contador del cliente
     // (evita que infiera el total sumando `updated`, que incluye modificados).
     const total = await this.prisma.producto.count({
