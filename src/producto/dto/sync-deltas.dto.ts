@@ -61,4 +61,11 @@ export class SyncDeltasResponseDto {
     example: false,
   })
   fullSyncRequired: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Total autoritativo de productos del catálogo base (empresa, no eliminados). El cliente lo usa como contador exacto en vez de inferirlo de los deltas.',
+    example: 142,
+  })
+  total?: number;
 }

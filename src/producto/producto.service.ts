@@ -753,11 +753,18 @@ export class ProductoService {
       }
     }
 
+    // Total autoritativo del catálogo base para el contador del cliente
+    // (evita que infiera el total sumando `updated`, que incluye modificados).
+    const total = await this.prisma.producto.count({
+      where: { empresaId, deletedAt: null },
+    });
+
     return {
       updated: updatedDtos,
       deleted: deletedRows.map((r) => r.id),
       serverTime: serverTime.toISOString(),
       fullSyncRequired: false,
+      total,
     };
   }
 
