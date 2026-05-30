@@ -115,6 +115,9 @@ export class VentaService {
           d.varianteId ?? null,
           sedeId,
           d.cantidad,
+          // Componentes de combo: sin niveles por mayor (el combo es su
+          // propio deal). Evita divergencia 409 al editar cantidades.
+          { ignorarNiveles: !!d.origenComboId },
         );
         if (
           d.precioUnitario != null &&

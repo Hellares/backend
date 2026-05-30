@@ -375,6 +375,7 @@ export class PrecioNivelService {
     varianteId: string | null,
     sedeId: string,
     cantidad: number,
+    opts?: { ignorarNiveles?: boolean },
   ): Promise<{
     precioUnitario: number;
     nivelAplicado: string;
@@ -498,7 +499,11 @@ export class PrecioNivelService {
     const candidatos: Array<{ valor: number; etiqueta: string; motivoLiquidacion?: string | null }> = [
       { valor: precioBase, etiqueta: 'Precio base' },
     ];
-    if (precioConNivel != null && !liquidacionVigente) {
+    // `ignorarNiveles`: los componentes de combo (origenComboId) NO usan
+    // niveles por mayor — el combo es su propio deal de precio. Sin esto, el
+    // backend preciaría el componente por volumen y divergiría del precio
+    // que mandó el cliente (base/oferta/liquidación) → 409 al cobrar.
+    if (precioConNivel != null && !liquidacionVigente && !opts?.ignorarNiveles) {
       candidatos.push({ valor: precioConNivel, etiqueta: nivelNombre ?? 'Nivel' });
     }
     if (precioOferta != null) candidatos.push({ valor: precioOferta, etiqueta: 'Oferta' });

@@ -2634,6 +2634,42 @@ export class ProductoComboService {
       fechaFinOferta: stock?.fechaFinOferta ?? null,
     });
 
+    // Precio efectivo del componente = min(base, oferta vigente, liquidación
+    // vigente), o el override `precioEnCombo` si el admin lo fijó. Es el
+    // precio al que el backend valida la venta (sin niveles por mayor), así
+    // que el cliente DEBE expandir el combo con este precio para no divergir
+    // (409). También exponemos `enLiquidacion` para que el combo NO apile su
+    // descuento sobre un componente en remate (liquidación gana sola).
+    const now = new Date();
+    const liqVigente = (stock: any) =>
+      !!(stock?.enLiquidacion &&
+        stock?.precioLiquidacion != null &&
+        (!stock?.fechaInicioLiquidacion || stock.fechaInicioLiquidacion <= now) &&
+        (!stock?.fechaFinLiquidacion || stock.fechaFinLiquidacion >= now));
+    const ofertaVigente = (stock: any) =>
+      !!(stock?.enOferta &&
+        stock?.precioOferta != null &&
+        (!stock?.fechaInicioOferta || stock.fechaInicioOferta <= now) &&
+        (!stock?.fechaFinOferta || stock.fechaFinOferta >= now));
+    const efectivoInfo = (stock: any) => {
+      const base = stock?.precio ? Number(stock.precio) : 0;
+      let efectivo = base;
+      if (ofertaVigente(stock) && Number(stock.precioOferta) < efectivo) {
+        efectivo = Number(stock.precioOferta);
+      }
+      const liq = liqVigente(stock);
+      if (liq && Number(stock.precioLiquidacion) < efectivo) {
+        efectivo = Number(stock.precioLiquidacion);
+      }
+      return {
+        precioEfectivo: precioEnCombo ?? efectivo,
+        enLiquidacion: liq,
+        precioLiquidacion: stock?.precioLiquidacion
+          ? Number(stock.precioLiquidacion)
+          : null,
+      };
+    };
+
     if (componente.componenteVariante) {
       const variante = componente.componenteVariante;
       const producto = variante.producto;
@@ -2650,6 +2686,7 @@ export class ProductoComboService {
         productoNombre: producto?.nombre,
         varianteNombre: variante.nombre,
         ...ofertaInfo(stock),
+        ...efectivoInfo(stock),
       };
     } else if (componente.componenteProducto) {
       const stock = componente.componenteProducto.stocksPorSede?.[0];
@@ -2663,6 +2700,7 @@ export class ProductoComboService {
         stock: this.getStockDisponibleReal(stock),
         esVariante: false,
         ...ofertaInfo(stock),
+        ...efectivoInfo(stock),
       };
     }
     return undefined;
