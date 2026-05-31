@@ -292,6 +292,9 @@ model ProductoVariante {
   // Relaciones para inventario por sede
   stocksPorSede ProductoStock[]
 
+  // Receta BOM específica de esta variante (fabricación por talla/modelo)
+  componentesBOM ProductoComponente[] @relation("VarianteReceta")
+
   // Relaciones para transferencias de stock
   itemsTransferencia TransferenciaStockItem[]
 

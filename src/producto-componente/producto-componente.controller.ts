@@ -21,6 +21,7 @@ import {
   CrearComponenteDto,
   ActualizarComponenteDto,
   FabricarDto,
+  CopiarRecetaDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
@@ -43,8 +44,9 @@ export class ProductoComponenteController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('productoId') productoId: string,
     @Query('sedeId') sedeId?: string,
+    @Query('varianteId') varianteId?: string,
   ) {
-    return this.service.listar(empresaId, productoId, sedeId);
+    return this.service.listar(empresaId, productoId, sedeId, varianteId);
   }
 
   @Get('calcular-costo')
@@ -58,8 +60,24 @@ export class ProductoComponenteController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('productoId') productoId: string,
     @Query('sedeId') sedeId: string,
+    @Query('varianteId') varianteId?: string,
   ) {
-    return this.service.calcularCosto(empresaId, productoId, sedeId);
+    return this.service.calcularCosto(empresaId, productoId, sedeId, varianteId);
+  }
+
+  @Post('copiar-a-variante')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary:
+      'Copia la receta base (varianteId null) a una variante como plantilla inicial',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async copiarRecetaAVariante(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('productoId') productoId: string,
+    @Body() dto: CopiarRecetaDto,
+  ) {
+    return this.service.copiarRecetaAVariante(empresaId, productoId, dto);
   }
 
   @Post()
@@ -131,6 +149,7 @@ export class ProductoComponenteController {
     @Param('productoId') productoId: string,
     @Query('sedeId') sedeId?: string,
     @Query('limit') limit?: string,
+    @Query('varianteId') varianteId?: string,
   ) {
     const lim = limit ? Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200) : 50;
     return this.service.historialFabricaciones(
@@ -138,6 +157,7 @@ export class ProductoComponenteController {
       productoId,
       sedeId,
       lim,
+      varianteId,
     );
   }
 

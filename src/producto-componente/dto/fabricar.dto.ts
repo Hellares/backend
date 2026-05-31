@@ -12,6 +12,15 @@ export class FabricarDto {
   sedeId!: string;
 
   @ApiProperty({
+    description:
+      'ID de la variante a fabricar. Obligatorio si el producto tiene variantes; omitir para productos sin variantes.',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  varianteId?: string;
+
+  @ApiProperty({
     description: 'Cantidad de unidades del producto final a fabricar.',
     example: 10,
     minimum: 1,

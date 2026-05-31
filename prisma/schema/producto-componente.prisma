@@ -24,6 +24,11 @@
 model ProductoComponente {
   id           String  @id @default(cuid())
   productoId   String // Producto final (el peluche armado)
+  // Receta por variante: null = receta del producto base (sin variantes,
+  // retrocompatible). Si el producto final tiene variantes (Peluche S/M/L),
+  // cada variante tiene su propia receta (misma materia prima, distinta
+  // cantidad por talla). Los insumos siguen siendo productos SIMPLES.
+  varianteId   String?
   componenteId String // Insumo (algodón, tela, hilo)
   cantidad     Decimal @db.Decimal(12, 4)
   notas        String?
@@ -31,11 +36,16 @@ model ProductoComponente {
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
-  producto   Producto @relation("ProductoFinal", fields: [productoId], references: [id], onDelete: Cascade)
-  componente Producto @relation("ProductoComponenteUsado", fields: [componenteId], references: [id], onDelete: Restrict)
+  producto   Producto          @relation("ProductoFinal", fields: [productoId], references: [id], onDelete: Cascade)
+  variante   ProductoVariante? @relation("VarianteReceta", fields: [varianteId], references: [id], onDelete: Cascade)
+  componente Producto          @relation("ProductoComponenteUsado", fields: [componenteId], references: [id], onDelete: Restrict)
 
-  // No duplicar el mismo componente en la receta del mismo producto
-  @@unique([productoId, componenteId])
+  // No duplicar el mismo componente en la receta de un producto/variante.
+  // OJO: Postgres NO considera dos NULL como iguales, así que esta unique
+  // NO protege las recetas base (varianteId null) de duplicados — eso se
+  // valida a nivel de app en el service (crear()).
+  @@unique([productoId, varianteId, componenteId])
   @@index([productoId])
+  @@index([varianteId])
   @@index([componenteId])
 }

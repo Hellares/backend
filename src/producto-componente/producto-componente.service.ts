@@ -13,6 +13,7 @@ import {
   CrearComponenteDto,
   ActualizarComponenteDto,
   FabricarDto,
+  CopiarRecetaDto,
 } from './dto';
 
 /**
@@ -35,11 +36,19 @@ export class ProductoComponenteService {
    * unidad y precioCosto del componente en la sede indicada (para que
    * el frontend pueda mostrar costo unitario y subtotal sin queries extras).
    */
-  async listar(empresaId: string, productoId: string, sedeId?: string) {
+  async listar(
+    empresaId: string,
+    productoId: string,
+    sedeId?: string,
+    varianteId?: string,
+  ) {
     await this._assertProductoPerteneceAEmpresa(empresaId, productoId);
+    if (varianteId) {
+      await this._assertVariantePerteneceAProducto(productoId, varianteId);
+    }
 
     const componentes = await this.prisma.productoComponente.findMany({
-      where: { productoId },
+      where: { productoId, varianteId: varianteId ?? null },
       orderBy: { creadoEn: 'asc' },
       include: {
         componente: {
@@ -122,11 +131,19 @@ export class ProductoComponenteService {
    * Si algún componente no tiene precioCosto en esa sede, lo reporta
    * en `componentesSinCosto` y NO lo cuenta — el total sería parcial.
    */
-  async calcularCosto(empresaId: string, productoId: string, sedeId: string) {
+  async calcularCosto(
+    empresaId: string,
+    productoId: string,
+    sedeId: string,
+    varianteId?: string,
+  ) {
     await this._assertProductoPerteneceAEmpresa(empresaId, productoId);
+    if (varianteId) {
+      await this._assertVariantePerteneceAProducto(productoId, varianteId);
+    }
 
     const componentes = await this.prisma.productoComponente.findMany({
-      where: { productoId },
+      where: { productoId, varianteId: varianteId ?? null },
       include: { componente: { select: { id: true, nombre: true } } },
     });
 
@@ -178,6 +195,9 @@ export class ProductoComponenteService {
       );
     }
     await this._assertProductoPerteneceAEmpresa(empresaId, dto.componenteId);
+    if (dto.varianteId) {
+      await this._assertVariantePerteneceAProducto(productoId, dto.varianteId);
+    }
 
     // Detectar ciclo directo (el componente ya usa al producto como insumo)
     const ciclo = await this.prisma.productoComponente.findFirst({
@@ -190,10 +210,28 @@ export class ProductoComponenteService {
       );
     }
 
+    // Pre-check de duplicado a nivel app. La unique de Postgres NO protege
+    // el caso varianteId null (dos NULL no chocan), así que lo validamos acá
+    // para ambos casos (base y variante).
+    const dup = await this.prisma.productoComponente.findFirst({
+      where: {
+        productoId,
+        varianteId: dto.varianteId ?? null,
+        componenteId: dto.componenteId,
+      },
+      select: { id: true },
+    });
+    if (dup) {
+      throw new ConflictException(
+        'Ese componente ya está en la receta de este producto',
+      );
+    }
+
     try {
       const nuevo = await this.prisma.productoComponente.create({
         data: {
           productoId,
+          varianteId: dto.varianteId ?? null,
           componenteId: dto.componenteId,
           cantidad: new Prisma.Decimal(dto.cantidad),
           notas: dto.notas,
@@ -259,6 +297,61 @@ export class ProductoComponenteService {
   }
 
   /**
+   * Copia la receta base del producto (varianteId null) a una variante como
+   * plantilla inicial. Útil al convertir un producto fabricado a variantes:
+   * cada talla parte de la receta base y luego se ajustan cantidades.
+   * Si la variante ya tiene receta, falla salvo que `sobrescribir=true`.
+   */
+  async copiarRecetaAVariante(
+    empresaId: string,
+    productoId: string,
+    dto: CopiarRecetaDto,
+  ) {
+    await this._assertProductoPerteneceAEmpresa(empresaId, productoId);
+    await this._assertVariantePerteneceAProducto(productoId, dto.varianteId);
+
+    const base = await this.prisma.productoComponente.findMany({
+      where: { productoId, varianteId: null },
+      orderBy: { creadoEn: 'asc' },
+    });
+    if (base.length === 0) {
+      throw new BadRequestException(
+        'El producto no tiene receta base (sin variante) para copiar.',
+      );
+    }
+
+    const existentes = await this.prisma.productoComponente.findMany({
+      where: { productoId, varianteId: dto.varianteId },
+      select: { id: true },
+    });
+    if (existentes.length > 0 && !dto.sobrescribir) {
+      throw new ConflictException(
+        'La variante ya tiene receta. Usa sobrescribir=true para reemplazarla.',
+      );
+    }
+
+    const copiados = await this.prisma.$transaction(async (tx) => {
+      if (existentes.length > 0) {
+        await tx.productoComponente.deleteMany({
+          where: { productoId, varianteId: dto.varianteId },
+        });
+      }
+      await tx.productoComponente.createMany({
+        data: base.map((b) => ({
+          productoId,
+          varianteId: dto.varianteId,
+          componenteId: b.componenteId,
+          cantidad: b.cantidad,
+          notas: b.notas,
+        })),
+      });
+      return base.length;
+    });
+
+    return { varianteId: dto.varianteId, copiados };
+  }
+
+  /**
    * Fabrica `cantidad` unidades del producto final desde sus componentes.
    * Descuenta stock de cada insumo (cantidad_componente × N) y suma
    * `cantidad` al stock del producto final. Genera 1+N movimientos de
@@ -293,15 +386,37 @@ export class ProductoComponenteService {
       );
     }
 
+    // Coherencia variante ↔ producto. Si el producto tiene variantes hay que
+    // fabricar UNA variante específica (cada talla tiene su receta y su stock).
+    const varianteId = dto.varianteId ?? null;
+    const numVariantes = await this.prisma.productoVariante.count({
+      where: { productoId, deletedAt: null },
+    });
+    if (numVariantes > 0 && !varianteId) {
+      throw new BadRequestException(
+        'Este producto tiene variantes: indica qué variante fabricar (varianteId).',
+      );
+    }
+    if (numVariantes === 0 && varianteId) {
+      throw new BadRequestException(
+        'Este producto no tiene variantes; no envíes varianteId.',
+      );
+    }
+    if (varianteId) {
+      await this._assertVariantePerteneceAProducto(productoId, varianteId);
+    }
+
     const componentes = await this.prisma.productoComponente.findMany({
-      where: { productoId },
+      where: { productoId, varianteId },
       include: {
         componente: { select: { id: true, nombre: true } },
       },
     });
     if (componentes.length === 0) {
       throw new BadRequestException(
-        'El producto no tiene receta. Agrega componentes antes de fabricar.',
+        varianteId
+          ? 'Esta variante no tiene receta. Agrega componentes (o copia la receta base) antes de fabricar.'
+          : 'El producto no tiene receta. Agrega componentes antes de fabricar.',
       );
     }
 
@@ -449,7 +564,7 @@ export class ProductoComponenteService {
         where: {
           sedeId: dto.sedeId,
           productoId,
-          varianteId: null,
+          varianteId,
         },
         select: { id: true, stockActual: true, precioCosto: true },
       });
@@ -506,6 +621,7 @@ export class ProductoComponenteService {
           data: {
             sedeId: dto.sedeId,
             productoId,
+            varianteId,
             empresaId,
             stockActual: stockFinalNuevo,
             ...(costoActualizado && precioCostoNuevo != null
@@ -559,6 +675,7 @@ export class ProductoComponenteService {
       return {
         numeroDocumento,
         productoId,
+        varianteId,
         productoNombre: producto.nombre,
         sedeId: dto.sedeId,
         cantidadProducida: dto.cantidad,
@@ -597,6 +714,7 @@ export class ProductoComponenteService {
     productoId: string,
     sedeId?: string,
     limit = 50,
+    varianteId?: string,
   ) {
     await this._assertProductoPerteneceAEmpresa(empresaId, productoId);
 
@@ -606,7 +724,7 @@ export class ProductoComponenteService {
         tipoDocumento: 'PRODUCCION',
         productoStock: {
           productoId,
-          varianteId: null,
+          varianteId: varianteId ?? null,
           ...(sedeId ? { sedeId } : {}),
         },
       },
@@ -769,6 +887,24 @@ export class ProductoComponenteService {
     });
     if (!p) {
       throw new NotFoundException('Producto no encontrado en esta empresa');
+    }
+  }
+
+  /**
+   * Valida que la variante exista y pertenezca al producto final indicado
+   * (y no esté soft-deleteada). Usado por todos los endpoints que aceptan
+   * varianteId para recetas/fabricación por variante.
+   */
+  private async _assertVariantePerteneceAProducto(
+    productoId: string,
+    varianteId: string,
+  ) {
+    const v = await this.prisma.productoVariante.findFirst({
+      where: { id: varianteId, productoId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!v) {
+      throw new NotFoundException('Variante no encontrada en este producto');
     }
   }
 
