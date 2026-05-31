@@ -75,25 +75,52 @@ export class ProductoTrazabilidadService {
           ...(varianteIds.length ? [{ varianteId: { in: varianteIds } }] : []),
         ];
 
+    // Stock primero: necesitamos sus ids (y el mapa id→sede) para el kardex
+    // consolidado y las fabricaciones.
+    const stocks = await this._stockPorSede(
+      productoId,
+      scopeVarianteIds,
+      varianteId,
+    );
+    const stockIds = stocks.map((s) => s.productoStockId);
+    const sedePorStockId = new Map(
+      stocks.map((s) => [s.productoStockId, s.sedeNombre]),
+    );
+
     const [
-      stocks,
       compras,
       lotes,
       ventas,
       fabricaciones,
+      kardex,
+      transferencias,
+      devoluciones,
+      proveedores,
       usadoEnRecetas,
       tieneReceta,
     ] = await Promise.all([
-      this._stockPorSede(productoId, scopeVarianteIds, varianteId),
       this._compras(empresaId, orProductoOVariante),
       this._lotes(empresaId, productoId, scopeVarianteIds, varianteId),
       this._ventas(empresaId, orProductoOVariante),
-      this._fabricaciones(productoId, varianteId),
+      this._fabricaciones(stockIds),
+      this._kardexConsolidado(stockIds, sedePorStockId),
+      this._transferencias(empresaId, orProductoOVariante),
+      this._devoluciones(empresaId, orProductoOVariante),
+      this._proveedores(empresaId, orProductoOVariante),
       producto.esInsumo
         ? this._usadoComoInsumo(empresaId, productoId, scopeVarianteIds, varianteId)
         : Promise.resolve([]),
       this.prisma.productoComponente.count({ where: { productoId } }),
     ]);
+
+    // Insumos consumidos: solo para productos fabricados. Agrupa los
+    // PRODUCCION_SALIDA de los lotes PROD- de este producto por insumo.
+    const insumosConsumidos =
+      tieneReceta > 0 && fabricaciones.length
+        ? await this._insumosConsumidos(
+            fabricaciones.map((f) => f.numeroDocumento),
+          )
+        : [];
 
     const stockTotal = stocks.reduce((s, x) => s + x.stockActual, 0);
     const valorizado = +stocks
@@ -116,12 +143,17 @@ export class ProductoTrazabilidadService {
       varianteId,
       variantes: producto.variantes,
       stock: { porSede: stocks, stockTotal, valorizado },
+      kardex,
       compras,
+      proveedores,
       lotes,
       ventas,
+      devoluciones,
+      transferencias,
       fabricacion: {
-        // Si el producto se fabrica: lotes PROD- producidos.
+        // Si el producto se fabrica: lotes PROD- producidos + insumos gastados.
         lotesFabricados: fabricaciones,
+        insumosConsumidos,
         // Si el producto es insumo: en qué recetas se usa.
         usadoEnRecetas,
       },
@@ -301,15 +333,7 @@ export class ProductoTrazabilidadService {
   }
 
   /** Lotes fabricados (PRODUCCION_ENTRADA) de este producto/variante. */
-  private async _fabricaciones(productoId: string, varianteId: string | null) {
-    const stockWhere: any = varianteId
-      ? { varianteId }
-      : { productoId, varianteId: null };
-    const stock = await this.prisma.productoStock.findMany({
-      where: stockWhere,
-      select: { id: true },
-    });
-    const stockIds = stock.map((s) => s.id);
+  private async _fabricaciones(stockIds: string[]) {
     if (stockIds.length === 0) return [];
     const movs = await this.prisma.movimientoStock.findMany({
       where: {
@@ -369,5 +393,224 @@ export class ProductoTrazabilidadService {
       componenteVarianteNombre: r.componenteVariante?.nombre ?? null,
       cantidadPorUnidad: Number(r.cantidad),
     }));
+  }
+
+  /** Kardex consolidado: movimientos de TODAS las sedes del producto. */
+  private async _kardexConsolidado(
+    stockIds: string[],
+    sedePorStockId: Map<string, string | null>,
+  ) {
+    if (stockIds.length === 0) return [];
+    const movs = await this.prisma.movimientoStock.findMany({
+      where: { productoStockId: { in: stockIds } },
+      take: 50,
+      orderBy: { creadoEn: 'desc' },
+      select: {
+        tipo: true,
+        tipoDocumento: true,
+        numeroDocumento: true,
+        cantidad: true,
+        precioCostoUnitario: true,
+        creadoEn: true,
+        productoStockId: true,
+      },
+    });
+    return movs.map((m) => ({
+      tipo: m.tipo,
+      tipoDocumento: m.tipoDocumento,
+      numeroDocumento: m.numeroDocumento,
+      cantidad: m.cantidad,
+      precioCostoUnitario:
+        m.precioCostoUnitario != null ? Number(m.precioCostoUnitario) : null,
+      fecha: m.creadoEn,
+      sedeNombre: sedePorStockId.get(m.productoStockId) ?? null,
+    }));
+  }
+
+  /** Transferencias entre sedes donde participó el producto/variante. */
+  private async _transferencias(empresaId: string, orProductoOVariante: any[]) {
+    const rows = await this.prisma.transferenciaStockItem.findMany({
+      where: {
+        OR: orProductoOVariante,
+        transferencia: { empresaId },
+      },
+      take: 20,
+      orderBy: { transferencia: { fechaSolicitud: 'desc' } },
+      select: {
+        cantidadSolicitada: true,
+        cantidadEnviada: true,
+        cantidadRecibida: true,
+        estado: true,
+        varianteId: true,
+        transferencia: {
+          select: {
+            id: true,
+            codigo: true,
+            estado: true,
+            fechaSolicitud: true,
+            sedeOrigen: { select: { nombre: true } },
+            sedeDestino: { select: { nombre: true } },
+          },
+        },
+        variante: { select: { nombre: true } },
+      },
+    });
+    return rows.map((r) => ({
+      transferenciaId: r.transferencia.id,
+      codigo: r.transferencia.codigo,
+      origen: r.transferencia.sedeOrigen?.nombre ?? null,
+      destino: r.transferencia.sedeDestino?.nombre ?? null,
+      estado: r.transferencia.estado,
+      estadoItem: r.estado,
+      fecha: r.transferencia.fechaSolicitud,
+      cantidadSolicitada: r.cantidadSolicitada,
+      cantidadEnviada: r.cantidadEnviada,
+      cantidadRecibida: r.cantidadRecibida,
+      varianteNombre: r.variante?.nombre ?? null,
+    }));
+  }
+
+  /** Devoluciones donde se devolvió el producto/variante. */
+  private async _devoluciones(empresaId: string, orProductoOVariante: any[]) {
+    const rows = await this.prisma.devolucionItem.findMany({
+      where: {
+        OR: orProductoOVariante,
+        devolucion: { empresaId },
+      },
+      take: 20,
+      orderBy: { devolucion: { creadoEn: 'desc' } },
+      select: {
+        cantidad: true,
+        motivo: true,
+        varianteId: true,
+        devolucion: {
+          select: {
+            id: true,
+            codigo: true,
+            estado: true,
+            creadoEn: true,
+            ventaId: true,
+            venta: { select: { codigo: true } },
+          },
+        },
+        variante: { select: { nombre: true } },
+      },
+    });
+    return rows.map((r) => ({
+      devolucionId: r.devolucion.id,
+      codigo: r.devolucion.codigo,
+      estado: r.devolucion.estado,
+      fecha: r.devolucion.creadoEn,
+      ventaCodigo: r.devolucion.venta?.codigo ?? null,
+      cantidad: r.cantidad,
+      motivo: r.motivo,
+      varianteNombre: r.variante?.nombre ?? null,
+    }));
+  }
+
+  /** Proveedores que han surtido el producto, con stats agregadas. */
+  private async _proveedores(empresaId: string, orProductoOVariante: any[]) {
+    const detalles = await this.prisma.compraDetalle.findMany({
+      where: { OR: orProductoOVariante, compra: { empresaId } },
+      select: {
+        cantidad: true,
+        precioUnitario: true,
+        compra: {
+          select: {
+            proveedorId: true,
+            nombreProveedor: true,
+            fechaRecepcion: true,
+          },
+        },
+      },
+    });
+    const map = new Map<
+      string,
+      {
+        proveedor: string;
+        veces: number;
+        cantidadAcum: number;
+        sumaPrecioXCant: number;
+        ultimaCompra: Date | null;
+      }
+    >();
+    for (const d of detalles) {
+      const key = d.compra.proveedorId ?? d.compra.nombreProveedor;
+      const acc =
+        map.get(key) ?? {
+          proveedor: d.compra.nombreProveedor,
+          veces: 0,
+          cantidadAcum: 0,
+          sumaPrecioXCant: 0,
+          ultimaCompra: null,
+        };
+      acc.veces += 1;
+      acc.cantidadAcum += d.cantidad;
+      acc.sumaPrecioXCant += Number(d.precioUnitario) * d.cantidad;
+      if (
+        !acc.ultimaCompra ||
+        d.compra.fechaRecepcion > acc.ultimaCompra
+      ) {
+        acc.ultimaCompra = d.compra.fechaRecepcion;
+      }
+      map.set(key, acc);
+    }
+    return Array.from(map.values())
+      .map((v) => ({
+        proveedor: v.proveedor,
+        veces: v.veces,
+        cantidadAcum: v.cantidadAcum,
+        precioPromedio:
+          v.cantidadAcum > 0
+            ? +(v.sumaPrecioXCant / v.cantidadAcum).toFixed(4)
+            : 0,
+        ultimaCompra: v.ultimaCompra,
+      }))
+      .sort((a, b) => b.cantidadAcum - a.cantidadAcum);
+  }
+
+  /** Insumos consumidos en las fabricaciones (PROD-) de este producto. */
+  private async _insumosConsumidos(numerosDocumento: string[]) {
+    const docs = numerosDocumento.filter((d): d is string => !!d);
+    if (docs.length === 0) return [];
+    const movs = await this.prisma.movimientoStock.findMany({
+      where: {
+        numeroDocumento: { in: docs },
+        tipo: 'PRODUCCION_SALIDA',
+      },
+      select: {
+        cantidad: true,
+        precioCostoUnitario: true,
+        valorMovimiento: true,
+        productoStock: {
+          select: {
+            producto: { select: { nombre: true } },
+            variante: { select: { nombre: true } },
+          },
+        },
+      },
+    });
+    const map = new Map<
+      string,
+      { insumo: string; cantidad: number; costo: number }
+    >();
+    for (const m of movs) {
+      const ps = m.productoStock;
+      const insumo =
+        ps?.variante?.nombre ?? ps?.producto?.nombre ?? 'Insumo';
+      const acc = map.get(insumo) ?? { insumo, cantidad: 0, costo: 0 };
+      acc.cantidad += Math.abs(m.cantidad);
+      acc.costo +=
+        m.valorMovimiento != null
+          ? Number(m.valorMovimiento)
+          : Math.abs(m.cantidad) *
+            (m.precioCostoUnitario != null
+              ? Number(m.precioCostoUnitario)
+              : 0);
+      map.set(insumo, acc);
+    }
+    return Array.from(map.values())
+      .map((v) => ({ ...v, costo: +v.costo.toFixed(2) }))
+      .sort((a, b) => b.costo - a.costo);
   }
 }
