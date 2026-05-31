@@ -173,6 +173,7 @@ model MovimientoStock {
   @@index([ventaId])
   @@index([productoStockId, creadoEn]) // Historial de movimientos ordenado
   @@index([sedeId, tipo]) // Filtrar movimientos por sede y tipo
+  @@index([empresaId, tipo, creadoEn(sort: Desc)]) // Lista global de producción (lotes fabricados)
 }
 
 /// Transferencias de stock entre sedes

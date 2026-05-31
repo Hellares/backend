@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
@@ -342,35 +343,48 @@ export class ProductoComponenteService {
       );
     }
 
-    const existentes = await this.prisma.productoComponente.findMany({
-      where: { productoId, varianteId: dto.varianteId },
-      select: { id: true },
-    });
-    if (existentes.length > 0 && !dto.sobrescribir) {
-      throw new ConflictException(
-        'La variante ya tiene receta. Usa sobrescribir=true para reemplazarla.',
-      );
-    }
-
-    const copiados = await this.prisma.$transaction(async (tx) => {
-      if (existentes.length > 0) {
-        await tx.productoComponente.deleteMany({
+    // Chequeo de existencia + borrado + copia, todo DENTRO de la transacción
+    // para evitar carreras (dos copias concurrentes que ambas ven "vacío").
+    try {
+      const copiados = await this.prisma.$transaction(async (tx) => {
+        const existentes = await tx.productoComponente.findMany({
           where: { productoId, varianteId: dto.varianteId },
+          select: { id: true },
         });
-      }
-      await tx.productoComponente.createMany({
-        data: base.map((b) => ({
-          productoId,
-          varianteId: dto.varianteId,
-          componenteId: b.componenteId,
-          cantidad: b.cantidad,
-          notas: b.notas,
-        })),
+        if (existentes.length > 0) {
+          if (!dto.sobrescribir) {
+            throw new ConflictException(
+              'La variante ya tiene receta. Usa sobrescribir=true para reemplazarla.',
+            );
+          }
+          await tx.productoComponente.deleteMany({
+            where: { productoId, varianteId: dto.varianteId },
+          });
+        }
+        await tx.productoComponente.createMany({
+          data: base.map((b) => ({
+            productoId,
+            varianteId: dto.varianteId,
+            componenteId: b.componenteId,
+            cantidad: b.cantidad,
+            notas: b.notas,
+          })),
+        });
+        return base.length;
       });
-      return base.length;
-    });
-
-    return { varianteId: dto.varianteId, copiados };
+      return { varianteId: dto.varianteId, copiados };
+    } catch (e) {
+      // Carrera: otra copia concurrente insertó primero → unique (P2002).
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'La variante ya tiene receta (copia concurrente). Reintenta.',
+        );
+      }
+      throw e;
+    }
   }
 
   /**
@@ -473,9 +487,10 @@ export class ProductoComponenteService {
       });
     }
 
-    const numeroDocumento = `PROD-${Date.now()}-${Math.floor(Math.random() * 1000)
-      .toString()
-      .padStart(3, '0')}`;
+    // Sufijo aleatorio robusto (8 hex de un UUID) para evitar colisiones de
+    // numeroDocumento bajo concurrencia (antes random 0-999 podía chocar en el
+    // mismo ms y mezclar dos lotes en el detalle).
+    const numeroDocumento = `PROD-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const motivoSalida = dto.soloConsumirInsumos
       ? `Consumo de insumos por producción previa de ${producto.nombre}`
       : `Insumo para producción de ${producto.nombre}`;
@@ -597,14 +612,35 @@ export class ProductoComponenteService {
       if (!dto.soloConsumirInsumos) {
         // Sumar al producto final (crear stock si no existe en esta sede).
         // XOR en ProductoStock: un stock es de producto base (productoId set,
-        // varianteId null) O de variante (varianteId set, productoId null),
-        // nunca ambos. Buscamos/creamos según corresponda.
-        let stockFinal = await tx.productoStock.findFirst({
-          where: varianteId
-            ? { sedeId: dto.sedeId, varianteId }
-            : { sedeId: dto.sedeId, productoId, varianteId: null },
-          select: { id: true, stockActual: true, precioCosto: true },
-        });
+        // varianteId null) O de variante (varianteId set, productoId null).
+        // LOCK con FOR UPDATE: findFirst NO lockea, lo que permitía lost-update
+        // con ventas/ajustes/otras fabricaciones concurrentes del mismo stock.
+        // Tomamos el lock de la fila (si existe) antes de leer/escribir.
+        const finalRows = await tx.$queryRaw<
+          Array<{ id: string; stockActual: number; precioCosto: string | null }>
+        >`SELECT id, "stockActual", "precioCosto"
+          FROM "ProductoStock"
+          WHERE "sedeId" = ${dto.sedeId}
+            AND ${
+              varianteId
+                ? Prisma.sql`"varianteId" = ${varianteId}`
+                : Prisma.sql`"productoId" = ${productoId} AND "varianteId" IS NULL`
+            }
+          FOR UPDATE`;
+        let stockFinal: {
+          id: string;
+          stockActual: number;
+          precioCosto: Prisma.Decimal | null;
+        } | null = finalRows[0]
+          ? {
+              id: finalRows[0].id,
+              stockActual: finalRows[0].stockActual,
+              precioCosto:
+                finalRows[0].precioCosto != null
+                  ? new Prisma.Decimal(finalRows[0].precioCosto)
+                  : null,
+            }
+          : null;
         stockFinalAnterior = stockFinal?.stockActual ?? 0;
         stockFinalNuevo = stockFinalAnterior + dto.cantidad;
         precioCostoAnterior =
@@ -703,9 +739,11 @@ export class ProductoComponenteService {
           precioCostoUnitario: costoActualizado
             ? +(costoLoteTotal / dto.cantidad).toFixed(4)
             : undefined,
-          // Mano de obra explícita del lote (marca que es costeo nuevo: los
-          // lotes viejos tienen null y NO se les deriva M.O.).
-          costoManoObra,
+          // Mano de obra explícita del lote (marca que es costeo nuevo). Solo
+          // si el costo del lote es confiable (todos los insumos con costo);
+          // si quedó parcial, null → el lote no se trata como costeo nuevo y
+          // no se muestra un costoLote engañoso en historial/listado.
+          costoManoObra: costoActualizado ? costoManoObra : null,
           motivo: motivoEntrada,
           observaciones: dto.observaciones,
           usuarioId,
@@ -771,6 +809,7 @@ export class ProductoComponenteService {
 
     const movimientos = await this.prisma.movimientoStock.findMany({
       where: {
+        empresaId,
         tipo: 'PRODUCCION_ENTRADA',
         tipoDocumento: 'PRODUCCION',
         // XOR: el stock de una variante tiene productoId NULL y varianteId set.
@@ -1094,7 +1133,15 @@ export class ProductoComponenteService {
         }
       : {};
 
+    // Filtro de la relación (sede + búsqueda). El scoping por empresa va por
+    // la COLUMNA MovimientoStock.empresaId (no por la relación productoStock),
+    // para usar índice y evitar el join en todas las filas.
+    const relacion = {
+      ...(opts.sedeId ? { sedeId: opts.sedeId } : {}),
+      ...searchFilter,
+    };
     const where: Prisma.MovimientoStockWhereInput = {
+      empresaId,
       tipo: 'PRODUCCION_ENTRADA',
       tipoDocumento: 'PRODUCCION',
       ...(opts.desde || opts.hasta
@@ -1105,11 +1152,9 @@ export class ProductoComponenteService {
             },
           }
         : {}),
-      productoStock: {
-        empresaId,
-        ...(opts.sedeId ? { sedeId: opts.sedeId } : {}),
-        ...searchFilter,
-      },
+      ...(Object.keys(relacion).length > 0
+        ? { productoStock: relacion }
+        : {}),
     };
 
     const [total, movimientos] = await this.prisma.$transaction([

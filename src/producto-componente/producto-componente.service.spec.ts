@@ -41,19 +41,38 @@ const mkTx = (opts: {
   stockRows?: any[];
   finalStock?: any | null;
   createdFinal?: any;
-}) => ({
-  $queryRaw: jest.fn().mockResolvedValue(opts.stockRows ?? []),
-  productoStock: {
-    update: jest.fn().mockResolvedValue({}),
-    findFirst: jest.fn().mockResolvedValue(opts.finalStock ?? null),
-    create: jest
+}) => {
+  // El stock final ahora se lockea con $queryRaw FOR UPDATE (no findFirst).
+  // 1er $queryRaw = lock de insumos (stockRows); 2do = lock del stock final.
+  const finalRows = opts.finalStock
+    ? [
+        {
+          id: opts.finalStock.id,
+          stockActual: opts.finalStock.stockActual,
+          precioCosto: opts.finalStock.precioCosto ?? null,
+        },
+      ]
+    : [];
+  return {
+    $queryRaw: jest
       .fn()
-      .mockResolvedValue(
-        opts.createdFinal ?? { id: 'sf-new', stockActual: 0, precioCosto: null },
-      ),
-  },
-  productoPrecioHistorialSede: { create: jest.fn().mockResolvedValue({}) },
-});
+      .mockResolvedValueOnce(opts.stockRows ?? [])
+      .mockResolvedValueOnce(finalRows),
+    productoStock: {
+      update: jest.fn().mockResolvedValue({}),
+      create: jest
+        .fn()
+        .mockResolvedValue(
+          opts.createdFinal ?? {
+            id: 'sf-new',
+            stockActual: 0,
+            precioCosto: null,
+          },
+        ),
+    },
+    productoPrecioHistorialSede: { create: jest.fn().mockResolvedValue({}) },
+  };
+};
 
 const mkService = (opts: {
   producto?: any;
@@ -343,12 +362,8 @@ describe('ProductoComponenteService.fabricar — por variante', () => {
         }),
       }),
     );
-    // El findFirst del stock final filtró por la variante
-    expect(tx.productoStock.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ varianteId: 'tallaL' }),
-      }),
-    );
+    // El stock final se lockeó con $queryRaw FOR UPDATE (insumos + final = 2).
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(r.varianteId).toBe('tallaL');
     expect(r.cantidadProducida).toBe(2);
   });
@@ -415,6 +430,8 @@ describe('ProductoComponenteService.copiarRecetaAVariante', () => {
   const mkCopiar = (opts: { base?: any[]; existentes?: any[] }) => {
     const tx = {
       productoComponente: {
+        // El chequeo de existentes ahora corre DENTRO de la tx.
+        findMany: jest.fn().mockResolvedValue(opts.existentes ?? []),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
@@ -425,10 +442,8 @@ describe('ProductoComponenteService.copiarRecetaAVariante', () => {
         findFirst: jest.fn().mockResolvedValue({ id: 'tallaL' }),
       },
       productoComponente: {
-        findMany: jest
-          .fn()
-          .mockResolvedValueOnce(opts.base ?? []) // receta base
-          .mockResolvedValueOnce(opts.existentes ?? []), // receta variante
+        // Solo la receta base se lee con prisma (fuera de la tx).
+        findMany: jest.fn().mockResolvedValue(opts.base ?? []),
       },
       $transaction: jest.fn(async (cb: any) => cb(tx)),
     };
@@ -459,15 +474,17 @@ describe('ProductoComponenteService.copiarRecetaAVariante', () => {
     expect(r).toEqual({ varianteId: 'tallaL', copiados: 2 });
   });
 
-  it('si la variante ya tiene receta y NO sobrescribir → Conflict, sin transacción', async () => {
-    const { service, prisma } = mkCopiar({
+  it('si la variante ya tiene receta y NO sobrescribir → Conflict, sin copiar', async () => {
+    const { service, tx } = mkCopiar({
       base: [{ componenteId: 'a', cantidad: 2, notas: null }],
       existentes: [{ id: 'x' }],
     });
     await expect(
       service.copiarRecetaAVariante('e1', 'pf', { varianteId: 'tallaL' } as any),
     ).rejects.toThrow(/ya tiene receta/i);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    // El chequeo corre dentro de la tx, pero no debe copiar ni borrar.
+    expect(tx.productoComponente.createMany).not.toHaveBeenCalled();
+    expect(tx.productoComponente.deleteMany).not.toHaveBeenCalled();
   });
 
   it('sobrescribir=true: borra la receta previa de la variante y copia', async () => {
