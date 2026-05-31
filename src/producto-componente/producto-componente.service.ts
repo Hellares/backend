@@ -929,7 +929,13 @@ export class ProductoComponenteService {
     ];
     const ultimaCompraPorInsumo = new Map<
       string,
-      { proveedor: string | null; precioUnitario: number; fecha: Date }
+      {
+        proveedor: string | null;
+        precioUnitario: number;
+        cantidad: number;
+        total: number;
+        fecha: Date;
+      }
     >();
     if (insumoIds.length > 0) {
       const detalles = await this.prisma.compraDetalle.findMany({
@@ -937,6 +943,7 @@ export class ProductoComponenteService {
         orderBy: { compra: { creadoEn: 'desc' } },
         select: {
           productoId: true,
+          cantidad: true,
           precioUnitario: true,
           compra: {
             select: {
@@ -949,9 +956,14 @@ export class ProductoComponenteService {
       });
       for (const cd of detalles) {
         if (cd.productoId && !ultimaCompraPorInsumo.has(cd.productoId)) {
+          const cantidad = Number(cd.cantidad);
+          const precioUnitario = Number(cd.precioUnitario);
           ultimaCompraPorInsumo.set(cd.productoId, {
             proveedor: cd.compra.proveedor?.nombre ?? null,
-            precioUnitario: Number(cd.precioUnitario),
+            precioUnitario,
+            cantidad,
+            // Total de la línea de compra = cantidad × precio unitario.
+            total: +(cantidad * precioUnitario).toFixed(2),
             fecha: cd.compra.fechaRecepcion ?? cd.compra.creadoEn,
           });
         }
@@ -1021,6 +1033,8 @@ export class ProductoComponenteService {
             ? {
                 proveedor: compra.proveedor,
                 precioUnitario: compra.precioUnitario,
+                cantidad: compra.cantidad,
+                total: compra.total,
                 fecha: compra.fecha,
               }
             : null,
