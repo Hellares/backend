@@ -25,6 +25,7 @@ import { ProductoPrecioHistorialService } from './producto-precio-historial.serv
 import { CompatibilidadService } from './compatibilidad.service';
 import { CompatibilidadController } from './compatibilidad.controller';
 import { ProductoBulkUploadService } from './producto-bulk-upload.service';
+import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule],
@@ -59,6 +60,9 @@ import { ProductoBulkUploadService } from './producto-bulk-upload.service';
     ConfiguracionPrecioService,
     CompatibilidadService,
     PlanLimitsService,
+
+    // Trazabilidad / Ficha 360
+    ProductoTrazabilidadService,
 
     // Helpers
     SedeContextHelper,

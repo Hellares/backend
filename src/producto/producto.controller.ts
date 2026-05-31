@@ -61,6 +61,7 @@ import { SetProductoAtributosDto } from './dto/create-producto-atributo-valor.dt
 import { CreatePrecioNivelDto } from './dto/create-precio-nivel.dto';
 import { UpdatePrecioNivelDto } from './dto/update-precio-nivel.dto';
 import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
+import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
 @ApiTags('Productos')
 @Controller('productos')
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
@@ -74,6 +75,7 @@ export class ProductoController {
     private readonly precioNivelService: PrecioNivelService,
     private readonly precioHistorialService: ProductoPrecioHistorialService,
     private readonly bulkUploadService: ProductoBulkUploadService,
+    private readonly trazabilidadService: ProductoTrazabilidadService,
   ) {}
 
   @Post()
@@ -673,6 +675,24 @@ export class ProductoController {
   ): Promise<{ stockTotal: number }> {
     const stockTotal = await this.productoService.getStockTotal(id, empresaId);
     return { stockTotal };
+  }
+
+  @Get(':id/trazabilidad')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Ficha 360 / Trazabilidad de un producto',
+    description:
+      'Consolida stock por sede, compras, lotes, ventas y fabricación (lotes producidos o, si es insumo, en qué recetas se usa). Pasar varianteId para acotar a una variante.',
+  })
+  @ApiResponse({ status: 200, description: 'Trazabilidad obtenida' })
+  @ApiResponse({ status: 404, description: 'Producto no encontrado' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async trazabilidad(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('varianteId') varianteId?: string,
+  ) {
+    return this.trazabilidadService.trazabilidad(empresaId, id, { varianteId });
   }
 
   @Get(':id/historial-precios')
