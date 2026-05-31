@@ -119,6 +119,10 @@ export class CreateProveedorDto {
 
   @IsOptional()
   @IsString()
+  departamento?: string;
+
+  @IsOptional()
+  @IsString()
   pais?: string;
 
   @IsOptional()

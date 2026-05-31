@@ -52,6 +52,7 @@ model Proveedor {
   direccion    String?
   ciudad       String?
   provincia    String?
+  departamento String?
   pais         String  @default("PE")
   codigoPostal String?
 
