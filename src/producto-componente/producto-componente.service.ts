@@ -703,6 +703,9 @@ export class ProductoComponenteService {
           precioCostoUnitario: costoActualizado
             ? +(costoLoteTotal / dto.cantidad).toFixed(4)
             : undefined,
+          // Mano de obra explícita del lote (marca que es costeo nuevo: los
+          // lotes viejos tienen null y NO se les deriva M.O.).
+          costoManoObra,
           motivo: motivoEntrada,
           observaciones: dto.observaciones,
           usuarioId,
@@ -786,6 +789,7 @@ export class ProductoComponenteService {
         cantidadNueva: true,
         valorMovimiento: true,
         precioCostoUnitario: true,
+        costoManoObra: true,
         observaciones: true,
         creadoEn: true,
         usuarioId: true,
@@ -821,11 +825,13 @@ export class ProductoComponenteService {
         cantidadProducida: m.cantidad,
         stockAnterior: m.cantidadAnterior,
         stockNuevo: m.cantidadNueva,
-        // Costo del lote producido (insumos + mano de obra) leído del kardex.
-        costoLote:
-          m.valorMovimiento != null ? Number(m.valorMovimiento) : null,
-        costoUnitario:
-          m.precioCostoUnitario != null
+        // Costo del lote (insumos + M.O.) solo para lotes con costeo nuevo
+        // (costoManoObra no null); en lotes viejos el valorMovimiento es el
+        // ponderado, no el costo del lote, así que no lo mostramos.
+        costoLote: m.costoManoObra != null && m.valorMovimiento != null
+            ? Number(m.valorMovimiento)
+            : null,
+        costoUnitario: m.costoManoObra != null && m.precioCostoUnitario != null
             ? Number(m.precioCostoUnitario)
             : null,
         observaciones: m.observaciones,
@@ -861,6 +867,7 @@ export class ProductoComponenteService {
         cantidadAnterior: true,
         cantidadNueva: true,
         valorMovimiento: true,
+        costoManoObra: true,
         observaciones: true,
         creadoEn: true,
         sede: { select: { id: true, nombre: true } },
@@ -897,16 +904,18 @@ export class ProductoComponenteService {
       (m) => m.tipo === 'PRODUCCION_SALIDA',
     );
 
-    // Costeo del lote: insumos = Σ valor de las salidas; total = valor de la
-    // entrada (incluye mano de obra); mano de obra = total − insumos.
+    // Costeo del lote: insumos = Σ valor de las salidas (siempre confiable);
+    // mano de obra se LEE de la entrada (null en lotes viejos → no se deriva
+    // restando, que daba un valor fantasma). Total = insumos + M.O.
     const costoInsumos = salidas.reduce(
       (acc, s) => acc + (s.valorMovimiento != null ? Number(s.valorMovimiento) : 0),
       0,
     );
-    const costoLoteTotal =
-      entrada?.valorMovimiento != null ? Number(entrada.valorMovimiento) : null;
     const costoManoObra =
-      costoLoteTotal != null ? +(costoLoteTotal - costoInsumos).toFixed(2) : null;
+      entrada?.costoManoObra != null ? Number(entrada.costoManoObra) : null;
+    // Total del lote: si hay costeo nuevo, insumos + M.O.; si es lote viejo
+    // (sin M.O. registrada), el costo de producción real es solo insumos.
+    const costoLoteTotal = +(costoInsumos + (costoManoObra ?? 0)).toFixed(2);
 
     const fmtUm = (p: (typeof movimientos)[number]['productoStock']['producto']) => {
       const um = p?.unidadMedida;
@@ -1026,6 +1035,7 @@ export class ProductoComponenteService {
           cantidadNueva: true,
           valorMovimiento: true,
           precioCostoUnitario: true,
+          costoManoObra: true,
           creadoEn: true,
           usuarioId: true,
           sede: { select: { id: true, nombre: true } },
@@ -1077,9 +1087,11 @@ export class ProductoComponenteService {
         varianteNombre: ps.variante?.nombre ?? null,
         cantidadProducida: m.cantidad,
         stockNuevo: m.cantidadNueva,
-        costoLote: m.valorMovimiento != null ? Number(m.valorMovimiento) : null,
-        costoUnitario:
-          m.precioCostoUnitario != null
+        // Costo del lote solo para costeo nuevo (costoManoObra no null).
+        costoLote: m.costoManoObra != null && m.valorMovimiento != null
+            ? Number(m.valorMovimiento)
+            : null,
+        costoUnitario: m.costoManoObra != null && m.precioCostoUnitario != null
             ? Number(m.precioCostoUnitario)
             : null,
         creadoEn: m.creadoEn,

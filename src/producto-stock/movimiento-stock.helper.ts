@@ -28,6 +28,8 @@ export interface CrearMovimientoStockData {
   transferenciaId?: string;
   devolucionId?: string;
   precioCostoUnitario?: number | Prisma.Decimal | null;
+  // Mano de obra del lote (solo se setea en PRODUCCION_ENTRADA de fabricaciones).
+  costoManoObra?: number | Prisma.Decimal | null;
 }
 
 /**

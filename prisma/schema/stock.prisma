@@ -144,6 +144,10 @@ model MovimientoStock {
   precioCostoUnitario Decimal? @db.Decimal(14, 4)
   valorMovimiento     Decimal? @db.Decimal(14, 2)
 
+  // Mano de obra del lote (solo en PRODUCCION_ENTRADA de fabricaciones nuevas).
+  // null = lote viejo (sin costeo de M.O.) → NO se debe derivar M.O. restando.
+  costoManoObra Decimal? @db.Decimal(14, 2)
+
   // Auditoría
   creadoEn DateTime @default(now())
 
