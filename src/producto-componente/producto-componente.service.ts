@@ -56,6 +56,7 @@ export class ProductoComponenteService {
             id: true,
             nombre: true,
             codigoEmpresa: true,
+            factorCompra: true,
             unidadMedida: {
               select: {
                 id: true,
@@ -64,6 +65,13 @@ export class ProductoComponenteService {
                 nombreLocal: true,
                 simboloLocal: true,
                 unidadMaestra: { select: { nombre: true, simbolo: true } },
+              },
+            },
+            unidadCompra: {
+              select: {
+                simboloPersonalizado: true,
+                simboloLocal: true,
+                unidadMaestra: { select: { simbolo: true } },
               },
             },
           },
@@ -104,6 +112,18 @@ export class ProductoComponenteService {
         um?.nombrePersonalizado ??
         um?.unidadMaestra?.nombre ??
         null;
+      // Unidad de compra (para mostrar conversión en el preview de fabricar:
+      // "200 cm (2 m)"). factorCompra = unidades atómicas por 1 de compra.
+      const uc = c.componente.unidadCompra;
+      const simboloCompra =
+        uc?.simboloLocal ??
+        uc?.simboloPersonalizado ??
+        uc?.unidadMaestra?.simbolo ??
+        null;
+      const factorCompra =
+        c.componente.factorCompra != null
+          ? Number(c.componente.factorCompra)
+          : null;
       return {
         id: c.id,
         productoId: c.productoId,
@@ -116,6 +136,8 @@ export class ProductoComponenteService {
           codigoEmpresa: c.componente.codigoEmpresa,
           unidadMedida: simbolo,
           unidadMedidaNombre: nombreUM,
+          factorCompra,
+          unidadCompraSimbolo: simboloCompra,
         },
         precioCostoUnitario: costoUnit,
         subtotal,
