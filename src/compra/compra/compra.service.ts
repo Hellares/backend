@@ -414,15 +414,12 @@ export class CompraService {
             : Number(detalle.precioUnitario);
 
         // b. Calcular costo promedio ponderado
-        let nuevoCosto: number;
-        if (stockAnterior === 0) {
-          nuevoCosto = precioCompra;
-        } else {
-          nuevoCosto =
-            (stockAnterior * costoAnterior + detalle.cantidad * precioCompra) /
-            (stockAnterior + detalle.cantidad);
-        }
-        nuevoCosto = Math.round(nuevoCosto * 100) / 100;
+        const nuevoCosto = CompraService.calcularNuevoCostoPromedio(
+          stockAnterior,
+          costoAnterior,
+          detalle.cantidad,
+          precioCompra,
+        );
 
         const nuevoStock = stockAnterior + detalle.cantidad;
 
@@ -1352,6 +1349,26 @@ export class CompraService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Error al invalidar cache: ${errorMessage}`);
     }
+  }
+
+  /**
+   * Costo promedio ponderado tras una entrada de compra, redondeado a 2
+   * decimales. Si no había stock previo, el nuevo costo es el de la compra.
+   * `cantidadEntra` y `precioCompra` van en UNIDAD ATÓMICA (ya convertidos
+   * por factorCompra si la compra fue en unidad de compra).
+   */
+  static calcularNuevoCostoPromedio(
+    stockAnterior: number,
+    costoAnterior: number,
+    cantidadEntra: number,
+    precioCompra: number,
+  ): number {
+    const nuevo =
+      stockAnterior <= 0
+        ? precioCompra
+        : (stockAnterior * costoAnterior + cantidadEntra * precioCompra) /
+          (stockAnterior + cantidadEntra);
+    return Math.round(nuevo * 100) / 100;
   }
 
   private calcularDetalle(
