@@ -3935,10 +3935,30 @@ export class VentaService {
 
     nodos.push(ventaNodo);
 
+    // Totales financieros del flujo (autoritativos desde la venta).
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const total = Number(venta.total);
+    const cobrado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
+    const saldo = Math.max(0, total - cobrado);
+    // "Devuelto" = suma de Notas de Crédito vigentes (el impacto financiero de
+    // las devoluciones se materializa en NC).
+    const notasCredito = (venta.comprobante?.notasRelacionadas ?? [])
+      .filter((n) => n.tipoComprobante === 'NOTA_CREDITO' && !n.anulado)
+      .reduce((s, n) => s + Number(n.total), 0);
+
     return {
       ventaId: venta.id,
       ventaCodigo: venta.codigo,
       totalDocumentos: this.contarNodos(nodos),
+      totales: {
+        moneda: venta.moneda,
+        total: r2(total),
+        cobrado: r2(cobrado),
+        saldo: r2(saldo),
+        devuelto: r2(notasCredito),
+        numDevoluciones: venta.devoluciones.length,
+        esCredito: venta.esCredito,
+      },
       nodos,
     };
   }
