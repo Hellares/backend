@@ -77,6 +77,7 @@ export class ProductoComponenteService {
             },
           },
         },
+        componenteVariante: { select: { id: true, nombre: true } },
       },
     });
 
@@ -84,11 +85,16 @@ export class ProductoComponenteService {
     // final para hidratar costos sin pedirle al usuario una sede explícita.
     const sedeResuelta = sedeId ?? (await this._sedeUnicaDelProducto(productoId));
 
-    const componenteIds = componentes.map((c) => c.componenteId);
+    // Pares (insumo, variante-del-insumo). El costo/stock se resuelve por la
+    // variante si la hay, o por el producto base si no.
+    const pares = componentes.map((c) => ({
+      componenteId: c.componenteId,
+      componenteVarianteId: c.componenteVarianteId,
+    }));
     const [costosMap, stocksMap] = sedeResuelta
       ? await Promise.all([
-          this._costosPorComponente(componenteIds, sedeResuelta),
-          this._stocksPorComponente(componenteIds, sedeResuelta),
+          this._costosPorComponente(pares, sedeResuelta),
+          this._stocksPorComponente(pares, sedeResuelta),
         ])
       : [
           new Map<string, number>(),
@@ -97,10 +103,14 @@ export class ProductoComponenteService {
 
     return componentes.map((c) => {
       const cantidad = Number(c.cantidad);
-      const costoUnit = costosMap.get(c.componenteId) ?? null;
+      // Clave de resolución: variante del insumo si existe (su stock vive ahí),
+      // si no el producto base. varianteId y productoId no colisionan (ids
+      // distintos).
+      const clave = c.componenteVarianteId ?? c.componenteId;
+      const costoUnit = costosMap.get(clave) ?? null;
       const subtotal =
         costoUnit != null ? +(cantidad * costoUnit).toFixed(4) : null;
-      const stockActual = stocksMap.get(c.componenteId) ?? null;
+      const stockActual = stocksMap.get(clave) ?? null;
       const um = c.componente.unidadMedida;
       // Resolución del símbolo/nombre: local override > personalizado > maestra.
       const simbolo =
@@ -129,6 +139,7 @@ export class ProductoComponenteService {
         id: c.id,
         productoId: c.productoId,
         componenteId: c.componenteId,
+        componenteVarianteId: c.componenteVarianteId,
         cantidad,
         notas: c.notas,
         componente: {
@@ -139,6 +150,8 @@ export class ProductoComponenteService {
           unidadMedidaNombre: nombreUM,
           factorCompra,
           unidadCompraSimbolo: simboloCompra,
+          // Nombre de la variante del insumo (ej. "T20 Niño"), si aplica.
+          varianteNombre: c.componenteVariante?.nombre ?? null,
         },
         precioCostoUnitario: costoUnit,
         subtotal,
@@ -180,7 +193,10 @@ export class ProductoComponenteService {
     }
 
     const costosMap = await this._costosPorComponente(
-      componentes.map((c) => c.componenteId),
+      componentes.map((c) => ({
+        componenteId: c.componenteId,
+        componenteVarianteId: c.componenteVarianteId,
+      })),
       sedeId,
     );
 
@@ -188,7 +204,7 @@ export class ProductoComponenteService {
     const sinCosto: { id: string; nombre: string }[] = [];
 
     for (const c of componentes) {
-      const costo = costosMap.get(c.componenteId);
+      const costo = costosMap.get(c.componenteVarianteId ?? c.componenteId);
       if (costo == null) {
         sinCosto.push({ id: c.componente.id, nombre: c.componente.nombre });
         continue;
@@ -222,6 +238,29 @@ export class ProductoComponenteService {
       await this._assertVariantePerteneceAProducto(productoId, dto.varianteId);
     }
 
+    // Variante del INSUMO/componente. Si el insumo tiene variantes, la receta
+    // DEBE apuntar a una variante concreta (su stock vive en la variante, no
+    // en el producto base). Si no tiene variantes, no se admite.
+    const numVariantesComponente = await this.prisma.productoVariante.count({
+      where: { productoId: dto.componenteId, deletedAt: null },
+    });
+    if (numVariantesComponente > 0 && !dto.componenteVarianteId) {
+      throw new BadRequestException(
+        'El insumo seleccionado tiene variantes: indica qué variante usar (componenteVarianteId).',
+      );
+    }
+    if (numVariantesComponente === 0 && dto.componenteVarianteId) {
+      throw new BadRequestException(
+        'El insumo seleccionado no tiene variantes; no envíes componenteVarianteId.',
+      );
+    }
+    if (dto.componenteVarianteId) {
+      await this._assertVariantePerteneceAProducto(
+        dto.componenteId,
+        dto.componenteVarianteId,
+      );
+    }
+
     // Detectar ciclo directo (el componente ya usa al producto como insumo)
     const ciclo = await this.prisma.productoComponente.findFirst({
       where: { productoId: dto.componenteId, componenteId: productoId },
@@ -241,6 +280,7 @@ export class ProductoComponenteService {
         productoId,
         varianteId: dto.varianteId ?? null,
         componenteId: dto.componenteId,
+        componenteVarianteId: dto.componenteVarianteId ?? null,
       },
       select: { id: true },
     });
@@ -256,6 +296,7 @@ export class ProductoComponenteService {
           productoId,
           varianteId: dto.varianteId ?? null,
           componenteId: dto.componenteId,
+          componenteVarianteId: dto.componenteVarianteId ?? null,
           cantidad: new Prisma.Decimal(dto.cantidad),
           notas: dto.notas,
         },
@@ -366,6 +407,7 @@ export class ProductoComponenteService {
             productoId,
             varianteId: dto.varianteId,
             componenteId: b.componenteId,
+            componenteVarianteId: b.componenteVarianteId,
             cantidad: b.cantidad,
             notas: b.notas,
           })),
@@ -465,6 +507,7 @@ export class ProductoComponenteService {
       return {
         componenteRowId: c.id,
         componenteId: c.componenteId,
+        componenteVarianteId: c.componenteVarianteId,
         nombreComponente: c.componente.nombre,
         cantidadPorUnidad: Number(c.cantidad),
         cantidadConsumida,
@@ -500,34 +543,50 @@ export class ProductoComponenteService {
       // Lock + cargar stocks (con precioCosto) de TODOS los componentes
       // en esta sede. El precioCosto lo necesitamos para el promedio
       // ponderado del costo del producto final.
-      const componenteIds = consumos.map((c) => c.componenteId);
+      // Resolver el stock de cada consumo: por la variante del insumo si la
+      // tiene (su stock vive con productoId NULL + varianteId set), o por el
+      // producto base si no. Se lockean ambas ramas en un solo FOR UPDATE.
+      const varianteIds = consumos
+        .map((c) => c.componenteVarianteId)
+        .filter((v): v is string => v != null);
+      const baseProductoIds = consumos
+        .filter((c) => c.componenteVarianteId == null)
+        .map((c) => c.componenteId);
       const stocksComponentes = await tx.$queryRaw<
         Array<{
           id: string;
-          productoId: string;
+          productoId: string | null;
+          varianteId: string | null;
           stockActual: number;
           precioCosto: string | null;
         }>
-      >`SELECT id, "productoId", "stockActual", "precioCosto"
+      >`SELECT id, "productoId", "varianteId", "stockActual", "precioCosto"
         FROM "ProductoStock"
         WHERE "sedeId" = ${dto.sedeId}
-          AND "varianteId" IS NULL
-          AND "productoId" = ANY(${componenteIds}::text[])
+          AND (
+            "varianteId" = ANY(${varianteIds}::text[])
+            OR ("varianteId" IS NULL AND "productoId" = ANY(${baseProductoIds}::text[]))
+          )
         FOR UPDATE`;
 
-      const stockPorComponenteId = new Map<
+      // Clave unificada: varianteId (si el insumo tiene variante) o productoId
+      // (producto base). No colisionan: son ids distintos.
+      const stockPorClave = new Map<
         string,
         { id: string; stockActual: number; precioCosto: number | null }
       >();
       for (const s of stocksComponentes) {
-        if (s.productoId) {
-          stockPorComponenteId.set(s.productoId, {
+        const clave = s.varianteId ?? s.productoId;
+        if (clave) {
+          stockPorClave.set(clave, {
             id: s.id,
             stockActual: s.stockActual,
             precioCosto: s.precioCosto != null ? Number(s.precioCosto) : null,
           });
         }
       }
+      const claveConsumo = (c: { componenteId: string; componenteVarianteId: string | null }) =>
+        c.componenteVarianteId ?? c.componenteId;
 
       // Validar disponibilidad de cada componente
       const sinStock: {
@@ -536,7 +595,7 @@ export class ProductoComponenteService {
         requerido: number;
       }[] = [];
       for (const c of consumos) {
-        const stock = stockPorComponenteId.get(c.componenteId);
+        const stock = stockPorClave.get(claveConsumo(c));
         const disponible = stock?.stockActual ?? 0;
         if (disponible < c.cantidadConsumidaEntera) {
           sinStock.push({
@@ -566,7 +625,7 @@ export class ProductoComponenteService {
         stockResultante: number;
       }[] = [];
       for (const c of consumos) {
-        const stock = stockPorComponenteId.get(c.componenteId)!;
+        const stock = stockPorClave.get(claveConsumo(c))!;
         const stockAnterior = stock.stockActual;
         const stockNuevo = stockAnterior - c.cantidadConsumidaEntera;
         await tx.productoStock.update({
@@ -653,7 +712,7 @@ export class ProductoComponenteService {
         // (sería parcial). Se reporta el motivo en el response.
         const insumosSinCosto: string[] = [];
         for (const c of consumos) {
-          const stock = stockPorComponenteId.get(c.componenteId)!;
+          const stock = stockPorClave.get(claveConsumo(c))!;
           if (stock.precioCosto == null) {
             insumosSinCosto.push(c.nombreComponente);
           } else {
@@ -1277,50 +1336,74 @@ export class ProductoComponenteService {
    * Si un componente no tiene stock registrado en esa sede, lo omite
    * (el caller decide qué hacer con el faltante).
    */
+  /**
+   * `where` de ProductoStock para resolver, en una sede, el stock de cada par
+   * (insumo, variante-del-insumo): por variante si la tiene, o por producto
+   * base si no. El stock de una variante vive con productoId NULL +
+   * varianteId set (constraint XOR), por eso se separan en dos ramas OR.
+   */
+  private _whereStockPares(
+    pares: { componenteId: string; componenteVarianteId: string | null }[],
+    sedeId: string,
+  ) {
+    const varianteIds = pares
+      .map((p) => p.componenteVarianteId)
+      .filter((v): v is string => v != null);
+    const baseProductoIds = pares
+      .filter((p) => p.componenteVarianteId == null)
+      .map((p) => p.componenteId);
+    return {
+      sedeId,
+      OR: [
+        { varianteId: { in: varianteIds } },
+        { varianteId: null, productoId: { in: baseProductoIds } },
+      ],
+    };
+  }
+
+  /**
+   * `Map<clave, precioCosto>` donde clave = `componenteVarianteId ?? componenteId`
+   * (variante del insumo si la hay, si no producto base). Omite los que no
+   * tienen precioCosto en la sede.
+   */
   private async _costosPorComponente(
-    componenteIds: string[],
+    pares: { componenteId: string; componenteVarianteId: string | null }[],
     sedeId: string,
   ): Promise<Map<string, number>> {
-    if (componenteIds.length === 0) return new Map();
+    if (pares.length === 0) return new Map();
     const stocks = await this.prisma.productoStock.findMany({
-      where: {
-        sedeId,
-        productoId: { in: componenteIds },
-        varianteId: null,
-      },
-      select: { productoId: true, precioCosto: true },
+      where: this._whereStockPares(pares, sedeId),
+      select: { productoId: true, varianteId: true, precioCosto: true },
     });
     const map = new Map<string, number>();
     for (const s of stocks) {
-      if (s.productoId && s.precioCosto != null) {
-        map.set(s.productoId, Number(s.precioCosto));
+      const clave = s.varianteId ?? s.productoId;
+      if (clave && s.precioCosto != null) {
+        map.set(clave, Number(s.precioCosto));
       }
     }
     return map;
   }
 
   /**
-   * Devuelve `Map<componenteId, stockActual>` para una sede dada.
-   * Usado por el GET /componentes para que el frontend pueda mostrar
-   * disponibilidad por insumo y validar fabricación en cliente.
+   * `Map<clave, stockActual>` (clave = `componenteVarianteId ?? componenteId`)
+   * para una sede. Usado por el GET /componentes para mostrar disponibilidad
+   * por insumo/variante y validar fabricación en cliente.
    */
   private async _stocksPorComponente(
-    componenteIds: string[],
+    pares: { componenteId: string; componenteVarianteId: string | null }[],
     sedeId: string,
   ): Promise<Map<string, number>> {
-    if (componenteIds.length === 0) return new Map();
+    if (pares.length === 0) return new Map();
     const stocks = await this.prisma.productoStock.findMany({
-      where: {
-        sedeId,
-        productoId: { in: componenteIds },
-        varianteId: null,
-      },
-      select: { productoId: true, stockActual: true },
+      where: this._whereStockPares(pares, sedeId),
+      select: { productoId: true, varianteId: true, stockActual: true },
     });
     const map = new Map<string, number>();
     for (const s of stocks) {
-      if (s.productoId) {
-        map.set(s.productoId, s.stockActual);
+      const clave = s.varianteId ?? s.productoId;
+      if (clave) {
+        map.set(clave, s.stockActual);
       }
     }
     return map;

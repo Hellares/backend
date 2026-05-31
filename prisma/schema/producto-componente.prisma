@@ -30,6 +30,11 @@ model ProductoComponente {
   // cantidad por talla). Los insumos siguen siendo productos SIMPLES.
   varianteId   String?
   componenteId String // Insumo (algodón, tela, hilo)
+  // Variante específica del INSUMO usada en la receta (ej. "Planta T20 Niño").
+  // null = el insumo no tiene variantes (producto base). Si el insumo tiene
+  // variantes, la receta apunta a una variante concreta y `fabricar` consume
+  // el stock de ESA variante.
+  componenteVarianteId String?
   cantidad     Decimal @db.Decimal(12, 4)
   notas        String?
 
@@ -39,13 +44,15 @@ model ProductoComponente {
   producto   Producto          @relation("ProductoFinal", fields: [productoId], references: [id], onDelete: Cascade)
   variante   ProductoVariante? @relation("VarianteReceta", fields: [varianteId], references: [id], onDelete: Cascade)
   componente Producto          @relation("ProductoComponenteUsado", fields: [componenteId], references: [id], onDelete: Restrict)
+  componenteVariante ProductoVariante? @relation("VarianteComponenteUsada", fields: [componenteVarianteId], references: [id], onDelete: Restrict)
 
-  // No duplicar el mismo componente en la receta de un producto/variante.
-  // OJO: Postgres NO considera dos NULL como iguales, así que esta unique
-  // NO protege las recetas base (varianteId null) de duplicados — eso se
-  // valida a nivel de app en el service (crear()).
-  @@unique([productoId, varianteId, componenteId])
+  // No duplicar el mismo componente (insumo + su variante) en la receta de un
+  // producto/variante. OJO: Postgres NO considera dos NULL como iguales, así
+  // que esta unique NO protege los casos con algún NULL (varianteId o
+  // componenteVarianteId) — eso se valida a nivel de app en el service.
+  @@unique([productoId, varianteId, componenteId, componenteVarianteId], map: "ProductoComponente_receta_componente_key")
   @@index([productoId])
   @@index([varianteId])
   @@index([componenteId])
+  @@index([componenteVarianteId])
 }

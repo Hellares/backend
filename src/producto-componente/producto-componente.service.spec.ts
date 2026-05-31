@@ -21,21 +21,46 @@ const movMock = crearMovimientoStockConValoracion as jest.Mock;
 // ─── builders ──────────────────────────────────────────────────
 
 // Una fila de receta (ProductoComponente con su componente incluido).
+// `componenteVarianteId` null = insumo sin variantes (producto base).
 const recetaItem = (componenteId: string, cantidad: number, nombre: string) => ({
   id: `r-${componenteId}`,
   productoId: 'pf',
   componenteId,
+  componenteVarianteId: null,
   cantidad, // el service hace Number(); un number plano vale como Decimal
   componente: { id: componenteId, nombre },
 });
 
+// Fila de receta cuyo componente es una VARIANTE del insumo (ej. "Planta T20").
+const recetaItemVar = (
+  componenteId: string,
+  componenteVarianteId: string,
+  cantidad: number,
+  nombre: string,
+) => ({
+  id: `r-${componenteVarianteId}`,
+  productoId: 'pf',
+  componenteId,
+  componenteVarianteId,
+  cantidad,
+  componente: { id: componenteId, nombre },
+});
+
 // Una fila de ProductoStock como la devuelve el $queryRaw FOR UPDATE.
-// precioCosto llega como string | null (cast de Postgres).
+// precioCosto llega como string | null (cast de Postgres). varianteId null =
+// stock del producto base; productoId null + varianteId = stock de variante.
 const stockRow = (
   productoId: string,
   stockActual: number,
   precioCosto: string | null,
-) => ({ id: `sc-${productoId}`, productoId, stockActual, precioCosto });
+) => ({ id: `sc-${productoId}`, productoId, varianteId: null, stockActual, precioCosto });
+
+// Stock de una VARIANTE de insumo (productoId null + varianteId set, XOR).
+const stockRowVariante = (
+  varianteId: string,
+  stockActual: number,
+  precioCosto: string | null,
+) => ({ id: `sc-${varianteId}`, productoId: null, varianteId, stockActual, precioCosto });
 
 const mkTx = (opts: {
   stockRows?: any[];
@@ -424,6 +449,65 @@ describe('ProductoComponenteService.fabricar — por variante', () => {
   });
 });
 
+// ─── fabricar() con componente = VARIANTE de insumo ────────────
+
+describe('ProductoComponenteService.fabricar — componente es variante de insumo', () => {
+  it('consume el stock de la VARIANTE del insumo (no del producto base)', async () => {
+    // Receta usa "Planta T20" (variante del insumo). 2 por unidad, fabricar 3
+    // → consume 6 de la variante. Stock de la variante: 50 @ 7.
+    const { service, tx } = mkService({
+      receta: [recetaItemVar('planta', 'plantaT20', 2, 'Planta')],
+      stockRows: [stockRowVariante('plantaT20', 50, '7')],
+      finalStock: null,
+    });
+
+    const r = await service.fabricar('e1', 'pf', DTO(3), 'u1');
+
+    // Descuenta el stock de la VARIANTE (id sc-plantaT20), no del base.
+    expect(updateCallFor(tx, 'sc-plantaT20')![0].data).toEqual({
+      stockActual: 44,
+    });
+    // Costo final = (6 × 7) / 3 = 14.
+    expect(r.precioCostoNuevo).toBe(14);
+    expect(r.costoActualizado).toBe(true);
+  });
+
+  it('receta mixta: un insumo base + una variante de insumo', async () => {
+    const { service, tx } = mkService({
+      receta: [
+        recetaItem('hilo', 1, 'Hilo'),
+        recetaItemVar('planta', 'plantaT20', 2, 'Planta'),
+      ],
+      stockRows: [
+        stockRow('hilo', 100, '1'),
+        stockRowVariante('plantaT20', 50, '7'),
+      ],
+      finalStock: null,
+    });
+
+    await service.fabricar('e1', 'pf', DTO(1), 'u1');
+
+    // El base se descuenta por productoId; la variante por su stock propio.
+    expect(updateCallFor(tx, 'sc-hilo')![0].data).toEqual({ stockActual: 99 });
+    expect(updateCallFor(tx, 'sc-plantaT20')![0].data).toEqual({
+      stockActual: 48,
+    });
+  });
+
+  it('stock insuficiente en la variante del insumo → 400', async () => {
+    const { service } = mkService({
+      receta: [recetaItemVar('planta', 'plantaT20', 10, 'Planta')],
+      stockRows: [stockRowVariante('plantaT20', 5, '7')], // hay 5, se necesitan 10
+    });
+
+    await expect(
+      service.fabricar('e1', 'pf', DTO(1), 'u1'),
+    ).rejects.toMatchObject({
+      response: { code: 'FABRICACION_STOCK_INSUFICIENTE' },
+    });
+  });
+});
+
 // ─── copiarRecetaAVariante() ────────────────────────────────────
 
 describe('ProductoComponenteService.copiarRecetaAVariante', () => {
@@ -583,6 +667,7 @@ describe('ProductoComponenteService.crear — validaciones', () => {
   it('rechaza ciclo directo (el componente ya usa al producto como insumo)', async () => {
     const prisma = {
       producto: { findFirst: jest.fn().mockResolvedValue({ id: 'ok' }) },
+      productoVariante: { count: jest.fn().mockResolvedValue(0) },
       productoComponente: {
         findFirst: jest.fn().mockResolvedValue({ id: 'ciclo' }),
       },
@@ -602,6 +687,7 @@ describe('ProductoComponenteService.crear — validaciones', () => {
 
     const prisma = {
       producto: { findFirst: jest.fn().mockResolvedValue({ id: 'ok' }) },
+      productoVariante: { count: jest.fn().mockResolvedValue(0) },
       productoComponente: {
         findFirst: jest.fn().mockResolvedValue(null), // sin ciclo
         create: jest.fn().mockRejectedValue(p2002),
@@ -612,5 +698,65 @@ describe('ProductoComponenteService.crear — validaciones', () => {
     await expect(
       service.crear('e1', 'pf', { componenteId: 'otro', cantidad: 1 } as any),
     ).rejects.toThrow(/ya está en la receta/);
+  });
+
+  it('insumo CON variantes sin componenteVarianteId → 400', async () => {
+    const prisma = {
+      producto: { findFirst: jest.fn().mockResolvedValue({ id: 'ok' }) },
+      productoVariante: { count: jest.fn().mockResolvedValue(3) },
+    };
+    const service = new ProductoComponenteService(prisma as any, {} as any);
+
+    await expect(
+      service.crear('e1', 'pf', { componenteId: 'planta', cantidad: 1 } as any),
+    ).rejects.toThrow(/variante/i);
+  });
+
+  it('insumo SIN variantes con componenteVarianteId → 400', async () => {
+    const prisma = {
+      producto: { findFirst: jest.fn().mockResolvedValue({ id: 'ok' }) },
+      productoVariante: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const service = new ProductoComponenteService(prisma as any, {} as any);
+
+    await expect(
+      service.crear('e1', 'pf', {
+        componenteId: 'planta',
+        componenteVarianteId: 'v20',
+        cantidad: 1,
+      } as any),
+    ).rejects.toThrow(/no tiene variantes/i);
+  });
+
+  it('crea componente con variante de insumo válida → create incluye componenteVarianteId', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'nuevo' });
+    const prisma = {
+      producto: { findFirst: jest.fn().mockResolvedValue({ id: 'ok' }) },
+      productoVariante: {
+        count: jest.fn().mockResolvedValue(3),
+        // _assertVariantePerteneceAProducto (variante pertenece al insumo)
+        findFirst: jest.fn().mockResolvedValue({ id: 'v20' }),
+      },
+      productoComponente: {
+        findFirst: jest.fn().mockResolvedValue(null), // sin ciclo ni duplicado
+        create,
+      },
+    };
+    const service = new ProductoComponenteService(prisma as any, {} as any);
+
+    await service.crear('e1', 'pf', {
+      componenteId: 'planta',
+      componenteVarianteId: 'v20',
+      cantidad: 2,
+    } as any);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          componenteId: 'planta',
+          componenteVarianteId: 'v20',
+        }),
+      }),
+    );
   });
 });

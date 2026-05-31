@@ -295,6 +295,10 @@ model ProductoVariante {
   // Receta BOM específica de esta variante (fabricación por talla/modelo)
   componentesBOM ProductoComponente[] @relation("VarianteReceta")
 
+  // Recetas donde esta variante se usa como INSUMO/componente (ej. "Planta
+  // T20 Niño" usada en la receta de un zapato).
+  usadaComoComponente ProductoComponente[] @relation("VarianteComponenteUsada")
+
   // Relaciones para transferencias de stock
   itemsTransferencia TransferenciaStockItem[]
 
