@@ -560,12 +560,13 @@ export class ProductoComponenteService {
       // findFirst en vez de findUnique: Prisma rechaza null en campos
       // opcionales dentro de compound unique. Mismo patrón que usa
       // _costosPorComponente más abajo.
+      // XOR en ProductoStock: un stock es de producto base (productoId set,
+      // varianteId null) O de variante (varianteId set, productoId null), nunca
+      // ambos. Buscamos/creamos según corresponda.
       let stockFinal = await tx.productoStock.findFirst({
-        where: {
-          sedeId: dto.sedeId,
-          productoId,
-          varianteId,
-        },
+        where: varianteId
+          ? { sedeId: dto.sedeId, varianteId }
+          : { sedeId: dto.sedeId, productoId, varianteId: null },
         select: { id: true, stockActual: true, precioCosto: true },
       });
       const stockFinalAnterior = stockFinal?.stockActual ?? 0;
@@ -620,7 +621,8 @@ export class ProductoComponenteService {
         stockFinal = await tx.productoStock.create({
           data: {
             sedeId: dto.sedeId,
-            productoId,
+            // XOR: si es variante, productoId va null (y viceversa).
+            productoId: varianteId ? null : productoId,
             varianteId,
             empresaId,
             stockActual: stockFinalNuevo,

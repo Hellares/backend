@@ -297,11 +297,12 @@ describe('ProductoComponenteService.fabricar — por variante', () => {
 
     const r = await service.fabricar('e1', 'pf', DTOV(2, 'tallaL'), 'u1');
 
-    // El stock final creado lleva la variante (no null)
+    // El stock final creado es de la variante: varianteId set y productoId
+    // null (XOR de ProductoStock).
     expect(tx.productoStock.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          productoId: 'pf',
+          productoId: null,
           varianteId: 'tallaL',
           stockActual: 2,
           precioCosto: 6, // (6 * 2) / 2
