@@ -454,7 +454,9 @@ export class ProductoComponenteService {
     const numeroDocumento = `PROD-${Date.now()}-${Math.floor(Math.random() * 1000)
       .toString()
       .padStart(3, '0')}`;
-    const motivoSalida = `Insumo para producción de ${producto.nombre}`;
+    const motivoSalida = dto.soloConsumirInsumos
+      ? `Consumo de insumos por producción previa de ${producto.nombre}`
+      : `Insumo para producción de ${producto.nombre}`;
     const motivoEntrada = `Fabricación: ${producto.nombre} × ${dto.cantidad}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -556,123 +558,123 @@ export class ProductoComponenteService {
         });
       }
 
-      // Sumar al producto final (crear stock si no existe en esta sede).
-      // findFirst en vez de findUnique: Prisma rechaza null en campos
-      // opcionales dentro de compound unique. Mismo patrón que usa
-      // _costosPorComponente más abajo.
-      // XOR en ProductoStock: un stock es de producto base (productoId set,
-      // varianteId null) O de variante (varianteId set, productoId null), nunca
-      // ambos. Buscamos/creamos según corresponda.
-      let stockFinal = await tx.productoStock.findFirst({
-        where: varianteId
-          ? { sedeId: dto.sedeId, varianteId }
-          : { sedeId: dto.sedeId, productoId, varianteId: null },
-        select: { id: true, stockActual: true, precioCosto: true },
-      });
-      const stockFinalAnterior = stockFinal?.stockActual ?? 0;
-      const stockFinalNuevo = stockFinalAnterior + dto.cantidad;
-      const precioCostoAnterior =
-        stockFinal?.precioCosto != null ? Number(stockFinal.precioCosto) : null;
-
-      // Calcular costo del lote sumando (cantidadConsumida × precioCosto)
-      // de cada insumo. Si algún insumo no tiene precioCosto en la sede,
-      // omitimos la actualización del costo del final (sería parcial y
-      // engañoso). Se reporta el motivo en el response.
-      let costoLote = 0;
-      const insumosSinCosto: string[] = [];
-      for (const c of consumos) {
-        const stock = stockPorComponenteId.get(c.componenteId)!;
-        if (stock.precioCosto == null) {
-          insumosSinCosto.push(c.nombreComponente);
-        } else {
-          costoLote += c.cantidadConsumidaEntera * stock.precioCosto;
-        }
-      }
-
-      // Promedio ponderado con el stock previo (si existía).
-      // - Si no hay stock previo: nuevoCosto = costoLote / cantidad
-      // - Si hay stock previo con costo: ponderado de los dos lotes
-      // - Si hay stock previo sin costo: tratamos el costo previo como 0
-      //   (caso edge, mejor que dejar el precioCosto null).
+      // Lado del producto final. En modo "solo consumir insumos" (registrar
+      // producción previa cuyo stock terminado YA existe) NO se suma stock ni
+      // se recalcula costo: únicamente se descuentan los insumos.
+      let stockFinalAnterior = 0;
+      let stockFinalNuevo = 0;
+      let precioCostoAnterior: number | null = null;
       let precioCostoNuevo: number | null = null;
       let costoActualizado = false;
       let razonCostoNoActualizado: string | null = null;
-      if (insumosSinCosto.length > 0) {
-        razonCostoNoActualizado = `Insumos sin precio costo: ${insumosSinCosto.join(', ')}`;
-      } else {
-        const valorPrevio =
-          stockFinalAnterior * (precioCostoAnterior ?? 0);
-        const valorTotal = valorPrevio + costoLote;
-        precioCostoNuevo = +(valorTotal / stockFinalNuevo).toFixed(2);
-        costoActualizado = true;
-      }
 
-      if (stockFinal) {
-        await tx.productoStock.update({
-          where: { id: stockFinal.id },
-          data: {
-            stockActual: stockFinalNuevo,
-            ...(costoActualizado && precioCostoNuevo != null
-              ? { precioCosto: precioCostoNuevo }
-              : {}),
-          },
-        });
-      } else {
-        stockFinal = await tx.productoStock.create({
-          data: {
-            sedeId: dto.sedeId,
-            // XOR: si es variante, productoId va null (y viceversa).
-            productoId: varianteId ? null : productoId,
-            varianteId,
-            empresaId,
-            stockActual: stockFinalNuevo,
-            ...(costoActualizado && precioCostoNuevo != null
-              ? { precioCosto: precioCostoNuevo }
-              : {}),
-          },
+      if (!dto.soloConsumirInsumos) {
+        // Sumar al producto final (crear stock si no existe en esta sede).
+        // XOR en ProductoStock: un stock es de producto base (productoId set,
+        // varianteId null) O de variante (varianteId set, productoId null),
+        // nunca ambos. Buscamos/creamos según corresponda.
+        let stockFinal = await tx.productoStock.findFirst({
+          where: varianteId
+            ? { sedeId: dto.sedeId, varianteId }
+            : { sedeId: dto.sedeId, productoId, varianteId: null },
           select: { id: true, stockActual: true, precioCosto: true },
         });
-      }
+        stockFinalAnterior = stockFinal?.stockActual ?? 0;
+        stockFinalNuevo = stockFinalAnterior + dto.cantidad;
+        precioCostoAnterior =
+          stockFinal?.precioCosto != null
+            ? Number(stockFinal.precioCosto)
+            : null;
 
-      // Trazabilidad del cambio de costo en el historial de precios
-      // (mismo modelo que usa producto-stock.service para que aparezca
-      // en la auditoría general).
-      if (
-        costoActualizado &&
-        precioCostoNuevo != null &&
-        precioCostoNuevo !== precioCostoAnterior
-      ) {
-        await tx.productoPrecioHistorialSede.create({
-          data: {
-            productoStockId: stockFinal.id,
-            sedeId: dto.sedeId,
-            tipoCambio: 'COSTO',
-            precioCostoAnterior:
-              precioCostoAnterior != null
-                ? new Prisma.Decimal(precioCostoAnterior)
-                : null,
-            precioCostoNuevo: new Prisma.Decimal(precioCostoNuevo),
-            razon: `Fabricación ${numeroDocumento}: promedio ponderado con ${stockFinalAnterior} unidad(es) previa(s)`,
-            origenModulo: 'PRODUCCION',
-            usuarioId,
-          },
+        // Costo del lote = Σ(cantidadConsumida × precioCosto). Si algún insumo
+        // no tiene precioCosto en la sede, no actualizamos el costo del final
+        // (sería parcial). Se reporta el motivo en el response.
+        let costoLote = 0;
+        const insumosSinCosto: string[] = [];
+        for (const c of consumos) {
+          const stock = stockPorComponenteId.get(c.componenteId)!;
+          if (stock.precioCosto == null) {
+            insumosSinCosto.push(c.nombreComponente);
+          } else {
+            costoLote += c.cantidadConsumidaEntera * stock.precioCosto;
+          }
+        }
+
+        // Promedio ponderado con el stock previo (si existía).
+        if (insumosSinCosto.length > 0) {
+          razonCostoNoActualizado = `Insumos sin precio costo: ${insumosSinCosto.join(', ')}`;
+        } else {
+          const valorPrevio = stockFinalAnterior * (precioCostoAnterior ?? 0);
+          const valorTotal = valorPrevio + costoLote;
+          precioCostoNuevo = +(valorTotal / stockFinalNuevo).toFixed(2);
+          costoActualizado = true;
+        }
+
+        if (stockFinal) {
+          await tx.productoStock.update({
+            where: { id: stockFinal.id },
+            data: {
+              stockActual: stockFinalNuevo,
+              ...(costoActualizado && precioCostoNuevo != null
+                ? { precioCosto: precioCostoNuevo }
+                : {}),
+            },
+          });
+        } else {
+          stockFinal = await tx.productoStock.create({
+            data: {
+              sedeId: dto.sedeId,
+              // XOR: si es variante, productoId va null (y viceversa).
+              productoId: varianteId ? null : productoId,
+              varianteId,
+              empresaId,
+              stockActual: stockFinalNuevo,
+              ...(costoActualizado && precioCostoNuevo != null
+                ? { precioCosto: precioCostoNuevo }
+                : {}),
+            },
+            select: { id: true, stockActual: true, precioCosto: true },
+          });
+        }
+
+        // Trazabilidad del cambio de costo en el historial de precios.
+        if (
+          costoActualizado &&
+          precioCostoNuevo != null &&
+          precioCostoNuevo !== precioCostoAnterior
+        ) {
+          await tx.productoPrecioHistorialSede.create({
+            data: {
+              productoStockId: stockFinal.id,
+              sedeId: dto.sedeId,
+              tipoCambio: 'COSTO',
+              precioCostoAnterior:
+                precioCostoAnterior != null
+                  ? new Prisma.Decimal(precioCostoAnterior)
+                  : null,
+              precioCostoNuevo: new Prisma.Decimal(precioCostoNuevo),
+              razon: `Fabricación ${numeroDocumento}: promedio ponderado con ${stockFinalAnterior} unidad(es) previa(s)`,
+              origenModulo: 'PRODUCCION',
+              usuarioId,
+            },
+          });
+        }
+
+        await crearMovimientoStockConValoracion(tx, {
+          sedeId: dto.sedeId,
+          empresaId,
+          productoStockId: stockFinal.id,
+          tipo: 'PRODUCCION_ENTRADA',
+          tipoDocumento: 'PRODUCCION',
+          numeroDocumento,
+          cantidadAnterior: stockFinalAnterior,
+          cantidad: dto.cantidad,
+          cantidadNueva: stockFinalNuevo,
+          motivo: motivoEntrada,
+          observaciones: dto.observaciones,
+          usuarioId,
         });
       }
-
-      await crearMovimientoStockConValoracion(tx, {
-        sedeId: dto.sedeId,
-        empresaId,
-        productoStockId: stockFinal.id,
-        tipo: 'PRODUCCION_ENTRADA',
-        tipoDocumento: 'PRODUCCION',
-        numeroDocumento,
-        cantidadAnterior: stockFinalAnterior,
-        cantidad: dto.cantidad,
-        cantidadNueva: stockFinalNuevo,
-        motivo: motivoEntrada,
-        observaciones: dto.observaciones,
-        usuarioId,
-      });
 
       return {
         numeroDocumento,
@@ -680,7 +682,11 @@ export class ProductoComponenteService {
         varianteId,
         productoNombre: producto.nombre,
         sedeId: dto.sedeId,
-        cantidadProducida: dto.cantidad,
+        soloConsumoInsumos: !!dto.soloConsumirInsumos,
+        // En modo solo-consumo no se "produce" stock nuevo; reportamos las
+        // unidades cuyo consumo se registró por separado.
+        cantidadProducida: dto.soloConsumirInsumos ? 0 : dto.cantidad,
+        unidadesRegistradas: dto.cantidad,
         stockFinalAnterior,
         stockFinalNuevo,
         precioCostoAnterior,
@@ -692,7 +698,7 @@ export class ProductoComponenteService {
     });
 
     this.logger.log(
-      `Fabricación ${numeroDocumento}: ${producto.nombre} × ${dto.cantidad} en sede ${dto.sedeId} (usuario ${usuarioId})`,
+      `${dto.soloConsumirInsumos ? 'Consumo insumos (prod. previa)' : 'Fabricación'} ${numeroDocumento}: ${producto.nombre} × ${dto.cantidad} en sede ${dto.sedeId} (usuario ${usuarioId})`,
     );
 
     try {

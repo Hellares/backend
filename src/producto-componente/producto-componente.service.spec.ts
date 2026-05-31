@@ -319,6 +319,39 @@ describe('ProductoComponenteService.fabricar — por variante', () => {
     expect(r.cantidadProducida).toBe(2);
   });
 
+  it('soloConsumirInsumos: descuenta insumos pero NO toca el stock final ni el costo', async () => {
+    const { service, tx } = mkService({
+      numVariantes: 3,
+      variante: { id: 'tallaL' },
+      receta: [recetaItem('algodon', 3, 'Algodón')],
+      stockRows: [stockRow('algodon', 100, '2')],
+      finalStock: { id: 'sf', stockActual: 25, precioCosto: '50' },
+    });
+
+    const r = await service.fabricar(
+      'e1',
+      'pf',
+      { ...DTOV(5, 'tallaL'), soloConsumirInsumos: true } as any,
+      'u1',
+    );
+
+    // Descuenta el insumo (3 × 5 = 15 → 100-15=85)
+    expect(updateCallFor(tx, 'sc-algodon')![0].data).toEqual({ stockActual: 85 });
+    // NO toca el stock del producto final ni lo crea
+    expect(updateCallFor(tx, 'sf')).toBeUndefined();
+    expect(tx.productoStock.create).not.toHaveBeenCalled();
+    // NO escribe historial de costo
+    expect(tx.productoPrecioHistorialSede.create).not.toHaveBeenCalled();
+    // Solo 1 movimiento: PRODUCCION_SALIDA (sin ENTRADA)
+    expect(movMock).toHaveBeenCalledTimes(1);
+    expect(movMock.mock.calls[0][1].tipo).toBe('PRODUCCION_SALIDA');
+    // El response refleja el modo
+    expect(r.soloConsumoInsumos).toBe(true);
+    expect(r.cantidadProducida).toBe(0);
+    expect(r.unidadesRegistradas).toBe(5);
+    expect(r.costoActualizado).toBe(false);
+  });
+
   it('producto CON variantes sin varianteId → 400 y NO abre transacción', async () => {
     const { service, prisma } = mkService({
       numVariantes: 3,

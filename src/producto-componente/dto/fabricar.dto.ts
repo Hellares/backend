@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class FabricarDto {
@@ -37,4 +44,14 @@ export class FabricarDto {
   @IsString()
   @IsOptional()
   observaciones?: string;
+
+  @ApiProperty({
+    description:
+      'Si true: SOLO descuenta los insumos (registro de producción previa cuyo stock terminado YA existe). NO suma stock al producto final ni recalcula su costo. Útil al onboarding de productos ya fabricados antes de tener el módulo.',
+    required: false,
+    default: false,
+  })
+  @IsBoolean()
+  @IsOptional()
+  soloConsumirInsumos?: boolean;
 }
