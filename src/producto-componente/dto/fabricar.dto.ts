@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   Min,
@@ -54,4 +55,16 @@ export class FabricarDto {
   @IsBoolean()
   @IsOptional()
   soloConsumirInsumos?: boolean;
+
+  @ApiProperty({
+    description:
+      'Costo de mano de obra TOTAL del lote (no por unidad). Se suma al costo de los insumos para el costo del lote y entra en el promedio ponderado del producto.',
+    required: false,
+    example: 150,
+  })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @IsOptional()
+  costoManoObra?: number;
 }

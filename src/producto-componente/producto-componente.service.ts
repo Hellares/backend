@@ -589,6 +589,10 @@ export class ProductoComponenteService {
       let precioCostoNuevo: number | null = null;
       let costoActualizado = false;
       let razonCostoNoActualizado: string | null = null;
+      // Costeo del lote: insumos + mano de obra (overhead futuro aquí).
+      const costoManoObra = dto.costoManoObra ?? 0;
+      let costoInsumos = 0;
+      let costoLoteTotal = 0;
 
       if (!dto.soloConsumirInsumos) {
         // Sumar al producto final (crear stock si no existe en esta sede).
@@ -611,23 +615,24 @@ export class ProductoComponenteService {
         // Costo del lote = Σ(cantidadConsumida × precioCosto). Si algún insumo
         // no tiene precioCosto en la sede, no actualizamos el costo del final
         // (sería parcial). Se reporta el motivo en el response.
-        let costoLote = 0;
         const insumosSinCosto: string[] = [];
         for (const c of consumos) {
           const stock = stockPorComponenteId.get(c.componenteId)!;
           if (stock.precioCosto == null) {
             insumosSinCosto.push(c.nombreComponente);
           } else {
-            costoLote += c.cantidadConsumidaEntera * stock.precioCosto;
+            costoInsumos += c.cantidadConsumidaEntera * stock.precioCosto;
           }
         }
+        // Costo total del lote = insumos + mano de obra del lote.
+        costoLoteTotal = costoInsumos + costoManoObra;
 
         // Promedio ponderado con el stock previo (si existía).
         if (insumosSinCosto.length > 0) {
           razonCostoNoActualizado = `Insumos sin precio costo: ${insumosSinCosto.join(', ')}`;
         } else {
           const valorPrevio = stockFinalAnterior * (precioCostoAnterior ?? 0);
-          const valorTotal = valorPrevio + costoLote;
+          const valorTotal = valorPrevio + costoLoteTotal;
           precioCostoNuevo = +(valorTotal / stockFinalNuevo).toFixed(2);
           costoActualizado = true;
         }
@@ -692,6 +697,12 @@ export class ProductoComponenteService {
           cantidadAnterior: stockFinalAnterior,
           cantidad: dto.cantidad,
           cantidadNueva: stockFinalNuevo,
+          // Valor de la entrada = costo REAL del lote (insumos + mano de obra),
+          // NO el ponderado. Así el historial puede leer el costo del lote
+          // desde el kardex y derivar la mano de obra (= total − insumos).
+          precioCostoUnitario: costoActualizado
+            ? +(costoLoteTotal / dto.cantidad).toFixed(4)
+            : undefined,
           motivo: motivoEntrada,
           observaciones: dto.observaciones,
           usuarioId,
@@ -715,6 +726,13 @@ export class ProductoComponenteService {
         precioCostoNuevo,
         costoActualizado,
         razonCostoNoActualizado,
+        // Costeo del lote (cuando se fabricó stock nuevo).
+        costoInsumos: +costoInsumos.toFixed(2),
+        costoManoObra: +costoManoObra.toFixed(2),
+        costoLoteTotal: +costoLoteTotal.toFixed(2),
+        costoUnitarioLote: !dto.soloConsumirInsumos && dto.cantidad > 0
+            ? +(costoLoteTotal / dto.cantidad).toFixed(4)
+            : null,
         componentesConsumidos: movimientosSalida,
       };
     });
@@ -766,6 +784,8 @@ export class ProductoComponenteService {
         cantidad: true,
         cantidadAnterior: true,
         cantidadNueva: true,
+        valorMovimiento: true,
+        precioCostoUnitario: true,
         observaciones: true,
         creadoEn: true,
         usuarioId: true,
@@ -801,6 +821,13 @@ export class ProductoComponenteService {
         cantidadProducida: m.cantidad,
         stockAnterior: m.cantidadAnterior,
         stockNuevo: m.cantidadNueva,
+        // Costo del lote producido (insumos + mano de obra) leído del kardex.
+        costoLote:
+          m.valorMovimiento != null ? Number(m.valorMovimiento) : null,
+        costoUnitario:
+          m.precioCostoUnitario != null
+            ? Number(m.precioCostoUnitario)
+            : null,
         observaciones: m.observaciones,
         creadoEn: m.creadoEn,
         sede: m.sede,
@@ -833,6 +860,7 @@ export class ProductoComponenteService {
         cantidad: true,
         cantidadAnterior: true,
         cantidadNueva: true,
+        valorMovimiento: true,
         observaciones: true,
         creadoEn: true,
         sede: { select: { id: true, nombre: true } },
@@ -869,6 +897,17 @@ export class ProductoComponenteService {
       (m) => m.tipo === 'PRODUCCION_SALIDA',
     );
 
+    // Costeo del lote: insumos = Σ valor de las salidas; total = valor de la
+    // entrada (incluye mano de obra); mano de obra = total − insumos.
+    const costoInsumos = salidas.reduce(
+      (acc, s) => acc + (s.valorMovimiento != null ? Number(s.valorMovimiento) : 0),
+      0,
+    );
+    const costoLoteTotal =
+      entrada?.valorMovimiento != null ? Number(entrada.valorMovimiento) : null;
+    const costoManoObra =
+      costoLoteTotal != null ? +(costoLoteTotal - costoInsumos).toFixed(2) : null;
+
     const fmtUm = (p: (typeof movimientos)[number]['productoStock']['producto']) => {
       const um = p?.unidadMedida;
       return (
@@ -898,9 +937,15 @@ export class ProductoComponenteService {
         codigo: s.productoStock.producto?.codigoEmpresa,
         unidadMedida: fmtUm(s.productoStock.producto),
         cantidadConsumida: Math.abs(s.cantidad),
+        costo:
+          s.valorMovimiento != null ? Number(s.valorMovimiento) : null,
         stockAnterior: s.cantidadAnterior,
         stockNuevo: s.cantidadNueva,
       })),
+      // Costeo del lote (mano de obra derivada = total − insumos).
+      costoInsumos: +costoInsumos.toFixed(2),
+      costoManoObra,
+      costoLoteTotal,
       observaciones: entrada?.observaciones ?? null,
     };
   }

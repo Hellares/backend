@@ -185,6 +185,40 @@ describe('ProductoComponenteService.fabricar', () => {
     expect(tx.productoPrecioHistorialSede.create).toHaveBeenCalledTimes(1);
   });
 
+  it('mano de obra: se suma al costo del lote y al ponderado; la entrada vale el lote', async () => {
+    // 1 insumo (1 × 5 = 5/u). Fabricar 2 → insumos 10. M.O. 6 → lote 16.
+    // Sin stock previo → precioCostoNuevo = 16/2 = 8.
+    const { service, tx } = mkService({
+      receta: [recetaItem('x', 1, 'Insumo X')],
+      stockRows: [stockRow('x', 100, '5')],
+      finalStock: null,
+    });
+
+    const r = await service.fabricar(
+      'e1',
+      'pf',
+      { ...DTO(2), costoManoObra: 6 } as any,
+      'u1',
+    );
+
+    // Costo del producto incluye mano de obra
+    expect(tx.productoStock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ precioCosto: 8 }),
+      }),
+    );
+    // El movimiento de ENTRADA se valora al costo del lote (16/2 = 8/u)
+    const entrada = movMock.mock.calls.find(
+      (c) => c[1].tipo === 'PRODUCCION_ENTRADA',
+    );
+    expect(entrada![1].precioCostoUnitario).toBe(8);
+    // Desglose en el response
+    expect(r.costoInsumos).toBe(10);
+    expect(r.costoManoObra).toBe(6);
+    expect(r.costoLoteTotal).toBe(16);
+    expect(r.costoUnitarioLote).toBe(8);
+  });
+
   it('cantidad fraccionaria por componente → 400 y NO abre transacción', async () => {
     // 0.5 por unidad × 3 = 1.5 (no entero) → no se puede descontar de stock Int.
     const { service, prisma } = mkService({
