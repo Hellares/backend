@@ -773,11 +773,21 @@ export class ProductoComponenteService {
       where: {
         tipo: 'PRODUCCION_ENTRADA',
         tipoDocumento: 'PRODUCCION',
-        productoStock: {
-          productoId,
-          varianteId: varianteId ?? null,
-          ...(sedeId ? { sedeId } : {}),
-        },
+        // XOR: el stock de una variante tiene productoId NULL y varianteId set.
+        // Si filtramos por variante, hay que buscar por varianteId (no por
+        // productoId, que es null en ese caso). Para el producto base, sí por
+        // productoId con varianteId null.
+        productoStock: varianteId
+          ? {
+              varianteId,
+              variante: { productoId },
+              ...(sedeId ? { sedeId } : {}),
+            }
+          : {
+              productoId,
+              varianteId: null,
+              ...(sedeId ? { sedeId } : {}),
+            },
       },
       orderBy: { creadoEn: 'desc' },
       take: limit,
