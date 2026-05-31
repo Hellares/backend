@@ -950,6 +950,147 @@ export class ProductoComponenteService {
     };
   }
 
+  /**
+   * Lista GLOBAL de lotes fabricados (PRODUCCION_ENTRADA) de la empresa, para
+   * la página "Producción". Filtrable por sede, búsqueda de producto y rango
+   * de fechas. Devuelve { items, total } para paginación.
+   */
+  async listarLotesProduccion(
+    empresaId: string,
+    opts: {
+      sedeId?: string;
+      search?: string;
+      desde?: Date;
+      hasta?: Date;
+      limit?: number;
+      offset?: number;
+    },
+  ) {
+    const limit = Math.min(Math.max(opts.limit ?? 30, 1), 100);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const q = opts.search?.trim();
+
+    const searchFilter = q
+      ? {
+          OR: [
+            {
+              producto: {
+                nombre: { contains: q, mode: Prisma.QueryMode.insensitive },
+              },
+            },
+            {
+              variante: {
+                nombre: { contains: q, mode: Prisma.QueryMode.insensitive },
+              },
+            },
+            {
+              variante: {
+                producto: {
+                  nombre: { contains: q, mode: Prisma.QueryMode.insensitive },
+                },
+              },
+            },
+          ],
+        }
+      : {};
+
+    const where: Prisma.MovimientoStockWhereInput = {
+      tipo: 'PRODUCCION_ENTRADA',
+      tipoDocumento: 'PRODUCCION',
+      ...(opts.desde || opts.hasta
+        ? {
+            creadoEn: {
+              ...(opts.desde ? { gte: opts.desde } : {}),
+              ...(opts.hasta ? { lte: opts.hasta } : {}),
+            },
+          }
+        : {}),
+      productoStock: {
+        empresaId,
+        ...(opts.sedeId ? { sedeId: opts.sedeId } : {}),
+        ...searchFilter,
+      },
+    };
+
+    const [total, movimientos] = await this.prisma.$transaction([
+      this.prisma.movimientoStock.count({ where }),
+      this.prisma.movimientoStock.findMany({
+        where,
+        orderBy: { creadoEn: 'desc' },
+        take: limit,
+        skip: offset,
+        select: {
+          id: true,
+          numeroDocumento: true,
+          cantidad: true,
+          cantidadNueva: true,
+          valorMovimiento: true,
+          precioCostoUnitario: true,
+          creadoEn: true,
+          usuarioId: true,
+          sede: { select: { id: true, nombre: true } },
+          productoStock: {
+            select: {
+              producto: {
+                select: { id: true, nombre: true, codigoEmpresa: true },
+              },
+              variante: {
+                select: {
+                  id: true,
+                  nombre: true,
+                  producto: {
+                    select: { id: true, nombre: true, codigoEmpresa: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const usuariosUnicos = [...new Set(movimientos.map((m) => m.usuarioId))];
+    const usuarios = await this.prisma.usuario.findMany({
+      where: { id: { in: usuariosUnicos } },
+      select: {
+        id: true,
+        email: true,
+        persona: { select: { nombres: true, apellidos: true } },
+      },
+    });
+    const usuarioById = new Map(usuarios.map((u) => [u.id, u]));
+
+    const items = movimientos.map((m) => {
+      const ps = m.productoStock;
+      const prod = ps.producto ?? ps.variante?.producto ?? null;
+      const u = usuarioById.get(m.usuarioId);
+      const nombreCompleto = u?.persona
+        ? `${u.persona.nombres ?? ''} ${u.persona.apellidos ?? ''}`.trim()
+        : (u?.email ?? '');
+      return {
+        id: m.id,
+        numeroDocumento: m.numeroDocumento,
+        productoId: prod?.id ?? null,
+        productoNombre: prod?.nombre ?? '—',
+        codigoEmpresa: prod?.codigoEmpresa ?? null,
+        varianteId: ps.variante?.id ?? null,
+        varianteNombre: ps.variante?.nombre ?? null,
+        cantidadProducida: m.cantidad,
+        stockNuevo: m.cantidadNueva,
+        costoLote: m.valorMovimiento != null ? Number(m.valorMovimiento) : null,
+        costoUnitario:
+          m.precioCostoUnitario != null
+            ? Number(m.precioCostoUnitario)
+            : null,
+        creadoEn: m.creadoEn,
+        sede: m.sede,
+        usuario: u ? { id: u.id, nombre: nombreCompleto } : null,
+      };
+    });
+
+    return { items, total, limit, offset };
+  }
+
   // ─── helpers privados ─────────────────────────────────────────
 
   private async _assertProductoPerteneceAEmpresa(
