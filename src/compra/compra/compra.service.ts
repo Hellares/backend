@@ -1286,10 +1286,13 @@ export class CompraService {
     productoId: string | null,
     varianteId: string | null,
   ) {
+    // XOR ProductoStock: el stock de una variante lleva productoId NULL (el
+    // detalle de compra puede traer ambos; varianteId manda).
+    const pid = varianteId ? null : (productoId ?? null);
     let stock = await tx.productoStock.findFirst({
       where: {
         sedeId,
-        productoId: productoId ?? null,
+        productoId: pid,
         varianteId: varianteId ?? null,
       },
     });
@@ -1299,7 +1302,7 @@ export class CompraService {
         data: {
           sedeId,
           empresaId,
-          productoId: productoId || null,
+          productoId: pid,
           varianteId: varianteId || null,
           stockActual: 0,
           precioCosto: 0,
@@ -1307,7 +1310,7 @@ export class CompraService {
         },
       });
       this.logger.warn(
-        `ProductoStock creado automáticamente para sede=${sedeId}, producto=${productoId}, variante=${varianteId}. ` +
+        `ProductoStock creado automáticamente para sede=${sedeId}, producto=${pid}, variante=${varianteId}. ` +
         `Nota: precioConfigurado=false, se debe configurar el precio de venta manualmente.`,
       );
     }
@@ -1325,10 +1328,11 @@ export class CompraService {
     productoId: string | null,
     varianteId: string | null,
   ) {
+    // XOR: el stock de una variante tiene productoId NULL (varianteId manda).
     return tx.productoStock.findFirst({
       where: {
         sedeId,
-        productoId: productoId ?? null,
+        productoId: varianteId ? null : (productoId ?? null),
         varianteId: varianteId ?? null,
       },
     });
