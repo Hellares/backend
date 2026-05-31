@@ -877,6 +877,7 @@ export class ProductoComponenteService {
         cantidadAnterior: true,
         cantidadNueva: true,
         valorMovimiento: true,
+        precioCostoUnitario: true,
         costoManoObra: true,
         observaciones: true,
         creadoEn: true,
@@ -884,6 +885,7 @@ export class ProductoComponenteService {
         productoStock: {
           select: {
             id: true,
+            precioCosto: true,
             producto: {
               select: {
                 id: true,
@@ -913,6 +915,48 @@ export class ProductoComponenteService {
     const salidas = movimientos.filter(
       (m) => m.tipo === 'PRODUCCION_SALIDA',
     );
+
+    // Trazabilidad: última compra de cada insumo (proveedor + precio + fecha).
+    // El sistema usa costo promedio (no rastrea de qué compra salió cada
+    // unidad consumida), así que mostramos la compra más reciente como
+    // referencia. Los costos "al momento" y "actual" sí son exactos.
+    const insumoIds = [
+      ...new Set(
+        salidas
+          .map((s) => s.productoStock.producto?.id)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const ultimaCompraPorInsumo = new Map<
+      string,
+      { proveedor: string | null; precioUnitario: number; fecha: Date }
+    >();
+    if (insumoIds.length > 0) {
+      const detalles = await this.prisma.compraDetalle.findMany({
+        where: { productoId: { in: insumoIds }, compra: { empresaId } },
+        orderBy: { compra: { creadoEn: 'desc' } },
+        select: {
+          productoId: true,
+          precioUnitario: true,
+          compra: {
+            select: {
+              creadoEn: true,
+              fechaRecepcion: true,
+              proveedor: { select: { nombre: true } },
+            },
+          },
+        },
+      });
+      for (const cd of detalles) {
+        if (cd.productoId && !ultimaCompraPorInsumo.has(cd.productoId)) {
+          ultimaCompraPorInsumo.set(cd.productoId, {
+            proveedor: cd.compra.proveedor?.nombre ?? null,
+            precioUnitario: Number(cd.precioUnitario),
+            fecha: cd.compra.fechaRecepcion ?? cd.compra.creadoEn,
+          });
+        }
+      }
+    }
 
     // Costeo del lote: insumos = Σ valor de las salidas (siempre confiable);
     // mano de obra se LEE de la entrada (null en lotes viejos → no se deriva
@@ -950,17 +994,40 @@ export class ProductoComponenteService {
             stockNuevo: entrada.cantidadNueva,
           }
         : null,
-      insumosConsumidos: salidas.map((s) => ({
-        id: s.productoStock.producto?.id,
-        nombre: s.productoStock.producto?.nombre,
-        codigo: s.productoStock.producto?.codigoEmpresa,
-        unidadMedida: fmtUm(s.productoStock.producto),
-        cantidadConsumida: Math.abs(s.cantidad),
-        costo:
-          s.valorMovimiento != null ? Number(s.valorMovimiento) : null,
-        stockAnterior: s.cantidadAnterior,
-        stockNuevo: s.cantidadNueva,
-      })),
+      insumosConsumidos: salidas.map((s) => {
+        const insumoId = s.productoStock.producto?.id;
+        const compra = insumoId
+          ? ultimaCompraPorInsumo.get(insumoId)
+          : undefined;
+        return {
+          id: insumoId,
+          nombre: s.productoStock.producto?.nombre,
+          codigo: s.productoStock.producto?.codigoEmpresa,
+          unidadMedida: fmtUm(s.productoStock.producto),
+          cantidadConsumida: Math.abs(s.cantidad),
+          costo: s.valorMovimiento != null ? Number(s.valorMovimiento) : null,
+          // Costo unitario del insumo AL MOMENTO de fabricar (snapshot real).
+          costoUnitarioMomento:
+            s.precioCostoUnitario != null
+              ? Number(s.precioCostoUnitario)
+              : null,
+          // Costo unitario ACTUAL del insumo en la sede (para comparar).
+          costoUnitarioActual:
+            s.productoStock.precioCosto != null
+              ? Number(s.productoStock.precioCosto)
+              : null,
+          // Referencia: última compra del insumo (proveedor/precio/fecha).
+          ultimaCompra: compra
+            ? {
+                proveedor: compra.proveedor,
+                precioUnitario: compra.precioUnitario,
+                fecha: compra.fecha,
+              }
+            : null,
+          stockAnterior: s.cantidadAnterior,
+          stockNuevo: s.cantidadNueva,
+        };
+      }),
       // Costeo del lote (mano de obra derivada = total − insumos).
       costoInsumos: +costoInsumos.toFixed(2),
       costoManoObra,
