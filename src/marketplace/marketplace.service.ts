@@ -370,9 +370,42 @@ export class MarketplaceService {
       masVistos = await this._mapearProductos(ordenados);
     }
 
+    // ── Más vendidos de la semana: agregamos VentaDetalle de los últimos 7
+    //    días (ventas no anuladas/borrador) por producto. Top 12 visibles.
+    const hace7dias = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const vendidosAgg = await this.prisma.ventaDetalle.groupBy({
+      by: ['productoId'],
+      where: {
+        productoId: { not: null },
+        venta: {
+          fechaVenta: { gte: hace7dias },
+          estado: { notIn: ['BORRADOR', 'ANULADA'] },
+        },
+      },
+      _sum: { cantidad: true },
+      orderBy: { _sum: { cantidad: 'desc' } },
+      take: 36,
+    });
+    let masVendidos: any[] = [];
+    const vendidosIds = vendidosAgg
+      .map((v) => v.productoId)
+      .filter((id): id is string => !!id);
+    if (vendidosIds.length > 0) {
+      const rows = await this.prisma.producto.findMany({
+        where: { ...baseWhere, id: { in: vendidosIds } },
+        include: this._includeMarketplace,
+      });
+      const byId = new Map(rows.map((p) => [p.id, p]));
+      const ordenados = vendidosIds
+        .map((id) => byId.get(id))
+        .filter((p): p is (typeof rows)[number] => !!p)
+        .slice(0, 12);
+      masVendidos = await this._mapearProductos(ordenados);
+    }
+
     const categorias = await this.getCategorias();
 
-    return { ofertas, masVistos, categorias };
+    return { ofertas, masVendidos, masVistos, categorias };
   }
 
   /**
@@ -440,6 +473,32 @@ export class MarketplaceService {
       else ofertaActiva = true;
     }
 
+    // Productos relacionados: misma categoría maestra, otras tiendas/productos.
+    const categoriaMaestraId =
+      producto.empresaCategoria?.categoriaMaestra?.id ?? null;
+    let relacionados: any[] = [];
+    if (categoriaMaestraId) {
+      const relRaw = await this.prisma.producto.findMany({
+        where: {
+          id: { not: producto.id },
+          visibleMarketplace: true,
+          isActive: true,
+          deletedAt: null,
+          esInsumo: false,
+          empresa: {
+            isActive: true,
+            deletedAt: null,
+            visibleEnMarketplace: true,
+          },
+          empresaCategoria: { categoriaMaestraId },
+        },
+        include: this._includeMarketplace,
+        orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }],
+        take: 10,
+      });
+      relacionados = await this._mapearProductos(relRaw);
+    }
+
     return {
       id: producto.id,
       nombre: producto.nombre,
@@ -478,6 +537,7 @@ export class MarketplaceService {
         provincia: stock.sede.provincia,
         coordenadas: (stock.sede.coordenadas as any) ?? null,
       } : null,
+      relacionados,
     };
   }
 
