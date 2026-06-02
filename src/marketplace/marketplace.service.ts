@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -76,46 +77,108 @@ export class MarketplaceService {
       };
     }
 
+    // Orden base (DB): destacados primero, luego recientes. El orden por PRECIO
+    // no se resuelve a nivel Prisma (el precio vive en la relación
+    // `stocksPorSede`), se maneja aparte más abajo.
+    const ordenarPorPrecio =
+      query.orden === 'precio_asc' || query.orden === 'precio_desc';
     let orderBy: any = [{ destacado: 'desc' }, { creadoEn: 'desc' }];
     if (query.orden === 'recientes') orderBy = { creadoEn: 'desc' };
 
-    const [productos, total] = await Promise.all([
-      this.prisma.producto.findMany({
-        where,
+    // Include compartido por las dos rutas de carga.
+    const includeProducto: Prisma.ProductoInclude = {
+      empresaCategoria: {
         include: {
-          empresaCategoria: {
-            include: {
-              categoriaMaestra: { select: { id: true, nombre: true } },
-            },
-          },
-          empresaMarca: {
-            include: {
-              marcaMaestra: { select: { id: true, nombre: true } },
-            },
-          },
-          empresa: {
-            select: {
-              id: true, nombre: true, logo: true, subdominio: true,
-              departamento: true, provincia: true, distrito: true, telefono: true,
-            },
-          },
+          categoriaMaestra: { select: { id: true, nombre: true } },
+        },
+      },
+      empresaMarca: {
+        include: {
+          marcaMaestra: { select: { id: true, nombre: true } },
+        },
+      },
+      empresa: {
+        select: {
+          id: true, nombre: true, logo: true, subdominio: true,
+          departamento: true, provincia: true, distrito: true, telefono: true,
+        },
+      },
+      stocksPorSede: {
+        where: { precioConfigurado: true },
+        select: {
+          precio: true, precioOferta: true, enOferta: true, stockActual: true,
+          fechaInicioOferta: true, fechaFinOferta: true,
+          sede: { select: { coordenadas: true } },
+        },
+        take: 1,
+        orderBy: { precio: 'asc' },
+      },
+    };
+
+    let productos: any[];
+    let total: number;
+
+    if (ordenarPorPrecio) {
+      // Precio representativo del producto = mínimo precio configurado entre sus
+      // sedes. Como Prisma no puede `orderBy` una relación, traemos id+precio de
+      // TODO el set filtrado, ordenamos/paginamos en memoria e hidratamos solo la
+      // página. (A futuro, para catálogos grandes, denormalizar un
+      // `precioReferencia` en Producto e indexarlo.)
+      const livianos = await this.prisma.producto.findMany({
+        where,
+        select: {
+          id: true,
           stocksPorSede: {
             where: { precioConfigurado: true },
-            select: {
-              precio: true, precioOferta: true, enOferta: true, stockActual: true,
-              fechaInicioOferta: true, fechaFinOferta: true,
-              sede: { select: { coordenadas: true } },
-            },
-            take: 1,
+            select: { precio: true },
             orderBy: { precio: 'asc' },
+            take: 1,
           },
         },
-        orderBy,
-        skip,
-        take: limit,
-      }),
-      this.prisma.producto.count({ where }),
-    ]);
+      });
+      total = livianos.length;
+      const dir = query.orden === 'precio_asc' ? 1 : -1;
+      const pageIds = livianos
+        .map((p) => ({
+          id: p.id,
+          precio:
+            p.stocksPorSede[0]?.precio != null
+              ? Number(p.stocksPorSede[0].precio)
+              : null,
+        }))
+        .sort((a, b) => {
+          // Sin precio configurado → siempre al final, en ambos sentidos.
+          if (a.precio == null && b.precio == null) return 0;
+          if (a.precio == null) return 1;
+          if (b.precio == null) return -1;
+          return (a.precio - b.precio) * dir;
+        })
+        .slice(skip, skip + limit)
+        .map((x) => x.id);
+
+      const rows = pageIds.length
+        ? await this.prisma.producto.findMany({
+            where: { id: { in: pageIds } },
+            include: includeProducto,
+          })
+        : [];
+      // `findMany` con `in` no garantiza el orden → reordenar según pageIds.
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      productos = pageIds
+        .map((id) => byId.get(id))
+        .filter((p): p is (typeof rows)[number] => !!p);
+    } else {
+      [productos, total] = await Promise.all([
+        this.prisma.producto.findMany({
+          where,
+          include: includeProducto,
+          orderBy,
+          skip,
+          take: limit,
+        }),
+        this.prisma.producto.count({ where }),
+      ]);
+    }
 
     // Obtener imágenes de productos en una sola query (evita N+1)
     const productoIds = productos.map((p) => p.id);
@@ -223,8 +286,9 @@ export class MarketplaceService {
       };
     });
 
-    // Si el usuario tiene ubicación, priorizar productos cercanos (20 km)
-    if (userLat && userLng) {
+    // Si el usuario tiene ubicación, priorizar productos cercanos (20 km).
+    // Excepción: si pidió orden explícito por precio, se respeta ese orden.
+    if (userLat && userLng && !ordenarPorPrecio) {
       const RADIO_CERCANO = 20; // km
       data = data.sort((a, b) => {
         const aCercano = a.distancia !== null && a.distancia <= RADIO_CERCANO;
