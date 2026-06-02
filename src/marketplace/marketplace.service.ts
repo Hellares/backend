@@ -317,6 +317,105 @@ export class MarketplaceService {
   }
 
   /**
+   * Reputación agregada por empresa: promedio y total de opiniones de TODOS
+   * sus productos (OpinionProducto ya guarda empresaId). Devuelve un Map para
+   * hidratar listados/perfiles sin N+1.
+   */
+  private async _reputacionPorEmpresa(empresaIds: string[]) {
+    const map = new Map<string, { promedio: number; totalOpiniones: number }>();
+    if (empresaIds.length === 0) return map;
+    const agg = await this.prisma.opinionProducto.groupBy({
+      by: ['empresaId'],
+      where: { empresaId: { in: empresaIds } },
+      _avg: { calificacion: true },
+      _count: true,
+    });
+    for (const o of agg) {
+      map.set(o.empresaId, {
+        promedio: Math.round((o._avg.calificacion ?? 0) * 10) / 10,
+        totalOpiniones: o._count,
+      });
+    }
+    return map;
+  }
+
+  /**
+   * Recomendados por historial de navegación (content-based por categoría).
+   * Toma las categorías maestras de los últimos productos vistos por el usuario
+   * y sugiere otros productos visibles de esas categorías, excluyendo los ya
+   * vistos. Sin historial suficiente, cae a los más vendidos de la semana.
+   */
+  async getRecomendados(usuarioId: string, limit = 12) {
+    const baseWhere: Prisma.ProductoWhereInput = {
+      visibleMarketplace: true,
+      isActive: true,
+      deletedAt: null,
+      esInsumo: false,
+      empresa: { isActive: true, deletedAt: null, visibleEnMarketplace: true },
+    };
+
+    // Últimos vistos del usuario + la categoría maestra de cada uno.
+    const vistos = await this.prisma.productoVisto.findMany({
+      where: { usuarioId },
+      orderBy: { vistoEn: 'desc' },
+      take: 30,
+      select: {
+        productoId: true,
+        producto: {
+          select: {
+            empresaCategoria: { select: { categoriaMaestraId: true } },
+          },
+        },
+      },
+    });
+
+    const vistosIds = new Set(vistos.map((v) => v.productoId));
+    const categoriaIds = [
+      ...new Set(
+        vistos
+          .map((v) => v.producto?.empresaCategoria?.categoriaMaestraId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+
+    // Sin señal de categorías → fallback a más vendidos.
+    if (categoriaIds.length === 0) {
+      const home = await this.getHome();
+      return {
+        recomendados: home.masVendidos.slice(0, limit),
+        basadoEnHistorial: false,
+      };
+    }
+
+    const rows = await this.prisma.producto.findMany({
+      where: {
+        ...baseWhere,
+        id: { notIn: [...vistosIds] },
+        empresaCategoria: { categoriaMaestraId: { in: categoriaIds } },
+      },
+      include: this._includeMarketplace,
+      orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }],
+      take: 36,
+    });
+    const recomendados = (await this._mapearProductos(rows)).slice(0, limit);
+
+    // Completar con más vendidos no repetidos si la categoría no rindió suficiente.
+    if (recomendados.length < limit) {
+      const home = await this.getHome();
+      const yaIncluidos = new Set(recomendados.map((r) => r.id));
+      for (const mv of home.masVendidos) {
+        if (recomendados.length >= limit) break;
+        if (!yaIncluidos.has(mv.id) && !vistosIds.has(mv.id)) {
+          recomendados.push(mv);
+          yaIncluidos.add(mv.id);
+        }
+      }
+    }
+
+    return { recomendados, basadoEnHistorial: true };
+  }
+
+  /**
    * Home del marketplace por secciones (estilo MercadoLibre):
    * - ofertas: productos con oferta vigente.
    * - masVistos: top productos por cantidad de vistas (ProductoVisto, global).
@@ -622,8 +721,15 @@ export class MarketplaceService {
       this.prisma.empresa.count({ where }),
     ]);
 
+    // Reputación (★ promedio · N opiniones) por empresa para la card.
+    const reputacionMap = await this._reputacionPorEmpresa(empresas.map((e) => e.id));
+    const data = empresas.map((e) => ({
+      ...e,
+      reputacion: reputacionMap.get(e.id) ?? { promedio: 0, totalOpiniones: 0 },
+    }));
+
     return {
-      data: empresas,
+      data,
       pagination: {
         page,
         limit,
@@ -749,6 +855,10 @@ export class MarketplaceService {
       throw new NotFoundException('Empresa no encontrada o no disponible en el marketplace');
     }
 
+    // Reputación agregada del vendedor (promedio de todas las opiniones de sus productos).
+    const reputacionMap = await this._reputacionPorEmpresa([empresa.id]);
+    const reputacion = reputacionMap.get(empresa.id) ?? { promedio: 0, totalOpiniones: 0 };
+
     // Verificar disponibilidad de la página web
     const tieneWebPermanente = empresa.planSuscripcion?.tieneWebPermanente ?? false;
     if (!tieneWebPermanente) {
@@ -760,7 +870,7 @@ export class MarketplaceService {
       }
     }
 
-    return empresa;
+    return { ...empresa, reputacion };
   }
 
   /**

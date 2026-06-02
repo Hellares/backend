@@ -10,12 +10,16 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { MarketplaceUsuarioService } from './marketplace-usuario.service';
+import { MarketplaceService } from './marketplace.service';
 
 @ApiTags('Marketplace Usuario')
 @Controller('marketplace/usuario')
 @UseGuards(JwtAuthGuard)
 export class MarketplaceUsuarioController {
-  constructor(private readonly service: MarketplaceUsuarioService) {}
+  constructor(
+    private readonly service: MarketplaceUsuarioService,
+    private readonly marketplaceService: MarketplaceService,
+  ) {}
 
   // ─── Favoritos ───
 
@@ -66,5 +70,21 @@ export class MarketplaceUsuarioController {
     @Query('limit') limit?: string,
   ) {
     return this.service.listarVistos(usuarioId, limit ? parseInt(limit) : 20);
+  }
+
+  // ─── Recomendados (por historial de navegación) ───
+
+  @Get('recomendados')
+  @ApiOperation({
+    summary: 'Productos recomendados según el historial de navegación del usuario',
+  })
+  getRecomendados(
+    @CurrentUser('sub') usuarioId: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.marketplaceService.getRecomendados(
+      usuarioId,
+      limit ? parseInt(limit) : 12,
+    );
   }
 }
