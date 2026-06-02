@@ -998,6 +998,36 @@ export class ProductoComponenteService {
                 },
               },
             },
+            // Insumo-variante: su stock vive con productoId NULL + varianteId,
+            // así que el nombre/código/unidad se toman de la variante (con
+            // fallback a su producto base para la unidad de medida).
+            variante: {
+              select: {
+                id: true,
+                nombre: true,
+                codigoEmpresa: true,
+                unidadMedida: {
+                  select: {
+                    simboloLocal: true,
+                    simboloPersonalizado: true,
+                    unidadMaestra: { select: { simbolo: true } },
+                  },
+                },
+                producto: {
+                  select: {
+                    id: true,
+                    nombre: true,
+                    unidadMedida: {
+                      select: {
+                        simboloLocal: true,
+                        simboloPersonalizado: true,
+                        unidadMaestra: { select: { simbolo: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -1014,18 +1044,52 @@ export class ProductoComponenteService {
       (m) => m.tipo === 'PRODUCCION_SALIDA',
     );
 
+    // Resuelve la identidad de un insumo (o del producto final) desde su
+    // ProductoStock: por la variante si la tiene (su stock vive con productoId
+    // NULL + varianteId), o por el producto base. Devuelve nombre/código/unidad
+    // ya resueltos y la `clave` (varianteId ?? productoId) para agrupar compras.
+    const resolverInsumo = (
+      ps: (typeof movimientos)[number]['productoStock'],
+    ) => {
+      const v = ps.variante;
+      const p = ps.producto;
+      const productoId = p?.id ?? v?.producto?.id ?? null;
+      const varianteId = v?.id ?? null;
+      const nombreBase = p?.nombre ?? v?.producto?.nombre ?? null;
+      const nombre = v
+        ? [nombreBase, v.nombre].filter(Boolean).join(' — ')
+        : nombreBase;
+      const codigo = v?.codigoEmpresa ?? p?.codigoEmpresa ?? null;
+      const um =
+        v?.unidadMedida ?? v?.producto?.unidadMedida ?? p?.unidadMedida ?? null;
+      return {
+        productoId,
+        varianteId,
+        clave: varianteId ?? productoId,
+        nombre,
+        codigo,
+        um,
+      };
+    };
+    const resueltos = salidas.map((s) => resolverInsumo(s.productoStock));
+
     // Trazabilidad: última compra de cada insumo (proveedor + precio + fecha).
     // El sistema usa costo promedio (no rastrea de qué compra salió cada
     // unidad consumida), así que mostramos la compra más reciente como
-    // referencia. Los costos "al momento" y "actual" sí son exactos.
-    const insumoIds = [
+    // referencia. Los costos "al momento" y "actual" sí son exactos. Se busca
+    // por varianteId para insumos-variante y por productoId (con varianteId
+    // NULL) para insumos base.
+    const productoIds = [
       ...new Set(
-        salidas
-          .map((s) => s.productoStock.producto?.id)
-          .filter((id): id is string => !!id),
+        resueltos.map((r) => r.productoId).filter((x): x is string => !!x),
       ),
     ];
-    const ultimaCompraPorInsumo = new Map<
+    const varianteIds = [
+      ...new Set(
+        resueltos.map((r) => r.varianteId).filter((x): x is string => !!x),
+      ),
+    ];
+    const ultimaCompraPorClave = new Map<
       string,
       {
         proveedor: string | null;
@@ -1035,12 +1099,23 @@ export class ProductoComponenteService {
         fecha: Date;
       }
     >();
-    if (insumoIds.length > 0) {
+    if (productoIds.length > 0 || varianteIds.length > 0) {
       const detalles = await this.prisma.compraDetalle.findMany({
-        where: { productoId: { in: insumoIds }, compra: { empresaId } },
+        where: {
+          compra: { empresaId },
+          OR: [
+            ...(varianteIds.length > 0
+              ? [{ varianteId: { in: varianteIds } }]
+              : []),
+            ...(productoIds.length > 0
+              ? [{ varianteId: null, productoId: { in: productoIds } }]
+              : []),
+          ],
+        },
         orderBy: { compra: { creadoEn: 'desc' } },
         select: {
           productoId: true,
+          varianteId: true,
           cantidad: true,
           precioUnitario: true,
           compra: {
@@ -1053,10 +1128,11 @@ export class ProductoComponenteService {
         },
       });
       for (const cd of detalles) {
-        if (cd.productoId && !ultimaCompraPorInsumo.has(cd.productoId)) {
+        const clave = cd.varianteId ?? cd.productoId;
+        if (clave && !ultimaCompraPorClave.has(clave)) {
           const cantidad = Number(cd.cantidad);
           const precioUnitario = Number(cd.precioUnitario);
-          ultimaCompraPorInsumo.set(cd.productoId, {
+          ultimaCompraPorClave.set(clave, {
             proveedor: cd.compra.proveedor?.nombre ?? null,
             precioUnitario,
             cantidad,
@@ -1081,15 +1157,13 @@ export class ProductoComponenteService {
     // (sin M.O. registrada), el costo de producción real es solo insumos.
     const costoLoteTotal = +(costoInsumos + (costoManoObra ?? 0)).toFixed(2);
 
-    const fmtUm = (p: (typeof movimientos)[number]['productoStock']['producto']) => {
-      const um = p?.unidadMedida;
-      return (
-        um?.simboloLocal ??
-        um?.simboloPersonalizado ??
-        um?.unidadMaestra?.simbolo ??
-        ''
-      );
-    };
+    const fmtUm = (um: (typeof resueltos)[number]['um']) =>
+      um?.simboloLocal ??
+      um?.simboloPersonalizado ??
+      um?.unidadMaestra?.simbolo ??
+      '';
+
+    const entradaInfo = entrada ? resolverInsumo(entrada.productoStock) : null;
 
     return {
       numeroDocumento,
@@ -1097,23 +1171,25 @@ export class ProductoComponenteService {
       creadoEn: entrada?.creadoEn ?? null,
       productoFinal: entrada
         ? {
-            id: entrada.productoStock.producto?.id,
-            nombre: entrada.productoStock.producto?.nombre,
+            id: entradaInfo?.productoId ?? null,
+            varianteId: entradaInfo?.varianteId ?? null,
+            nombre: entradaInfo?.nombre ?? null,
             cantidadProducida: entrada.cantidad,
             stockAnterior: entrada.cantidadAnterior,
             stockNuevo: entrada.cantidadNueva,
           }
         : null,
-      insumosConsumidos: salidas.map((s) => {
-        const insumoId = s.productoStock.producto?.id;
-        const compra = insumoId
-          ? ultimaCompraPorInsumo.get(insumoId)
+      insumosConsumidos: salidas.map((s, i) => {
+        const r = resueltos[i];
+        const compra = r.clave
+          ? ultimaCompraPorClave.get(r.clave)
           : undefined;
         return {
-          id: insumoId,
-          nombre: s.productoStock.producto?.nombre,
-          codigo: s.productoStock.producto?.codigoEmpresa,
-          unidadMedida: fmtUm(s.productoStock.producto),
+          id: r.productoId,
+          varianteId: r.varianteId,
+          nombre: r.nombre,
+          codigo: r.codigo,
+          unidadMedida: fmtUm(r.um),
           cantidadConsumida: Math.abs(s.cantidad),
           costo: s.valorMovimiento != null ? Number(s.valorMovimiento) : null,
           // Costo unitario del insumo AL MOMENTO de fabricar (snapshot real).

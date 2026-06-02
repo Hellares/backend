@@ -760,3 +760,241 @@ describe('ProductoComponenteService.crear — validaciones', () => {
     );
   });
 });
+
+// ─── detalleFabricacion() — resolución de insumos base y variante ──
+//
+// Regresión: el feature de BOM con insumo-variante hizo que el stock del
+// insumo viva con productoId NULL + varianteId set. detalleFabricacion solo
+// seleccionaba `producto`, así que los insumos-variante (y el producto final
+// cuando es una variante) salían con nombre/código/unidad vacíos y sin última
+// compra. El fix selecciona también `variante` y resuelve con fallback.
+
+describe('ProductoComponenteService.detalleFabricacion', () => {
+  // Unidad de medida tal como la trae el select (simboloLocal gana).
+  const um = (simbolo: string) => ({
+    simboloLocal: simbolo,
+    simboloPersonalizado: null,
+    unidadMaestra: { simbolo: simbolo.toUpperCase() },
+  });
+
+  // Movimiento base (productoStock de producto, sin variante).
+  const movBase = (
+    tipo: 'PRODUCCION_ENTRADA' | 'PRODUCCION_SALIDA',
+    over: Record<string, any>,
+    prod: { id: string; nombre: string; codigo: string; um: any },
+  ) => ({
+    id: `m-${prod.id}`,
+    tipo,
+    cantidad: 0,
+    cantidadAnterior: 0,
+    cantidadNueva: 0,
+    valorMovimiento: null,
+    precioCostoUnitario: null,
+    costoManoObra: null,
+    observaciones: null,
+    creadoEn: new Date('2026-05-10T00:00:00Z'),
+    sede: { id: 's1', nombre: 'Sede 1' },
+    productoStock: {
+      id: `sc-${prod.id}`,
+      precioCosto: null,
+      producto: {
+        id: prod.id,
+        nombre: prod.nombre,
+        codigoEmpresa: prod.codigo,
+        unidadMedida: prod.um,
+      },
+      variante: null,
+    },
+    ...over,
+  });
+
+  // Movimiento de una VARIANTE (productoStock con productoId NULL + variante).
+  const movVar = (
+    tipo: 'PRODUCCION_ENTRADA' | 'PRODUCCION_SALIDA',
+    over: Record<string, any>,
+    v: {
+      id: string;
+      nombre: string;
+      codigo: string;
+      um: any;
+      baseId: string;
+      baseNombre: string;
+      baseUm: any;
+    },
+  ) => ({
+    id: `m-${v.id}`,
+    tipo,
+    cantidad: 0,
+    cantidadAnterior: 0,
+    cantidadNueva: 0,
+    valorMovimiento: null,
+    precioCostoUnitario: null,
+    costoManoObra: null,
+    observaciones: null,
+    creadoEn: new Date('2026-05-10T00:00:00Z'),
+    sede: { id: 's1', nombre: 'Sede 1' },
+    productoStock: {
+      id: `sc-${v.id}`,
+      precioCosto: null,
+      producto: null,
+      variante: {
+        id: v.id,
+        nombre: v.nombre,
+        codigoEmpresa: v.codigo,
+        unidadMedida: v.um,
+        producto: { id: v.baseId, nombre: v.baseNombre, unidadMedida: v.baseUm },
+      },
+    },
+    ...over,
+  });
+
+  const mkDetalleService = (opts: { movimientos: any[]; compras?: any[] }) => {
+    const prisma = {
+      producto: { findFirst: jest.fn().mockResolvedValue({ id: 'pf' }) },
+      movimientoStock: {
+        findMany: jest.fn().mockResolvedValue(opts.movimientos),
+      },
+      compraDetalle: {
+        findMany: jest.fn().mockResolvedValue(opts.compras ?? []),
+      },
+    };
+    const service = new ProductoComponenteService(prisma as any, {} as any);
+    return { service, prisma };
+  };
+
+  it('insumo base: resuelve nombre/código/unidad del producto y última compra por productoId', async () => {
+    const entrada = movBase(
+      'PRODUCCION_ENTRADA',
+      { cantidad: 3, cantidadAnterior: 0, cantidadNueva: 3, costoManoObra: 0 },
+      { id: 'pf', nombre: 'Peluche', codigo: 'PF1', um: um('und') },
+    );
+    const salida = movBase(
+      'PRODUCCION_SALIDA',
+      {
+        cantidad: -6,
+        cantidadAnterior: 100,
+        cantidadNueva: 94,
+        valorMovimiento: 12,
+        precioCostoUnitario: 2,
+      },
+      { id: 'hilo', nombre: 'Hilo', codigo: 'H1', um: um('und') },
+    );
+    const { service, prisma } = mkDetalleService({
+      movimientos: [entrada, salida],
+      compras: [
+        {
+          productoId: 'hilo',
+          varianteId: null,
+          cantidad: 10,
+          precioUnitario: 2,
+          compra: {
+            creadoEn: new Date('2026-05-01T00:00:00Z'),
+            fechaRecepcion: null,
+            proveedor: { nombre: 'Prov A' },
+          },
+        },
+      ],
+    });
+
+    const r = await service.detalleFabricacion('e1', 'pf', 'PROD-1');
+
+    expect(r.productoFinal).toMatchObject({
+      id: 'pf',
+      varianteId: null,
+      nombre: 'Peluche',
+    });
+    const ins = r.insumosConsumidos[0];
+    expect(ins).toMatchObject({
+      id: 'hilo',
+      varianteId: null,
+      nombre: 'Hilo',
+      codigo: 'H1',
+      unidadMedida: 'und',
+      cantidadConsumida: 6,
+    });
+    expect(ins.ultimaCompra).toMatchObject({ proveedor: 'Prov A', total: 20 });
+    expect(r.costoInsumos).toBe(12);
+    // La compra base se busca con varianteId NULL + productoId.
+    const whereArg = prisma.compraDetalle.findMany.mock.calls[0][0].where;
+    expect(JSON.stringify(whereArg.OR)).toContain('hilo');
+  });
+
+  it('insumo-variante: resuelve nombre/código/unidad desde la VARIANTE (con fallback de unidad al base) y última compra por varianteId', async () => {
+    // Producto final ES una variante (talla L). Insumo consumido ES la variante
+    // "T20 Niño" de "Planta" (su unidad cae al base porque la variante no la fija).
+    const entrada = movVar(
+      'PRODUCCION_ENTRADA',
+      { cantidad: 3, cantidadAnterior: 0, cantidadNueva: 3, costoManoObra: 0 },
+      {
+        id: 'tallaL',
+        nombre: 'Talla L',
+        codigo: 'PF-L',
+        um: null,
+        baseId: 'pf',
+        baseNombre: 'Peluche',
+        baseUm: um('und'),
+      },
+    );
+    const salida = movVar(
+      'PRODUCCION_SALIDA',
+      {
+        cantidad: -6,
+        cantidadAnterior: 50,
+        cantidadNueva: 44,
+        valorMovimiento: 42,
+        precioCostoUnitario: 7,
+      },
+      {
+        id: 'plantaT20',
+        nombre: 'T20 Niño',
+        codigo: 'PL-T20',
+        um: null, // la variante no fija unidad → cae al base
+        baseId: 'planta',
+        baseNombre: 'Planta',
+        baseUm: um('g'),
+      },
+    );
+    const { service, prisma } = mkDetalleService({
+      movimientos: [entrada, salida],
+      compras: [
+        {
+          productoId: 'planta',
+          varianteId: 'plantaT20',
+          cantidad: 5,
+          precioUnitario: 7,
+          compra: {
+            creadoEn: new Date('2026-05-01T00:00:00Z'),
+            fechaRecepcion: null,
+            proveedor: { nombre: 'Vivero' },
+          },
+        },
+      ],
+    });
+
+    const r = await service.detalleFabricacion('e1', 'pf', 'PROD-2');
+
+    // Header del producto final (variante) resuelto: "base — variante".
+    expect(r.productoFinal).toMatchObject({
+      id: 'pf',
+      varianteId: 'tallaL',
+      nombre: 'Peluche — Talla L',
+    });
+    const ins = r.insumosConsumidos[0];
+    // Antes del fix: nombre/codigo eran null, unidadMedida '' y ultimaCompra null.
+    expect(ins.id).toBe('planta');
+    expect(ins.varianteId).toBe('plantaT20');
+    expect(ins.nombre).toBe('Planta — T20 Niño');
+    expect(ins.codigo).toBe('PL-T20');
+    expect(ins.unidadMedida).toBe('g'); // fallback a la unidad del producto base
+    expect(ins.cantidadConsumida).toBe(6);
+    expect(ins.ultimaCompra).toMatchObject({
+      proveedor: 'Vivero',
+      precioUnitario: 7,
+      total: 35,
+    });
+    expect(r.costoInsumos).toBe(42);
+    // La última compra del insumo-variante se busca por varianteId.
+    const whereArg = prisma.compraDetalle.findMany.mock.calls[0][0].where;
+    expect(JSON.stringify(whereArg.OR)).toContain('plantaT20');
+  });
+});
