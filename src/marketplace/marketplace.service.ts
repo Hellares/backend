@@ -658,6 +658,71 @@ export class MarketplaceService {
   }
 
   /**
+   * Autocomplete del buscador del marketplace. Devuelve categorías maestras y
+   * productos visibles cuyo nombre matchea el término (prefijo/substring). Es
+   * liviano: sólo id/nombre + thumbnail del producto para un dropdown rápido.
+   */
+  async getSugerencias(q: string, limit = 8) {
+    const term = (q ?? '').trim();
+    if (term.length < 2) return { categorias: [], productos: [] };
+
+    const baseWhere: Prisma.ProductoWhereInput = {
+      visibleMarketplace: true,
+      isActive: true,
+      deletedAt: null,
+      esInsumo: false,
+      nombre: { contains: term, mode: 'insensitive' },
+      empresa: { isActive: true, deletedAt: null, visibleEnMarketplace: true },
+    };
+
+    const [categorias, productos] = await Promise.all([
+      this.prisma.categoriaMaestra.findMany({
+        where: { isActive: true, nombre: { contains: term, mode: 'insensitive' } },
+        select: { id: true, nombre: true, icono: true },
+        orderBy: [{ esPopular: 'desc' }, { nombre: 'asc' }],
+        take: 5,
+      }),
+      this.prisma.producto.findMany({
+        where: baseWhere,
+        select: { id: true, nombre: true },
+        orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }],
+        take: limit,
+      }),
+    ]);
+
+    // Thumbnail por producto sugerido (una sola consulta batched).
+    const productoIds = productos.map((p) => p.id);
+    const imagenes = productoIds.length > 0
+      ? await this.prisma.archivo.findMany({
+          where: {
+            entidadTipo: 'PRODUCTO',
+            entidadId: { in: productoIds },
+            tipoArchivo: 'IMAGEN',
+            isActive: true,
+            deletedAt: null,
+          },
+          select: { entidadId: true, url: true, urlThumbnail: true },
+          orderBy: { orden: 'asc' },
+        })
+      : [];
+    const imagenMap = new Map<string, string>();
+    for (const img of imagenes) {
+      if (img.entidadId && !imagenMap.has(img.entidadId)) {
+        imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
+      }
+    }
+
+    return {
+      categorias,
+      productos: productos.map((p) => ({
+        id: p.id,
+        nombre: p.nombre,
+        imagen: imagenMap.get(p.id) ?? null,
+      })),
+    };
+  }
+
+  /**
    * Obtener todas las empresas activas para el marketplace público
    */
   async getAllEmpresas(page: number = 1, limit: number = 20, search?: string) {

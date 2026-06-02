@@ -71,6 +71,21 @@ export class MarketplaceController {
   }
 
   /**
+   * Autocomplete del buscador: sugerencias de categorías y productos por término.
+   */
+  @Get('sugerencias')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Sugerencias de búsqueda (autocomplete)' })
+  @ApiQuery({ name: 'q', required: true, type: String, example: 'tecl' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 8 })
+  async getSugerencias(
+    @Query('q') q: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.marketplaceService.getSugerencias(q, limit ? parseInt(limit) : 8);
+  }
+
+  /**
    * Home del marketplace por secciones (ofertas, más vistos, categorías).
    */
   @Get('home')
