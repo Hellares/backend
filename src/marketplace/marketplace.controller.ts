@@ -71,6 +71,16 @@ export class MarketplaceController {
   }
 
   /**
+   * Home del marketplace por secciones (ofertas, más vistos, categorías).
+   */
+  @Get('home')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Secciones del home del marketplace' })
+  async getHome() {
+    return this.marketplaceService.getHome();
+  }
+
+  /**
    * Obtener todas las empresas del marketplace
    */
   @Get('empresas')

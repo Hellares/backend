@@ -85,35 +85,8 @@ export class MarketplaceService {
     let orderBy: any = [{ destacado: 'desc' }, { creadoEn: 'desc' }];
     if (query.orden === 'recientes') orderBy = { creadoEn: 'desc' };
 
-    // Include compartido por las dos rutas de carga.
-    const includeProducto: Prisma.ProductoInclude = {
-      empresaCategoria: {
-        include: {
-          categoriaMaestra: { select: { id: true, nombre: true } },
-        },
-      },
-      empresaMarca: {
-        include: {
-          marcaMaestra: { select: { id: true, nombre: true } },
-        },
-      },
-      empresa: {
-        select: {
-          id: true, nombre: true, logo: true, subdominio: true,
-          departamento: true, provincia: true, distrito: true, telefono: true,
-        },
-      },
-      stocksPorSede: {
-        where: { precioConfigurado: true },
-        select: {
-          precio: true, precioOferta: true, enOferta: true, stockActual: true,
-          fechaInicioOferta: true, fechaFinOferta: true,
-          sede: { select: { coordenadas: true } },
-        },
-        take: 1,
-        orderBy: { precio: 'asc' },
-      },
-    };
+    // Include compartido por las dos rutas de carga (def en `_includeMarketplace`).
+    const includeProducto = this._includeMarketplace;
 
     let productos: any[];
     let total: number;
@@ -180,111 +153,9 @@ export class MarketplaceService {
       ]);
     }
 
-    // Obtener imágenes de productos en una sola query (evita N+1)
-    const productoIds = productos.map((p) => p.id);
-    const imagenes = productoIds.length > 0
-      ? await this.prisma.archivo.findMany({
-          where: {
-            entidadTipo: 'PRODUCTO',
-            entidadId: { in: productoIds },
-            tipoArchivo: 'IMAGEN',
-            isActive: true,
-            deletedAt: null,
-          },
-          select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
-          orderBy: { orden: 'asc' },
-        })
-      : [];
-
-    // Mapa: primera imagen por producto
-    const imagenMap = new Map<string, string>();
-    for (const img of imagenes) {
-      if (img.entidadId && !imagenMap.has(img.entidadId)) {
-        imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
-      }
-    }
-
-    // Opiniones: promedio y total por producto
-    const opiniones = productoIds.length > 0
-      ? await this.prisma.opinionProducto.groupBy({
-          by: ['productoId'],
-          where: { productoId: { in: productoIds } },
-          _avg: { calificacion: true },
-          _count: true,
-        })
-      : [];
-
-    const opinionMap = new Map<string, { promedio: number; total: number }>();
-    for (const o of opiniones) {
-      opinionMap.set(o.productoId, {
-        promedio: Math.round((o._avg.calificacion ?? 0) * 10) / 10,
-        total: o._count,
-      });
-    }
-
     const userLat = query.lat;
     const userLng = query.lng;
-
-    let data = productos.map((p: any) => {
-      const stock = p.stocksPorSede[0];
-      const coordenadas = stock?.sede?.coordenadas as any;
-      let distancia: number | null = null;
-
-      const coordLng = coordenadas?.lng ?? coordenadas?.lon;
-      if (userLat && userLng && coordenadas?.lat && coordLng) {
-        distancia = Math.round(
-          this.calcularDistancia(userLat, userLng, coordenadas.lat, coordLng) * 10
-        ) / 10;
-      }
-
-      // Validar si la oferta está vigente
-      let ofertaActiva = false;
-      if (stock?.enOferta && stock?.precioOferta) {
-        const ahora = new Date();
-        const inicio = stock.fechaInicioOferta ? new Date(stock.fechaInicioOferta) : null;
-        const fin = stock.fechaFinOferta ? new Date(stock.fechaFinOferta) : null;
-
-        if (inicio && fin) {
-          ofertaActiva = ahora >= inicio && ahora <= fin;
-        } else if (inicio) {
-          ofertaActiva = ahora >= inicio;
-        } else if (fin) {
-          ofertaActiva = ahora <= fin;
-        } else {
-          ofertaActiva = true; // Sin fechas = siempre activa
-        }
-      }
-
-      return {
-        id: p.id,
-        nombre: p.nombre,
-        descripcion: p.descripcion?.substring(0, 120) || null,
-        categoria: p.empresaCategoria?.nombrePersonalizado
-          || p.empresaCategoria?.categoriaMaestra?.nombre || null,
-        marca: p.empresaMarca?.nombrePersonalizado
-          || p.empresaMarca?.marcaMaestra?.nombre || null,
-        precio: stock?.precio ? Number(stock.precio) : null,
-        precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
-        enOferta: ofertaActiva,
-        hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
-        imagen: imagenMap.get(p.id) ?? null,
-        calificacion: opinionMap.get(p.id)?.promedio ?? null,
-        totalOpiniones: opinionMap.get(p.id)?.total ?? 0,
-        distancia,
-        coordenadas: coordenadas ? { lat: coordenadas.lat, lng: coordenadas.lng ?? coordenadas.lon } : null,
-        destacado: p.destacado,
-        creadoEn: p.creadoEn,
-        empresa: {
-          id: p.empresa.id,
-          nombre: p.empresa.nombre,
-          logo: p.empresa.logo,
-          subdominio: p.empresa.subdominio,
-          telefono: p.empresa.telefono,
-          ubicacion: [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
-            .filter(Boolean).join(', '),
-        },
-      };
-    });
+    let data = await this._mapearProductos(productos, userLat, userLng);
 
     // Si el usuario tiene ubicación, priorizar productos cercanos (20 km).
     // Excepción: si pidió orden explícito por precio, se respeta ese orden.
@@ -309,6 +180,199 @@ export class MarketplaceService {
     }
 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  /** Include estándar para mapear un producto al shape de card del marketplace. */
+  private get _includeMarketplace(): Prisma.ProductoInclude {
+    return {
+      empresaCategoria: {
+        include: {
+          categoriaMaestra: { select: { id: true, nombre: true } },
+        },
+      },
+      empresaMarca: {
+        include: {
+          marcaMaestra: { select: { id: true, nombre: true } },
+        },
+      },
+      empresa: {
+        select: {
+          id: true, nombre: true, logo: true, subdominio: true,
+          departamento: true, provincia: true, distrito: true, telefono: true,
+        },
+      },
+      stocksPorSede: {
+        where: { precioConfigurado: true },
+        select: {
+          precio: true, precioOferta: true, enOferta: true, stockActual: true,
+          fechaInicioOferta: true, fechaFinOferta: true,
+          sede: { select: { coordenadas: true } },
+        },
+        take: 1,
+        orderBy: { precio: 'asc' },
+      },
+    };
+  }
+
+  /**
+   * Hidrata productos crudos (cargados con `_includeMarketplace`) al shape de
+   * card del marketplace: imagen principal, rating, oferta vigente y distancia.
+   * Compartido por el listado y por las secciones del home.
+   */
+  private async _mapearProductos(
+    productos: any[],
+    userLat?: number,
+    userLng?: number,
+  ) {
+    const productoIds = productos.map((p) => p.id);
+    if (productoIds.length === 0) return [];
+
+    const imagenes = await this.prisma.archivo.findMany({
+      where: {
+        entidadTipo: 'PRODUCTO',
+        entidadId: { in: productoIds },
+        tipoArchivo: 'IMAGEN',
+        isActive: true,
+        deletedAt: null,
+      },
+      select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
+      orderBy: { orden: 'asc' },
+    });
+    const imagenMap = new Map<string, string>();
+    for (const img of imagenes) {
+      if (img.entidadId && !imagenMap.has(img.entidadId)) {
+        imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
+      }
+    }
+
+    const opiniones = await this.prisma.opinionProducto.groupBy({
+      by: ['productoId'],
+      where: { productoId: { in: productoIds } },
+      _avg: { calificacion: true },
+      _count: true,
+    });
+    const opinionMap = new Map<string, { promedio: number; total: number }>();
+    for (const o of opiniones) {
+      opinionMap.set(o.productoId, {
+        promedio: Math.round((o._avg.calificacion ?? 0) * 10) / 10,
+        total: o._count,
+      });
+    }
+
+    return productos.map((p: any) => {
+      const stock = p.stocksPorSede[0];
+      const coordenadas = stock?.sede?.coordenadas as any;
+      let distancia: number | null = null;
+
+      const coordLng = coordenadas?.lng ?? coordenadas?.lon;
+      if (userLat && userLng && coordenadas?.lat && coordLng) {
+        distancia = Math.round(
+          this.calcularDistancia(userLat, userLng, coordenadas.lat, coordLng) * 10,
+        ) / 10;
+      }
+
+      let ofertaActiva = false;
+      if (stock?.enOferta && stock?.precioOferta) {
+        const ahora = new Date();
+        const inicio = stock.fechaInicioOferta ? new Date(stock.fechaInicioOferta) : null;
+        const fin = stock.fechaFinOferta ? new Date(stock.fechaFinOferta) : null;
+        if (inicio && fin) ofertaActiva = ahora >= inicio && ahora <= fin;
+        else if (inicio) ofertaActiva = ahora >= inicio;
+        else if (fin) ofertaActiva = ahora <= fin;
+        else ofertaActiva = true;
+      }
+
+      return {
+        id: p.id,
+        nombre: p.nombre,
+        descripcion: p.descripcion?.substring(0, 120) || null,
+        categoria: p.empresaCategoria?.nombrePersonalizado
+          || p.empresaCategoria?.categoriaMaestra?.nombre || null,
+        marca: p.empresaMarca?.nombrePersonalizado
+          || p.empresaMarca?.marcaMaestra?.nombre || null,
+        precio: stock?.precio ? Number(stock.precio) : null,
+        precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: ofertaActiva,
+        hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+        imagen: imagenMap.get(p.id) ?? null,
+        calificacion: opinionMap.get(p.id)?.promedio ?? null,
+        totalOpiniones: opinionMap.get(p.id)?.total ?? 0,
+        distancia,
+        coordenadas: coordenadas
+          ? { lat: coordenadas.lat, lng: coordenadas.lng ?? coordenadas.lon }
+          : null,
+        destacado: p.destacado,
+        creadoEn: p.creadoEn,
+        empresa: {
+          id: p.empresa.id,
+          nombre: p.empresa.nombre,
+          logo: p.empresa.logo,
+          subdominio: p.empresa.subdominio,
+          telefono: p.empresa.telefono,
+          ubicacion: [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
+            .filter(Boolean).join(', '),
+        },
+      };
+    });
+  }
+
+  /**
+   * Home del marketplace por secciones (estilo MercadoLibre):
+   * - ofertas: productos con oferta vigente.
+   * - masVistos: top productos por cantidad de vistas (ProductoVisto, global).
+   * - categorias: categorías maestras activas (cards).
+   * "Vistos recientemente" es por-usuario → lo sirve marketplace-usuario.
+   */
+  async getHome() {
+    const baseWhere: Prisma.ProductoWhereInput = {
+      visibleMarketplace: true,
+      isActive: true,
+      deletedAt: null,
+      esInsumo: false,
+      empresa: { isActive: true, deletedAt: null, visibleEnMarketplace: true },
+    };
+
+    // ── Ofertas: al menos una sede en oferta con precio configurado. El mapeo
+    //    valida la vigencia por fechas → nos quedamos con las realmente activas.
+    const ofertasRaw = await this.prisma.producto.findMany({
+      where: {
+        ...baseWhere,
+        stocksPorSede: { some: { enOferta: true, precioConfigurado: true } },
+      },
+      include: this._includeMarketplace,
+      orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }],
+      take: 24,
+    });
+    const ofertas = (await this._mapearProductos(ofertasRaw))
+      .filter((p) => p.enOferta)
+      .slice(0, 12);
+
+    // ── Más vistos: agregamos ProductoVisto por producto (global). Pedimos de
+    //    más porque algunos vistos pueden ya no estar visibles/activos.
+    const masVistosAgg = await this.prisma.productoVisto.groupBy({
+      by: ['productoId'],
+      _count: { productoId: true },
+      orderBy: { _count: { productoId: 'desc' } },
+      take: 36,
+    });
+    let masVistos: any[] = [];
+    const masVistosIds = masVistosAgg.map((v) => v.productoId);
+    if (masVistosIds.length > 0) {
+      const rows = await this.prisma.producto.findMany({
+        where: { ...baseWhere, id: { in: masVistosIds } },
+        include: this._includeMarketplace,
+      });
+      const byId = new Map(rows.map((p) => [p.id, p]));
+      const ordenados = masVistosIds
+        .map((id) => byId.get(id))
+        .filter((p): p is (typeof rows)[number] => !!p)
+        .slice(0, 12);
+      masVistos = await this._mapearProductos(ordenados);
+    }
+
+    const categorias = await this.getCategorias();
+
+    return { ofertas, masVistos, categorias };
   }
 
   /**
