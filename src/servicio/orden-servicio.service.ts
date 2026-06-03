@@ -935,12 +935,13 @@ export class OrdenServicioService {
       select: this.MENSAJE_SELECT,
     });
 
-    // Notificar al técnico o admins de la empresa
+    // Notificar al técnico (si hay) y SIEMPRE a los admins de la empresa.
+    // tipo ORDEN_SERVICIO + data.ordenId para que el deep-link rutee a la orden.
     const notifTitulo = `Mensaje del cliente - ${orden.codigo}`;
     const notifCuerpo = contenido.length > 100 ? contenido.substring(0, 100) + '...' : contenido;
     const notifOpts = {
-      tipo: TipoNotificacion.MENSAJE,
-      data: { ordenServicioId, action: 'MENSAJE' },
+      tipo: TipoNotificacion.ORDEN_SERVICIO,
+      data: { ordenId: ordenServicioId, action: 'MENSAJE' },
       empresaId,
     };
 
@@ -948,10 +949,10 @@ export class OrdenServicioService {
       this.notificacionService.enviarAUsuario(
         orden.tecnicoId, notifTitulo, notifCuerpo, notifOpts,
       ).catch(() => {});
-    } else {
-      // Sin técnico asignado: notificar a admins de la empresa
-      this.notificarAdminsEmpresa(empresaId, notifTitulo, notifCuerpo, notifOpts).catch(() => {});
     }
+    this.notificarAdminsEmpresa(
+      empresaId, notifTitulo, notifCuerpo, notifOpts, orden.tecnicoId ?? undefined,
+    ).catch(() => {});
 
     return mensaje;
   }
@@ -961,6 +962,7 @@ export class OrdenServicioService {
     titulo: string,
     cuerpo: string,
     options: { tipo: TipoNotificacion; data: Record<string, string>; empresaId: string },
+    excludeUserId?: string,
   ) {
     const admins = await this.prisma.empresaUsuarioRol.findMany({
       where: {
@@ -971,7 +973,9 @@ export class OrdenServicioService {
       select: { usuarioId: true },
     });
 
-    const adminIds = admins.map((a) => a.usuarioId);
+    const adminIds = [...new Set(admins.map((a) => a.usuarioId))].filter(
+      (id) => id !== excludeUserId,
+    );
     if (adminIds.length > 0) {
       await this.notificacionService.enviarAUsuarios(adminIds, titulo, cuerpo, options);
     }
