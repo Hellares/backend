@@ -523,7 +523,9 @@ export class OrdenServicioService {
       cuerpo,
       {
         tipo: TipoNotificacion.ORDEN_SERVICIO,
-        data: { ordenId, action },
+        // target 'cliente' → el deep-link de la app lo lleva a /mis-ordenes
+        // (la cuenta puede tener loginMode 'management' por otros roles).
+        data: { ordenId, action, target: 'cliente' },
         empresaId,
       },
     );
@@ -966,7 +968,7 @@ export class OrdenServicioService {
     const notifCuerpo = contenido.length > 100 ? contenido.substring(0, 100) + '...' : contenido;
     const notifOpts = {
       tipo: TipoNotificacion.ORDEN_SERVICIO,
-      data: { ordenId: ordenServicioId, action: 'MENSAJE' },
+      data: { ordenId: ordenServicioId, action: 'MENSAJE', target: 'staff' },
       empresaId,
     };
 
