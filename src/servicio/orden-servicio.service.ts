@@ -540,7 +540,7 @@ export class OrdenServicioService {
     }
 
     query.clienteId = empresaPersona.id;
-    return this.findAll(empresaId, query);
+    return this.findAll(empresaId, query, true);
   }
 
   /**
@@ -650,7 +650,11 @@ export class OrdenServicioService {
     });
   }
 
-  async findAll(empresaId: string, query: QueryOrdenServicioDto) {
+  async findAll(
+    empresaId: string,
+    query: QueryOrdenServicioDto,
+    esCliente = false,
+  ) {
     const limit = Math.min(query.limit ?? 10, 100);
 
     const where: any = { empresaId };
@@ -702,6 +706,27 @@ export class OrdenServicioService {
       this.prisma.ordenServicio.findMany(findArgs),
       this.prisma.ordenServicio.count({ where }),
     ]);
+
+    // Conteo de mensajes no leídos por orden (campanita en la card). El staff
+    // ve los mensajes del cliente sin leer; el cliente, los del staff.
+    const ordenIds = data.map((o) => o.id);
+    if (ordenIds.length > 0) {
+      const noLeidos = await this.prisma.mensajeServicio.groupBy({
+        by: ['ordenServicioId'],
+        where: {
+          ordenServicioId: { in: ordenIds },
+          esCliente: !esCliente,
+          leidoEn: null,
+        },
+        _count: { _all: true },
+      });
+      const countMap = new Map(
+        noLeidos.map((n) => [n.ordenServicioId, n._count._all]),
+      );
+      for (const o of data as any[]) {
+        o.mensajesNoLeidos = countMap.get(o.id) ?? 0;
+      }
+    }
 
     return createCursorPaginatedResponse(data, total, limit, (item) => item.id);
   }
