@@ -53,16 +53,18 @@ export class NotificacionService {
     });
 
     // Limpieza para evitar acumulación de tokens (FCM rota el token en cada
-    // reinstalación/restore → filas muertas). Elimina del usuario los tokens
-    // inactivos (ya marcados fallidos) y los no usados hace 60+ días
-    // (rotados/abandonados). Nunca toca el recién registrado.
-    const hace60dias = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    // reinstalación/restore → filas muertas). Conserva por usuario solo los 5
+    // tokens usados más recientemente (el recién registrado siempre queda) y
+    // elimina el resto, sin importar si están activos o no.
+    const conservar = await this.prisma.dispositivoNotificacion.findMany({
+      where: { usuarioId },
+      orderBy: { lastUsedAt: 'desc' },
+      take: 5,
+      select: { id: true },
+    });
+    const idsConservar = conservar.map((d) => d.id);
     await this.prisma.dispositivoNotificacion.deleteMany({
-      where: {
-        usuarioId,
-        id: { not: dispositivo.id },
-        OR: [{ isActive: false }, { lastUsedAt: { lt: hace60dias } }],
-      },
+      where: { usuarioId, id: { notIn: idsConservar } },
     });
 
     return dispositivo;
