@@ -126,6 +126,20 @@ export class OrdenServicioController {
 
   // ─── Mensajes del técnico/empresa ───
 
+  @Get(':id/mensajes/no-leidos')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({
+    summary: 'Contar mensajes no leídos del cliente (sin marcarlos leídos)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  contarMensajesNoLeidos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.ordenServicioService.contarMensajesNoLeidos(empresaId, id);
+  }
+
   @Get(':id/mensajes')
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar mensajes de una orden' })

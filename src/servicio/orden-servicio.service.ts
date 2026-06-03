@@ -827,6 +827,15 @@ export class OrdenServicioService {
     },
   } as const;
 
+  /// Cuenta mensajes del cliente sin leer (para el badge), SIN marcarlos leídos.
+  async contarMensajesNoLeidos(empresaId: string, ordenServicioId: string) {
+    await this.findOne(empresaId, ordenServicioId);
+    const count = await this.prisma.mensajeServicio.count({
+      where: { ordenServicioId, esCliente: true, leidoEn: null },
+    });
+    return { count };
+  }
+
   async listarMensajes(empresaId: string, ordenServicioId: string) {
     await this.findOne(empresaId, ordenServicioId);
 
