@@ -238,6 +238,8 @@ model OrdenServicio {
   tercerizacionDestino      TercerizacionServicio?   @relation("OrdenDestino")
   citas                     Cita[]
   mensajes                  MensajeServicio[]
+  // Línea de venta POS que cobró esta orden (null = aún no cobrada por venta)
+  ventaDetalle              VentaDetalle?
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

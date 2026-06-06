@@ -3,6 +3,7 @@ import {
   Inject,
   forwardRef,
   BadRequestException,
+  ConflictException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -1011,6 +1012,11 @@ export class OrdenServicioService {
   /**
    * Cobrar una orden de servicio: genera ComprobanteElectronico + PagoComprobante
    * y cambia el estado a ENTREGADO
+   *
+   * @deprecated LEGACY — solo para APKs antiguos. El cobro migró al pipeline
+   * de Venta Rápida (`VentaService.crearYCobrar` con detalle.ordenServicioId):
+   * registra caja, envía a SUNAT, soporta MIXTO/crédito y bancarización —
+   * nada de eso existe aquí. Retirar con 410 cuando salga el APK release.
    */
   async cobrarOrden(empresaId: string, ordenId: string, dto: CobrarOrdenDto, usuarioId: string) {
     return await this.prisma.$transaction(async (tx) => {
@@ -1242,5 +1248,436 @@ export class OrdenServicioService {
         },
       };
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Cobro de órdenes vía Venta Rápida (POS)
+  //
+  // El cobro de órdenes migró al pipeline de venta (caja multi-medio, SUNAT,
+  // crédito con cuotas, bancarización). VentaService invoca estos métodos
+  // dentro de SU transacción. `cobrarOrden` (arriba) queda como flujo legacy
+  // para APKs antiguos hasta el próximo release; luego se retira con 410.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** Estados en los que una orden puede cobrarse */
+  private static readonly ESTADOS_COBRABLES: EstadoOrdenServicio[] = [
+    EstadoOrdenServicio.REPARADO,
+    EstadoOrdenServicio.LISTO_ENTREGA,
+  ];
+
+  private static saldoPendiente(orden: {
+    costoTotal: Prisma.Decimal | null;
+    adelanto: Prisma.Decimal | null;
+    descuento: Prisma.Decimal | null;
+  }): number {
+    const costo = Number(orden.costoTotal ?? 0);
+    const adelanto = Number(orden.adelanto ?? 0);
+    const descuento = Number(orden.descuento ?? 0);
+    return Math.round((costo - adelanto - descuento) * 100) / 100;
+  }
+
+  /**
+   * Valida (y bloquea con FOR UPDATE) las órdenes referenciadas por líneas
+   * de venta con `ordenServicioId`. Llamar DENTRO de la transacción de la
+   * venta, antes de crearla.
+   *
+   * Garantías:
+   * - Orden pertenece al tenant y está REPARADO/LISTO_ENTREGA.
+   * - Línea pura (sin producto/variante/combo), cantidad 1, sin descuento
+   *   de línea (el descuento comercial vive en la orden).
+   * - `precioUnitario` == saldo pendiente vigente (409 SALDO_ORDEN_DESACTUALIZADO
+   *   si la orden cambió mientras estaba en el carrito — mismo patrón que
+   *   PRECIO_DESACTUALIZADO).
+   * - Sin doble cobro: FOR UPDATE serializa cobros concurrentes y el check
+   *   de VentaDetalle existente convierte al perdedor en 409 ORDEN_YA_COBRADA
+   *   (el @unique de BD respalda como última línea de defensa).
+   */
+  async validarYBloquearCobroVenta(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    detalles: Array<{
+      ordenServicioId?: string;
+      productoId?: string;
+      varianteId?: string;
+      comboId?: string;
+      cantidad: number;
+      precioUnitario: number;
+      descuento?: number;
+      descripcion: string;
+    }>,
+  ) {
+    const lineasOrden = detalles.filter((d) => d.ordenServicioId);
+    if (lineasOrden.length === 0) return [];
+
+    // Línea pura: una orden no se mezcla con producto/combo en el mismo item
+    for (const d of lineasOrden) {
+      if (d.productoId || d.varianteId || d.comboId) {
+        throw new BadRequestException(
+          `La línea "${d.descripcion}" combina ordenServicioId con producto/combo`,
+        );
+      }
+      if (Number(d.cantidad) !== 1) {
+        throw new BadRequestException(
+          `La línea "${d.descripcion}" cobra una orden de servicio: la cantidad debe ser 1`,
+        );
+      }
+      if ((d.descuento ?? 0) > 0) {
+        throw new BadRequestException(
+          `La línea "${d.descripcion}" cobra una orden de servicio: el descuento se gestiona en la orden, no en la venta`,
+        );
+      }
+    }
+
+    const ids = lineasOrden.map((d) => d.ordenServicioId!);
+    const duplicados = ids.filter((id, i) => ids.indexOf(id) !== i);
+    if (duplicados.length > 0) {
+      throw new BadRequestException(
+        'La venta incluye la misma orden de servicio más de una vez',
+      );
+    }
+
+    // Lock pesimista: serializa dos cobros simultáneos de la misma orden
+    await tx.$queryRawUnsafe(
+      `SELECT id FROM "OrdenServicio" WHERE id = ANY($1) AND "empresaId" = $2 FOR UPDATE`,
+      ids,
+      empresaId,
+    );
+
+    const ordenes = await tx.ordenServicio.findMany({
+      where: { id: { in: ids }, empresaId },
+      include: { servicio: { select: { nombre: true } } },
+    });
+
+    const ordenesMap = new Map(ordenes.map((o) => [o.id, o]));
+    const divergencias: Array<{
+      ordenServicioId: string;
+      codigo: string | null;
+      descripcion: string;
+      precioCliente: number;
+      saldoServer: number;
+    }> = [];
+
+    for (const d of lineasOrden) {
+      const orden = ordenesMap.get(d.ordenServicioId!);
+      if (!orden) {
+        throw new NotFoundException(
+          `Orden de servicio de la línea "${d.descripcion}" no encontrada`,
+        );
+      }
+      if (!OrdenServicioService.ESTADOS_COBRABLES.includes(orden.estado)) {
+        throw new BadRequestException(
+          `La orden ${orden.codigo} está en estado ${orden.estado}. ` +
+            `Solo se cobran órdenes en REPARADO o LISTO_ENTREGA`,
+        );
+      }
+      if (!orden.costoTotal || Number(orden.costoTotal) <= 0) {
+        throw new BadRequestException(
+          `La orden ${orden.codigo} no tiene costo total definido`,
+        );
+      }
+      const saldo = OrdenServicioService.saldoPendiente(orden);
+      if (saldo <= 0) {
+        throw new BadRequestException(
+          `La orden ${orden.codigo} no tiene saldo pendiente (ya está cubierta por adelanto/descuento). ` +
+            `Entregala con el cambio de estado normal`,
+        );
+      }
+      if (Math.abs(Number(d.precioUnitario) - saldo) > 0.01) {
+        divergencias.push({
+          ordenServicioId: orden.id,
+          codigo: orden.codigo,
+          descripcion: d.descripcion,
+          precioCliente: Number(d.precioUnitario),
+          saldoServer: saldo,
+        });
+      }
+    }
+
+    if (divergencias.length > 0) {
+      throw new ConflictException({
+        code: 'SALDO_ORDEN_DESACTUALIZADO',
+        message:
+          divergencias.length === 1
+            ? `El saldo de la orden ${divergencias[0].codigo} cambió de S/ ` +
+              `${divergencias[0].precioCliente.toFixed(2)} a S/ ` +
+              `${divergencias[0].saldoServer.toFixed(2)}. Refrescá el carrito y volvé a intentar.`
+            : `${divergencias.length} órdenes tienen saldo desactualizado. ` +
+              `Refrescá el carrito y volvé a intentar.`,
+        divergencias,
+      });
+    }
+
+    // Doble cobro: tras el FOR UPDATE este check ve lo que commiteó cualquier
+    // transacción ganadora.
+    const yaCobradas = await tx.ventaDetalle.findMany({
+      where: { ordenServicioId: { in: ids } },
+      select: {
+        ordenServicioId: true,
+        venta: { select: { codigo: true } },
+      },
+    });
+    if (yaCobradas.length > 0) {
+      const codigos = yaCobradas
+        .map((v) => ordenesMap.get(v.ordenServicioId!)?.codigo ?? v.ordenServicioId)
+        .join(', ');
+      throw new ConflictException({
+        code: 'ORDEN_YA_COBRADA',
+        message: `Orden(es) ya cobrada(s) en otra venta: ${codigos} (${yaCobradas
+          .map((v) => v.venta.codigo)
+          .join(', ')})`,
+      });
+    }
+
+    return ordenes;
+  }
+
+  /**
+   * Marca las órdenes como ENTREGADO tras el cobro vía venta POS.
+   * Llamar DENTRO de la transacción de la venta, después de crear la venta
+   * y el comprobante. Replica los efectos de la transición a ENTREGADO:
+   * fechaEntrega, estadoDiagnostico, historial y componentes → EN_USO.
+   */
+  async marcarOrdenesCobradasPorVenta(
+    tx: Prisma.TransactionClient,
+    params: {
+      ordenes: Array<{
+        id: string;
+        estado: EstadoOrdenServicio;
+        estadoDiagnostico: EstadoDiagnostico | null;
+      }>;
+      ventaCodigo: string;
+      comprobante: { id: string; codigoGenerado: string } | null;
+      usuarioId: string;
+    },
+  ) {
+    const { ordenes, ventaCodigo, comprobante, usuarioId } = params;
+    const actualizadas: any[] = [];
+
+    for (const orden of ordenes) {
+      const updated = await tx.ordenServicio.update({
+        where: { id: orden.id },
+        data: {
+          estado: EstadoOrdenServicio.ENTREGADO,
+          fechaEntrega: new Date(),
+          comprobanteId: comprobante?.id ?? null,
+          ...(orden.estadoDiagnostico &&
+          orden.estadoDiagnostico !== EstadoDiagnostico.COMPLETADO
+            ? { estadoDiagnostico: EstadoDiagnostico.COMPLETADO }
+            : {}),
+        },
+        include: { servicio: { select: { nombre: true } } },
+      });
+
+      await tx.historialOrdenServicio.create({
+        data: {
+          ordenServicioId: orden.id,
+          estadoAnterior: orden.estado,
+          estadoNuevo: EstadoOrdenServicio.ENTREGADO,
+          notas:
+            `Orden cobrada vía Venta Rápida ${ventaCodigo}` +
+            (comprobante ? ` — Comprobante ${comprobante.codigoGenerado}` : ''),
+          comunicarCliente: true,
+          creadoPor: usuarioId,
+        },
+      });
+
+      // Mismo sync de componentes que la transición manual a ENTREGADO
+      await tx.servicioComponente.updateMany({
+        where: { ordenServicioId: orden.id },
+        data: { estadoComponente: EstadoComponente.EN_USO },
+      });
+
+      actualizadas.push(updated);
+    }
+
+    return actualizadas;
+  }
+
+  /**
+   * Efectos post-commit del cobro vía venta: push al cliente + aviso de
+   * mantenimiento. Fire-and-forget (el caller hace .catch).
+   */
+  async procesarPostCobroOrdenes(empresaId: string, ordenes: any[]) {
+    for (const orden of ordenes) {
+      // Aviso de mantenimiento (solo clientes persona, igual que transitionEstado)
+      if (orden.incluirAvisoMantenimiento && orden.clienteId) {
+        try {
+          await this.avisoMantenimientoService.crearAvisoParaOrden({
+            id: orden.id,
+            empresaId,
+            clienteId: orden.clienteId,
+            tipoServicio: orden.tipoServicio,
+            tipoEquipo: orden.tipoEquipo,
+            marcaEquipo: orden.marcaEquipo,
+            fechaEntrega: orden.fechaEntrega,
+            actualizadoEn: orden.actualizadoEn,
+            fechaAvisoPersonalizado: orden.fechaAvisoPersonalizado,
+          });
+        } catch {
+          // No bloquear por el aviso
+        }
+      }
+
+      const servicioNombre = orden.servicio?.nombre ?? 'Servicio';
+      await this.notificarClienteOrden(
+        orden.clienteId,
+        'Servicio entregado',
+        `Tu orden ${orden.codigo} (${servicioNombre}) ha sido cobrada y entregada.`,
+        empresaId,
+        orden.id,
+        'status_changed',
+      ).catch(() => {});
+    }
+  }
+
+  /**
+   * Reversa del cobro cuando se ANULA la venta: la orden vuelve a
+   * LISTO_ENTREGA (re-cobrable), se desvincula el comprobante y se libera
+   * el candado @unique poniendo VentaDetalle.ordenServicioId en null.
+   * Llamar DENTRO de la transacción de anulación de la venta.
+   */
+  async revertirCobroPorVentaAnulada(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    detalles: Array<{ id: string; ordenServicioId: string }>,
+    usuarioId: string,
+    ventaCodigo: string,
+  ) {
+    for (const detalle of detalles) {
+      const orden = await tx.ordenServicio.findFirst({
+        where: { id: detalle.ordenServicioId, empresaId },
+        select: { id: true, estado: true, codigo: true },
+      });
+      if (!orden) continue;
+
+      await tx.ordenServicio.update({
+        where: { id: orden.id },
+        data: {
+          estado: EstadoOrdenServicio.LISTO_ENTREGA,
+          fechaEntrega: null,
+          comprobanteId: null,
+        },
+      });
+
+      await tx.historialOrdenServicio.create({
+        data: {
+          ordenServicioId: orden.id,
+          estadoAnterior: orden.estado,
+          estadoNuevo: EstadoOrdenServicio.LISTO_ENTREGA,
+          notas: `[ANULACIÓN VENTA] Se anuló la venta ${ventaCodigo} que cobró esta orden. La orden vuelve a estar pendiente de cobro`,
+          creadoPor: usuarioId,
+        },
+      });
+
+      // Espeja el estado de componentes de LISTO_ENTREGA (post-REPARADO)
+      await tx.servicioComponente.updateMany({
+        where: { ordenServicioId: orden.id },
+        data: { estadoComponente: EstadoComponente.DISPONIBLE },
+      });
+
+      // Libera el candado @unique para permitir re-cobro
+      await tx.ventaDetalle.update({
+        where: { id: detalle.id },
+        data: { ordenServicioId: null },
+      });
+    }
+  }
+
+  /**
+   * Órdenes cobrables para el selector de Venta Rápida: REPARADO/LISTO_ENTREGA
+   * con saldo > 0 y sin venta vinculada. Payload liviano.
+   */
+  async findCobrables(empresaId: string, search?: string) {
+    const searchTrim = search?.trim();
+    const ordenes = await this.prisma.ordenServicio.findMany({
+      where: {
+        empresaId,
+        estado: { in: OrdenServicioService.ESTADOS_COBRABLES },
+        costoTotal: { not: null },
+        ventaDetalle: null,
+        ...(searchTrim
+          ? {
+              OR: [
+                { codigo: { contains: searchTrim, mode: 'insensitive' } },
+                { tipoEquipo: { contains: searchTrim, mode: 'insensitive' } },
+                { marcaEquipo: { contains: searchTrim, mode: 'insensitive' } },
+                {
+                  cliente: {
+                    persona: {
+                      OR: [
+                        { nombres: { contains: searchTrim, mode: 'insensitive' } },
+                        { apellidos: { contains: searchTrim, mode: 'insensitive' } },
+                        { dni: { contains: searchTrim } },
+                      ],
+                    },
+                  },
+                },
+                {
+                  clienteEmpresa: {
+                    OR: [
+                      { razonSocial: { contains: searchTrim, mode: 'insensitive' } },
+                      { numeroDocumento: { contains: searchTrim } },
+                    ],
+                  },
+                },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        cliente: {
+          select: {
+            id: true,
+            persona: {
+              select: { nombres: true, apellidos: true, dni: true, telefono: true, email: true },
+            },
+          },
+        },
+        clienteEmpresa: {
+          select: { id: true, razonSocial: true, numeroDocumento: true, email: true, direccion: true },
+        },
+        servicio: { select: { nombre: true } },
+      },
+      orderBy: { actualizadoEn: 'desc' },
+      take: 30,
+    });
+
+    return ordenes
+      .map((o) => {
+        const saldoPendiente = OrdenServicioService.saldoPendiente(o);
+        return {
+          id: o.id,
+          codigo: o.codigo,
+          estado: o.estado,
+          tipoServicio: o.tipoServicio,
+          servicioNombre: o.servicio?.nombre ?? null,
+          tipoEquipo: o.tipoEquipo,
+          marcaEquipo: o.marcaEquipo,
+          numeroSerie: o.numeroSerie,
+          costoTotal: Number(o.costoTotal ?? 0),
+          adelanto: Number(o.adelanto ?? 0),
+          descuento: Number(o.descuento ?? 0),
+          saldoPendiente,
+          cliente: o.cliente
+            ? {
+                clienteId: o.cliente.id,
+                nombre: `${o.cliente.persona?.nombres ?? ''} ${o.cliente.persona?.apellidos ?? ''}`.trim(),
+                numeroDocumento: o.cliente.persona?.dni ?? null,
+                telefono: o.cliente.persona?.telefono ?? null,
+                email: o.cliente.persona?.email ?? null,
+              }
+            : null,
+          clienteEmpresa: o.clienteEmpresa
+            ? {
+                clienteEmpresaId: o.clienteEmpresa.id,
+                razonSocial: o.clienteEmpresa.razonSocial,
+                ruc: o.clienteEmpresa.numeroDocumento,
+                email: o.clienteEmpresa.email ?? null,
+                direccion: o.clienteEmpresa.direccion ?? null,
+              }
+            : null,
+        };
+      })
+      .filter((o) => o.saldoPendiente > 0);
   }
 }

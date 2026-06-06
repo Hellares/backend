@@ -179,6 +179,21 @@ export class OrdenServicioController {
     return this.ordenServicioService.findAll(empresaId, query);
   }
 
+  @Get('cobrables')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({
+    summary:
+      'Órdenes cobrables desde Venta Rápida (REPARADO/LISTO_ENTREGA con saldo > 0 y sin venta vinculada)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  findCobrables(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('search') search?: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.ordenServicioService.findCobrables(empresaId, search);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Obtener una orden de servicio' })

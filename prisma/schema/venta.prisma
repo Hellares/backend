@@ -165,6 +165,12 @@ model VentaDetalle {
   varianteId String?
   servicioId String?
   comboId    String?
+  // Cobro de orden de servicio vía POS: la línea representa el saldo de una
+  // OrdenServicio (REPARADO/LISTO_ENTREGA). @unique = candado anti doble
+  // cobro a nivel BD. Al anular la venta se desvincula (set null) para que
+  // la orden vuelva a ser cobrable; la trazabilidad queda en el historial
+  // de la orden.
+  ordenServicioId String? @unique
 
   // Datos del item (snapshot)
   descripcion    String
@@ -214,10 +220,11 @@ model VentaDetalle {
   actualizadoEn DateTime @updatedAt
 
   // Relaciones
-  venta        Venta             @relation(fields: [ventaId], references: [id], onDelete: Cascade)
-  producto     Producto?         @relation(fields: [productoId], references: [id])
-  variante     ProductoVariante? @relation(fields: [varianteId], references: [id])
-  servicio     Servicio?         @relation(fields: [servicioId], references: [id])
+  venta         Venta             @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  producto      Producto?         @relation(fields: [productoId], references: [id])
+  variante      ProductoVariante? @relation(fields: [varianteId], references: [id])
+  servicio      Servicio?         @relation(fields: [servicioId], references: [id])
+  ordenServicio OrdenServicio?    @relation(fields: [ordenServicioId], references: [id])
   origenCombo  Producto?         @relation("VentaDetalleOrigenCombo", fields: [origenComboId], references: [id])
   devoluciones DevolucionItem[]
 

@@ -29,6 +29,17 @@ export class CreateVentaDetalleDto {
   @IsString()
   comboId?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'ID de la orden de servicio que se cobra con esta línea (solo POS ' +
+      'crearYCobrar). La orden debe estar REPARADO/LISTO_ENTREGA y el ' +
+      'precioUnitario debe coincidir con su saldo pendiente. Excluyente ' +
+      'con productoId/varianteId/comboId; cantidad debe ser 1.',
+  })
+  @IsOptional()
+  @IsString()
+  ordenServicioId?: string;
+
   @ApiProperty({ description: 'Descripcion del item' })
   @IsString()
   @IsNotEmpty()

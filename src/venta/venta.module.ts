@@ -10,6 +10,7 @@ import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuraci
 import { CajaModule } from '../caja/caja.module';
 import { ProductoModule } from '../producto/producto.module';
 import { SunatModule } from '../sunat/sunat.module';
+import { ServicioModule } from '../servicio/servicio.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { SunatModule } from '../sunat/sunat.module';
     forwardRef(() => CajaModule),
     ProductoModule,
     SunatModule,
+    ServicioModule,
   ],
   controllers: [VentaAnalyticsController, VentaController],
   providers: [VentaService, VentaAnalyticsService],

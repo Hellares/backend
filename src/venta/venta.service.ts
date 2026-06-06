@@ -31,6 +31,7 @@ import {
   Rol,
 } from '@prisma/client';
 import { FacturacionService } from '../sunat/facturacion.service';
+import { OrdenServicioService } from '../servicio/orden-servicio.service';
 import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
 
 /**
@@ -55,6 +56,7 @@ export class VentaService {
     @Inject(forwardRef(() => CajaService)) private readonly cajaService: CajaService,
     private readonly comboService: ProductoComboService,
     private readonly facturacionService: FacturacionService,
+    private readonly ordenServicioService: OrdenServicioService,
     private readonly precioNivelService: PrecioNivelService,
     private readonly realtimeInvalidation: RealtimeInvalidationService,
     loggerService: AppLoggerService,
@@ -582,6 +584,15 @@ export class VentaService {
   async create(empresaId: string, dto: CreateVentaDto, cajeroId?: string) {
     this.logger.info('Creando venta', { empresaId, sede: dto.sedeId });
 
+    // El cobro de órdenes de servicio solo está soportado en el flujo POS
+    // crearYCobrar (valida saldo, marca ENTREGADO y registra en caja en una
+    // sola transacción). Este flujo crea ventas que se cobran después.
+    if (dto.detalles?.some((d) => (d as any).ordenServicioId)) {
+      throw new BadRequestException(
+        'Las órdenes de servicio se cobran desde Venta Rápida (crear y cobrar), no en este flujo',
+      );
+    }
+
     // Si la empresa exige caja para vender (flag `requiereCajaParaVender`),
     // bloquear si el cajero no tiene caja abierta en la sede destino.
     // Cada cajero gestiona su propia caja. Si el flag está OFF, no valida.
@@ -766,6 +777,16 @@ export class VentaService {
           this.calcularDetalle(d, index),
         );
 
+        // 2a-bis. Órdenes de servicio en el carrito: validar y bloquear
+        // (FOR UPDATE). Verifica estado cobrable, saldo vigente (409
+        // SALDO_ORDEN_DESACTUALIZADO) y doble cobro (409 ORDEN_YA_COBRADA).
+        const ordenesACobrar =
+          await this.ordenServicioService.validarYBloquearCobroVenta(
+            tx,
+            empresaId,
+            detallesCalculados,
+          );
+
         // 2b. Guard: validar venta bajo costo (margen negativo).
         const perdidaTotal = await this.validarVentaBajoCosto(
           empresaId,
@@ -892,6 +913,7 @@ export class VentaService {
                 varianteId: d.varianteId,
                 servicioId: d.servicioId,
                 comboId: d.comboId,
+                ordenServicioId: d.ordenServicioId,
                 descripcion: d.descripcion,
                 cantidad: d.cantidad,
                 precioUnitario: d.precioUnitario,
@@ -1197,6 +1219,7 @@ export class VentaService {
 
         // 6. Generar comprobante electrónico (solo BOLETA/FACTURA, no TICKET)
         let comprobanteIdGenerado: string | null = null;
+        let comprobanteGenerado: { id: string; codigoGenerado: string } | null = null;
         const tipoComprobante = dto.tipoComprobante || 'TICKET';
 
         if (tipoComprobante !== 'TICKET') {
@@ -1318,8 +1341,26 @@ export class VentaService {
 
           this.logger.log(`Comprobante ${codigoGenerado} generado para venta POS ${venta.codigo}`);
           comprobanteIdGenerado = comprobante.id;
+          comprobanteGenerado = { id: comprobante.id, codigoGenerado };
         }
         } // fin if tipoComprobante !== 'TICKET'
+
+        // 6b. Órdenes de servicio cobradas → ENTREGADO + historial +
+        // componentes EN_USO + vínculo al comprobante (misma transacción).
+        let ordenesCobradas: any[] = [];
+        if (ordenesACobrar.length > 0) {
+          ordenesCobradas =
+            await this.ordenServicioService.marcarOrdenesCobradasPorVenta(tx, {
+              ordenes: ordenesACobrar,
+              ventaCodigo: codigoVenta,
+              comprobante: comprobanteGenerado,
+              usuarioId: cajeroId,
+            });
+          this.logger.log(
+            `Venta POS ${codigoVenta} cobró ${ordenesCobradas.length} orden(es) de servicio: ` +
+              ordenesCobradas.map((o) => o.codigo).join(', '),
+          );
+        }
 
         // 7. Registrar movimientos en caja — UNO POR PAGO REAL (multi-medio).
         // Cada PagoVenta no-CREDITO genera su propio MovimientoCaja con su método.
@@ -1355,7 +1396,7 @@ export class VentaService {
         }
 
         this.logger.log(`Venta POS creada y cobrada: ${venta.codigo}`);
-        return { venta, comprobanteIdGenerado };
+        return { venta, comprobanteIdGenerado, ordenesCobradas };
       },
       { timeout: Math.max(30000, dto.detalles.length * 1000 + 15000) },
     );
@@ -1390,6 +1431,18 @@ export class VentaService {
     if (result.comprobanteIdGenerado) {
       this.facturacionService.enviarComprobante(result.comprobanteIdGenerado, empresaId)
         .catch(err => this.logger.warn(`Envío fallido para comprobante ${result.comprobanteIdGenerado}: ${err?.message}`));
+    }
+
+    // Fire-after-commit: push al cliente + aviso mantenimiento de las
+    // órdenes de servicio cobradas (no bloquea la venta)
+    if (result.ordenesCobradas?.length > 0) {
+      this.ordenServicioService
+        .procesarPostCobroOrdenes(empresaId, result.ordenesCobradas)
+        .catch((err) =>
+          this.logger.warn(
+            `Post-cobro órdenes falló (no crítico): ${err?.message ?? err}`,
+          ),
+        );
     }
 
     return result.venta;
@@ -2857,6 +2910,27 @@ export class VentaService {
         });
       }
 
+      // Si la venta cobró órdenes de servicio, revertirlas a LISTO_ENTREGA
+      // (re-cobrables) y liberar el candado @unique del detalle.
+      const detallesConOrden = venta.detalles.filter(
+        (d) => (d as any).ordenServicioId,
+      );
+      if (detallesConOrden.length > 0) {
+        await this.ordenServicioService.revertirCobroPorVentaAnulada(
+          tx,
+          empresaId,
+          detallesConOrden.map((d) => ({
+            id: d.id,
+            ordenServicioId: (d as any).ordenServicioId as string,
+          })),
+          usuarioId,
+          venta.codigo,
+        );
+        this.logger.log(
+          `Anulación ${venta.codigo}: ${detallesConOrden.length} orden(es) de servicio revertida(s) a LISTO_ENTREGA`,
+        );
+      }
+
       const updatedVenta = await tx.venta.update({
         where: { id },
         data: {
@@ -3315,6 +3389,7 @@ export class VentaService {
       varianteId: dto.varianteId || null,
       servicioId: dto.servicioId || null,
       comboId: dto.comboId || null,
+      ordenServicioId: dto.ordenServicioId || null,
       descripcion: dto.descripcion,
       cantidad,
       precioUnitario,
