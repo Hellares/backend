@@ -855,10 +855,21 @@ export class VentaService {
         const descuentoVenta = descuentoItems + descuentoGlobal;
         const totalVenta = Math.round((totalSinDescuentoGlobal - descuentoGlobal) * 100) / 100;
 
+        // Adelantos ya pagados de las órdenes de servicio cobradas: el
+        // comprobante/venta sale por el TOTAL del servicio (la línea es el
+        // costo neto), pero HOY solo se cobra el saldo. El adelanto entra
+        // como PagoVenta/PagoComprobante "aplicado" (su dinero ya pasó por
+        // caja al recibirse) y todo lo que depende de lo cobrado hoy
+        // (pagada-completa, vuelto, bancarización, caja) usa el neto.
+        const adelantoOrdenes = Math.round(
+          ordenesACobrar.reduce((s, o) => s + Number(o.adelanto ?? 0), 0) * 100,
+        ) / 100;
+        const totalACobrarHoy = Math.round((totalVenta - adelantoOrdenes) * 100) / 100;
+
         const esCredito = dto.esCredito ?? false;
 
         this.validarBancarizacion({
-          total: totalVenta,
+          total: totalACobrarHoy,
           moneda: dto.moneda,
           esCredito,
           pagos: dto.pagos,
@@ -872,14 +883,14 @@ export class VentaService {
           ? dto.pagos.reduce((s, p) => s + p.monto, 0)
           : (dto.montoRecibido ?? 0);
         const montoRecibido = dto.montoRecibido ?? montoPagadoInmediato;
-        const estaPagada = !esCredito && montoRecibido >= totalVenta;
+        const estaPagada = !esCredito && montoRecibido >= totalACobrarHoy;
         const montoCredito = esCredito
-          ? Math.round((totalVenta - montoPagadoInmediato) * 100) / 100
+          ? Math.round((totalACobrarHoy - montoPagadoInmediato) * 100) / 100
           : 0;
 
         const montoCambio =
-          montoRecibido > totalVenta
-            ? Math.round((montoRecibido - totalVenta) * 100) / 100
+          montoRecibido > totalACobrarHoy
+            ? Math.round((montoRecibido - totalACobrarHoy) * 100) / 100
             : 0;
 
         // 3. Crear venta con estado final
@@ -1207,8 +1218,27 @@ export class VentaService {
             data: {
               ventaId: venta.id,
               metodoPago: dto.metodoPago || 'EFECTIVO',
-              monto: Math.min(montoRecibido, totalVenta),
+              monto: Math.min(montoRecibido, totalACobrarHoy),
             },
+          });
+        }
+
+        // 5a-bis. Adelantos de órdenes de servicio como pagos APLICADOS:
+        // la venta queda saldada por el total del servicio. Su dinero ya
+        // entró a caja al recibirse (ADELANTO_SERVICIO) — se identifican
+        // por la referencia "Adelanto OS-..." y NO van a caja hoy.
+        if (adelantoOrdenes > 0) {
+          await tx.pagoVenta.createMany({
+            data: ordenesACobrar
+              .filter((o) => Number(o.adelanto ?? 0) > 0)
+              .map((o) => ({
+                ventaId: venta.id,
+                metodoPago: OrdenServicioService.toMetodoPagoVenta(
+                  o.metodoPagoAdelanto,
+                ) as any,
+                monto: Number(o.adelanto),
+                referencia: `Adelanto ${o.codigo}`,
+              })),
           });
         }
 
@@ -1353,12 +1383,28 @@ export class VentaService {
                 comprobanteId: comprobante.id,
                 metodoPago: dto.metodoPago || 'EFECTIVO',
                 monto: new Prisma.Decimal(
-                  (esCredito ? 0 : Math.min(montoRecibido || totalVenta, totalVenta)).toFixed(2),
+                  (esCredito ? 0 : Math.min(montoRecibido || totalACobrarHoy, totalACobrarHoy)).toFixed(2),
                 ),
                 estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
               }];
 
-          await tx.pagoComprobante.createMany({ data: pagosComprobanteData });
+          // Adelantos de órdenes aplicados al comprobante: completan el
+          // total (total = adelantos + cobrado hoy).
+          const pagosAdelantoComprobante = ordenesACobrar
+            .filter((o) => Number(o.adelanto ?? 0) > 0)
+            .map((o) => ({
+              comprobanteId: comprobante.id,
+              metodoPago: OrdenServicioService.toMetodoPagoVenta(
+                o.metodoPagoAdelanto,
+              ) as string,
+              monto: new Prisma.Decimal(Number(o.adelanto).toFixed(2)),
+              referencia: `Adelanto ${o.codigo}`,
+              estado: 'COMPLETADO',
+            }));
+
+          await tx.pagoComprobante.createMany({
+            data: [...pagosComprobanteData, ...pagosAdelantoComprobante],
+          });
 
           this.logger.log(`Comprobante ${codigoGenerado} generado para venta POS ${venta.codigo}`);
           comprobanteIdGenerado = comprobante.id;
@@ -1387,11 +1433,14 @@ export class VentaService {
         // Cada PagoVenta no-CREDITO genera su propio MovimientoCaja con su método.
         // Así el cierre Z agrupa correctamente sin necesidad de tocar el groupBy.
         if (montoPagadoInmediato > 0) {
+          // OJO: la caja registra solo lo cobrado HOY (totalACobrarHoy =
+          // total − adelantos de órdenes; el adelanto ya tuvo su propio
+          // movimiento ADELANTO_SERVICIO al recibirse).
           const pagosParaCaja = (dto.pagos && dto.pagos.length > 0)
-            ? this.construirPagosParaCaja(dto.pagos, totalVenta, montoCambio)
+            ? this.construirPagosParaCaja(dto.pagos, totalACobrarHoy, montoCambio)
             : [{
                 metodoPago: dto.metodoPago || 'EFECTIVO',
-                monto: Math.min(montoPagadoInmediato, totalVenta),
+                monto: Math.min(montoPagadoInmediato, totalACobrarHoy),
               }];
 
           // Si la venta cobra órdenes de servicio, referenciarlas en la
@@ -2879,7 +2928,9 @@ export class VentaService {
         include: {
           detalles: true,
           // Necesario para reversar caja: 1 EGRESO por cada PagoVenta original.
-          pagos: { select: { metodoPago: true, monto: true } },
+          // `referencia` identifica pagos "adelanto aplicado" de órdenes
+          // (no entraron a caja con esta venta → no se reversan aquí).
+          pagos: { select: { metodoPago: true, monto: true, referencia: true } },
         },
       });
 
@@ -2998,7 +3049,13 @@ export class VentaService {
       // MovimientoCaja), usamos los PagoVenta no-CREDITO como compensación
       // contra la caja del que anula.
       const pagosACobrar = (venta.pagos ?? []).filter(
-        (p) => p.metodoPago !== 'CREDITO',
+        (p) =>
+          p.metodoPago !== 'CREDITO' &&
+          // Adelantos aplicados de órdenes: su dinero entró a caja con su
+          // propio movimiento ADELANTO_SERVICIO (que sigue vigente — la
+          // orden vuelve a LISTO_ENTREGA con su adelanto). El fallback no
+          // debe reversarlos.
+          !(p as any).referencia?.startsWith('Adelanto '),
       );
       // El INGRESO original ya se registró NETO de vuelto (efectivo = recibido −
       // cambio). La contrapartida del fallback debe espejar eso, no el bruto del
@@ -4105,6 +4162,15 @@ export class VentaService {
     // 5. Pagos
     const montoCambio = venta.montoCambio ? Number(venta.montoCambio) : 0;
     for (const pago of venta.pagos || []) {
+      // Pagos "adelanto aplicado" de órdenes de servicio: ya aparecen como
+      // nodo ADELANTO bajo la orden (con su fecha real de caja) — no
+      // duplicar como pago de la venta.
+      if (
+        ordenesServicio.length > 0 &&
+        pago.referencia?.startsWith('Adelanto ')
+      ) {
+        continue;
+      }
       const esEfectivo = pago.metodoPago === 'EFECTIVO';
       ventaNodo.hijos.push({
         tipo: 'PAGO',

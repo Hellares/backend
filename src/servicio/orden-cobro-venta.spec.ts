@@ -60,7 +60,10 @@ const ordenBase = (overrides: Partial<any> = {}) => ({
 const lineaBase = (overrides: Partial<any> = {}) => ({
   ordenServicioId: 'orden-1',
   cantidad: 1,
-  precioUnitario: 100, // = 150 - 50 - 0
+  // Precio de línea = COSTO NETO (costoTotal − descuento, SIN restar
+  // adelanto): el comprobante sale por el total del servicio y el
+  // adelanto entra como pago aplicado.
+  precioUnitario: 150,
   descuento: 0,
   descripcion: 'SERVICIO ORD-00001 — LAPTOP DELL',
   ...overrides,
@@ -171,10 +174,10 @@ describe('OrdenServicioService.validarYBloquearCobroVenta', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('409 SALDO_ORDEN_DESACTUALIZADO cuando el precio no coincide con el saldo', async () => {
-    const tx = makeTx(); // saldo real = 100
+  it('409 SALDO_ORDEN_DESACTUALIZADO cuando el precio no coincide con el costo neto', async () => {
+    const tx = makeTx(); // costo neto real = 150 (saldo 100 NO es el precio)
     try {
-      await validar(tx, EMPRESA, [lineaBase({ precioUnitario: 80 })]);
+      await validar(tx, EMPRESA, [lineaBase({ precioUnitario: 100 })]);
       fail('debió lanzar ConflictException');
     } catch (e: any) {
       expect(e).toBeInstanceOf(ConflictException);
@@ -182,8 +185,8 @@ describe('OrdenServicioService.validarYBloquearCobroVenta', () => {
       expect(body.code).toBe('SALDO_ORDEN_DESACTUALIZADO');
       expect(body.divergencias).toHaveLength(1);
       expect(body.divergencias[0]).toMatchObject({
-        precioCliente: 80,
-        saldoServer: 100,
+        precioCliente: 100,
+        saldoServer: 150,
       });
     }
   });
@@ -191,7 +194,7 @@ describe('OrdenServicioService.validarYBloquearCobroVenta', () => {
   it('tolera diferencia de centavos <= 0.01 (floating point)', async () => {
     const tx = makeTx();
     const result = await validar(tx, EMPRESA, [
-      lineaBase({ precioUnitario: 100.009 }),
+      lineaBase({ precioUnitario: 150.009 }),
     ]);
     expect(result).toHaveLength(1);
   });

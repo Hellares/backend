@@ -108,7 +108,7 @@ export class OrdenServicioService {
   ) {}
 
   /** Mapea el string libre `metodoPagoAdelanto` al enum de caja (fallback EFECTIVO). */
-  private static toMetodoPagoVenta(metodo?: string | null): MetodoPagoVenta {
+  static toMetodoPagoVenta(metodo?: string | null): MetodoPagoVenta {
     const valor = (metodo ?? '').toUpperCase().trim();
     return (Object.values(MetodoPagoVenta) as string[]).includes(valor)
       ? (valor as MetodoPagoVenta)
@@ -1437,6 +1437,18 @@ export class OrdenServicioService {
     return Math.round((costo - adelanto - descuento) * 100) / 100;
   }
 
+  /** Costo neto del servicio (costo − descuento, SIN restar adelanto).
+   * Es el monto por el que se factura: el comprobante sale por el TOTAL
+   * del servicio y el adelanto entra como pago aplicado. */
+  static costoNeto(orden: {
+    costoTotal: Prisma.Decimal | null;
+    descuento: Prisma.Decimal | null;
+  }): number {
+    const costo = Number(orden.costoTotal ?? 0);
+    const descuento = Number(orden.descuento ?? 0);
+    return Math.round((costo - descuento) * 100) / 100;
+  }
+
   /**
    * Valida (y bloquea con FOR UPDATE) las órdenes referenciadas por líneas
    * de venta con `ordenServicioId`. Llamar DENTRO de la transacción de la
@@ -1446,9 +1458,10 @@ export class OrdenServicioService {
    * - Orden pertenece al tenant y está REPARADO/LISTO_ENTREGA.
    * - Línea pura (sin producto/variante/combo), cantidad 1, sin descuento
    *   de línea (el descuento comercial vive en la orden).
-   * - `precioUnitario` == saldo pendiente vigente (409 SALDO_ORDEN_DESACTUALIZADO
-   *   si la orden cambió mientras estaba en el carrito — mismo patrón que
-   *   PRECIO_DESACTUALIZADO).
+   * - `precioUnitario` == COSTO NETO vigente del servicio (costo − descuento,
+   *   SIN restar adelanto: el comprobante sale por el total y el adelanto
+   *   entra como pago aplicado). 409 SALDO_ORDEN_DESACTUALIZADO si la orden
+   *   cambió mientras estaba en el carrito.
    * - Sin doble cobro: FOR UPDATE serializa cobros concurrentes y el check
    *   de VentaDetalle existente convierte al perdedor en 409 ORDEN_YA_COBRADA
    *   (el @unique de BD respalda como última línea de defensa).
@@ -1543,13 +1556,16 @@ export class OrdenServicioService {
             `Entregala con el cambio de estado normal`,
         );
       }
-      if (Math.abs(Number(d.precioUnitario) - saldo) > 0.01) {
+      // El precio de línea es el COSTO NETO (factura por el total del
+      // servicio); el adelanto se aplica como pago, no como descuento.
+      const costoNeto = OrdenServicioService.costoNeto(orden);
+      if (Math.abs(Number(d.precioUnitario) - costoNeto) > 0.01) {
         divergencias.push({
           ordenServicioId: orden.id,
           codigo: orden.codigo,
           descripcion: d.descripcion,
           precioCliente: Number(d.precioUnitario),
-          saldoServer: saldo,
+          saldoServer: costoNeto,
         });
       }
     }
@@ -1559,10 +1575,10 @@ export class OrdenServicioService {
         code: 'SALDO_ORDEN_DESACTUALIZADO',
         message:
           divergencias.length === 1
-            ? `El saldo de la orden ${divergencias[0].codigo} cambió de S/ ` +
+            ? `El costo de la orden ${divergencias[0].codigo} cambió de S/ ` +
               `${divergencias[0].precioCliente.toFixed(2)} a S/ ` +
               `${divergencias[0].saldoServer.toFixed(2)}. Refrescá el carrito y volvé a intentar.`
-            : `${divergencias.length} órdenes tienen saldo desactualizado. ` +
+            : `${divergencias.length} órdenes tienen montos desactualizados. ` +
               `Refrescá el carrito y volvé a intentar.`,
         divergencias,
       });
