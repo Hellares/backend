@@ -439,6 +439,21 @@ export class OrdenServicioService {
       }
       if (dto.adelanto !== undefined) {
         if (allowCostStates.includes(dto.nuevoEstado)) {
+          // Guard: orden ya cobrada (vínculo a venta o comprobante) → el
+          // adelanto está saldado, no se puede modificar (dinero fantasma).
+          if (Number(dto.adelanto) !== Number(orden.adelanto ?? 0)) {
+            const cobrada =
+              orden.comprobanteId != null ||
+              (await tx.ventaDetalle.findUnique({
+                where: { ordenServicioId: id },
+                select: { id: true },
+              })) != null;
+            if (cobrada) {
+              throw new BadRequestException(
+                `La orden ${orden.codigo} ya fue cobrada: el adelanto no se puede modificar`,
+              );
+            }
+          }
           updateData.adelanto = dto.adelanto;
           if (dto.metodoPagoAdelanto) {
             updateData.metodoPagoAdelanto = dto.metodoPagoAdelanto;
@@ -899,6 +914,24 @@ export class OrdenServicioService {
     }
 
     const adelantoAnterior = Number(existing.adelanto ?? 0);
+
+    // Orden ya cobrada (vía venta o legacy): el adelanto está saldado en el
+    // comprobante — modificarlo registraría dinero fantasma en caja sobre
+    // una operación cerrada. ENTREGADO no es estado terminal (permite
+    // reingreso), así que el guard va por el vínculo de cobro.
+    if (dto.adelanto !== undefined && Number(dto.adelanto) !== adelantoAnterior) {
+      const cobrada =
+        existing.comprobanteId != null ||
+        (await this.prisma.ventaDetalle.findUnique({
+          where: { ordenServicioId: id },
+          select: { id: true },
+        })) != null;
+      if (cobrada) {
+        throw new BadRequestException(
+          `La orden ${existing.codigo} ya fue cobrada: el adelanto no se puede modificar`,
+        );
+      }
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.ordenServicio.update({

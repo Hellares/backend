@@ -866,10 +866,25 @@ export class VentaService {
         ) / 100;
         const totalACobrarHoy = Math.round((totalVenta - adelantoOrdenes) * 100) / 100;
 
+        // Defensa: con descuentoGlobal un caller podría dejar el neto a
+        // cobrar en negativo (la validación por orden garantiza saldo > 0,
+        // pero no contempla el descuento global). Sin este guard, la venta
+        // saldría PAGADA_COMPLETA sin pagos y con PagoComprobante negativo.
+        if (totalACobrarHoy < 0) {
+          throw new BadRequestException(
+            `Los adelantos aplicados (S/ ${adelantoOrdenes.toFixed(2)}) superan el total a cobrar ` +
+              `(S/ ${totalVenta.toFixed(2)}). Reducí el descuento global o ajustá la orden.`,
+          );
+        }
+
         const esCredito = dto.esCredito ?? false;
 
+        // Bancarización: la Ley 28194 aplica al monto de la OPERACIÓN (el
+        // comprobante sale por totalVenta), no a lo cobrado hoy. Con
+        // adelanto, el saldo podría caer bajo el umbral aunque la operación
+        // facturada lo supere — se valida contra el total.
         this.validarBancarizacion({
-          total: totalACobrarHoy,
+          total: totalVenta,
           moneda: dto.moneda,
           esCredito,
           pagos: dto.pagos,
@@ -3048,14 +3063,22 @@ export class VentaService {
       // Fallback: si la venta fue cobrada sin caja activa (no hay
       // MovimientoCaja), usamos los PagoVenta no-CREDITO como compensación
       // contra la caja del que anula.
+      // Adelantos aplicados de órdenes: su dinero entró a caja con su
+      // propio movimiento ADELANTO_SERVICIO (que sigue vigente — la orden
+      // vuelve a LISTO_ENTREGA con su adelanto). El fallback no debe
+      // reversarlos. ACOTADO a ventas con líneas de orden: el prefijo
+      // "Adelanto " también matchearía "Adelanto cotización ..." y ese SÍ
+      // debe compensarse al anular una venta de cotización.
+      const tieneOrdenesServicio = venta.detalles.some(
+        (d) => (d as any).ordenServicioId,
+      );
       const pagosACobrar = (venta.pagos ?? []).filter(
         (p) =>
           p.metodoPago !== 'CREDITO' &&
-          // Adelantos aplicados de órdenes: su dinero entró a caja con su
-          // propio movimiento ADELANTO_SERVICIO (que sigue vigente — la
-          // orden vuelve a LISTO_ENTREGA con su adelanto). El fallback no
-          // debe reversarlos.
-          !(p as any).referencia?.startsWith('Adelanto '),
+          !(
+            tieneOrdenesServicio &&
+            (p as any).referencia?.startsWith('Adelanto ')
+          ),
       );
       // El INGRESO original ya se registró NETO de vuelto (efectivo = recibido −
       // cambio). La contrapartida del fallback debe espejar eso, no el bruto del
