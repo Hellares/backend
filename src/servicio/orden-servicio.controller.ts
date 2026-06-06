@@ -54,10 +54,11 @@ export class OrdenServicioController {
   create(
     @Headers('x-tenant-id') empresaId: string,
     @Body() dto: CreateOrdenServicioDto,
+    @CurrentUser('sub') usuarioId: string,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     dto.empresaId = empresaId;
-    return this.ordenServicioService.create(dto);
+    return this.ordenServicioService.create(dto, usuarioId);
   }
 
   @Get('mis-ordenes')
@@ -214,9 +215,10 @@ export class OrdenServicioController {
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @Body() dto: UpdateOrdenServicioDto,
+    @CurrentUser('sub') usuarioId: string,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
-    return this.ordenServicioService.update(empresaId, id, dto);
+    return this.ordenServicioService.update(empresaId, id, dto, usuarioId);
   }
 
   @Patch(':id/estado')

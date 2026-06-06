@@ -115,6 +115,7 @@ model MovimientoCaja {
   boletaPagoId        String?
   adelantoPagoId      String?
   cotizacionId        String? // Para movimientos tipo ADELANTO_COTIZACION o DEVOLUCION_ADELANTO_COTIZACION
+  ordenServicioId     String? // Para movimientos tipo ADELANTO_SERVICIO (ingreso por delta y corrección)
 
   esManual        Boolean  @default(true)
   registradoPorId String
@@ -147,12 +148,14 @@ model MovimientoCaja {
   boletaPago              BoletaPago?          @relation("MovimientoCajaBoletaPago", fields: [boletaPagoId], references: [id])
   adelantoPago            AdelantoPago?        @relation("MovimientoCajaAdelanto", fields: [adelantoPagoId], references: [id])
   cotizacion              Cotizacion?          @relation("MovimientoCajaCotizacion", fields: [cotizacionId], references: [id])
+  ordenServicio           OrdenServicio?       @relation("MovimientoCajaOrdenServicio", fields: [ordenServicioId], references: [id])
   pagoGastoRecurrente     PagoGastoRecurrente?
   rendicionesCajaChica    RendicionCajaChica[]
   operacionesAgente       OperacionAgente[]
 
   @@index([boletaPagoId])
   @@index([adelantoPagoId])
+  @@index([ordenServicioId])
   @@index([cajaId])
   @@index([anulado])
   @@index([cajaId, tipo])

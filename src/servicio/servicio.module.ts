@@ -21,9 +21,10 @@ import { EstadisticasServicioController } from './estadisticas-servicio.controll
 import { ModeloEquipoService } from './modelo-equipo.service';
 import { ModeloEquipoController } from './modelo-equipo.controller';
 import { AvisoMantenimientoModule } from '../aviso-mantenimiento/aviso-mantenimiento.module';
+import { CajaModule } from '../caja/caja.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule, forwardRef(() => AvisoMantenimientoModule)],
+  imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule, forwardRef(() => AvisoMantenimientoModule), CajaModule],
   controllers: [
     ConfiguracionCamposController,
     ServicioController,

@@ -240,6 +240,8 @@ model OrdenServicio {
   mensajes                  MensajeServicio[]
   // Línea de venta POS que cobró esta orden (null = aún no cobrada por venta)
   ventaDetalle              VentaDetalle?
+  // Movimientos de caja por adelantos de esta orden (ADELANTO_SERVICIO)
+  movimientosCaja           MovimientoCaja[]         @relation("MovimientoCajaOrdenServicio")
 
   @@unique([empresaId, codigo])
   @@index([empresaId])

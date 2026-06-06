@@ -10,8 +10,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AvisoMantenimientoService } from '../aviso-mantenimiento/aviso-mantenimiento.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
+import { CajaService } from '../caja/caja.service';
 import { TipoNotificacion } from '@prisma/client';
-import { EstadoOrdenServicio, EstadoDiagnostico, EstadoComponente, Prisma } from '@prisma/client';
+import {
+  EstadoOrdenServicio,
+  EstadoDiagnostico,
+  EstadoComponente,
+  TipoMovimientoCaja,
+  CategoriaMovimientoCaja,
+  MetodoPagoVenta,
+  Prisma,
+} from '@prisma/client';
 import { CreateOrdenServicioDto } from './dto/create-orden-servicio.dto';
 import { CobrarOrdenDto } from './dto/cobrar-orden.dto';
 import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
@@ -95,9 +104,75 @@ export class OrdenServicioService {
     @Inject(forwardRef(() => AvisoMantenimientoService))
     private avisoMantenimientoService: AvisoMantenimientoService,
     private notificacionService: NotificacionService,
+    private cajaService: CajaService,
   ) {}
 
-  async create(dto: CreateOrdenServicioDto) {
+  /** Mapea el string libre `metodoPagoAdelanto` al enum de caja (fallback EFECTIVO). */
+  private static toMetodoPagoVenta(metodo?: string | null): MetodoPagoVenta {
+    const valor = (metodo ?? '').toUpperCase().trim();
+    return (Object.values(MetodoPagoVenta) as string[]).includes(valor)
+      ? (valor as MetodoPagoVenta)
+      : MetodoPagoVenta.EFECTIVO;
+  }
+
+  /**
+   * Registra en caja el DELTA del adelanto de una orden, respetando el medio
+   * de pago del abono (YAPE/PLIN/TARJETA/EFECTIVO/TRANSFERENCIA):
+   * - delta > 0 (cliente abona / amplía) → INGRESO ADELANTO_SERVICIO.
+   * - delta < 0 (corrección / devolución parcial) → EGRESO ADELANTO_SERVICIO.
+   *
+   * Usa `registrarMovimientoEnCajaOTesoreria`: si el usuario no tiene caja
+   * abierta cae a la Caja Central de la sede — el dinero recibido NUNCA se
+   * pierde (mismo criterio que devoluciones). Cada abono parcial queda con
+   * SU método del momento aunque `metodoPagoAdelanto` guarde solo el último.
+   */
+  private async registrarDeltaAdelantoEnCaja(
+    tx: Prisma.TransactionClient,
+    params: {
+      empresaId: string;
+      ordenId: string;
+      codigo: string | null;
+      sedeId: string | null;
+      usuarioId: string;
+      adelantoAnterior: number;
+      adelantoNuevo: number;
+      metodoPago?: string | null;
+    },
+  ) {
+    const delta =
+      Math.round((params.adelantoNuevo - params.adelantoAnterior) * 100) / 100;
+    if (Math.abs(delta) < 0.01) return;
+
+    if (!params.sedeId) {
+      console.warn(
+        `Adelanto orden ${params.codigo}: sin sedeId, no se puede registrar en caja (S/ ${delta})`,
+      );
+      return;
+    }
+
+    await this.cajaService.registrarMovimientoEnCajaOTesoreria(
+      params.empresaId,
+      params.sedeId,
+      params.usuarioId,
+      {
+        tipo: delta > 0 ? TipoMovimientoCaja.INGRESO : TipoMovimientoCaja.EGRESO,
+        categoria: CategoriaMovimientoCaja.ADELANTO_SERVICIO,
+        metodoPago: OrdenServicioService.toMetodoPagoVenta(params.metodoPago),
+        monto: Math.abs(delta),
+        descripcion:
+          delta > 0
+            ? `Adelanto orden ${params.codigo}` +
+              (params.adelantoAnterior > 0
+                ? ` (abono: S/ ${params.adelantoAnterior.toFixed(2)} → S/ ${params.adelantoNuevo.toFixed(2)})`
+                : '')
+            : `Corrección adelanto orden ${params.codigo} (S/ ${params.adelantoAnterior.toFixed(2)} → S/ ${params.adelantoNuevo.toFixed(2)})`,
+        ordenServicioId: params.ordenId,
+      },
+      tx,
+    );
+  }
+
+  async create(dto: CreateOrdenServicioDto, usuarioId?: string) {
     // Validar XOR: debe tener clienteId O clienteEmpresaId, pero no ambos ni ninguno
     if (!dto.clienteId && !dto.clienteEmpresaId) {
       throw new BadRequestException(
@@ -221,17 +296,38 @@ export class OrdenServicioService {
 
     const { empresaId, fechaAvisoPersonalizado, ...restDto } = dto;
 
-    const orden = await this.prisma.ordenServicio.create({
-      data: {
-        empresaId,
-        ...restDto,
-        codigo,
-        estado: EstadoOrdenServicio.RECIBIDO,
-        fechaAvisoPersonalizado: fechaAvisoPersonalizado
-          ? new Date(fechaAvisoPersonalizado)
-          : undefined,
-      },
-      include: ORDEN_SERVICIO_FULL_INCLUDE,
+    // Transacción: la orden y el registro del adelanto en caja son atómicos
+    // (si falla caja, no queda una orden con adelanto sin rastro de dinero).
+    const orden = await this.prisma.$transaction(async (tx) => {
+      const creada = await tx.ordenServicio.create({
+        data: {
+          empresaId,
+          ...restDto,
+          codigo,
+          estado: EstadoOrdenServicio.RECIBIDO,
+          fechaAvisoPersonalizado: fechaAvisoPersonalizado
+            ? new Date(fechaAvisoPersonalizado)
+            : undefined,
+        },
+        include: ORDEN_SERVICIO_FULL_INCLUDE,
+      });
+
+      // Adelanto inicial → INGRESO en caja con su medio de pago
+      const adelantoInicial = Number(creada.adelanto ?? 0);
+      if (adelantoInicial > 0 && usuarioId) {
+        await this.registrarDeltaAdelantoEnCaja(tx, {
+          empresaId,
+          ordenId: creada.id,
+          codigo: creada.codigo,
+          sedeId: creada.sedeId,
+          usuarioId,
+          adelantoAnterior: 0,
+          adelantoNuevo: adelantoInicial,
+          metodoPago: creada.metodoPagoAdelanto,
+        });
+      }
+
+      return creada;
     });
 
     // Notificar al cliente (fire-and-forget)
@@ -427,6 +523,20 @@ export class OrdenServicioService {
         await tx.servicioComponente.updateMany({
           where: { ordenServicioId: id },
           data: { estadoComponente: componenteEstado },
+        });
+      }
+
+      // Cambio de adelanto en la transición → delta en caja con su medio
+      if (updateData.adelanto !== undefined && usuarioId) {
+        await this.registrarDeltaAdelantoEnCaja(tx, {
+          empresaId,
+          ordenId: id,
+          codigo: orden.codigo,
+          sedeId: orden.sedeId,
+          usuarioId,
+          adelantoAnterior: Number(orden.adelanto ?? 0),
+          adelantoNuevo: Number(dto.adelanto),
+          metodoPago: dto.metodoPagoAdelanto ?? orden.metodoPagoAdelanto,
         });
       }
 
@@ -748,7 +858,12 @@ export class OrdenServicioService {
   }
 
   // B4 FIX: Validar que la orden no esté en estado terminal antes de permitir update
-  async update(empresaId: string, id: string, dto: UpdateOrdenServicioDto) {
+  async update(
+    empresaId: string,
+    id: string,
+    dto: UpdateOrdenServicioDto,
+    usuarioId?: string,
+  ) {
     const existing = await this.findOne(empresaId, id);
 
     if (ESTADOS_TERMINALES.includes(existing.estado)) {
@@ -757,10 +872,40 @@ export class OrdenServicioService {
       );
     }
 
-    return this.prisma.ordenServicio.update({
-      where: { id: existing.id },
-      data: dto,
-      include: ORDEN_SERVICIO_DETAIL_INCLUDE,
+    // B8 (paridad con transitionEstado): adelanto/descuento no exceden costo
+    const effectiveCostoTotal =
+      dto.costoTotal ?? (existing.costoTotal ? Number(existing.costoTotal) : null);
+    if (dto.adelanto !== undefined && effectiveCostoTotal !== null && dto.adelanto > effectiveCostoTotal) {
+      throw new BadRequestException('El adelanto no puede ser mayor al costo total');
+    }
+    if (dto.descuento !== undefined && effectiveCostoTotal !== null && dto.descuento > effectiveCostoTotal) {
+      throw new BadRequestException('El descuento no puede ser mayor al costo total');
+    }
+
+    const adelantoAnterior = Number(existing.adelanto ?? 0);
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.ordenServicio.update({
+        where: { id: existing.id },
+        data: dto,
+        include: ORDEN_SERVICIO_DETAIL_INCLUDE,
+      });
+
+      // Cambio de adelanto → delta en caja con su medio de pago
+      if (dto.adelanto !== undefined && usuarioId) {
+        await this.registrarDeltaAdelantoEnCaja(tx, {
+          empresaId,
+          ordenId: existing.id,
+          codigo: existing.codigo,
+          sedeId: existing.sedeId,
+          usuarioId,
+          adelantoAnterior,
+          adelantoNuevo: Number(dto.adelanto),
+          metodoPago: dto.metodoPagoAdelanto ?? existing.metodoPagoAdelanto,
+        });
+      }
+
+      return updated;
     });
   }
 

@@ -540,6 +540,7 @@ export class CajaService {
       devolucionId?: string;
       compraId?: string;
       cotizacionId?: string;
+      ordenServicioId?: string;
       metadata?: any;
     },
     tx: Prisma.TransactionClient,
@@ -562,6 +563,7 @@ export class CajaService {
           devolucionId: data.devolucionId,
           compraId: data.compraId,
           cotizacionId: data.cotizacionId,
+          ordenServicioId: data.ordenServicioId,
           esManual: false,
           registradoPorId: usuarioId,
           metadata: data.metadata ?? undefined,
@@ -583,6 +585,7 @@ export class CajaService {
         devolucionId: data.devolucionId,
         compraId: data.compraId,
         cotizacionId: data.cotizacionId,
+        ordenServicioId: data.ordenServicioId,
         esManual: false,
         registradoPorId: usuarioId,
         metadata: {
