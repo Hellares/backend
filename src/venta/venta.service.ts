@@ -354,6 +354,19 @@ export class VentaService {
           servicio: {
             select: { id: true, nombre: true, codigoEmpresa: true },
           },
+          // Cobro de orden de servicio: el ticket muestra el desglose
+          // (costo total del servicio, adelantos previos con su método y
+          // saldo cobrado en esta venta).
+          ordenServicio: {
+            select: {
+              id: true,
+              codigo: true,
+              costoTotal: true,
+              adelanto: true,
+              descuento: true,
+              metodoPagoAdelanto: true,
+            },
+          },
         },
         orderBy: { orden: 'asc' as const },
       },
@@ -1373,6 +1386,14 @@ export class VentaService {
                 monto: Math.min(montoPagadoInmediato, totalVenta),
               }];
 
+          // Si la venta cobra órdenes de servicio, referenciarlas en la
+          // descripción del movimiento (legible en Mi Caja / cierre).
+          const descripcionCaja = ordenesCobradas.length > 0
+            ? `Venta POS ${codigoVenta} — Servicio ${ordenesCobradas
+                .map((o) => o.codigo)
+                .join(', ')}`
+            : `Venta POS ${codigoVenta}`;
+
           for (const p of pagosParaCaja) {
             try {
               await this.cajaService.registrarMovimientoSiHayCaja(
@@ -1384,7 +1405,7 @@ export class VentaService {
                   categoria: 'VENTA' as any,
                   metodoPago: p.metodoPago as any,
                   monto: p.monto,
-                  descripcion: `Venta POS ${codigoVenta}`,
+                  descripcion: descripcionCaja,
                   ventaId: venta.id,
                 },
                 tx,
