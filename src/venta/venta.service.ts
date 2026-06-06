@@ -3825,6 +3825,25 @@ export class VentaService {
         cotizacion: {
           select: { id: true, codigo: true, estado: true, total: true, fechaEmision: true },
         },
+        // Órdenes de servicio cobradas por esta venta (preceden a la venta
+        // en el flujo, como la cotización). Sus adelantos se muestran como
+        // hijos con los movimientos de caja reales.
+        detalles: {
+          where: { ordenServicioId: { not: null } },
+          select: {
+            ordenServicio: {
+              select: {
+                id: true,
+                codigo: true,
+                estado: true,
+                costoTotal: true,
+                adelanto: true,
+                metodoPagoAdelanto: true,
+                creadoEn: true,
+              },
+            },
+          },
+        },
         // Comprobante electrónico (factura/boleta)
         comprobante: {
           select: {
@@ -3901,6 +3920,86 @@ export class VentaService {
         ruta: `/empresa/cotizaciones/${venta.cotizacion.id}`,
         hijos: [],
       });
+    }
+
+    // 1b. Órdenes de servicio cobradas por esta venta — preceden a la
+    // venta (el servicio + sus adelantos existieron antes del cobro).
+    // Los adelantos salen de los MovimientoCaja ADELANTO_SERVICIO reales
+    // (cada abono con su método y fecha); fallback al campo de la orden
+    // para adelantos previos a esa integración.
+    const ordenesServicio = (venta.detalles ?? [])
+      .map((d) => d.ordenServicio)
+      .filter((o): o is NonNullable<typeof o> => !!o);
+
+    if (ordenesServicio.length > 0) {
+      const movsAdelanto = await this.prisma.movimientoCaja.findMany({
+        where: {
+          ordenServicioId: { in: ordenesServicio.map((o) => o.id) },
+          categoria: 'ADELANTO_SERVICIO' as any,
+          anulado: false,
+        },
+        select: {
+          id: true,
+          ordenServicioId: true,
+          tipo: true,
+          metodoPago: true,
+          monto: true,
+          fechaMovimiento: true,
+        },
+        orderBy: { fechaMovimiento: 'asc' },
+      });
+
+      for (const os of ordenesServicio) {
+        const ordenNodo: any = {
+          tipo: 'ORDEN_SERVICIO',
+          icono: 'home_repair_service',
+          id: os.id,
+          codigo: os.codigo,
+          estado: os.estado,
+          fecha: os.creadoEn,
+          monto: os.costoTotal,
+          moneda: venta.moneda,
+          detalle: 'Servicio cobrado en esta venta',
+          ruta: `/empresa/ordenes/${os.id}`,
+          hijos: [],
+        };
+
+        const movs = movsAdelanto.filter((m) => m.ordenServicioId === os.id);
+        for (const m of movs) {
+          const esCorreccion = m.tipo === 'EGRESO';
+          ordenNodo.hijos.push({
+            tipo: 'ADELANTO',
+            icono: 'savings',
+            id: m.id,
+            codigo: `${esCorreccion ? 'Corrección adelanto' : 'Adelanto'} ${m.metodoPago}`,
+            estado: 'COMPLETADO',
+            fecha: m.fechaMovimiento,
+            monto: esCorreccion ? -Number(m.monto) : Number(m.monto),
+            moneda: venta.moneda,
+            ruta: null,
+            hijos: [],
+          });
+        }
+
+        // Fallback: orden con adelanto registrado antes de la integración
+        // adelanto→caja (sin MovimientoCaja vinculado).
+        if (movs.length === 0 && Number(os.adelanto ?? 0) > 0) {
+          ordenNodo.hijos.push({
+            tipo: 'ADELANTO',
+            icono: 'savings',
+            id: `${os.id}-adelanto`,
+            codigo: `Adelanto${os.metodoPagoAdelanto ? ` ${os.metodoPagoAdelanto}` : ''}`,
+            estado: 'COMPLETADO',
+            fecha: null,
+            monto: Number(os.adelanto),
+            moneda: venta.moneda,
+            ruta: null,
+            hijos: [],
+          });
+        }
+
+        nodos.push(ordenNodo);
+      }
     }
 
     // 2. Venta (nodo principal)
