@@ -175,13 +175,15 @@ export class OrdenServicioService {
         categoria: CategoriaMovimientoCaja.ADELANTO_SERVICIO,
         metodoPago: OrdenServicioService.toMetodoPagoVenta(params.metodoPago),
         monto: Math.abs(delta),
+        // Solo ASCII: estas descripciones se imprimen en tickets térmicos
+        // (cierre de caja) cuyos code pages no tienen "→"/"—".
         descripcion:
           delta > 0
             ? `Adelanto orden ${params.codigo}` +
               (params.adelantoAnterior > 0
-                ? ` (abono: S/ ${params.adelantoAnterior.toFixed(2)} → S/ ${params.adelantoNuevo.toFixed(2)})`
+                ? ` (abono: S/ ${params.adelantoAnterior.toFixed(2)} -> S/ ${params.adelantoNuevo.toFixed(2)})`
                 : '')
-            : `Corrección adelanto orden ${params.codigo} (S/ ${params.adelantoAnterior.toFixed(2)} → S/ ${params.adelantoNuevo.toFixed(2)})`,
+            : `Corrección adelanto orden ${params.codigo} (S/ ${params.adelantoAnterior.toFixed(2)} -> S/ ${params.adelantoNuevo.toFixed(2)})`,
         ordenServicioId: params.ordenId,
       },
       tx,

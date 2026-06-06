@@ -1462,8 +1462,10 @@ export class VentaService {
           // descripción del movimiento (legible en Mi Caja / cierre) y
           // vincular la FK para el badge "OS-XXXXX" (solo si es UNA orden;
           // con varias, la descripción las lista todas).
+          // Solo ASCII (sin "—"): la descripción puede terminar impresa en
+          // tickets térmicos cuyo code page no la soporta.
           const descripcionCaja = ordenesCobradas.length > 0
-            ? `Venta POS ${codigoVenta} — Servicio ${ordenesCobradas
+            ? `Venta POS ${codigoVenta} - Servicio ${ordenesCobradas
                 .map((o) => o.codigo)
                 .join(', ')}`
             : `Venta POS ${codigoVenta}`;
