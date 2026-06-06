@@ -231,6 +231,13 @@ describe('OrdenServicioService.validarYBloquearCobroVenta', () => {
       expect(e).toBeInstanceOf(ConflictException);
       expect(e.getResponse().code).toBe('ORDEN_YA_COBRADA');
       expect(e.getResponse().message).toContain('VTA-00099');
+      // Ids estructurados: el cliente quita esas líneas del carrito
+      expect(e.getResponse().ordenes).toEqual([
+        expect.objectContaining({
+          ordenServicioId: 'orden-1',
+          ventaCodigo: 'VTA-00099',
+        }),
+      ]);
     }
   });
 

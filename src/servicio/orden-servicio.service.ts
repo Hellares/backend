@@ -1601,6 +1601,12 @@ export class OrdenServicioService {
         message: `Orden(es) ya cobrada(s) en otra venta: ${codigos} (${yaCobradas
           .map((v) => v.venta.codigo)
           .join(', ')})`,
+        // Ids para que el cliente quite EXACTAMENTE esas líneas del carrito
+        ordenes: yaCobradas.map((v) => ({
+          ordenServicioId: v.ordenServicioId,
+          codigo: ordenesMap.get(v.ordenServicioId!)?.codigo ?? null,
+          ventaCodigo: v.venta.codigo,
+        })),
       });
     }
 
