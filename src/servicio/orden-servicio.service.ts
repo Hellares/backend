@@ -380,6 +380,14 @@ export class OrdenServicioService {
 
     // B2 FIX: Toda la lógica de transición dentro de una transacción para evitar race conditions
     const updatedOrden = await this.prisma.$transaction(async (tx) => {
+      // Lock pesimista: serializa transiciones/ediciones concurrentes de la
+      // misma orden (valida VALID_TRANSITIONS y calcula el delta del
+      // adelanto sobre el estado REAL, no sobre una lectura paralela).
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM "OrdenServicio" WHERE id = $1 AND "empresaId" = $2 FOR UPDATE`,
+        id,
+        empresaId,
+      );
       // Re-leer la orden DENTRO de la transacción para evitar race conditions
       const orden = await tx.ordenServicio.findFirst({
         where: { id, empresaId },
@@ -915,13 +923,11 @@ export class OrdenServicioService {
       throw new BadRequestException('El descuento no puede ser mayor al costo total');
     }
 
-    const adelantoAnterior = Number(existing.adelanto ?? 0);
-
     // Orden ya cobrada (vía venta o legacy): el adelanto está saldado en el
     // comprobante — modificarlo registraría dinero fantasma en caja sobre
     // una operación cerrada. ENTREGADO no es estado terminal (permite
     // reingreso), así que el guard va por el vínculo de cobro.
-    if (dto.adelanto !== undefined && Number(dto.adelanto) !== adelantoAnterior) {
+    if (dto.adelanto !== undefined && Number(dto.adelanto) !== Number(existing.adelanto ?? 0)) {
       const cobrada =
         existing.comprobanteId != null ||
         (await this.prisma.ventaDetalle.findUnique({
@@ -936,6 +942,21 @@ export class OrdenServicioService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      // Lock pesimista: serializa ediciones concurrentes. El "adelanto
+      // anterior" para el delta de caja se lee BAJO el lock — sin esto,
+      // N PUTs paralelos leían el mismo anterior y la caja sumaba los N
+      // deltas completos (detectado por el test de concurrencia: orden
+      // con adelanto 90 y S/180 en caja).
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM "OrdenServicio" WHERE id = $1 FOR UPDATE`,
+        existing.id,
+      );
+      const fresh = await tx.ordenServicio.findUnique({
+        where: { id: existing.id },
+        select: { adelanto: true },
+      });
+      const adelantoAnterior = Number(fresh?.adelanto ?? 0);
+
       const updated = await tx.ordenServicio.update({
         where: { id: existing.id },
         data: dto,
@@ -1558,6 +1579,31 @@ export class OrdenServicioService {
     });
 
     const ordenesMap = new Map(ordenes.map((o) => [o.id, o]));
+
+    // Doble cobro PRIMERO: tras el FOR UPDATE, el perdedor de una carrera
+    // ve la venta que commiteó el ganador. Este check va ANTES que el de
+    // estado para que reciba 409 ORDEN_YA_COBRADA (estructurado, con el
+    // código de la venta ganadora) y no un 400 "está en ENTREGADO"
+    // (detectado por el test de concurrencia).
+    const yaCobradas = await tx.ventaDetalle.findMany({
+      where: { ordenServicioId: { in: ids } },
+      select: {
+        ordenServicioId: true,
+        venta: { select: { codigo: true } },
+      },
+    });
+    if (yaCobradas.length > 0) {
+      const codigos = yaCobradas
+        .map((v) => ordenesMap.get(v.ordenServicioId!)?.codigo ?? v.ordenServicioId)
+        .join(', ');
+      throw new ConflictException({
+        code: 'ORDEN_YA_COBRADA',
+        message: `Orden(es) ya cobrada(s) en otra venta: ${codigos} (${yaCobradas
+          .map((v) => v.venta.codigo)
+          .join(', ')})`,
+      });
+    }
+
     const divergencias: Array<{
       ordenServicioId: string;
       codigo: string | null;
@@ -1616,27 +1662,6 @@ export class OrdenServicioService {
             : `${divergencias.length} órdenes tienen montos desactualizados. ` +
               `Refrescá el carrito y volvé a intentar.`,
         divergencias,
-      });
-    }
-
-    // Doble cobro: tras el FOR UPDATE este check ve lo que commiteó cualquier
-    // transacción ganadora.
-    const yaCobradas = await tx.ventaDetalle.findMany({
-      where: { ordenServicioId: { in: ids } },
-      select: {
-        ordenServicioId: true,
-        venta: { select: { codigo: true } },
-      },
-    });
-    if (yaCobradas.length > 0) {
-      const codigos = yaCobradas
-        .map((v) => ordenesMap.get(v.ordenServicioId!)?.codigo ?? v.ordenServicioId)
-        .join(', ');
-      throw new ConflictException({
-        code: 'ORDEN_YA_COBRADA',
-        message: `Orden(es) ya cobrada(s) en otra venta: ${codigos} (${yaCobradas
-          .map((v) => v.venta.codigo)
-          .join(', ')})`,
       });
     }
 
