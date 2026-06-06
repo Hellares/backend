@@ -441,6 +441,14 @@ export class VentaService {
         },
       },
       cotizacion: { select: { id: true, codigo: true } },
+      // Órdenes de servicio cobradas por la venta (badge "OS-XXXXX" en la
+      // card). Solo trae filas para líneas con ordenServicioId — para
+      // ventas normales devuelve []. findAll lo aplana a `ordenesServicio`
+      // y NO expone `detalles` (el cliente no espera detalles parciales).
+      detalles: {
+        where: { ordenServicioId: { not: null } },
+        select: { ordenServicio: { select: { id: true, codigo: true } } },
+      },
       _count: { select: { detalles: true, pagos: true } },
     };
   }
@@ -2285,11 +2293,20 @@ export class VentaService {
       ];
     }
 
-    return this.prisma.venta.findMany({
+    const ventas = await this.prisma.venta.findMany({
       where,
       include: this.getListInclude(),
       orderBy: { creadoEn: 'desc' },
     });
+
+    // Aplanar las órdenes de servicio cobradas a `ordenesServicio` y quitar
+    // los `detalles` parciales del include liviano (ver getListInclude).
+    return ventas.map(({ detalles, ...v }: any) => ({
+      ...v,
+      ordenesServicio: (detalles ?? [])
+        .map((d: any) => d.ordenServicio)
+        .filter(Boolean),
+    }));
   }
 
   /**
