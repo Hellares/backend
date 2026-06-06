@@ -43,7 +43,12 @@ const baseParams = (overrides: Partial<any> = {}) => ({
   ...overrides,
 });
 
-const TX = {} as any;
+const makeTx = (cajaUsuario: { sedeId: string } | null = null) =>
+  ({
+    caja: { findFirst: jest.fn().mockResolvedValue(cajaUsuario) },
+  }) as any;
+
+const TX = makeTx();
 
 describe('OrdenServicioService.registrarDeltaAdelantoEnCaja', () => {
   it('primer abono → INGRESO ADELANTO_SERVICIO con su método (YAPE)', async () => {
@@ -108,10 +113,29 @@ describe('OrdenServicioService.registrarDeltaAdelantoEnCaja', () => {
       .not.toHaveBeenCalled();
   });
 
-  it('sin sedeId → no toca caja (warn, no rompe)', async () => {
+  it('orden sin sedeId → fallback a la sede de la caja abierta del usuario', async () => {
+    const self = makeSelf();
+    const tx = makeTx({ sedeId: 'sede-de-caja' });
+    await registrar.call(self, tx, baseParams({ sedeId: null }));
+
+    expect(tx.caja.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          usuarioId: 'user-1',
+          estado: 'ABIERTA',
+          esCajaCentral: false,
+        }),
+      }),
+    );
+    const call =
+      self.cajaService.registrarMovimientoEnCajaOTesoreria.mock.calls[0];
+    expect(call[1]).toBe('sede-de-caja'); // sedeId resuelto desde la caja
+  });
+
+  it('sin sedeId NI caja abierta → no toca caja (warn, no rompe)', async () => {
     const self = makeSelf();
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    await registrar.call(self, TX, baseParams({ sedeId: null }));
+    await registrar.call(self, makeTx(null), baseParams({ sedeId: null }));
     expect(self.cajaService.registrarMovimientoEnCajaOTesoreria)
       .not.toHaveBeenCalled();
     warn.mockRestore();

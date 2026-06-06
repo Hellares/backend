@@ -143,16 +143,32 @@ export class OrdenServicioService {
       Math.round((params.adelantoNuevo - params.adelantoAnterior) * 100) / 100;
     if (Math.abs(delta) < 0.01) return;
 
-    if (!params.sedeId) {
+    // Fallback de sede: muchas órdenes se crean sin sedeId (el form no lo
+    // exige). El dinero lo recibe quien registra → usar la sede de SU caja
+    // abierta. Sin sede resoluble no hay caja donde registrar (warn).
+    let sedeId = params.sedeId;
+    if (!sedeId) {
+      const cajaUsuario = await tx.caja.findFirst({
+        where: {
+          empresaId: params.empresaId,
+          usuarioId: params.usuarioId,
+          estado: 'ABIERTA',
+          esCajaCentral: false,
+        },
+        select: { sedeId: true },
+      });
+      sedeId = cajaUsuario?.sedeId ?? null;
+    }
+    if (!sedeId) {
       console.warn(
-        `Adelanto orden ${params.codigo}: sin sedeId, no se puede registrar en caja (S/ ${delta})`,
+        `Adelanto orden ${params.codigo}: sin sede (ni en la orden ni caja abierta del usuario), no se registró en caja (S/ ${delta})`,
       );
       return;
     }
 
     await this.cajaService.registrarMovimientoEnCajaOTesoreria(
       params.empresaId,
-      params.sedeId,
+      sedeId,
       params.usuarioId,
       {
         tipo: delta > 0 ? TipoMovimientoCaja.INGRESO : TipoMovimientoCaja.EGRESO,
