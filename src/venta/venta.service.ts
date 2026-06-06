@@ -1384,25 +1384,6 @@ export class VentaService {
           // Multi-medio: 1 PagoComprobante por cada PagoVenta no-CREDITO.
           // Si la venta es a crédito puro o no hay pagos[], crear UN registro
           // marcador (PENDIENTE para crédito, COMPLETADO para legacy).
-          const pagosComprobanteData = (!esCredito && dto.pagos && dto.pagos.length > 0)
-            ? dto.pagos
-                .filter((p) => p.metodoPago !== 'CREDITO')
-                .map((p) => ({
-                  comprobanteId: comprobante.id,
-                  metodoPago: p.metodoPago,
-                  monto: new Prisma.Decimal(Number(p.monto).toFixed(2)),
-                  referencia: p.referencia || null,
-                  estado: 'COMPLETADO',
-                }))
-            : [{
-                comprobanteId: comprobante.id,
-                metodoPago: dto.metodoPago || 'EFECTIVO',
-                monto: new Prisma.Decimal(
-                  (esCredito ? 0 : Math.min(montoRecibido || totalACobrarHoy, totalACobrarHoy)).toFixed(2),
-                ),
-                estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
-              }];
-
           // Adelantos de órdenes aplicados al comprobante: completan el
           // total (total = adelantos + cobrado hoy).
           const pagosAdelantoComprobante = ordenesACobrar
@@ -1416,6 +1397,31 @@ export class VentaService {
               referencia: `Adelanto ${o.codigo}`,
               estado: 'COMPLETADO',
             }));
+
+          const pagosComprobanteData = (!esCredito && dto.pagos && dto.pagos.length > 0)
+            ? dto.pagos
+                .filter((p) => p.metodoPago !== 'CREDITO')
+                .map((p) => ({
+                  comprobanteId: comprobante.id,
+                  metodoPago: p.metodoPago,
+                  monto: new Prisma.Decimal(Number(p.monto).toFixed(2)),
+                  referencia: p.referencia || null,
+                  estado: 'COMPLETADO',
+                }))
+            : (!esCredito &&
+                totalACobrarHoy <= 0 &&
+                pagosAdelantoComprobante.length > 0)
+              // Orden 100% adelantada: el comprobante queda saldado por los
+              // adelantos — sin marker de S/ 0.00 que ensucie los pagos.
+              ? []
+              : [{
+                  comprobanteId: comprobante.id,
+                  metodoPago: dto.metodoPago || 'EFECTIVO',
+                  monto: new Prisma.Decimal(
+                    (esCredito ? 0 : Math.min(montoRecibido || totalACobrarHoy, totalACobrarHoy)).toFixed(2),
+                  ),
+                  estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
+                }];
 
           await tx.pagoComprobante.createMany({
             data: [...pagosComprobanteData, ...pagosAdelantoComprobante],

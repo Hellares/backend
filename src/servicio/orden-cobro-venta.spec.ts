@@ -161,16 +161,33 @@ describe('OrdenServicioService.validarYBloquearCobroVenta', () => {
     );
   });
 
-  it('rechaza orden con saldo 0 (cubierta por adelanto)', async () => {
+  it('PERMITE orden 100% adelantada (saldo 0): la boleta sale por el total', async () => {
     const tx = makeTx({
       ordenServicio: {
         findMany: jest
           .fn()
           .mockResolvedValue([ordenBase({ costoTotal: 100, adelanto: 100 })]),
       },
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+    // precio de línea = costo neto (100), aunque hoy se cobre S/ 0
+    const result = await validar(tx, EMPRESA, [
+      lineaBase({ precioUnitario: 100 }),
+    ]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('rechaza saldo NEGATIVO (adelanto + descuento superan el costo)', async () => {
+    const tx = makeTx({
+      ordenServicio: {
+        findMany: jest.fn().mockResolvedValue([
+          // costo 100, descuento 30, adelanto 90 → saldo −20
+          ordenBase({ costoTotal: 100, descuento: 30, adelanto: 90 }),
+        ]),
+      },
     });
     await expect(
-      validar(tx, EMPRESA, [lineaBase({ precioUnitario: 0 })]),
+      validar(tx, EMPRESA, [lineaBase({ precioUnitario: 70 })]),
     ).rejects.toThrow(BadRequestException);
   });
 

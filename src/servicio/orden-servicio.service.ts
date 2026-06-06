@@ -1630,11 +1630,16 @@ export class OrdenServicioService {
           `La orden ${orden.codigo} no tiene costo total definido`,
         );
       }
+      // saldo == 0 (100% adelantada) SÍ es cobrable: el cliente no paga
+      // nada hoy pero la boleta debe emitirse por el total (sin esto, el
+      // servicio totalmente prepagado nunca obtenía comprobante). Solo se
+      // rechaza el saldo NEGATIVO (adelanto+descuento > costo = datos
+      // inconsistentes que descuadrarían el cobro).
       const saldo = OrdenServicioService.saldoPendiente(orden);
-      if (saldo <= 0) {
+      if (saldo < 0) {
         throw new BadRequestException(
-          `La orden ${orden.codigo} no tiene saldo pendiente (ya está cubierta por adelanto/descuento). ` +
-            `Entregala con el cambio de estado normal`,
+          `La orden ${orden.codigo} tiene montos inconsistentes (adelanto + descuento superan el costo). ` +
+            `Corregí los costos de la orden antes de cobrarla`,
         );
       }
       // El precio de línea es el COSTO NETO (factura por el total del
@@ -1915,6 +1920,9 @@ export class OrdenServicioService {
             : null,
         };
       })
-      .filter((o) => o.saldoPendiente > 0);
+      // saldo == 0 (100% adelantada) se incluye: sigue pendiente de
+      // FACTURAR aunque no haya nada que pagar hoy. Solo se excluye el
+      // saldo negativo (datos inconsistentes).
+      .filter((o) => o.saldoPendiente >= 0);
   }
 }
