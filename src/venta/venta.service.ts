@@ -3944,6 +3944,12 @@ export class VentaService {
     // Los adelantos salen de los MovimientoCaja ADELANTO_SERVICIO reales
     // (cada abono con su método y fecha); fallback al campo de la orden
     // para adelantos previos a esa integración.
+    //
+    // Los nodos se acumulan aparte: si la venta cobró UNA sola orden, la
+    // venta se anida como hijo de la orden (un solo árbol conectado:
+    // servicio → adelantos → venta → comprobante/pagos). Con varias
+    // órdenes quedan como raíces hermanas de la venta.
+    const ordenNodos: any[] = [];
     const ordenesServicio = (venta.detalles ?? [])
       .map((d) => d.ordenServicio)
       .filter((o): o is NonNullable<typeof o> => !!o);
@@ -4015,7 +4021,7 @@ export class VentaService {
           });
         }
 
-        nodos.push(ordenNodo);
+        ordenNodos.push(ordenNodo);
       }
     }
 
@@ -4150,7 +4156,16 @@ export class VentaService {
       });
     }
 
-    nodos.push(ventaNodo);
+    // Cierre del árbol: con UNA orden de servicio, la venta cuelga de la
+    // orden (historia conectada: servicio → adelantos → venta → docs).
+    // Con varias órdenes (o ninguna), la venta va como raíz.
+    if (ordenNodos.length === 1) {
+      ordenNodos[0].hijos.push(ventaNodo);
+      nodos.push(ordenNodos[0]);
+    } else {
+      nodos.push(...ordenNodos);
+      nodos.push(ventaNodo);
+    }
 
     // Totales financieros del flujo (autoritativos desde la venta).
     const r2 = (n: number) => Math.round(n * 100) / 100;
