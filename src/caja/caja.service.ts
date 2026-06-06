@@ -426,6 +426,7 @@ export class CajaService {
       devolucionId?: string;
       boletaPagoId?: string;
       adelantoPagoId?: string;
+      ordenServicioId?: string;
       registradoPorId: string;
       metadata?: any;
     },
@@ -467,6 +468,7 @@ export class CajaService {
         devolucionId: data.devolucionId,
         boletaPagoId: data.boletaPagoId,
         adelantoPagoId: data.adelantoPagoId,
+        ordenServicioId: data.ordenServicioId,
         esManual: false,
         registradoPorId: data.registradoPorId,
         metadata: data.metadata ?? undefined,
@@ -502,6 +504,7 @@ export class CajaService {
       devolucionId?: string;
       boletaPagoId?: string;
       adelantoPagoId?: string;
+      ordenServicioId?: string;
       metadata?: any;
     },
     tx?: Prisma.TransactionClient,
@@ -672,6 +675,9 @@ export class CajaService {
         // "DEVUELTO" en el ADELANTO_COTIZACION cuando la cotizacion
         // termino en RECHAZADA con devolucion registrada.
         cotizacion: { select: { id: true, codigo: true, estado: true } },
+        // Badge "OS-XXXXX": adelantos de orden de servicio y ventas que
+        // cobran una orden quedan vinculados visualmente a su orden.
+        ordenServicio: { select: { id: true, codigo: true } },
         categoriaGasto: { select: { id: true, nombre: true, tipo: true, icono: true, color: true } },
         registradoPor: {
           select: {
@@ -1143,6 +1149,7 @@ export class CajaService {
         compra: { select: { id: true, codigo: true } },
         devolucion: { select: { id: true, codigo: true } },
         cotizacion: { select: { id: true, codigo: true, estado: true } },
+        ordenServicio: { select: { id: true, codigo: true } },
         categoriaGasto: { select: { id: true, nombre: true, tipo: true, icono: true, color: true } },
         registradoPor: {
           select: {

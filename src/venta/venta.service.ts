@@ -1387,12 +1387,16 @@ export class VentaService {
               }];
 
           // Si la venta cobra órdenes de servicio, referenciarlas en la
-          // descripción del movimiento (legible en Mi Caja / cierre).
+          // descripción del movimiento (legible en Mi Caja / cierre) y
+          // vincular la FK para el badge "OS-XXXXX" (solo si es UNA orden;
+          // con varias, la descripción las lista todas).
           const descripcionCaja = ordenesCobradas.length > 0
             ? `Venta POS ${codigoVenta} — Servicio ${ordenesCobradas
                 .map((o) => o.codigo)
                 .join(', ')}`
             : `Venta POS ${codigoVenta}`;
+          const ordenServicioIdCaja =
+            ordenesCobradas.length === 1 ? ordenesCobradas[0].id : undefined;
 
           for (const p of pagosParaCaja) {
             try {
@@ -1407,6 +1411,7 @@ export class VentaService {
                   monto: p.monto,
                   descripcion: descripcionCaja,
                   ventaId: venta.id,
+                  ordenServicioId: ordenServicioIdCaja,
                 },
                 tx,
               );
