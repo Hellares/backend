@@ -116,26 +116,37 @@ export class InventarioService {
         empresaId,
       },
       include: {
-        producto: true,
-        variante: true,
+        producto: { select: { nombre: true, codigoSistema: true } },
+        // Stocks de variante tienen producto=null: el producto padre viene vía variante.producto
+        variante: {
+          select: {
+            nombre: true,
+            sku: true,
+            producto: { select: { nombre: true, codigoSistema: true } },
+          },
+        },
       },
     });
 
-    for (const stock of productosStock) {
-      await tx.inventarioItem.create({
-        data: {
+    // createMany (antes era create en loop: con cientos de productos reventaba
+    // el timeout de 5s de la transacción interactiva)
+    await tx.inventarioItem.createMany({
+      data: productosStock.map((stock) => {
+        const prod = stock.producto ?? stock.variante?.producto ?? null;
+        const nombreBase = prod?.nombre ?? 'Producto';
+        return {
           inventarioId,
           empresaId,
           sedeId,
           productoStockId: stock.id,
           nombreProducto: stock.variante
-            ? `${stock.producto.nombre} - ${stock.variante.nombre}`
-            : stock.producto.nombre,
-          codigoProducto: stock.producto.codigoSistema,
+            ? `${nombreBase} - ${stock.variante.nombre}`
+            : nombreBase,
+          codigoProducto: prod?.codigoSistema ?? stock.variante?.sku ?? null,
           cantidadSistema: stock.stockActual,
-        },
-      });
-    }
+        };
+      }),
+    });
 
     // Actualizar total de productos esperados
     await tx.inventario.update({
