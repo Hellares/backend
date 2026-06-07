@@ -441,6 +441,11 @@ export class VentaService {
         },
       },
       cotizacion: { select: { id: true, codigo: true } },
+      // Comprobante liviano para la columna de la lista (web muestra
+      // serie-número + estado SUNAT; la card de Flutter lo ignora).
+      comprobante: {
+        select: { tipoComprobante: true, codigoGenerado: true, sunatStatus: true },
+      },
       // Órdenes de servicio cobradas por la venta (badge "OS-XXXXX" en la
       // card). Solo trae filas para líneas con ordenServicioId — para
       // ventas normales devuelve []. findAll lo aplana a `ordenesServicio`
