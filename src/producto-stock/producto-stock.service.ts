@@ -335,15 +335,29 @@ export class ProductoStockService {
     empresaId: string,
     page: number = 1,
     limit: number = 50,
+    search?: string,
   ) {
     const skip = (page - 1) * limit;
 
+    const where: Prisma.ProductoStockWhereInput = { sedeId, empresaId };
+
+    // Búsqueda por nombre/código/SKU/barras del producto o de la variante
+    const term = search?.trim();
+    if (term) {
+      where.OR = [
+        { producto: { nombre: { contains: term, mode: 'insensitive' } } },
+        { producto: { codigoEmpresa: { contains: term, mode: 'insensitive' } } },
+        { producto: { sku: { contains: term, mode: 'insensitive' } } },
+        { producto: { codigoBarras: { contains: term, mode: 'insensitive' } } },
+        { variante: { nombre: { contains: term, mode: 'insensitive' } } },
+        { variante: { sku: { contains: term, mode: 'insensitive' } } },
+        { variante: { codigoBarras: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
     const [stocks, total] = await Promise.all([
       this.prisma.productoStock.findMany({
-        where: {
-          sedeId,
-          empresaId,
-        },
+        where,
         include: {
           producto: {
             select: {
@@ -375,12 +389,7 @@ export class ProductoStockService {
         skip,
         take: limit,
       }),
-      this.prisma.productoStock.count({
-        where: {
-          sedeId,
-          empresaId,
-        },
-      }),
+      this.prisma.productoStock.count({ where }),
     ]);
 
     return createPaginatedResponse(stocks, total, page, limit);

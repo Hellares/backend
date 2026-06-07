@@ -179,12 +179,14 @@ export class ProductoStockController {
     @Headers('x-tenant-id') empresaId: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('search') search?: string,
   ) {
     return await this.stockService.getStocksPorSede(
       sedeId,
       empresaId,
       page ? +page : 1,
       limit ? +limit : 50,
+      search,
     );
   }
 
