@@ -4,7 +4,6 @@ import {
   IsEnum,
   IsDateString,
   MaxLength,
-  IsUUID,
   IsBoolean,
 } from 'class-validator';
 import { TipoInventario, EstadoInventario } from '@prisma/client';
@@ -31,7 +30,8 @@ export class ActualizarInventarioDto {
   @IsOptional()
   fechaPlanificada?: string;
 
-  @IsUUID()
+  // IDs del sistema son cuid, NO UUID
+  @IsString()
   @IsOptional()
   supervisorId?: string;
 

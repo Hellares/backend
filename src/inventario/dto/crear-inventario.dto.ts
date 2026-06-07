@@ -5,7 +5,6 @@ import {
   IsDateString,
   IsNotEmpty,
   MaxLength,
-  IsUUID,
   IsBoolean,
 } from 'class-validator';
 import { TipoInventario } from '@prisma/client';
@@ -23,14 +22,15 @@ export class CrearInventarioDto {
   @IsEnum(TipoInventario)
   tipoInventario: TipoInventario;
 
-  @IsUUID()
+  // IDs del sistema son cuid, NO UUID — @IsUUID() rechazaba todo (módulo nunca usable)
+  @IsString()
   @IsNotEmpty()
   sedeId: string;
 
   @IsDateString()
   fechaPlanificada: string;
 
-  @IsUUID()
+  @IsString()
   @IsOptional()
   supervisorId?: string;
 
