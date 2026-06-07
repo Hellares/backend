@@ -1266,12 +1266,18 @@ export class CotizacionService {
         continue;
       }
 
+      // El detalle de variante guarda productoId Y varianteId, pero la fila de
+      // ProductoStock de una variante tiene productoId=NULL → buscar por
+      // varianteId solo (antes el AND productoId+varianteId no matcheaba nada
+      // → "sin stock" falso en variantes que SÍ tenían stock).
       const productoStock = await this.prisma.productoStock.findFirst({
-        where: {
-          sedeId: cotizacion.sedeId,
-          productoId: detalle.productoId ?? null,
-          varianteId: detalle.varianteId ?? null,
-        },
+        where: detalle.varianteId
+          ? { sedeId: cotizacion.sedeId, varianteId: detalle.varianteId }
+          : {
+              sedeId: cotizacion.sedeId,
+              productoId: detalle.productoId,
+              varianteId: null,
+            },
       });
 
       const cantidad = Number(detalle.cantidad);
