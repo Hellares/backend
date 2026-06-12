@@ -936,6 +936,9 @@ export class UsuariosService {
         nombreCompleto: `${persona.nombres} ${persona.apellidos}`,
         email: persona.email || usuario.email || undefined,
         telefono: persona.telefono || usuario.telefono || undefined,
+        // Sin esto el detail sheet (que se alimenta del listado) mostraba
+        // "Sin alias" aunque el usuario tuviera uno — findOne sí lo emitía.
+        aliasTicket: usuario.aliasTicket || undefined,
         direccion: persona.direccion || undefined,
         distrito: persona.distrito || undefined,
         provincia: persona.provincia || undefined,
