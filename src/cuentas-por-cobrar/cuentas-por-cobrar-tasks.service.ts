@@ -152,6 +152,11 @@ export class CuentasPorCobrarTasksService {
             let montoMora = montoCuota * (porcentajeDiario / 100) * diasVencidoEfectivo;
             const moraMaxima = montoCuota * (maxPorcentaje / 100);
             montoMora = Math.min(montoMora, moraMaxima);
+            // montoMora almacena la mora PENDIENTE: el acumulado se netea
+            // contra lo ya pagado. Sin esto, la mora pagada "resucitaba" en
+            // la siguiente corrida (la cuota PAGADA_PARCIAL vuelve a VENCIDA
+            // y la fórmula recalcula el acumulado completo).
+            montoMora = Math.max(montoMora - Number(cuota.montoPagadoMora ?? 0), 0);
             montoMora = Math.round(montoMora * 100) / 100;
 
             await this.prisma.cuotaVenta.update({

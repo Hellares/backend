@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsNumber,
   IsEnum,
+  IsBoolean,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -29,4 +30,12 @@ export class ProcesarPagoDto {
   @IsOptional()
   @IsString()
   cuotaVentaId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Confirmación del cajero para pago en efectivo sobre el umbral de bancarización (Ley 28194)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  aceptaRiesgoBancarizacion?: boolean;
 }

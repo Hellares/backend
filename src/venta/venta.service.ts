@@ -2738,6 +2738,51 @@ export class VentaService {
   /**
    * Registrar pago
    */
+  /**
+   * Mora vigente de una cuota al momento del pago, neta de lo ya pagado.
+   * Misma fórmula que el cron de cobranza (cuentas-por-cobrar-tasks):
+   * monto × %diario × días vencidos efectivos, con tope %máximo — menos
+   * `montoPagadoMora`. Sin esto, pagar entre corridas del cron usaba una
+   * mora desactualizada (días de menos) y la cuota podía cerrarse como
+   * PAGADA debiendo mora real.
+   * Si la empresa no tiene mora habilitada se respeta el `montoMora`
+   * almacenado (cargo histórico de cuando estuvo habilitada).
+   */
+  private static moraVigente(
+    cuota: {
+      monto: unknown;
+      montoMora: unknown;
+      montoPagadoMora: unknown;
+      fechaVencimiento: Date;
+    },
+    config: {
+      moraHabilitada: boolean;
+      porcentajeMoraDiario: unknown;
+      moraMaximaPorcentaje: unknown;
+      diasGraciaMora: number | null;
+    } | null,
+    ahora: Date,
+  ): number {
+    if (!config?.moraHabilitada) return Number(cuota.montoMora ?? 0);
+
+    const diasVencido = Math.floor(
+      (ahora.getTime() - cuota.fechaVencimiento.getTime()) / 86_400_000,
+    );
+    const diasEfectivos = Math.max(diasVencido - (config.diasGraciaMora ?? 0), 0);
+    if (diasEfectivos <= 0) return 0;
+
+    const montoCuota = Number(cuota.monto);
+    const pctDiario = Number(config.porcentajeMoraDiario ?? 0.05);
+    const pctMax = Number(config.moraMaximaPorcentaje ?? 30);
+    const acumulada = Math.min(
+      montoCuota * (pctDiario / 100) * diasEfectivos,
+      montoCuota * (pctMax / 100),
+    );
+    const neta =
+      Math.round((acumulada - Number(cuota.montoPagadoMora ?? 0)) * 100) / 100;
+    return Math.max(neta, 0);
+  }
+
   async procesarPago(
     id: string,
     empresaId: string,
@@ -2780,6 +2825,31 @@ export class VentaService {
         );
       }
 
+      // Ley 28194 también al cobrar DESPUÉS de crear: la validación de
+      // creación se salta ventas a crédito y borradores cobrados luego.
+      // Acá no se exige banco (los APKs no lo mandan en este flujo): solo
+      // referencia para digitales y confirmación expresa para efectivo.
+      const totalLey = Number(venta.totalConInteres ?? venta.total);
+      const monedaLey = venta.moneda || 'PEN';
+      const umbralLey = monedaLey === 'USD' ? 500 : 2000;
+      if (totalLey >= umbralLey) {
+        const metodo = dto.metodoPago as string;
+        if (
+          ['YAPE', 'PLIN', 'TARJETA', 'TRANSFERENCIA'].includes(metodo) &&
+          !dto.referencia?.trim()
+        ) {
+          throw new BadRequestException(
+            `Bancarización: el pago de ${metodo} (S/ ${dto.monto.toFixed(2)}) requiere N° de operación.`,
+          );
+        }
+        if (metodo === 'EFECTIVO' && !dto.aceptaRiesgoBancarizacion) {
+          throw new BadRequestException(
+            `Ley 28194: la venta ${venta.codigo} (${monedaLey} ${totalLey.toFixed(2)}) supera el límite de bancarización (${umbralLey}). ` +
+              `Cobrar en efectivo requiere confirmación del cajero — el cliente perderá derecho a deducir IGV/sustento de gasto.`,
+          );
+        }
+      }
+
       // Crear pago
       const pago = await tx.pagoVenta.create({
         data: {
@@ -2796,6 +2866,23 @@ export class VentaService {
         orderBy: { numero: 'asc' },
       });
 
+      // Config de mora de la empresa: la mora se recalcula AL MOMENTO del
+      // pago (cuota.montoMora la actualiza un cron a lo sumo diario, puede
+      // estar desactualizada por días).
+      const configMora =
+        ventaCuotas.length > 0
+          ? await tx.configuracionEmpresa.findFirst({
+              where: { empresaId },
+              select: {
+                moraHabilitada: true,
+                porcentajeMoraDiario: true,
+                moraMaximaPorcentaje: true,
+                diasGraciaMora: true,
+              },
+            })
+          : null;
+      const ahora = new Date();
+
       // Track total breakdown
       let totalMoraAplicada = 0;
       let totalInteresAplicado = 0;
@@ -2806,7 +2893,7 @@ export class VentaService {
         for (const cuota of ventaCuotas) {
           if (remaining <= 0) break;
 
-          const mora = Number(cuota.montoMora ?? 0);
+          const mora = VentaService.moraVigente(cuota, configMora, ahora);
           const saldoInteres = Math.round((Number(cuota.montoInteres ?? 0) - Number(cuota.montoPagadoInteres ?? 0)) * 100) / 100;
           const saldoPrincipal = Math.round((Number(cuota.montoPrincipal ?? 0) - Number(cuota.montoPagadoPrincipal ?? 0)) * 100) / 100;
           const saldoTotal = mora + Math.max(saldoInteres, 0) + Math.max(saldoPrincipal, 0);

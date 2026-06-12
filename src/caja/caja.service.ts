@@ -34,10 +34,12 @@ const CATEGORIA_ES_INGRESO: Partial<Record<CategoriaMovimientoCaja, boolean>> = 
   [CategoriaMovimientoCaja.VENTA]: true,
   [CategoriaMovimientoCaja.PEDIDO_MARKETPLACE]: true,
   [CategoriaMovimientoCaja.ADELANTO_SERVICIO]: true,
+  [CategoriaMovimientoCaja.ADELANTO_COTIZACION]: true,
   [CategoriaMovimientoCaja.OTRO_INGRESO]: true,
   // Egresos puros
   [CategoriaMovimientoCaja.COMPRA]: false,
   [CategoriaMovimientoCaja.DEVOLUCION]: false,
+  [CategoriaMovimientoCaja.DEVOLUCION_ADELANTO_COTIZACION]: false,
   [CategoriaMovimientoCaja.PAGO_PROVEEDOR]: false,
   [CategoriaMovimientoCaja.GASTO_OPERATIVO]: false,
   [CategoriaMovimientoCaja.OTRO_EGRESO]: false,
@@ -49,6 +51,19 @@ const CATEGORIA_ES_INGRESO: Partial<Record<CategoriaMovimientoCaja, boolean>> = 
   // DEPOSITO_AGENTE / RETIRO_AGENTE: pueden ser ambos según la dirección del
   // efectivo respecto al banco — no se valida polaridad.
 };
+
+/**
+ * Categorías reservadas a flujos del sistema: barrido del cierre de caja,
+ * reversos de cajas cerradas y ajustes desde el endpoint de tesorería.
+ * Un movimiento MANUAL con una de estas falsearía la trazabilidad de
+ * tesorería (p.ej. un "barrido" que ningún cierre generó).
+ */
+const CATEGORIAS_SOLO_SISTEMA: CategoriaMovimientoCaja[] = [
+  CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+  CategoriaMovimientoCaja.RETIRO_TESORERIA,
+  CategoriaMovimientoCaja.AJUSTE_TESORERIA,
+  CategoriaMovimientoCaja.REVERSO_CAJA_CERRADA,
+];
 
 @Injectable()
 export class CajaService {
@@ -375,6 +390,12 @@ export class CajaService {
 
     if (!caja) {
       throw new NotFoundException('Caja no encontrada o no está abierta');
+    }
+
+    if (CATEGORIAS_SOLO_SISTEMA.includes(dto.categoria)) {
+      throw new BadRequestException(
+        `La categoría ${dto.categoria} la genera el sistema (cierres, reversos, tesorería) y no puede registrarse manualmente`,
+      );
     }
 
     this._validarCoherenciaTipoCategoria(dto.tipo, dto.categoria);
