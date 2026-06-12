@@ -19,6 +19,7 @@ import { AppLoggerService } from '../common/logger';
 import { CacheService } from '../redis/cache.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { ClienteEmpresaService } from '../cliente-empresa/cliente-empresa.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
@@ -31,9 +32,50 @@ export class ClientesService {
     loggerService: AppLoggerService,
     private consultasExternas: ConsultasExternasService,
     private clienteEmpresaService: ClienteEmpresaService,
+    private realtime: RealtimeInvalidationService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ClientesService.name);
+  }
+
+  /**
+   * Notifica CLIENTE_CAMBIADO a las empresas afectadas (fire-and-forget,
+   * nunca rompe el flujo principal).
+   *
+   * Con `fanOut=true` resuelve TODAS las empresas vinculadas a la Persona
+   * (sus datos son compartidos: un cambio hecho por la empresa A debe
+   * invalidar el catálogo local de B y C). Con `fanOut=false` notifica
+   * solo a `empresaId` (cambios del vínculo: activar/desactivar/eliminar).
+   */
+  private async notificarClienteCambiado(opts: {
+    personaId?: string;
+    empresaId?: string;
+    clienteEmpresaId?: string;
+    fanOut: boolean;
+  }): Promise<void> {
+    try {
+      let empresaIds = opts.empresaId ? [opts.empresaId] : [];
+      if (opts.fanOut && opts.personaId) {
+        const vinculos = await this.prisma.empresaPersona.findMany({
+          where: { personaId: opts.personaId, deletedAt: null },
+          select: { empresaId: true },
+        });
+        empresaIds = [
+          ...new Set([...empresaIds, ...vinculos.map((v) => v.empresaId)]),
+        ];
+      }
+      if (empresaIds.length > 0) {
+        this.realtime.notifyClienteCambiado({
+          empresaIds,
+          clienteEmpresaId: opts.clienteEmpresaId,
+          personaId: opts.personaId,
+        });
+      }
+    } catch (e) {
+      this.logger.warn(
+        `notificarClienteCambiado falló: ${(e as Error).message}`,
+      );
+    }
   }
 
   /** Delegado: ver `ClienteEmpresaService.getOrCreateByRuc`. */
@@ -226,6 +268,18 @@ export class ClientesService {
       persona.id,
       empresaId,
     );
+
+    // Realtime: vínculo nuevo (casos 2/3/4) → los devices de esta empresa
+    // (y de las demás vinculadas, si la persona ya existía y se tocaron
+    // sus datos) refrescan su catálogo local de clientes.
+    if (!yaEraClienteEmpresa) {
+      void this.notificarClienteCambiado({
+        personaId: persona.id,
+        empresaId,
+        clienteEmpresaId: clienteCompleto.id,
+        fanOut: true,
+      });
+    }
 
     return {
       cliente: clienteCompleto,
@@ -547,6 +601,120 @@ export class ClientesService {
   }
 
   /**
+   * Delta-sync del catálogo de clientes (mismo patrón que /productos/sync).
+   *
+   * Devuelve los clientes cuyo vínculo (EmpresaPersona) O cuya Persona
+   * cambió desde `lastSync`. El OR sobre `persona.actualizadoEn` es la
+   * clave multi-tenant: la Persona es compartida — si OTRA empresa (o el
+   * propio cliente desde su portal) edita sus datos, el vínculo de esta
+   * empresa no se toca y sin el OR el cache local quedaría stale para
+   * siempre.
+   *
+   * Fallback a full sync si: lastSync ausente/inválido, > 7 días, o el
+   * delta supera MAX_DELTA (cliente muy desactualizado: un full es más
+   * barato que paginar deltas).
+   */
+  async syncDeltas(empresaId: string, lastSyncRaw?: string) {
+    const MAX_DELTA = 500;
+    const MAX_FULL = 5000;
+    const ahora = new Date();
+
+    let since: Date | null = null;
+    if (lastSyncRaw) {
+      const parsed = new Date(lastSyncRaw);
+      const valida = !Number.isNaN(parsed.getTime());
+      const muyViejo =
+        valida && ahora.getTime() - parsed.getTime() > 7 * 24 * 60 * 60 * 1000;
+      if (valida && !muyViejo) since = parsed;
+    }
+
+    const whereBase = {
+      empresaId,
+      rol: 'CLIENTE' as const,
+      deletedAt: null,
+    };
+    const include = {
+      persona: {
+        include: {
+          usuario: {
+            select: {
+              id: true,
+              email: true,
+              telefono: true,
+              emailVerificado: true,
+              telefonoVerificado: true,
+              dniVerificado: true,
+              isActive: true,
+              registrosComoCliente: {
+                where: { empresaId },
+                orderBy: { creadoEn: 'asc' as const },
+                take: 1,
+              },
+              empresas: {
+                where: {
+                  empresaId,
+                  rol: 'CLIENTE' as const,
+                  deletedAt: null,
+                },
+                take: 1,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    let fullSync = since === null;
+    let rows;
+
+    if (!fullSync) {
+      rows = await this.prisma.empresaPersona.findMany({
+        where: {
+          ...whereBase,
+          OR: [
+            { actualizadoEn: { gt: since! } },
+            { persona: { actualizadoEn: { gt: since! } } },
+          ],
+        },
+        include,
+        take: MAX_DELTA + 1,
+      });
+      if (rows.length > MAX_DELTA) fullSync = true;
+    }
+
+    if (fullSync) {
+      rows = await this.prisma.empresaPersona.findMany({
+        where: whereBase,
+        include,
+        orderBy: { creadoEn: 'desc' },
+        take: MAX_FULL,
+      });
+    }
+
+    const deleted = fullSync
+      ? []
+      : (
+          await this.prisma.empresaPersona.findMany({
+            where: {
+              empresaId,
+              rol: 'CLIENTE',
+              deletedAt: { gt: since! },
+            },
+            select: { id: true },
+          })
+        ).map((r) => r.id);
+
+    return {
+      updated: rows!.map((c) => this.toResponseDto(c, empresaId)),
+      deleted,
+      fullSync,
+      // El cliente guarda ESTE timestamp como próximo lastSync (hora del
+      // server, inmune al clock skew del dispositivo).
+      serverTime: ahora.toISOString(),
+    };
+  }
+
+  /**
    * Obtiene un cliente específico por ID
    * OPTIMIZADO: Incluye todas las relaciones para evitar N+1 queries
    */
@@ -648,14 +816,15 @@ export class ClientesService {
     }
 
     const { isActive, notas, ...personaData } = updateDto;
+    const dataToUpdate = {
+      ...personaData,
+      ...(notas !== undefined && { observaciones: notas }),
+    };
+    const tocoPersona = Object.keys(dataToUpdate).length > 0;
 
     await this.prisma.$transaction(async (tx) => {
       // Actualizar datos de la persona (si se proporcionan)
-      const dataToUpdate = {
-        ...personaData,
-        ...(notas !== undefined && { observaciones: notas }),
-      };
-      if (Object.keys(dataToUpdate).length > 0) {
+      if (tocoPersona) {
         await tx.persona.update({
           where: { id: clienteExistente.personaId },
           data: dataToUpdate,
@@ -674,6 +843,16 @@ export class ClientesService {
     this.logger.log(
       `Cliente ${clienteId} actualizado en empresa ${empresaId}`,
     );
+
+    // Realtime: si se tocaron datos de la Persona (compartida), fan-out a
+    // TODAS las empresas vinculadas; si solo cambió el vínculo (isActive),
+    // únicamente a esta empresa.
+    void this.notificarClienteCambiado({
+      personaId: clienteExistente.personaId,
+      empresaId,
+      clienteEmpresaId: clienteId,
+      fanOut: tocoPersona,
+    });
 
     return this.findOne(clienteId, empresaId);
   }
@@ -712,6 +891,15 @@ export class ClientesService {
     if (usuarioId) {
       await this.cache.invalidateTenantAccess(usuarioId, empresaId);
     }
+
+    // Realtime: solo afecta el vínculo de ESTA empresa (la persona sigue
+    // siendo cliente de las demás).
+    void this.notificarClienteCambiado({
+      personaId: cliente.personaId,
+      empresaId,
+      clienteEmpresaId: clienteId,
+      fanOut: false,
+    });
 
     this.logger.log(
       `Cliente ${clienteId} eliminado (soft delete) de empresa ${empresaId}`,
@@ -955,11 +1143,17 @@ export class ClientesService {
     const datos = await this.consultasExternas.consultarDni(dniLimpio);
     const apellidos = `${datos.apellidoPaterno} ${datos.apellidoMaterno}`.trim();
 
+    // Solo notificar realtime si esta llamada CREÓ o reactivó algo —
+    // VR consulta este endpoint en cada lookup de DNI y no hay que
+    // spamear el topic cuando el cliente ya existía y estaba activo.
+    let huboCambio = false;
+
     // 2) Asegurar Persona
     let persona = await this.prisma.persona.findUnique({
       where: { dni: dniLimpio },
     });
     if (!persona) {
+      huboCambio = true;
       persona = await this.prisma.persona.create({
         data: {
           dni: dniLimpio,
@@ -991,6 +1185,7 @@ export class ClientesService {
       },
     });
     if (!empresaPersona) {
+      huboCambio = true;
       empresaPersona = await this.prisma.empresaPersona.create({
         data: {
           personaId: persona.id,
@@ -1000,9 +1195,19 @@ export class ClientesService {
         },
       });
     } else if (empresaPersona.deletedAt !== null || !empresaPersona.isActive) {
+      huboCambio = true;
       empresaPersona = await this.prisma.empresaPersona.update({
         where: { id: empresaPersona.id },
         data: { deletedAt: null, isActive: true },
+      });
+    }
+
+    if (huboCambio) {
+      void this.notificarClienteCambiado({
+        personaId: persona.id,
+        empresaId,
+        clienteEmpresaId: empresaPersona.id,
+        fanOut: false,
       });
     }
 

@@ -97,6 +97,35 @@ export class RealtimeInvalidationService {
       });
   }
 
+  /// Un cliente (Persona compartida o su vínculo EmpresaPersona) cambió:
+  /// creado, asociado, datos actualizados, desactivado o eliminado.
+  ///
+  /// Recibe el ARRAY de empresas a notificar: la Persona es global y
+  /// compartida entre empresas — cuando sus datos cambian, TODAS las
+  /// empresas vinculadas deben invalidar su catálogo local de clientes
+  /// (fan-out), no solo la que hizo el cambio.
+  notifyClienteCambiado(args: {
+    empresaIds: string[];
+    clienteEmpresaId?: string | null;
+    personaId?: string | null;
+  }): void {
+    for (const empresaId of new Set(args.empresaIds)) {
+      this.firebase
+        .sendDataToTopic(
+          this.topicForEmpresa(empresaId),
+          this.toStringMap({
+            tipo: 'CLIENTE_CAMBIADO',
+            empresaId,
+            clienteEmpresaId: args.clienteEmpresaId,
+            personaId: args.personaId,
+          }),
+        )
+        .catch((err) => {
+          this.logger.warn(`CLIENTE_CAMBIADO send failed: ${err?.message}`);
+        });
+    }
+  }
+
   /// Los niveles de precio (Por Mayor, Distribuidor, etc.) de un producto
   /// fueron creados/modificados/eliminados. Cliente debe invalidar el
   /// cache local de niveles para que el próximo cálculo en carrito use

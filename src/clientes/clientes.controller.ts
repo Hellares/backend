@@ -95,6 +95,25 @@ export class ClientesController {
     return await this.clientesService.findAll(empresaId, queryDto);
   }
 
+  @Get('sync')
+  @RequiresPermission(Permission.VIEW_CLIENTS)
+  @ApiOperation({
+    summary: 'Delta-sync del catálogo de clientes',
+    description:
+      'Devuelve los clientes creados/modificados desde `lastSync` (vínculo ' +
+      'O datos de la Persona compartida) + ids eliminados. Sin lastSync ' +
+      'válido (o > 7 días, o delta muy grande) responde el catálogo ' +
+      'completo con fullSync=true. El cliente debe guardar `serverTime` ' +
+      'como próximo lastSync. Mismo patrón que /productos/sync.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async syncClientes(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('lastSync') lastSync?: string,
+  ) {
+    return this.clientesService.syncDeltas(empresaId, lastSync);
+  }
+
   @Get('generico')
   @RequiresPermission(Permission.VIEW_CLIENTS)
   @ApiOperation({
