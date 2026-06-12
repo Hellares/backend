@@ -55,6 +55,17 @@ export class ClienteEmpresaController {
     return this.clienteEmpresaService.findAll(empresaId, query);
   }
 
+  /// Delta-sync del catálogo B2B (patrón /clientes/sync). Declarado antes
+  /// de ':id' para que la ruta estática gane.
+  @Get('sync')
+  @RequiresPermission(Permission.VIEW_CLIENTS)
+  async sync(
+    @Param('empresaId') empresaId: string,
+    @Query('lastSync') lastSync?: string,
+  ) {
+    return this.clienteEmpresaService.syncDeltas(empresaId, lastSync);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_CLIENTS)
   async findOne(

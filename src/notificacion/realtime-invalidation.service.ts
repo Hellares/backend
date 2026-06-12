@@ -126,6 +126,28 @@ export class RealtimeInvalidationService {
     }
   }
 
+  /// Un cliente empresa B2B (ClienteEmpresa o sus contactos) cambió.
+  /// A diferencia de la Persona, es per-empresa: sin fan-out.
+  notifyClienteEmpresaCambiado(args: {
+    empresaId: string;
+    clienteEmpresaId?: string | null;
+  }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'CLIENTE_EMPRESA_CAMBIADO',
+          empresaId: args.empresaId,
+          clienteEmpresaId: args.clienteEmpresaId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(
+          `CLIENTE_EMPRESA_CAMBIADO send failed: ${err?.message}`,
+        );
+      });
+  }
+
   /// Los niveles de precio (Por Mayor, Distribuidor, etc.) de un producto
   /// fueron creados/modificados/eliminados. Cliente debe invalidar el
   /// cache local de niveles para que el próximo cálculo en carrito use

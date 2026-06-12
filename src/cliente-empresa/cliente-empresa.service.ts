@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import {
   CreateClienteEmpresaDto,
   UpdateClienteEmpresaDto,
@@ -20,7 +21,14 @@ export class ClienteEmpresaService {
     private readonly prisma: PrismaService,
     private readonly configuracionCodigosService: ConfiguracionCodigosService,
     private readonly consultasExternas: ConsultasExternasService,
+    private readonly realtime: RealtimeInvalidationService,
   ) {}
+
+  /// Push CLIENTE_EMPRESA_CAMBIADO (fire-and-forget). Per-empresa: el
+  /// ClienteEmpresa no se comparte entre tenants, sin fan-out.
+  private notificarCambio(empresaId: string, clienteEmpresaId?: string) {
+    this.realtime.notifyClienteEmpresaCambiado({ empresaId, clienteEmpresaId });
+  }
 
   /**
    * Busca o crea un ClienteEmpresa por RUC usando consulta SUNAT.
@@ -62,7 +70,9 @@ export class ClienteEmpresaService {
     });
 
     let cliente = existente;
+    let huboCambio = false;
     if (!cliente) {
+      huboCambio = true;
       const { codigoClienteEmpresa: codigo } =
         await this.configuracionCodigosService.generarCodigoClienteEmpresa(empresaId);
       cliente = await this.prisma.clienteEmpresa.create({
@@ -85,11 +95,15 @@ export class ClienteEmpresaService {
         },
       });
     } else if (cliente.deletedAt !== null || !cliente.isActive) {
+      huboCambio = true;
       cliente = await this.prisma.clienteEmpresa.update({
         where: { id: cliente.id },
         data: { deletedAt: null, isActive: true, actualizadoPor: creadoPor },
       });
     }
+
+    // Solo si creó/reactivó — VR consulta por RUC en cada lookup.
+    if (huboCambio) this.notificarCambio(empresaId, cliente.id);
 
     return {
       clienteEmpresaId: cliente.id,
@@ -189,7 +203,70 @@ export class ClienteEmpresaService {
       });
     }
 
+    this.notificarCambio(data.empresaId, created.id);
+
     return { ...created, empresaVinculable };
+  }
+
+  /**
+   * Delta-sync del catálogo de clientes empresa B2B (patrón /clientes/sync).
+   * A diferencia de Personas no hay OR a una entidad compartida — el
+   * ClienteEmpresa es per-tenant — pero las mutaciones de CONTACTOS
+   * bumpean el actualizadoEn del padre para entrar en los deltas.
+   */
+  async syncDeltas(empresaId: string, lastSyncRaw?: string) {
+    const MAX_DELTA = 500;
+    const MAX_FULL = 5000;
+    const ahora = new Date();
+
+    let since: Date | null = null;
+    if (lastSyncRaw) {
+      const parsed = new Date(lastSyncRaw);
+      const valida = !Number.isNaN(parsed.getTime());
+      const muyViejo =
+        valida && ahora.getTime() - parsed.getTime() > 7 * 24 * 60 * 60 * 1000;
+      if (valida && !muyViejo) since = parsed;
+    }
+
+    const whereBase = { empresaId, deletedAt: null };
+    const include = { contactos: true };
+
+    let fullSync = since === null;
+    let rows;
+
+    if (!fullSync) {
+      rows = await this.prisma.clienteEmpresa.findMany({
+        where: { ...whereBase, actualizadoEn: { gt: since! } },
+        include,
+        take: MAX_DELTA + 1,
+      });
+      if (rows.length > MAX_DELTA) fullSync = true;
+    }
+
+    if (fullSync) {
+      rows = await this.prisma.clienteEmpresa.findMany({
+        where: whereBase,
+        include,
+        orderBy: { razonSocial: 'asc' },
+        take: MAX_FULL,
+      });
+    }
+
+    const deleted = fullSync
+      ? []
+      : (
+          await this.prisma.clienteEmpresa.findMany({
+            where: { empresaId, deletedAt: { gt: since! } },
+            select: { id: true },
+          })
+        ).map((r) => r.id);
+
+    return {
+      updated: rows!,
+      deleted,
+      fullSync,
+      serverTime: ahora.toISOString(),
+    };
   }
 
   async findAll(empresaId: string, query: QueryClienteEmpresaDto) {
@@ -280,7 +357,7 @@ export class ClienteEmpresaService {
       }
     }
 
-    return this.prisma.clienteEmpresa.update({
+    const actualizado = await this.prisma.clienteEmpresa.update({
       where: { id },
       data: {
         razonSocial: data.razonSocial,
@@ -309,12 +386,15 @@ export class ClienteEmpresaService {
         contactos: true,
       },
     });
+
+    this.notificarCambio(empresaId, id);
+    return actualizado;
   }
 
   async remove(id: string, empresaId: string, motivo?: string) {
     await this.findOne(id, empresaId);
 
-    return this.prisma.$transaction(async (tx) => {
+    const eliminado = await this.prisma.$transaction(async (tx) => {
       // Verificar que no tenga órdenes activas dentro de la transacción
       const ordenesActivas = await tx.ordenServicio.count({
         where: {
@@ -339,6 +419,9 @@ export class ClienteEmpresaService {
         },
       });
     });
+
+    this.notificarCambio(empresaId, id);
+    return eliminado;
   }
 
   // ─── Contactos ───
@@ -350,18 +433,30 @@ export class ClienteEmpresaService {
   ) {
     await this.findOne(clienteEmpresaId, empresaId);
 
-    return this.prisma.clienteEmpresaContacto.create({
-      data: {
-        clienteEmpresaId,
-        nombre: data.nombre,
-        cargo: data.cargo,
-        dni: data.dni,
-        email: data.email,
-        telefono: data.telefono,
-        telefonoMovil: data.telefonoMovil,
-        esPrincipal: data.esPrincipal || false,
-      },
-    });
+    // Bump del padre en la MISMA tx: el delta-sync filtra por
+    // ClienteEmpresa.actualizadoEn — sin esto, los cambios de contactos
+    // serían invisibles para el catálogo local.
+    const [contacto] = await this.prisma.$transaction([
+      this.prisma.clienteEmpresaContacto.create({
+        data: {
+          clienteEmpresaId,
+          nombre: data.nombre,
+          cargo: data.cargo,
+          dni: data.dni,
+          email: data.email,
+          telefono: data.telefono,
+          telefonoMovil: data.telefonoMovil,
+          esPrincipal: data.esPrincipal || false,
+        },
+      }),
+      this.prisma.clienteEmpresa.update({
+        where: { id: clienteEmpresaId },
+        data: { actualizadoEn: new Date() },
+      }),
+    ]);
+
+    this.notificarCambio(empresaId, clienteEmpresaId);
+    return contacto;
   }
 
   async removeContacto(
@@ -393,9 +488,19 @@ export class ClienteEmpresaService {
       );
     }
 
-    return this.prisma.clienteEmpresaContacto.delete({
-      where: { id: contactoId },
-    });
+    const [eliminado] = await this.prisma.$transaction([
+      this.prisma.clienteEmpresaContacto.delete({
+        where: { id: contactoId },
+      }),
+      // Bump del padre para el delta-sync (ver addContacto).
+      this.prisma.clienteEmpresa.update({
+        where: { id: clienteEmpresaId },
+        data: { actualizadoEn: new Date() },
+      }),
+    ]);
+
+    this.notificarCambio(empresaId, clienteEmpresaId);
+    return eliminado;
   }
 
   async updateContacto(
@@ -423,9 +528,19 @@ export class ClienteEmpresaService {
     if (data.telefonoMovil !== undefined) updateData.telefonoMovil = data.telefonoMovil;
     if (data.esPrincipal !== undefined) updateData.esPrincipal = data.esPrincipal;
 
-    return this.prisma.clienteEmpresaContacto.update({
-      where: { id: contactoId },
-      data: updateData,
-    });
+    const [actualizado] = await this.prisma.$transaction([
+      this.prisma.clienteEmpresaContacto.update({
+        where: { id: contactoId },
+        data: updateData,
+      }),
+      // Bump del padre para el delta-sync (ver addContacto).
+      this.prisma.clienteEmpresa.update({
+        where: { id: clienteEmpresaId },
+        data: { actualizadoEn: new Date() },
+      }),
+    ]);
+
+    this.notificarCambio(empresaId, clienteEmpresaId);
+    return actualizado;
   }
 }
