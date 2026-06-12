@@ -20,6 +20,7 @@ import {
   CategoriaMovimientoCaja,
   MetodoPagoVenta,
   Prisma,
+  TipoCampoServicio,
 } from '@prisma/client';
 import { CreateOrdenServicioDto } from './dto/create-orden-servicio.dto';
 import { CobrarOrdenDto } from './dto/cobrar-orden.dto';
@@ -1114,14 +1115,13 @@ export class OrdenServicioService {
       plantillaId = servicio?.plantillaServicioId ?? null;
     }
 
-    // Campos requeridos aplicables:
-    // - Globales (`plantillaId = null`): siempre se validan.
-    // - De la plantilla del servicio actual (si hay): se suman.
+    // Campos aplicables (globales + de la plantilla del servicio). Se traen
+    // TODOS los activos, no solo requeridos: los requeridos validan
+    // presencia y todo valor presente valida su TIPO.
     const campos = await this.prisma.configuracionCamposServicio.findMany({
       where: {
         empresaId,
         isActive: true,
-        esRequerido: true,
         OR: plantillaId
             ? [{ plantillaId: null }, { plantillaId }]
             : [{ plantillaId: null }],
@@ -1129,11 +1129,144 @@ export class OrdenServicioService {
     });
 
     for (const campo of campos) {
-      if (!(campo.nombre in datos) || datos[campo.nombre] === null || datos[campo.nombre] === '') {
+      const valor = datos[campo.nombre];
+      const presente =
+        campo.nombre in datos && valor !== null && valor !== '';
+      if (campo.esRequerido && !presente) {
         throw new BadRequestException(
           `El campo "${campo.nombre}" es requerido`,
         );
       }
+      if (presente) {
+        this.validarTipoCampo(campo, valor);
+      }
+    }
+  }
+
+  /**
+   * Valida que el valor respete el formato de su tipo de campo.
+   * Deliberadamente LAXO (NUMERO acepta string numérica, etc.): los
+   * clientes guardan casi todo como string. Solo rechaza lo
+   * inequívocamente inválido — antes `datosPersonalizados` era JSON
+   * libre y cualquier basura entraba a la BD.
+   *
+   * Convenciones de almacenamiento (paridad Flutter dynamic_form_renderer
+   * y web dynamic-fields-form):
+   * - OPCION_MULTIPLE / CHECKBOX_MULTIPLE → array<string>
+   * - PATRON_DESBLOQUEO → "0-1-2-5-8" (índices 0-8 del grid 3x3)
+   * - INSPECCION_VISUAL → JSON-string {silueta, puntos[]}
+   * - OBJETO → mapa de subcampos
+   * - ARCHIVO → boolean (switch); se toleran URLs legacy
+   * - permiteOtro → el texto libre REEMPLAZA el valor (no se valida
+   *   pertenencia a opciones en ese caso)
+   */
+  private validarTipoCampo(
+    campo: {
+      nombre: string;
+      tipoCampo: TipoCampoServicio;
+      opciones: unknown;
+      permiteOtro: boolean;
+    },
+    valor: unknown,
+  ): void {
+    const fail = (esperado: string): never => {
+      throw new BadRequestException(
+        `El campo "${campo.nombre}" tiene un valor inválido: se esperaba ${esperado}`,
+      );
+    };
+
+    switch (campo.tipoCampo) {
+      case TipoCampoServicio.NUMERO: {
+        if (typeof valor !== 'number' && typeof valor !== 'string') {
+          fail('un número');
+        }
+        if (Number.isNaN(Number(valor))) fail('un número');
+        break;
+      }
+      case TipoCampoServicio.EMAIL:
+        if (
+          typeof valor !== 'string' ||
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valor)
+        ) {
+          fail('un email válido');
+        }
+        break;
+      case TipoCampoServicio.FECHA:
+        if (typeof valor !== 'string' || Number.isNaN(Date.parse(valor))) {
+          fail('una fecha válida');
+        }
+        break;
+      case TipoCampoServicio.CHECKBOX:
+        if (typeof valor !== 'boolean') fail('verdadero/falso');
+        break;
+      case TipoCampoServicio.ARCHIVO:
+        // Switch booleano en los clientes actuales; URLs legacy toleradas.
+        if (
+          typeof valor !== 'boolean' &&
+          typeof valor !== 'string' &&
+          !Array.isArray(valor)
+        ) {
+          fail('verdadero/falso');
+        }
+        break;
+      case TipoCampoServicio.OPCION_MULTIPLE:
+      case TipoCampoServicio.CHECKBOX_MULTIPLE:
+        if (!Array.isArray(valor) || valor.some((v) => typeof v !== 'string')) {
+          fail('una lista de opciones');
+        }
+        break;
+      case TipoCampoServicio.OPCION_SIMPLES: {
+        if (typeof valor !== 'string') fail('una opción (texto)');
+        // Pertenencia a la lista solo si el campo NO permite "Otro" (el
+        // texto libre reemplaza el valor) y opciones es lista de strings.
+        const ops = Array.isArray(campo.opciones) ? campo.opciones : null;
+        if (
+          !campo.permiteOtro &&
+          ops &&
+          ops.length > 0 &&
+          ops.every((o) => typeof o === 'string') &&
+          !ops.includes(valor as string)
+        ) {
+          fail('una de las opciones configuradas');
+        }
+        break;
+      }
+      case TipoCampoServicio.PATRON_DESBLOQUEO:
+        if (typeof valor !== 'string' || !/^[0-8](-[0-8])*$/.test(valor)) {
+          fail('un patrón de desbloqueo válido (índices 0-8)');
+        }
+        break;
+      case TipoCampoServicio.INSPECCION_VISUAL: {
+        if (typeof valor !== 'string') fail('datos de inspección visual');
+        try {
+          const parsed: unknown = JSON.parse(valor as string);
+          if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            Array.isArray(parsed)
+          ) {
+            fail('datos de inspección visual válidos');
+          }
+        } catch {
+          fail('datos de inspección visual válidos');
+        }
+        break;
+      }
+      case TipoCampoServicio.OBJETO:
+        if (typeof valor !== 'object' || valor === null || Array.isArray(valor)) {
+          fail('un grupo de subcampos');
+        }
+        break;
+      case TipoCampoServicio.HORA:
+      case TipoCampoServicio.TELEFONO:
+      case TipoCampoServicio.URL:
+      case TipoCampoServicio.TEXTO:
+      case TipoCampoServicio.TEXTO_AREA:
+      default:
+        if (typeof valor !== 'string' && typeof valor !== 'number') {
+          fail('texto');
+        }
+        break;
     }
   }
 

@@ -115,6 +115,29 @@ export class CajaService {
    *     perdida en el aire).
    */
   async abrirCaja(empresaId: string, usuarioId: string, dto: AbrirCajaDto) {
+    try {
+      return await this._abrirCajaTx(empresaId, usuarioId, dto);
+    } catch (e) {
+      // Índice parcial Caja_usuario_abierta_unique (mig 20260612120000):
+      // el perdedor de una carrera de doble-apertura choca con P2002.
+      // Traducirlo al mismo 400 que la validación normal.
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new BadRequestException(
+          'Ya tienes una caja abierta. Ciérrala antes de abrir una nueva.',
+        );
+      }
+      throw e;
+    }
+  }
+
+  private async _abrirCajaTx(
+    empresaId: string,
+    usuarioId: string,
+    dto: AbrirCajaDto,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       // Política: 1 caja activa por cajero en TODA la empresa (no por sede).
       // Si el cajero se mueve a otra sede, primero debe cerrar la actual.
