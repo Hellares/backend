@@ -6,7 +6,14 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
-import { EstadoOrdenServicio, EstadoTercerizacion, EstadoVinculacion, OrigenOrden } from '@prisma/client';
+import { NotificacionService } from '../notificacion/notificacion.service';
+import {
+  EstadoOrdenServicio,
+  EstadoTercerizacion,
+  EstadoVinculacion,
+  OrigenOrden,
+  TipoNotificacion,
+} from '@prisma/client';
 import { CreateTercerizacionDto } from './dto/create-tercerizacion.dto';
 import { RespondTercerizacionDto } from './dto/respond-tercerizacion.dto';
 import { CompleteTercerizacionDto } from './dto/complete-tercerizacion.dto';
@@ -18,7 +25,45 @@ export class TercerizacionService {
   constructor(
     private prisma: PrismaService,
     private configuracionCodigosService: ConfiguracionCodigosService,
+    private notificacionService: NotificacionService,
   ) {}
+
+  /// Notificaciones fire-and-forget: el fallo no rompe el flujo B2B pero
+  /// queda logueado (mismo criterio que orden-servicio.service).
+  private static logNotifFallida(contexto: string) {
+    return (e: unknown) =>
+      console.warn(
+        `Notificacion B2B fallida (${contexto}):`,
+        e instanceof Error ? e.message : e,
+      );
+  }
+
+  /// Push a los admins de la empresa contraparte de un evento B2B, con
+  /// deep-link al detalle de la tercerización.
+  private async notificarAdminsB2B(
+    empresaId: string,
+    titulo: string,
+    cuerpo: string,
+    tercerizacionId: string,
+    action: string,
+  ) {
+    const admins = await this.prisma.empresaUsuarioRol.findMany({
+      where: {
+        empresaId,
+        estado: 'ACTIVO',
+        rol: { in: ['EMPRESA_ADMIN', 'SUPER_ADMIN'] },
+      },
+      select: { usuarioId: true },
+    });
+    const adminIds = [...new Set(admins.map((a) => a.usuarioId))];
+    if (adminIds.length === 0) return;
+
+    await this.notificacionService.enviarAUsuarios(adminIds, titulo, cuerpo, {
+      tipo: TipoNotificacion.ORDEN_SERVICIO,
+      data: { tercerizacionId, action, target: 'staff' },
+      empresaId,
+    });
+  }
 
   // ─── Empresas vinculadas que aceptan tercerización ───
 
@@ -47,13 +92,15 @@ export class TercerizacionService {
 
     if (empresaIds.length === 0) return [];
 
-    // Buscar solo las que aceptan tercerización
+    // Buscar solo las que aceptan tercerización y están operativas
+    // (mismo criterio que el directorio general)
     const empresas = await this.prisma.empresa.findMany({
       where: {
         id: { in: empresaIds },
         aceptaTercerizacion: true,
         isActive: true,
         deletedAt: null,
+        estadoSuscripcion: 'ACTIVA',
       },
       select: {
         id: true,
@@ -203,17 +250,26 @@ export class TercerizacionService {
       throw new BadRequestException('No puedes tercerizar a tu propia empresa');
     }
 
-    // Validar que la empresa destino acepta tercerización
+    // Validar que la empresa destino acepta tercerización y está operativa
+    // (mismo criterio que el directorio: suscripción ACTIVA).
     const empresaDestino = await this.prisma.empresa.findFirst({
       where: {
         id: empresaDestinoId,
         aceptaTercerizacion: true,
         isActive: true,
+        estadoSuscripcion: 'ACTIVA',
       },
     });
     if (!empresaDestino) {
-      throw new BadRequestException('La empresa destino no acepta tercerización o no existe');
+      throw new BadRequestException(
+        'La empresa destino no acepta tercerización, no existe o no está activa',
+      );
     }
+
+    const empresaOrigen = await this.prisma.empresa.findUnique({
+      where: { id: empresaOrigenId },
+      select: { nombre: true },
+    });
 
     // Validar que la orden existe y pertenece a la empresa origen
     const orden = await this.prisma.ordenServicio.findFirst({
@@ -282,8 +338,11 @@ export class TercerizacionService {
       },
     }));
 
-    // B3 FIX: Guardar estado previo para restaurar al rechazar/cancelar
+    // B3 FIX: Guardar estado previo para restaurar al rechazar/cancelar.
+    // También origenOrden: una orden B2B_RECIBIDO re-tercerizada debe
+    // recuperar su marca B2B al rechazarse, no quedar como CLIENTE_FINAL.
     const estadoPrevioOrigen = orden.estado;
+    const origenOrdenPrevio = orden.origenOrden;
 
     // Crear tercerización y actualizar orden en transacción
     const result = await this.prisma.$transaction(async (tx) => {
@@ -303,7 +362,7 @@ export class TercerizacionService {
           empresaOrigenId,
           empresaDestinoId,
           ordenOrigenId,
-          datosEquipo: { ...datosEquipo, estadoPrevioOrigen },
+          datosEquipo: { ...datosEquipo, estadoPrevioOrigen, origenOrdenPrevio },
           descripcionProblema: dtoDescripcion || orden.descripcionProblema,
           sintomas: dtoSintomas || orden.sintomas,
           componentesData: componentesData.length > 0 ? componentesData : undefined,
@@ -333,6 +392,14 @@ export class TercerizacionService {
       return tercerizacion;
     });
 
+    this.notificarAdminsB2B(
+      empresaDestinoId,
+      'Nueva solicitud de tercerización',
+      `${empresaOrigen?.nombre ?? 'Una empresa'} te envió la orden ${orden.codigo} (${datosEquipo.tipoServicio})`,
+      result.id,
+      'b2b_solicitud',
+    ).catch(TercerizacionService.logNotifFallida('nueva solicitud'));
+
     return result;
   }
 
@@ -352,6 +419,7 @@ export class TercerizacionService {
           },
         },
         empresaOrigen: { select: { id: true, nombre: true, ruc: true, telefono: true, email: true } },
+        empresaDestino: { select: { nombre: true } },
       },
     });
 
@@ -373,7 +441,7 @@ export class TercerizacionService {
         throw new BadRequestException('El motivo de rechazo es requerido');
       }
 
-      return this.prisma.$transaction(async (tx) => {
+      const rechazada = await this.prisma.$transaction(async (tx) => {
         const updated = await tx.tercerizacionServicio.update({
           where: { id: tercerizacionId },
           data: {
@@ -384,15 +452,19 @@ export class TercerizacionService {
           },
         });
 
-        // B3 FIX: Restaurar estado previo en vez de siempre RECIBIDO
+        // B3 FIX: Restaurar estado previo en vez de siempre RECIBIDO.
+        // origenOrden también se restaura (cadenas de re-tercerización:
+        // una orden B2B_RECIBIDO no debe quedar como CLIENTE_FINAL).
         const datosEquipo = tercerizacion.datosEquipo as any;
         const estadoRestaurar = datosEquipo?.estadoPrevioOrigen || EstadoOrdenServicio.RECIBIDO;
+        const origenRestaurar =
+          datosEquipo?.origenOrdenPrevio || OrigenOrden.CLIENTE_FINAL;
 
         await tx.ordenServicio.update({
           where: { id: tercerizacion.ordenOrigenId },
           data: {
             estado: estadoRestaurar,
-            origenOrden: OrigenOrden.CLIENTE_FINAL,
+            origenOrden: origenRestaurar,
           },
         });
 
@@ -407,16 +479,34 @@ export class TercerizacionService {
 
         return updated;
       });
+
+      this.notificarAdminsB2B(
+        tercerizacion.empresaOrigenId,
+        'Tercerización rechazada',
+        `${tercerizacion.empresaDestino.nombre} rechazó la orden ${tercerizacion.ordenOrigen.codigo}. Motivo: ${dto.motivoRechazo}`,
+        tercerizacionId,
+        'b2b_rechazada',
+      ).catch(TercerizacionService.logNotifFallida('rechazo'));
+
+      return rechazada;
     }
 
     // Aceptar: crear orden en empresa destino
-    return this.prisma.$transaction(async (tx) => {
+    const aceptada = await this.prisma.$transaction(async (tx) => {
       // Buscar o crear la empresa origen como Persona + EmpresaPersona (cliente B2B)
-      // Usamos el RUC como identificador único para empresas
+      // Usamos el RUC como identificador único para empresas. Sin RUC,
+      // dedup por la observación B2B (antes cada aceptación creaba una
+      // Persona duplicada con dni null).
       const rucOrigen = tercerizacion.empresaOrigen.ruc;
       let persona = rucOrigen
         ? await tx.persona.findFirst({ where: { dni: rucOrigen } })
-        : null;
+        : await tx.persona.findFirst({
+            where: {
+              dni: null,
+              esCliente: true,
+              observaciones: `Empresa B2B - ${tercerizacion.empresaOrigen.nombre}`,
+            },
+          });
 
       if (!persona) {
         persona = await tx.persona.create({
@@ -490,6 +580,16 @@ export class TercerizacionService {
 
       return updated;
     });
+
+    this.notificarAdminsB2B(
+      tercerizacion.empresaOrigenId,
+      'Tercerización aceptada',
+      `${tercerizacion.empresaDestino.nombre} aceptó la orden ${tercerizacion.ordenOrigen.codigo} y comenzará el servicio`,
+      tercerizacionId,
+      'b2b_aceptada',
+    ).catch(TercerizacionService.logNotifFallida('aceptación'));
+
+    return aceptada;
   }
 
   // ─── Completar tercerización (empresa destino) ───
@@ -501,6 +601,10 @@ export class TercerizacionService {
   ) {
     const tercerizacion = await this.prisma.tercerizacionServicio.findUnique({
       where: { id: tercerizacionId },
+      include: {
+        empresaDestino: { select: { nombre: true } },
+        ordenOrigen: { select: { codigo: true } },
+      },
     });
 
     if (!tercerizacion) {
@@ -518,7 +622,7 @@ export class TercerizacionService {
       );
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const completada = await this.prisma.$transaction(async (tx) => {
       // Actualizar tercerización
       const updated = await tx.tercerizacionServicio.update({
         where: { id: tercerizacionId },
@@ -580,6 +684,16 @@ export class TercerizacionService {
 
       return updated;
     });
+
+    this.notificarAdminsB2B(
+      tercerizacion.empresaOrigenId,
+      'Tercerización completada',
+      `${tercerizacion.empresaDestino.nombre} completó la orden ${tercerizacion.ordenOrigen.codigo}. Precio B2B: S/ ${Number(dto.precioB2B).toFixed(2)}`,
+      tercerizacionId,
+      'b2b_completada',
+    ).catch(TercerizacionService.logNotifFallida('completada'));
+
+    return completada;
   }
 
   // ─── Cancelar tercerización (empresa origen) ───
@@ -587,6 +701,10 @@ export class TercerizacionService {
   async cancelar(tercerizacionId: string, empresaId: string) {
     const tercerizacion = await this.prisma.tercerizacionServicio.findUnique({
       where: { id: tercerizacionId },
+      include: {
+        empresaOrigen: { select: { nombre: true } },
+        ordenOrigen: { select: { codigo: true } },
+      },
     });
 
     if (!tercerizacion) {
@@ -599,26 +717,52 @@ export class TercerizacionService {
 
     if (
       tercerizacion.estado === EstadoTercerizacion.COMPLETADO ||
-      tercerizacion.estado === EstadoTercerizacion.CANCELADO
+      tercerizacion.estado === EstadoTercerizacion.CANCELADO ||
+      tercerizacion.estado === EstadoTercerizacion.RECHAZADO
     ) {
       throw new BadRequestException('No se puede cancelar en este estado');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    // Una tercerización ACEPTADA solo se cancela si el taller destino aún
+    // no empezó (orden espejo en RECIBIDO/EN_DIAGNOSTICO). Cancelar trabajo
+    // en curso o ya cobrado pisaría la orden del destino por fuera de su
+    // flujo — eso se coordina entre empresas, no unilateralmente.
+    let ordenDestino: { id: string; estado: EstadoOrdenServicio } | null = null;
+    if (tercerizacion.ordenDestinoId) {
+      ordenDestino = await this.prisma.ordenServicio.findUnique({
+        where: { id: tercerizacion.ordenDestinoId },
+        select: { id: true, estado: true },
+      });
+      const cancelables: EstadoOrdenServicio[] = [
+        EstadoOrdenServicio.RECIBIDO,
+        EstadoOrdenServicio.EN_DIAGNOSTICO,
+      ];
+      if (ordenDestino && !cancelables.includes(ordenDestino.estado)) {
+        throw new BadRequestException(
+          `La empresa destino ya está trabajando la orden (${ordenDestino.estado}). ` +
+            'Coordina la cancelación directamente con ella',
+        );
+      }
+    }
+
+    const cancelada = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.tercerizacionServicio.update({
         where: { id: tercerizacionId },
         data: { estado: EstadoTercerizacion.CANCELADO },
       });
 
-      // B3 FIX: Restaurar estado previo en vez de siempre RECIBIDO
+      // B3 FIX: Restaurar estado previo en vez de siempre RECIBIDO.
+      // origenOrden también (cadenas de re-tercerización).
       const datosEquipo = tercerizacion.datosEquipo as any;
       const estadoRestaurar = datosEquipo?.estadoPrevioOrigen || EstadoOrdenServicio.RECIBIDO;
+      const origenRestaurar =
+        datosEquipo?.origenOrdenPrevio || OrigenOrden.CLIENTE_FINAL;
 
       await tx.ordenServicio.update({
         where: { id: tercerizacion.ordenOrigenId },
         data: {
           estado: estadoRestaurar,
-          origenOrden: OrigenOrden.CLIENTE_FINAL,
+          origenOrden: origenRestaurar,
         },
       });
 
@@ -631,16 +775,34 @@ export class TercerizacionService {
         },
       });
 
-      // Cancelar orden destino si existe
-      if (tercerizacion.ordenDestinoId) {
+      // Cancelar orden destino si existe (con rastro en su historial)
+      if (ordenDestino) {
         await tx.ordenServicio.update({
-          where: { id: tercerizacion.ordenDestinoId },
+          where: { id: ordenDestino.id },
           data: { estado: EstadoOrdenServicio.CANCELADO },
+        });
+        await tx.historialOrdenServicio.create({
+          data: {
+            ordenServicioId: ordenDestino.id,
+            estadoAnterior: ordenDestino.estado,
+            estadoNuevo: EstadoOrdenServicio.CANCELADO,
+            notas: `Tercerización cancelada por la empresa origen (${tercerizacion.empresaOrigen.nombre})`,
+          },
         });
       }
 
       return updated;
     });
+
+    this.notificarAdminsB2B(
+      tercerizacion.empresaDestinoId,
+      'Tercerización cancelada',
+      `${tercerizacion.empresaOrigen.nombre} canceló la solicitud de la orden ${tercerizacion.ordenOrigen.codigo}`,
+      tercerizacionId,
+      'b2b_cancelada',
+    ).catch(TercerizacionService.logNotifFallida('cancelación'));
+
+    return cancelada;
   }
 
   // ─── Listar tercerizaciones de una empresa ───
