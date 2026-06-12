@@ -457,6 +457,150 @@ export class ClientesService {
   }
 
   /**
+   * Crea el acceso al portal/app para un cliente existente que aún no
+   * tiene Usuario (típicamente auto-creado por el lookup de DNI en el
+   * POS, que registra Persona+vínculo sin cuenta). Credenciales
+   * iniciales: usuario = DNI, contraseña = DNI, con cambio obligatorio
+   * en el primer login.
+   *
+   * Idempotente: si ya tenía cuenta solo asegura el vínculo
+   * EmpresaUsuarioRol y devuelve `yaTeniaAcceso: true`.
+   */
+  async crearAcceso(
+    clienteId: string,
+    empresaId: string,
+    registradoPorId: string,
+  ): Promise<{ yaTeniaAcceso: boolean; mensaje: string }> {
+    const empresaPersona = await this.prisma.empresaPersona.findFirst({
+      where: { id: clienteId, empresaId, deletedAt: null },
+      include: { persona: { include: { usuario: true } } },
+    });
+
+    if (!empresaPersona) {
+      throw new NotFoundException('Cliente no encontrado en esta empresa');
+    }
+
+    const persona = empresaPersona.persona;
+    const dni = persona.dni;
+    if (!dni || dni === '00000000') {
+      throw new BadRequestException(
+        'El cliente necesita un DNI real para crear su acceso (el login inicial es el DNI)',
+      );
+    }
+
+    // Ya tiene cuenta → solo asegurar el vínculo usuario-empresa.
+    if (persona.usuario) {
+      const relacion = await this.prisma.empresaUsuarioRol.findFirst({
+        where: {
+          usuarioId: persona.usuario.id,
+          empresaId,
+          rol: 'CLIENTE',
+          deletedAt: null,
+        },
+      });
+      if (!relacion) {
+        await this.prisma.empresaUsuarioRol.create({
+          data: {
+            usuarioId: persona.usuario.id,
+            empresaId,
+            rol: 'CLIENTE',
+            isActive: true,
+            estado: 'ACTIVO',
+            registradoPor: registradoPorId,
+          },
+        });
+        await this.cache.invalidateTenantAccess(persona.usuario.id, empresaId);
+      }
+      return {
+        yaTeniaAcceso: true,
+        mensaje: 'El cliente ya tenía acceso: ingresa con su DNI',
+      };
+    }
+
+    // Crear Usuario + AuthProvider + vínculo + auditoría. NO se crea
+    // EmpresaPersona (ya existe — por eso no se reusa
+    // crearUsuarioParaCliente, que lo crearía duplicado).
+    const usuario = await this.prisma.$transaction(async (tx) => {
+      const passwordHash = await bcrypt.hash(dni, 12);
+      const nuevo = await tx.usuario.create({
+        data: {
+          personaId: persona.id,
+          email: persona.email || null,
+          telefono: persona.telefono,
+          passwordHash,
+          emailVerificado: persona.email ? false : true,
+          telefonoVerificado: false,
+          authMethodsCount: 1,
+          metodoPrincipalLogin: persona.email ? 'EMAIL' : 'DNI',
+          requiereCambioPassword: true,
+          dniVerificado: false,
+          rolGlobal: 'CLIENTE',
+        },
+      });
+
+      await tx.authProvider.create({
+        data: {
+          userId: nuevo.id,
+          provider: 'PASSWORD',
+          providerId: nuevo.id,
+          email: persona.email || dni,
+          isActive: true,
+        },
+      });
+
+      await tx.empresaUsuarioRol.create({
+        data: {
+          usuarioId: nuevo.id,
+          empresaId,
+          rol: 'CLIENTE',
+          isActive: true,
+          estado: 'ACTIVO',
+          registradoPor: registradoPorId,
+        },
+      });
+
+      await tx.registroCliente.create({
+        data: {
+          usuarioId: nuevo.id,
+          empresaId,
+          tipoRegistro: 'EMPRESA_REGISTRA',
+          canalRegistro: 'PRESENCIAL',
+          estado: 'AUTO_APROBADO',
+          registradoPor: registradoPorId,
+        },
+      });
+
+      // Bump de Persona: el delta-sync del catálogo detecta el cambio y
+      // los devices ven el usuarioId nuevo (el chip "Crear acceso"
+      // desaparece solo).
+      await tx.persona.update({
+        where: { id: persona.id },
+        data: { esUsuario: true },
+      });
+
+      return nuevo;
+    });
+
+    await this.cache.invalidateTenantAccess(usuario.id, empresaId);
+    void this.notificarClienteCambiado({
+      personaId: persona.id,
+      empresaId,
+      clienteEmpresaId: clienteId,
+      fanOut: true,
+    });
+
+    this.logger.log(
+      `Acceso al portal creado para cliente ${clienteId} (DNI ${dni}) por ${registradoPorId}`,
+    );
+
+    return {
+      yaTeniaAcceso: false,
+      mensaje:
+        'Acceso creado: el cliente puede ingresar al app con su DNI como usuario y contraseña',
+    };
+  }
+
+  /**
    * Obtiene la lista de clientes de una empresa con filtros y paginación
    * OPTIMIZADO: Usa includes para evitar N+1 queries
    */

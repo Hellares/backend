@@ -114,6 +114,25 @@ export class ClientesController {
     return this.clientesService.syncDeltas(empresaId, lastSync);
   }
 
+  @Post(':id/crear-acceso')
+  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @ApiOperation({
+    summary: 'Crear acceso al portal/app para un cliente sin cuenta',
+    description:
+      'Crea el Usuario (login = DNI, contraseña = DNI, cambio obligatorio ' +
+      'al primer ingreso) para un cliente que solo existe como ' +
+      'Persona+vínculo (p.ej. auto-creado por el lookup de DNI del POS). ' +
+      'Idempotente: si ya tenía cuenta solo asegura el vínculo.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async crearAcceso(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser() user: any,
+  ): Promise<{ yaTeniaAcceso: boolean; mensaje: string }> {
+    return this.clientesService.crearAcceso(id, empresaId, user.sub);
+  }
+
   @Get('generico')
   @RequiresPermission(Permission.VIEW_CLIENTS)
   @ApiOperation({
