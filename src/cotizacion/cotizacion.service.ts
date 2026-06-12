@@ -136,28 +136,7 @@ export class CotizacionService {
       await this._assertNoInsumos(tx, detallesCalculados);
 
       // Validar descuentos máximos por producto
-      const detallesConDescuento = detallesCalculados.filter(d => d.descuento > 0 && d.productoId);
-      if (detallesConDescuento.length > 0) {
-        const productoIds = [...new Set(detallesConDescuento.map(d => d.productoId!))];
-        const productosConLimite = await tx.producto.findMany({
-          where: { id: { in: productoIds }, descuentoMaximo: { not: null }, esCombo: false },
-          select: { id: true, descuentoMaximo: true },
-        });
-        const limiteMap = new Map(productosConLimite.map(p => [p.id, Number(p.descuentoMaximo)]));
-
-        for (const detalle of detallesConDescuento) {
-          const limite = limiteMap.get(detalle.productoId!);
-          if (limite != null && limite > 0) {
-            const subtotalBruto = detalle.cantidad * detalle.precioUnitario;
-            const porcentaje = subtotalBruto > 0 ? (detalle.descuento / subtotalBruto) * 100 : 0;
-            if (porcentaje > limite) {
-              throw new BadRequestException(
-                `Descuento de "${detalle.descripcion}" (${porcentaje.toFixed(1)}%) excede el máximo permitido (${limite}%)`,
-              );
-            }
-          }
-        }
-      }
+      await this._validarDescuentosMaximos(tx, detallesCalculados);
 
       // ── Reserva de stock ──
       // Si `reservarStock=true`, validamos disponibilidad y preparamos
@@ -166,66 +145,14 @@ export class CotizacionService {
       // varianteId) NO reservan stock. La validación se hace ANTES de
       // crear la cotización para que un error de stock no deje datos
       // huérfanos.
-      //
-      // Mapeo de cada index → { productoStockId, cantidadReservada }
-      // o null si ese item no reserva.
-      const reservaInfo: Array<{ productoStockId: string; cantidad: number } | null> = [];
-      if (reservarStock) {
-        for (const d of detallesCalculados) {
-          const isProducto = d.productoId != null || d.varianteId != null;
-          if (!isProducto) {
-            reservaInfo.push(null);
-            continue;
-          }
-          const stock = await tx.productoStock.findFirst({
-            where: {
-              empresaId,
-              sedeId: dto.sedeId,
-              productoId: d.varianteId ? null : d.productoId,
-              varianteId: d.varianteId ?? null,
-            },
-            select: {
-              id: true,
-              stockActual: true,
-              stockReservado: true,
-              stockReservadoVenta: true,
-              stockReservadoCombo: true,
-              stockReservadoCotizacion: true,
-              stockDanado: true,
-              stockEnGarantia: true,
-            },
-          });
-          if (!stock) {
-            throw new BadRequestException(
-              `No hay stock registrado en esta sede para "${d.descripcion}"`,
-            );
-          }
-          const disponible =
-            stock.stockActual -
-            stock.stockReservado -
-            stock.stockReservadoVenta -
-            stock.stockReservadoCombo -
-            stock.stockReservadoCotizacion -
-            stock.stockDanado -
-            stock.stockEnGarantia;
-          const cantidadInt = Math.ceil(d.cantidad);
-          if (disponible < cantidadInt) {
-            throw new BadRequestException(
-              `Stock insuficiente para reservar "${d.descripcion}": ` +
-                `solicitado ${cantidadInt}, disponible ${disponible}`,
-            );
-          }
-          reservaInfo.push({
-            productoStockId: stock.id,
-            cantidad: cantidadInt,
-          });
-        }
-      } else {
-        // Sin reserva: igualmente push de nulls para mantener el index alineado.
-        for (let i = 0; i < detallesCalculados.length; i++) {
-          reservaInfo.push(null);
-        }
-      }
+      const reservaInfo = reservarStock
+        ? await this._prepararReservaInfo(
+            tx,
+            empresaId,
+            dto.sedeId,
+            detallesCalculados,
+          )
+        : detallesCalculados.map(() => null);
 
       // Calcular totales del header
       const subtotal = detallesCalculados.reduce(
@@ -543,9 +470,20 @@ export class CotizacionService {
       );
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    let huboCambioReservas = false;
+
+    const actualizada = await this.prisma.$transaction(async (tx) => {
       // Si vienen detalles nuevos, reemplazar los existentes
       if (dto.detalles && dto.detalles.length > 0) {
+        // Liberar reservas activas ANTES de borrar los detalles; si no,
+        // stockReservadoCotizacion quedaría incrementado sin ningún
+        // detalle que lo respalde (stock fantasma imposible de liberar).
+        // El adelanto NO se toca: editar un borrador no devuelve dinero.
+        const teniaReservaActiva = await this._liberarReservasDeDetalles(
+          tx,
+          id,
+        );
+
         await tx.cotizacionDetalle.deleteMany({
           where: { cotizacionId: id },
         });
@@ -562,25 +500,57 @@ export class CotizacionService {
         // Rechazar insumos
         await this._assertNoInsumos(tx, detallesCalculados);
 
+        // Validar descuentos máximos por producto (igual que en create)
+        await this._validarDescuentosMaximos(tx, detallesCalculados);
+
+        // Si la cotización tenía reserva activa, los nuevos detalles
+        // heredan la reserva: validar disponibilidad y re-reservar.
+        const reservaInfo = teniaReservaActiva
+          ? await this._prepararReservaInfo(
+              tx,
+              empresaId,
+              cotizacion.sedeId,
+              detallesCalculados,
+            )
+          : detallesCalculados.map(() => null);
+
         await tx.cotizacionDetalle.createMany({
-          data: detallesCalculados.map((d) => ({
-            cotizacionId: id,
-            productoId: d.productoId,
-            varianteId: d.varianteId,
-            servicioId: d.servicioId,
-            descripcion: d.descripcion,
-            cantidad: d.cantidad,
-            precioUnitario: d.precioUnitario,
-            descuento: d.descuento,
-            tipoAfectacion: d.tipoAfectacion,
-            porcentajeIGV: d.porcentajeIGV,
-            igv: d.igv,
-            icbper: d.icbper,
-            subtotal: d.subtotal,
-            total: d.total,
-            orden: d.orden,
-          })),
+          data: detallesCalculados.map((d, idx) => {
+            const info = reservaInfo[idx];
+            return {
+              cotizacionId: id,
+              productoId: d.productoId,
+              varianteId: d.varianteId,
+              servicioId: d.servicioId,
+              descripcion: d.descripcion,
+              cantidad: d.cantidad,
+              precioUnitario: d.precioUnitario,
+              descuento: d.descuento,
+              tipoAfectacion: d.tipoAfectacion,
+              porcentajeIGV: d.porcentajeIGV,
+              igv: d.igv,
+              icbper: d.icbper,
+              subtotal: d.subtotal,
+              total: d.total,
+              orden: d.orden,
+              productoStockId: info?.productoStockId,
+              cantidadReservada: info?.cantidad,
+              reservaEstado: info ? ReservaCotizacionEstado.ACTIVA : null,
+            };
+          }),
         });
+
+        for (const info of reservaInfo) {
+          if (info == null) continue;
+          await tx.productoStock.update({
+            where: { id: info.productoStockId },
+            data: {
+              stockReservadoCotizacion: { increment: info.cantidad },
+            },
+          });
+        }
+
+        huboCambioReservas = teniaReservaActiva;
 
         const subtotal = detallesCalculados.reduce(
           (sum, d) => sum + d.subtotal,
@@ -686,6 +656,17 @@ export class CotizacionService {
         },
       });
     });
+
+    // La edición liberó y re-aplicó reservas → avisar a los clientes
+    // para que refresquen stock disponible.
+    if (huboCambioReservas) {
+      this.realtime.notifyStockCambiado({
+        empresaId,
+        sedeId: cotizacion.sedeId,
+      });
+    }
+
+    return actualizada;
   }
 
   /**
@@ -889,8 +870,10 @@ export class CotizacionService {
               cantidad: d.cantidad,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
+              tipoAfectacion: d.tipoAfectacion,
               porcentajeIGV: d.porcentajeIGV,
               igv: d.igv,
+              icbper: d.icbper,
               subtotal: d.subtotal,
               total: d.total,
               orden: d.orden,
@@ -1345,6 +1328,154 @@ export class CotizacionService {
    * como insumo. Los insumos son materia prima y no se venden ni se
    * cotizan al cliente final (mismo guard que venta.service).
    */
+  /// Valida que el descuento de cada línea no exceda el `descuentoMaximo`
+  /// configurado en el producto. Compartido por create() y update().
+  private async _validarDescuentosMaximos(
+    tx: Prisma.TransactionClient,
+    detalles: Array<{
+      productoId: string | null;
+      descripcion: string;
+      cantidad: number;
+      precioUnitario: number;
+      descuento: number;
+    }>,
+  ): Promise<void> {
+    const detallesConDescuento = detalles.filter(
+      (d) => d.descuento > 0 && d.productoId,
+    );
+    if (detallesConDescuento.length === 0) return;
+
+    const productoIds = [
+      ...new Set(detallesConDescuento.map((d) => d.productoId!)),
+    ];
+    const productosConLimite = await tx.producto.findMany({
+      where: {
+        id: { in: productoIds },
+        descuentoMaximo: { not: null },
+        esCombo: false,
+      },
+      select: { id: true, descuentoMaximo: true },
+    });
+    const limiteMap = new Map(
+      productosConLimite.map((p) => [p.id, Number(p.descuentoMaximo)]),
+    );
+
+    for (const detalle of detallesConDescuento) {
+      const limite = limiteMap.get(detalle.productoId!);
+      if (limite != null && limite > 0) {
+        const subtotalBruto = detalle.cantidad * detalle.precioUnitario;
+        const porcentaje =
+          subtotalBruto > 0 ? (detalle.descuento / subtotalBruto) * 100 : 0;
+        if (porcentaje > limite) {
+          throw new BadRequestException(
+            `Descuento de "${detalle.descripcion}" (${porcentaje.toFixed(1)}%) excede el máximo permitido (${limite}%)`,
+          );
+        }
+      }
+    }
+  }
+
+  /// Valida disponibilidad y construye el mapeo index → reserva para cada
+  /// detalle (null si el item no reserva: servicios o líneas manuales).
+  /// Compartido por create() (reservarStock=true) y update() (cotización
+  /// que ya tenía reserva activa).
+  private async _prepararReservaInfo(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    sedeId: string,
+    detalles: Array<{
+      productoId: string | null;
+      varianteId: string | null;
+      descripcion: string;
+      cantidad: number;
+    }>,
+  ): Promise<Array<{ productoStockId: string; cantidad: number } | null>> {
+    const reservaInfo: Array<{
+      productoStockId: string;
+      cantidad: number;
+    } | null> = [];
+    for (const d of detalles) {
+      const isProducto = d.productoId != null || d.varianteId != null;
+      if (!isProducto) {
+        reservaInfo.push(null);
+        continue;
+      }
+      const stock = await tx.productoStock.findFirst({
+        where: {
+          empresaId,
+          sedeId,
+          productoId: d.varianteId ? null : d.productoId,
+          varianteId: d.varianteId ?? null,
+        },
+        select: {
+          id: true,
+          stockActual: true,
+          stockReservado: true,
+          stockReservadoVenta: true,
+          stockReservadoCombo: true,
+          stockReservadoCotizacion: true,
+          stockDanado: true,
+          stockEnGarantia: true,
+        },
+      });
+      if (!stock) {
+        throw new BadRequestException(
+          `No hay stock registrado en esta sede para "${d.descripcion}"`,
+        );
+      }
+      const disponible =
+        stock.stockActual -
+        stock.stockReservado -
+        stock.stockReservadoVenta -
+        stock.stockReservadoCombo -
+        stock.stockReservadoCotizacion -
+        stock.stockDanado -
+        stock.stockEnGarantia;
+      const cantidadInt = Math.ceil(d.cantidad);
+      if (disponible < cantidadInt) {
+        throw new BadRequestException(
+          `Stock insuficiente para reservar "${d.descripcion}": ` +
+            `solicitado ${cantidadInt}, disponible ${disponible}`,
+        );
+      }
+      reservaInfo.push({
+        productoStockId: stock.id,
+        cantidad: cantidadInt,
+      });
+    }
+    return reservaInfo;
+  }
+
+  /// Decrementa stockReservadoCotizacion de los detalles con reserva
+  /// ACTIVA, sin tocar el adelanto (a diferencia de _liberarReservas).
+  /// Pensado para la edición de BORRADOR, donde los detalles se
+  /// reemplazan y la reserva se re-aplica sobre los nuevos.
+  /// Devuelve `true` si había reservas activas.
+  private async _liberarReservasDeDetalles(
+    tx: Prisma.TransactionClient,
+    cotizacionId: string,
+  ): Promise<boolean> {
+    const detallesConReserva = await tx.cotizacionDetalle.findMany({
+      where: {
+        cotizacionId,
+        reservaEstado: ReservaCotizacionEstado.ACTIVA,
+      },
+      select: { productoStockId: true, cantidadReservada: true },
+    });
+    if (detallesConReserva.length === 0) return false;
+
+    for (const d of detallesConReserva) {
+      if (!d.productoStockId || !d.cantidadReservada) continue;
+      await tx.productoStock.update({
+        where: { id: d.productoStockId },
+        data: {
+          stockReservadoCotizacion: { decrement: d.cantidadReservada },
+        },
+      });
+    }
+    return true;
+  }
+
   private async _assertNoInsumos(
     tx: Prisma.TransactionClient,
     detalles: Array<{ productoId: string | null; descripcion: string }>,
