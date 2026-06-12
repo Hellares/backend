@@ -33,6 +33,7 @@ import {
 import { FacturacionService } from '../sunat/facturacion.service';
 import { OrdenServicioService } from '../servicio/orden-servicio.service';
 import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
+import { round2 } from '../common/utils/money.util';
 
 /**
  * DTO interno enriquecido por `aplicarPreciosBackendNivel` con el snapshot
@@ -577,7 +578,6 @@ export class VentaService {
     totalACobrar: number,
     vuelto: number,
   ): Array<{ metodoPago: string; monto: number }> {
-    const round2 = (n: number) => Math.round(n * 100) / 100;
     let vueltoRestante = Math.max(0, round2(vuelto));
 
     const resultado = pagos
@@ -681,7 +681,7 @@ export class VentaService {
 
       const montoCambio =
         dto.montoRecibido && dto.montoRecibido > total
-          ? Math.round((dto.montoRecibido - total) * 100) / 100
+          ? round2(dto.montoRecibido - total)
           : null;
 
       const venta = await tx.venta.create({
@@ -856,9 +856,9 @@ export class VentaService {
         const totalSinDescuentoGlobal = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
 
         // Descuento global: se resta del total final
-        const descuentoGlobal = Math.round((dto.descuentoGlobal || 0) * 100) / 100;
+        const descuentoGlobal = round2(dto.descuentoGlobal || 0);
         const descuentoVenta = descuentoItems + descuentoGlobal;
-        const totalVenta = Math.round((totalSinDescuentoGlobal - descuentoGlobal) * 100) / 100;
+        const totalVenta = round2(totalSinDescuentoGlobal - descuentoGlobal);
 
         // Adelantos ya pagados de las órdenes de servicio cobradas: el
         // comprobante/venta sale por el TOTAL del servicio (la línea es el
@@ -866,10 +866,10 @@ export class VentaService {
         // como PagoVenta/PagoComprobante "aplicado" (su dinero ya pasó por
         // caja al recibirse) y todo lo que depende de lo cobrado hoy
         // (pagada-completa, vuelto, bancarización, caja) usa el neto.
-        const adelantoOrdenes = Math.round(
-          ordenesACobrar.reduce((s, o) => s + Number(o.adelanto ?? 0), 0) * 100,
-        ) / 100;
-        const totalACobrarHoy = Math.round((totalVenta - adelantoOrdenes) * 100) / 100;
+        const adelantoOrdenes = round2(
+          ordenesACobrar.reduce((s, o) => s + Number(o.adelanto ?? 0), 0),
+        );
+        const totalACobrarHoy = round2(totalVenta - adelantoOrdenes);
 
         // Defensa: con descuentoGlobal un caller podría dejar el neto a
         // cobrar en negativo (la validación por orden garantiza saldo > 0,
@@ -905,12 +905,12 @@ export class VentaService {
         const montoRecibido = dto.montoRecibido ?? montoPagadoInmediato;
         const estaPagada = !esCredito && montoRecibido >= totalACobrarHoy;
         const montoCredito = esCredito
-          ? Math.round((totalACobrarHoy - montoPagadoInmediato) * 100) / 100
+          ? round2(totalACobrarHoy - montoPagadoInmediato)
           : 0;
 
         const montoCambio =
           montoRecibido > totalACobrarHoy
-            ? Math.round((montoRecibido - totalACobrarHoy) * 100) / 100
+            ? round2(montoRecibido - totalACobrarHoy)
             : 0;
 
         // 3. Crear venta con estado final
@@ -1276,7 +1276,7 @@ export class VentaService {
 
           // Store interest snapshot on venta
           if (porcentajeInteres > 0) {
-            const montoInteresTotal = Math.round(montoCredito * (porcentajeInteres / 100) * 100) / 100;
+            const montoInteresTotal = round2(montoCredito * (porcentajeInteres / 100));
             await tx.venta.update({
               where: { id: venta.id },
               data: {
@@ -1647,7 +1647,7 @@ export class VentaService {
             const nuevoDescuento = descUnit * nuevaCantidad;
             const nuevoSubtotal = (precioUnit * nuevaCantidad) - nuevoDescuento;
             const porcentajeIGV = Number(d.porcentajeIGV) / 100;
-            const nuevoIgv = Math.round(nuevoSubtotal * porcentajeIGV * 100) / 100;
+            const nuevoIgv = round2(nuevoSubtotal * porcentajeIGV);
             const nuevoTotal = nuevoSubtotal + nuevoIgv;
             return {
               ...d,
@@ -1694,7 +1694,7 @@ export class VentaService {
         const tipoAfectacion = item.tipoAfectacion || (porcentajeIGV > 0 ? '10' : '10');
         const icbperMonto = item.icbper ?? 0;
         const subtotal = (cantidad * precioUnitario) - descuento;
-        const igv = Math.round(subtotal * (porcentajeIGV / 100) * 100) / 100;
+        const igv = round2(subtotal * (porcentajeIGV / 100));
         const total = subtotal + igv + icbperMonto;
         const snap = snapshotsAdicionales[idx];
         const descuentoUnit = cantidad > 0 ? descuento / cantidad : 0;
@@ -1710,12 +1710,12 @@ export class VentaService {
           tipoAfectacion,
           porcentajeIGV: new Prisma.Decimal(porcentajeIGV),
           igv: new Prisma.Decimal(igv.toFixed(2)),
-          icbper: new Prisma.Decimal(Math.round(icbperMonto * 100) / 100),
+          icbper: new Prisma.Decimal(round2(icbperMonto)),
           subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
           total: new Prisma.Decimal(total.toFixed(2)),
           orden: 0,
           precioCostoSnapshot: new Prisma.Decimal(snap.precioCostoSnapshot.toFixed(2)),
-          margenSnapshot: new Prisma.Decimal((Math.round(margenUnit * 100) / 100).toFixed(2)),
+          margenSnapshot: new Prisma.Decimal((round2(margenUnit)).toFixed(2)),
           motivoLiquidacionSnapshot: snap.motivoLiquidacionSnapshot,
           nivelAplicadoSnapshot: snap.nivelAplicadoSnapshot,
           // Guardar valores numéricos para stock + guard
@@ -1797,7 +1797,7 @@ export class VentaService {
 
       const montoCambio =
         dto.montoRecibido && dto.montoRecibido > totalAPagarHoy
-          ? Math.round((dto.montoRecibido - totalAPagarHoy) * 100) / 100
+          ? round2(dto.montoRecibido - totalAPagarHoy)
           : null;
 
       // Determinar estado de la venta. Considera adelanto + pagos del día.
@@ -2779,7 +2779,7 @@ export class VentaService {
       montoCuota * (pctMax / 100),
     );
     const neta =
-      Math.round((acumulada - Number(cuota.montoPagadoMora ?? 0)) * 100) / 100;
+      round2(acumulada - Number(cuota.montoPagadoMora ?? 0));
     return Math.max(neta, 0);
   }
 
@@ -2894,8 +2894,8 @@ export class VentaService {
           if (remaining <= 0) break;
 
           const mora = VentaService.moraVigente(cuota, configMora, ahora);
-          const saldoInteres = Math.round((Number(cuota.montoInteres ?? 0) - Number(cuota.montoPagadoInteres ?? 0)) * 100) / 100;
-          const saldoPrincipal = Math.round((Number(cuota.montoPrincipal ?? 0) - Number(cuota.montoPagadoPrincipal ?? 0)) * 100) / 100;
+          const saldoInteres = round2(Number(cuota.montoInteres ?? 0) - Number(cuota.montoPagadoInteres ?? 0));
+          const saldoPrincipal = round2(Number(cuota.montoPrincipal ?? 0) - Number(cuota.montoPagadoPrincipal ?? 0));
           const saldoTotal = mora + Math.max(saldoInteres, 0) + Math.max(saldoPrincipal, 0);
           const aplicar = Math.min(remaining, saldoTotal);
 
@@ -2914,8 +2914,8 @@ export class VentaService {
           const nuevoMontoPagadoInteres = Number(cuota.montoPagadoInteres ?? 0) + interesAplicado;
           const nuevoMontoPagadoMora = Number(cuota.montoPagadoMora ?? 0) + moraAplicada;
           const nuevoMontoPagado = nuevoMontoPagadoPrincipal + nuevoMontoPagadoInteres;
-          const nuevoSaldo = Math.round((Number(cuota.monto) - nuevoMontoPagado) * 100) / 100;
-          const nuevaMora = Math.round((mora - moraAplicada) * 100) / 100;
+          const nuevoSaldo = round2(Number(cuota.monto) - nuevoMontoPagado);
+          const nuevaMora = round2(mora - moraAplicada);
           const cuotaPagada = nuevoSaldo <= 0 && nuevaMora <= 0;
 
           await tx.cuotaVenta.update({
@@ -2945,7 +2945,7 @@ export class VentaService {
             });
           }
 
-          remaining = Math.round((remaining - aplicar) * 100) / 100;
+          remaining = round2(remaining - aplicar);
         }
 
         // Update pago breakdown (final totals, since loop may span multiple cuotas)
@@ -2980,7 +2980,7 @@ export class VentaService {
 
       const montoCambio =
         totalPagado > targetTotal
-          ? Math.round((totalPagado - targetTotal) * 100) / 100
+          ? round2(totalPagado - targetTotal)
           : 0;
 
       const updatedVenta = await tx.venta.update({
@@ -3007,7 +3007,7 @@ export class VentaService {
               metodoPago: dto.metodoPago,
               // El vuelto sale del efectivo: registramos el neto que queda en caja.
               monto: dto.metodoPago === 'EFECTIVO'
-                ? Math.max(0, Math.round((dto.monto - montoCambio) * 100) / 100)
+                ? Math.max(0, round2(dto.monto - montoCambio))
                 : dto.monto,
               descripcion: `Pago venta ${venta.codigo}`,
               ventaId: venta.id,
@@ -3309,23 +3309,23 @@ export class VentaService {
     porcentajeInteres: number = 0,
     fechaBase: Date = new Date(),
   ) {
-    const montoInteresTotal = Math.round(montoCredito * (porcentajeInteres / 100) * 100) / 100;
+    const montoInteresTotal = round2(montoCredito * (porcentajeInteres / 100));
     const totalConInteres = montoCredito + montoInteresTotal;
 
     const intervaloDias = Math.floor(plazoDias / numeroCuotas);
     const montoCuota = Math.floor((totalConInteres / numeroCuotas) * 100) / 100;
-    const resto = Math.round((totalConInteres - montoCuota * numeroCuotas) * 100) / 100;
+    const resto = round2(totalConInteres - montoCuota * numeroCuotas);
 
     // Distribute interest proportionally
     const interesPorCuota = numeroCuotas > 0 ? Math.floor((montoInteresTotal / numeroCuotas) * 100) / 100 : 0;
-    const restoInteres = Math.round((montoInteresTotal - interesPorCuota * numeroCuotas) * 100) / 100;
+    const restoInteres = round2(montoInteresTotal - interesPorCuota * numeroCuotas);
 
     return Array.from({ length: numeroCuotas }, (_, i) => {
       const numero = i + 1;
       const esUltima = numero === numeroCuotas;
       const monto = esUltima ? montoCuota + resto : montoCuota;
       const interesEstaCuota = esUltima ? interesPorCuota + restoInteres : interesPorCuota;
-      const principalEstaCuota = Math.round((monto - interesEstaCuota) * 100) / 100;
+      const principalEstaCuota = round2(monto - interesEstaCuota);
 
       const fechaVencimiento = new Date(fechaBase);
       fechaVencimiento.setDate(fechaVencimiento.getDate() + intervaloDias * numero);
@@ -3409,7 +3409,7 @@ export class VentaService {
         const margenUnit = (precioUnit - descuentoUnit) - costo;
         result.push({
           precioCostoSnapshot: costo,
-          margenSnapshot: Math.round(margenUnit * 100) / 100,
+          margenSnapshot: round2(margenUnit),
           motivoLiquidacionSnapshot:
             (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
           nivelAplicadoSnapshot:
@@ -3517,7 +3517,7 @@ export class VentaService {
             requierenAutorizacion.length === 1
               ? `"${requierenAutorizacion[0].descripcion}" se está vendiendo bajo costo y no está en liquidación. Se requiere autorización gerencial.`
               : `${requierenAutorizacion.length} productos se están vendiendo bajo costo sin liquidación. Se requiere autorización gerencial.`,
-          perdidaTotal: Math.round(perdidaTotal * 100) / 100,
+          perdidaTotal: round2(perdidaTotal),
           lineas: requierenAutorizacion.map((d) => ({
             descripcion: d.descripcion,
             productoId: d.productoId,
@@ -3525,8 +3525,8 @@ export class VentaService {
             cantidad: d.cantidad,
             precioUnitario: d.precioUnitario,
             precioCosto: d.precioCostoSnapshot,
-            margenUnitario: Math.round(d.margenSnapshot * 100) / 100,
-            perdidaLinea: Math.round(d.margenSnapshot * d.cantidad * 100) / 100,
+            margenUnitario: round2(d.margenSnapshot),
+            perdidaLinea: round2(d.margenSnapshot * d.cantidad),
           })),
         });
       }
@@ -3562,7 +3562,7 @@ export class VentaService {
       }
     }
 
-    return Math.round(perdidaTotal * 100) / 100;
+    return round2(perdidaTotal);
   }
 
   private calcularDetalle(dto: CreateVentaDetalleDto | DetalleConSnapshot, index: number) {
@@ -3619,16 +3619,16 @@ export class VentaService {
       descuento,
       porcentajeIGV,
       tipoAfectacion,
-      icbper: Math.round(icbperMonto * 100) / 100,
-      igv: Math.round(igv * 100) / 100,
-      subtotal: Math.round(subtotal * 100) / 100,
-      total: Math.round(totalConIcbper * 100) / 100,
+      icbper: round2(icbperMonto),
+      igv: round2(igv),
+      subtotal: round2(subtotal),
+      total: round2(totalConIcbper),
       orden: index,
       origenComboId: dto.origenComboId || null,
       origenComboNombre: dto.origenComboNombre || null,
       // Snapshot de margen para reportería de liquidaciones / pérdidas.
-      precioCostoSnapshot: Math.round(precioCostoSnapshot * 100) / 100,
-      margenSnapshot: Math.round(margenSnapshot * 100) / 100,
+      precioCostoSnapshot: round2(precioCostoSnapshot),
+      margenSnapshot: round2(margenSnapshot),
       motivoLiquidacionSnapshot,
       nivelAplicadoSnapshot,
     };
@@ -3799,11 +3799,11 @@ export class VentaService {
     }
 
     return {
-      gravada: Math.round(gravada * 100) / 100,
-      exonerada: Math.round(exonerada * 100) / 100,
-      inafecta: Math.round(inafecta * 100) / 100,
-      igv: Math.round(igvTotal * 100) / 100,
-      icbper: Math.round(icbperTotal * 100) / 100,
+      gravada: round2(gravada),
+      exonerada: round2(exonerada),
+      inafecta: round2(inafecta),
+      igv: round2(igvTotal),
+      icbper: round2(icbperTotal),
     };
   }
 
@@ -4357,7 +4357,6 @@ export class VentaService {
     }
 
     // Totales financieros del flujo (autoritativos desde la venta).
-    const r2 = (n: number) => Math.round(n * 100) / 100;
     const total = Number(venta.total);
     const cobrado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
     const saldo = Math.max(0, total - cobrado);
@@ -4373,10 +4372,10 @@ export class VentaService {
       totalDocumentos: this.contarNodos(nodos),
       totales: {
         moneda: venta.moneda,
-        total: r2(total),
-        cobrado: r2(cobrado),
-        saldo: r2(saldo),
-        devuelto: r2(notasCredito),
+        total: round2(total),
+        cobrado: round2(cobrado),
+        saldo: round2(saldo),
+        devuelto: round2(notasCredito),
         numDevoluciones: venta.devoluciones.length,
         esCredito: venta.esCredito,
       },

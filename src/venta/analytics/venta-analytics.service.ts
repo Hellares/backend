@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { EstadoVenta, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
+import { round2 } from '../../common/utils/money.util';
 import { getTodayStart, getTomorrowStart, getWeekStart, getMonthStart, parseStartOfDay, parseEndOfDay } from '../../common/utils/date-utils';
 import {
   VentaAnalyticsQueryDto,
@@ -141,7 +142,7 @@ export class VentaAnalyticsService {
 
     return Array.from(agrupado.entries()).map(([periodo, data]) => ({
       periodo,
-      total: Math.round(data.total * 100) / 100,
+      total: round2(data.total),
       cantidad: data.cantidad,
     }));
   }
@@ -211,11 +212,11 @@ export class VentaAnalyticsService {
         productoId: p.productoId,
         nombre: p.nombre,
         codigo: p.codigo,
-        cantidadVendida: Math.round(p.cantidadVendida * 100) / 100,
-        ingresoTotal: Math.round(p.ingresoTotal * 100) / 100,
+        cantidadVendida: round2(p.cantidadVendida),
+        ingresoTotal: round2(p.ingresoTotal),
         precioPromedio:
           p.count > 0
-            ? Math.round((p.sumaPrecio / p.count) * 100) / 100
+            ? round2(p.sumaPrecio / p.count)
             : 0,
       }))
       .sort((a, b) => b.ingresoTotal - a.ingresoTotal)
@@ -268,7 +269,7 @@ export class VentaAnalyticsService {
         clienteId: c.clienteId,
         nombre: c.nombre,
         totalCompras: c.totalCompras,
-        montoTotal: Math.round(c.montoTotal * 100) / 100,
+        montoTotal: round2(c.montoTotal),
       }))
       .sort((a, b) => b.montoTotal - a.montoTotal)
       .slice(0, limit);
@@ -343,7 +344,7 @@ export class VentaAnalyticsService {
     const diferencia = montoActual - montoAnterior;
     const porcentajeCambio =
       montoAnterior > 0
-        ? Math.round((diferencia / montoAnterior) * 10000) / 100
+        ? round2((diferencia / montoAnterior) * 100)
         : montoActual > 0
           ? 100
           : 0;
@@ -407,7 +408,7 @@ export class VentaAnalyticsService {
     const montoHoy = Number(montoHoyAgg._sum.total ?? 0);
     const montoSemana = Number(montoSemanaAgg._sum.total ?? 0);
     const montoMes = Number(montoMesAgg._sum.total ?? 0);
-    const ticketPromedio = ventasMesCant > 0 ? Math.round((montoMes / ventasMesCant) * 100) / 100 : 0;
+    const ticketPromedio = ventasMesCant > 0 ? round2(montoMes / ventasMesCant) : 0;
 
     // Cotizaciones
     const cotizBaseWhere: any = { empresaId, vendedorId };
@@ -417,7 +418,7 @@ export class VentaAnalyticsService {
       this.prisma.cotizacion.count({ where: { ...cotizBaseWhere, creadoEn: { gte: inicioMes } } }),
       this.prisma.cotizacion.count({ where: { ...cotizBaseWhere, estado: 'CONVERTIDA', creadoEn: { gte: inicioMes } } }),
     ]);
-    const tasaConversion = cotizacionesTotal > 0 ? Math.round((cotizacionesConvertidas / cotizacionesTotal) * 10000) / 100 : 0;
+    const tasaConversion = cotizacionesTotal > 0 ? round2((cotizacionesConvertidas / cotizacionesTotal) * 100) : 0;
 
     // Creditos pendientes (override estado from baseWhere)
     const creditosVentas = await this.prisma.venta.findMany({
@@ -523,43 +524,43 @@ export class VentaAnalyticsService {
     return {
       vendedor: { id: vendedorId, nombre: nombreVendedor, email: vendedor?.email },
       resumen: {
-        ventasHoy: { cantidad: ventasHoyCant, monto: Math.round(montoHoy * 100) / 100 },
-        ventasSemana: { cantidad: ventasSemanaCant, monto: Math.round(montoSemana * 100) / 100 },
-        ventasMes: { cantidad: ventasMesCant, monto: Math.round(montoMes * 100) / 100 },
+        ventasHoy: { cantidad: ventasHoyCant, monto: round2(montoHoy) },
+        ventasSemana: { cantidad: ventasSemanaCant, monto: round2(montoSemana) },
+        ventasMes: { cantidad: ventasMesCant, monto: round2(montoMes) },
         ticketPromedio,
         cotizacionesTotal,
         cotizacionesConvertidas,
         tasaConversion,
       },
       creditos: {
-        totalPendiente: Math.round(totalPendiente * 100) / 100,
+        totalPendiente: round2(totalPendiente),
         cantidadPendientes,
-        totalVencido: Math.round(totalVencido * 100) / 100,
+        totalVencido: round2(totalVencido),
         cantidadVencidos,
       },
       metodosPago: Object.fromEntries(
-        Object.entries(metodosPago).map(([k, v]) => [k, Math.round(v * 100) / 100])
+        Object.entries(metodosPago).map(([k, v]) => [k, round2(v)])
       ),
       ventasPorDia: ventasPorDiaRaw.map(r => ({
         fecha: r.fecha,
         cantidad: r.cantidad,
-        monto: Math.round(r.monto * 100) / 100,
+        monto: round2(r.monto),
       })),
       topProductos: topProductosRaw.map(r => ({
         nombre: r.nombre ?? 'Sin nombre',
         cantidad: r.cantidad,
-        monto: Math.round(r.monto * 100) / 100,
+        monto: round2(r.monto),
       })),
       topClientes: topClientesRaw.map(r => ({
         nombre: r.nombre ?? 'Sin nombre',
         cantidadCompras: r.cantidadCompras,
-        montoTotal: Math.round(r.montoTotal * 100) / 100,
+        montoTotal: round2(r.montoTotal),
       })),
       ranking: {
         posicion: posicion > 0 ? posicion : rankingRaw.length + 1,
         totalVendedores: rankingRaw.length,
-        montoVendedor: Math.round(montoMes * 100) / 100,
-        montoLider: Math.round(montoLider * 100) / 100,
+        montoVendedor: round2(montoMes),
+        montoLider: round2(montoLider),
       },
     };
   }
