@@ -147,6 +147,19 @@ export class OrdenServicioService {
   }
 
   /**
+   * Notificaciones fire-and-forget: el fallo no debe romper el flujo de la
+   * orden, pero sí quedar logueado — sin esto, "al cliente no le llegó
+   * nada" es indiagnosticable.
+   */
+  private static logNotifFallida(contexto: string) {
+    return (e: unknown) =>
+      console.warn(
+        `Notificacion de orden fallida (${contexto}):`,
+        e instanceof Error ? e.message : e,
+      );
+  }
+
+  /**
    * Registra en caja el DELTA del adelanto de una orden, respetando el medio
    * de pago del abono (YAPE/PLIN/TARJETA/EFECTIVO/TRANSFERENCIA):
    * - delta > 0 (cliente abona / amplía) → INGRESO ADELANTO_SERVICIO.
@@ -411,7 +424,7 @@ export class OrdenServicioService {
       empresaId,
       orden.id,
       'created',
-    ).catch(() => {});
+    ).catch(OrdenServicioService.logNotifFallida('orden creada'));
 
     return orden;
   }
@@ -693,7 +706,7 @@ export class OrdenServicioService {
       empresaId,
       id,
       'status_changed',
-    ).catch(() => {});
+    ).catch(OrdenServicioService.logNotifFallida('cambio de estado'));
 
     return updatedOrden;
   }
@@ -1213,7 +1226,7 @@ export class OrdenServicioService {
       empresaId,
       ordenServicioId,
       'MENSAJE',
-    ).catch(() => {});
+    ).catch(OrdenServicioService.logNotifFallida('mensaje al cliente'));
 
     return mensaje;
   }
@@ -1261,11 +1274,11 @@ export class OrdenServicioService {
     if (orden.tecnicoId) {
       this.notificacionService.enviarAUsuario(
         orden.tecnicoId, notifTitulo, notifCuerpo, notifOpts,
-      ).catch(() => {});
+      ).catch(OrdenServicioService.logNotifFallida('mensaje al tecnico'));
     }
     this.notificarAdminsEmpresa(
       empresaId, notifTitulo, notifCuerpo, notifOpts, orden.tecnicoId ?? undefined,
-    ).catch(() => {});
+    ).catch(OrdenServicioService.logNotifFallida('mensaje a admins'));
 
     return mensaje;
   }
@@ -1842,7 +1855,7 @@ export class OrdenServicioService {
         empresaId,
         orden.id,
         'status_changed',
-      ).catch(() => {});
+      ).catch(OrdenServicioService.logNotifFallida('entrega post-cobro'));
     }
   }
 
