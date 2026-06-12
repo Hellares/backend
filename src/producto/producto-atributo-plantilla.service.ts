@@ -302,7 +302,7 @@ export class ProductoAtributoPlantillaService {
     empresaId: string,
     productoId?: string,
     varianteId?: string,
-  ): Promise<{ atributosCreados: number }> {
+  ): Promise<{ atributosCreados: number; atributosOmitidos: number }> {
     if (!productoId && !varianteId) {
       throw new BadRequestException(
         'Debe especificar productoId o varianteId',
@@ -315,21 +315,28 @@ export class ProductoAtributoPlantillaService {
       );
     }
 
-    // Verificar que el producto o variante existe y pertenece a la empresa
+    // Verificar que el producto o variante existe y pertenece a la empresa.
+    // `productoPadreId` es el Producto cuyo actualizadoEn hay que bumpear
+    // para el delta-sync (el padre, si se aplica a una variante).
+    let productoPadreId: string;
     if (productoId) {
       const producto = await this.prisma.producto.findFirst({
         where: { id: productoId, empresaId, deletedAt: null },
+        select: { id: true },
       });
       if (!producto) {
         throw new NotFoundException(`Producto ${productoId} no encontrado`);
       }
-    } else if (varianteId) {
+      productoPadreId = producto.id;
+    } else {
       const variante = await this.prisma.productoVariante.findFirst({
         where: { id: varianteId, empresaId, deletedAt: null },
+        select: { id: true, productoId: true },
       });
       if (!variante) {
         throw new NotFoundException(`Variante ${varianteId} no encontrada`);
       }
+      productoPadreId = variante.productoId;
     }
 
     // Obtener plantilla con atributos (solo atributos activos)
@@ -385,18 +392,31 @@ export class ProductoAtributoPlantillaService {
       valor: getValorPorDefecto(pa.atributo),
     }));
 
-    // Crear valores de atributos (con conflictos se ignoran)
-    const result = await this.prisma.productoAtributoValor.createMany({
-      data: atributosValores,
-      skipDuplicates: true,
+    // Crear valores de atributos (con conflictos se ignoran) y bumpear
+    // el Producto en la MISMA transacción: sin actualizadoEn nuevo, el
+    // delta-sync del app no trae los atributos recién aplicados.
+    const result = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.productoAtributoValor.createMany({
+        data: atributosValores,
+        skipDuplicates: true,
+      });
+      if (created.count > 0) {
+        await tx.producto.update({
+          where: { id: productoPadreId },
+          data: { actualizadoEn: new Date() },
+        });
+      }
+      return created;
     });
 
+    const omitidos = atributosActivos.length - result.count;
     this.logger.log(
-      `Plantilla "${plantilla.nombre}" aplicada a ${productoId ? 'producto' : 'variante'} ${productoId || varianteId} (${result.count} de ${atributosActivos.length} atributos creados)`,
+      `Plantilla "${plantilla.nombre}" aplicada a ${productoId ? 'producto' : 'variante'} ${productoId || varianteId} (${result.count} creados, ${omitidos} ya existían)`,
     );
 
     return {
       atributosCreados: result.count,
+      atributosOmitidos: omitidos,
     };
   }
 
