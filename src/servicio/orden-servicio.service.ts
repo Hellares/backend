@@ -116,6 +116,37 @@ export class OrdenServicioService {
   }
 
   /**
+   * B8 ampliado: adelanto y descuento no pueden exceder el costo total,
+   * ni tampoco su SUMA (adelanto + descuento > costo = saldo negativo que
+   * después bloquea el cobro con "montos inconsistentes"). Suma == costo
+   * sí se permite (orden 100% adelantada, saldo 0, es cobrable).
+   * Con costoTotal null (aún sin diagnosticar) no hay contra qué validar.
+   */
+  private static validarMontosOrden(params: {
+    costoTotal: number | null;
+    adelanto: number;
+    descuento: number;
+  }) {
+    if (params.costoTotal === null) return;
+    if (params.adelanto > params.costoTotal) {
+      throw new BadRequestException(
+        'El adelanto no puede ser mayor al costo total',
+      );
+    }
+    if (params.descuento > params.costoTotal) {
+      throw new BadRequestException(
+        'El descuento no puede ser mayor al costo total',
+      );
+    }
+    const suma = Math.round((params.adelanto + params.descuento) * 100) / 100;
+    if (suma > params.costoTotal) {
+      throw new BadRequestException(
+        'La suma de adelanto y descuento no puede superar el costo total',
+      );
+    }
+  }
+
+  /**
    * Registra en caja el DELTA del adelanto de una orden, respetando el medio
    * de pago del abono (YAPE/PLIN/TARJETA/EFECTIVO/TRANSFERENCIA):
    * - delta > 0 (cliente abona / amplía) → INGRESO ADELANTO_SERVICIO.
@@ -145,7 +176,9 @@ export class OrdenServicioService {
 
     // Fallback de sede: muchas órdenes se crean sin sedeId (el form no lo
     // exige). El dinero lo recibe quien registra → usar la sede de SU caja
-    // abierta. Sin sede resoluble no hay caja donde registrar (warn).
+    // abierta; si tampoco hay, la sede más antigua activa de la empresa
+    // (su Caja Central absorbe el delta). El dinero recibido NUNCA queda
+    // sin registrar.
     let sedeId = params.sedeId;
     if (!sedeId) {
       const cajaUsuario = await tx.caja.findFirst({
@@ -160,8 +193,21 @@ export class OrdenServicioService {
       sedeId = cajaUsuario?.sedeId ?? null;
     }
     if (!sedeId) {
+      const sedePrincipal = await tx.sede.findFirst({
+        where: {
+          empresaId: params.empresaId,
+          isActive: true,
+          deletedAt: null,
+        },
+        orderBy: { creadoEn: 'asc' },
+        select: { id: true },
+      });
+      sedeId = sedePrincipal?.id ?? null;
+    }
+    if (!sedeId) {
+      // Empresa sin ninguna sede activa: no existe caja posible.
       console.warn(
-        `Adelanto orden ${params.codigo}: sin sede (ni en la orden ni caja abierta del usuario), no se registró en caja (S/ ${delta})`,
+        `Adelanto orden ${params.codigo}: empresa sin sedes activas, no se registró en caja (S/ ${delta})`,
       );
       return;
     }
@@ -209,6 +255,14 @@ export class OrdenServicioService {
         'contactoClienteEmpresaId solo aplica cuando se usa clienteEmpresaId',
       );
     }
+
+    // B8 (paridad con transitionEstado/update): la orden no puede NACER
+    // con montos inconsistentes.
+    OrdenServicioService.validarMontosOrden({
+      costoTotal: dto.costoTotal ?? null,
+      adelanto: dto.adelanto ?? 0,
+      descuento: dto.descuento ?? 0,
+    });
 
     // Validar cliente persona
     if (dto.clienteId) {
@@ -433,13 +487,21 @@ export class OrdenServicioService {
         EstadoOrdenServicio.ENTREGADO,
       ];
 
-      // B8 FIX: Validar que adelanto y descuento no excedan costoTotal
-      const effectiveCostoTotal = dto.costoTotal ?? (orden.costoTotal ? Number(orden.costoTotal) : null);
-      if (dto.adelanto !== undefined && effectiveCostoTotal !== null && dto.adelanto > effectiveCostoTotal) {
-        throw new BadRequestException('El adelanto no puede ser mayor al costo total');
-      }
-      if (dto.descuento !== undefined && effectiveCostoTotal !== null && dto.descuento > effectiveCostoTotal) {
-        throw new BadRequestException('El descuento no puede ser mayor al costo total');
+      // B8 FIX: adelanto/descuento (incluida su suma) no exceden costoTotal.
+      // Solo se valida si la transición toca montos: una orden con datos
+      // legacy inconsistentes igual puede transicionar sin modificarlos.
+      if (
+        dto.costoTotal !== undefined ||
+        dto.adelanto !== undefined ||
+        dto.descuento !== undefined
+      ) {
+        OrdenServicioService.validarMontosOrden({
+          costoTotal:
+            dto.costoTotal ??
+            (orden.costoTotal ? Number(orden.costoTotal) : null),
+          adelanto: dto.adelanto ?? Number(orden.adelanto ?? 0),
+          descuento: dto.descuento ?? Number(orden.descuento ?? 0),
+        });
       }
 
       if (dto.costoTotal !== undefined) {
@@ -913,14 +975,20 @@ export class OrdenServicioService {
       );
     }
 
-    // B8 (paridad con transitionEstado): adelanto/descuento no exceden costo
-    const effectiveCostoTotal =
-      dto.costoTotal ?? (existing.costoTotal ? Number(existing.costoTotal) : null);
-    if (dto.adelanto !== undefined && effectiveCostoTotal !== null && dto.adelanto > effectiveCostoTotal) {
-      throw new BadRequestException('El adelanto no puede ser mayor al costo total');
-    }
-    if (dto.descuento !== undefined && effectiveCostoTotal !== null && dto.descuento > effectiveCostoTotal) {
-      throw new BadRequestException('El descuento no puede ser mayor al costo total');
+    // B8 (paridad con transitionEstado): adelanto/descuento (incluida su
+    // suma) no exceden costo. Solo si el update toca montos.
+    if (
+      dto.costoTotal !== undefined ||
+      dto.adelanto !== undefined ||
+      dto.descuento !== undefined
+    ) {
+      OrdenServicioService.validarMontosOrden({
+        costoTotal:
+          dto.costoTotal ??
+          (existing.costoTotal ? Number(existing.costoTotal) : null),
+        adelanto: dto.adelanto ?? Number(existing.adelanto ?? 0),
+        descuento: dto.descuento ?? Number(existing.descuento ?? 0),
+      });
     }
 
     // Orden ya cobrada (vía venta o legacy): el adelanto está saldado en el
