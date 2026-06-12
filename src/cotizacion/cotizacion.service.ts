@@ -709,7 +709,7 @@ export class CotizacionService {
       async (tx) => {
         const huboReservas =
           motivoReserva != null
-            ? await this._liberarReservas(tx, id, motivoReserva, actorUserId)
+            ? await this.liberarReservas(tx, id, motivoReserva, actorUserId)
             : false;
         const updated = await tx.cotizacion.update({
           where: { id },
@@ -774,7 +774,7 @@ export class CotizacionService {
     // Si tenía reservas activas o adelanto, liberar/devolver antes de
     // borrar (Cascade dejaría stock "perdido" en stockReservadoCotizacion).
     const huboReservas = await this.prisma.$transaction(async (tx) => {
-      const result = await this._liberarReservas(
+      const result = await this.liberarReservas(
         tx,
         id,
         'LIBERAR',
@@ -976,7 +976,11 @@ export class CotizacionService {
   ///
   /// Devuelve `true` si había reservas activas (para que el caller emita
   /// FCM STOCK_CAMBIADO).
-  private async _liberarReservas(
+  ///
+  /// Público porque también lo usa CotizacionTasksService (cron de
+  /// vencimiento) — antes el cron tenía una copia propia que divergió
+  /// (EFECTIVO hardcodeado, sin fallback a Caja Central).
+  async liberarReservas(
     tx: Prisma.TransactionClient,
     cotizacionId: string,
     motivo: 'LIBERAR' | 'CONVERTIR',

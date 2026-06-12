@@ -1,16 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
-  CategoriaMovimientoCaja,
   EstadoCotizacion,
-  MetodoPagoVenta,
-  Prisma,
   ReservaCotizacionEstado,
-  TipoMovimientoCaja,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { CotizacionService } from './cotizacion.service';
 
 /**
  * Tareas programadas del módulo de cotizaciones.
@@ -31,6 +28,7 @@ export class CotizacionTasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeInvalidationService,
+    private readonly cotizacionService: CotizacionService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -82,7 +80,17 @@ export class CotizacionTasksService {
       for (const c of cotizaciones) {
         try {
           await this.prisma.$transaction(async (tx) => {
-            await this._liberarReservasYDevolverAdelanto(tx, c);
+            // Helper compartido del service: libera stock y devuelve el
+            // adelanto espejando el método de pago original, con fallback
+            // a Caja Central si la caja del adelanto ya cerró. (La copia
+            // local que vivía acá había divergido: EFECTIVO hardcodeado y
+            // sin fallback — el adelanto de una caja cerrada se perdía.)
+            await this.cotizacionService.liberarReservas(
+              tx,
+              c.id,
+              'LIBERAR',
+              c.vendedorId,
+            );
             await tx.cotizacion.update({
               where: { id: c.id },
               data: { estado: EstadoCotizacion.VENCIDA },
@@ -111,79 +119,4 @@ export class CotizacionTasksService {
     }
   }
 
-  /// Libera reservas + devuelve adelanto (si lo había y la caja sigue
-  /// abierta). Idéntico al helper privado del service pero sin la
-  /// opción 'CONVERTIR' (acá solo se libera).
-  private async _liberarReservasYDevolverAdelanto(
-    tx: Prisma.TransactionClient,
-    cot: {
-      id: string;
-      empresaId: string;
-      codigo: string;
-      movimientoCajaId: string | null;
-      adelantoMonto: Prisma.Decimal | null;
-      vendedorId: string;
-    },
-  ): Promise<void> {
-    const detalles = await tx.cotizacionDetalle.findMany({
-      where: {
-        cotizacionId: cot.id,
-        reservaEstado: ReservaCotizacionEstado.ACTIVA,
-      },
-      select: {
-        id: true,
-        productoStockId: true,
-        cantidadReservada: true,
-      },
-    });
-
-    for (const d of detalles) {
-      if (!d.productoStockId || !d.cantidadReservada) continue;
-      await tx.productoStock.update({
-        where: { id: d.productoStockId },
-        data: {
-          stockReservadoCotizacion: { decrement: d.cantidadReservada },
-        },
-      });
-      await tx.cotizacionDetalle.update({
-        where: { id: d.id },
-        data: { reservaEstado: ReservaCotizacionEstado.LIBERADA },
-      });
-    }
-
-    // Devolver adelanto si lo tenía y la caja sigue abierta.
-    if (
-      cot.movimientoCajaId &&
-      cot.adelantoMonto != null &&
-      Number(cot.adelantoMonto) > 0
-    ) {
-      const ingresoOriginal = await tx.movimientoCaja.findUnique({
-        where: { id: cot.movimientoCajaId },
-        select: { cajaId: true, anulado: true },
-      });
-      if (ingresoOriginal && !ingresoOriginal.anulado) {
-        const caja = await tx.caja.findUnique({
-          where: { id: ingresoOriginal.cajaId },
-          select: { estado: true },
-        });
-        if (caja?.estado === 'ABIERTA') {
-          await tx.movimientoCaja.create({
-            data: {
-              cajaId: ingresoOriginal.cajaId,
-              empresaId: cot.empresaId,
-              tipo: TipoMovimientoCaja.EGRESO,
-              categoria:
-                CategoriaMovimientoCaja.DEVOLUCION_ADELANTO_COTIZACION,
-              metodoPago: MetodoPagoVenta.EFECTIVO,
-              monto: cot.adelantoMonto,
-              descripcion: `Devolución adelanto cotización ${cot.codigo} (expirada)`,
-              cotizacionId: cot.id,
-              registradoPorId: cot.vendedorId,
-              esManual: false, // automático por cron
-            },
-          });
-        }
-      }
-    }
-  }
 }

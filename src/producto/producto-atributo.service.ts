@@ -245,56 +245,66 @@ export class ProductoAtributoService {
     const valoresParaValidar = dto.valores ?? existing.valores;
     this.validateAtributoValues(tipoParaValidar, valoresParaValidar);
 
-    const atributo = await this.prisma.productoAtributo.update({
-      where: { id: atributoId },
-      data: {
-        ...(dto.nombre && { nombre: dto.nombre }),
-        ...(dto.clave && { clave: dto.clave }),
-        ...(dto.tipo && { tipo: dto.tipo }),
-        ...(dto.requerido !== undefined && { requerido: dto.requerido }),
-        ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
-        ...(dto.unidad !== undefined && { unidad: dto.unidad }),
-        ...(dto.categoriaIds !== undefined && { categoriaIds: dto.categoriaIds }),
-        ...(dto.valores && { valores: dto.valores }),
-        ...(dto.orden !== undefined && { orden: dto.orden }),
-        ...(dto.mostrarEnListado !== undefined && { mostrarEnListado: dto.mostrarEnListado }),
-        ...(dto.usarParaFiltros !== undefined && { usarParaFiltros: dto.usarParaFiltros }),
-        ...(dto.mostrarEnMarketplace !== undefined && {
-          mostrarEnMarketplace: dto.mostrarEnMarketplace,
-        }),
-      },
+    // Update + cascada de rename en UNA transacción: si la cascada falla,
+    // el cambio de la lista de opciones también se revierte (antes el
+    // updateMany corría suelto y un fallo a mitad dejaba asignaciones
+    // mezcladas entre el valor viejo y el nuevo).
+    const { atributo, rename } = await this.prisma.$transaction(async (tx) => {
+      const atributo = await tx.productoAtributo.update({
+        where: { id: atributoId },
+        data: {
+          ...(dto.nombre && { nombre: dto.nombre }),
+          ...(dto.clave && { clave: dto.clave }),
+          ...(dto.tipo && { tipo: dto.tipo }),
+          ...(dto.requerido !== undefined && { requerido: dto.requerido }),
+          ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
+          ...(dto.unidad !== undefined && { unidad: dto.unidad }),
+          ...(dto.categoriaIds !== undefined && { categoriaIds: dto.categoriaIds }),
+          ...(dto.valores && { valores: dto.valores }),
+          ...(dto.orden !== undefined && { orden: dto.orden }),
+          ...(dto.mostrarEnListado !== undefined && { mostrarEnListado: dto.mostrarEnListado }),
+          ...(dto.usarParaFiltros !== undefined && { usarParaFiltros: dto.usarParaFiltros }),
+          ...(dto.mostrarEnMarketplace !== undefined && {
+            mostrarEnMarketplace: dto.mostrarEnMarketplace,
+          }),
+        },
+      });
+
+      // Cascada de rename de VALOR: el valor que cada variante/producto tiene
+      // guardado (ProductoAtributoValor.valor) es un string independiente de la
+      // lista de opciones (ProductoAtributo.valores). Si se renombró un valor de
+      // la lista, las asignaciones existentes quedarían con el string viejo. Se
+      // detecta un rename simple (un valor sale, uno entra) y se propaga a todas
+      // las asignaciones. Cambios múltiples no se cascadean (ambigüedad).
+      let rename: { de: string; a: string; count: number } | null = null;
+      if (dto.valores) {
+        const viejos = existing.valores ?? [];
+        const nuevos = dto.valores;
+        const removidos = viejos.filter((v) => !nuevos.includes(v));
+        const agregados = nuevos.filter((v) => !viejos.includes(v));
+        if (removidos.length === 1 && agregados.length === 1) {
+          const res = await tx.productoAtributoValor.updateMany({
+            where: { atributoId, valor: removidos[0] },
+            data: { valor: agregados[0] },
+          });
+          rename = { de: removidos[0], a: agregados[0], count: res.count };
+        } else if (removidos.length > 0 && agregados.length > 0) {
+          this.logger.warn(
+            `Cambio múltiple de valores en atributo ${atributoId} ` +
+              `(removidos: ${removidos.length}, agregados: ${agregados.length}). ` +
+              `No se aplica cascada automática para evitar ambigüedad.`,
+          );
+        }
+      }
+
+      return { atributo, rename };
     });
 
     this.logger.success('Attribute updated', { atributoId });
-
-    // Cascada de rename de VALOR: el valor que cada variante/producto tiene
-    // guardado (ProductoAtributoValor.valor) es un string independiente de la
-    // lista de opciones (ProductoAtributo.valores). Si se renombró un valor de
-    // la lista, las asignaciones existentes quedarían con el string viejo. Se
-    // detecta un rename simple (un valor sale, uno entra) y se propaga a todas
-    // las asignaciones. Cambios múltiples no se cascadean (ambigüedad).
-    if (dto.valores) {
-      const viejos = existing.valores ?? [];
-      const nuevos = dto.valores;
-      const removidos = viejos.filter((v) => !nuevos.includes(v));
-      const agregados = nuevos.filter((v) => !viejos.includes(v));
-      if (removidos.length === 1 && agregados.length === 1) {
-        const res = await this.prisma.productoAtributoValor.updateMany({
-          where: { atributoId, valor: removidos[0] },
-          data: { valor: agregados[0] },
-        });
-        if (res.count > 0) {
-          this.logger.info(
-            `Cascada de rename de valor "${removidos[0]}" → "${agregados[0]}" en ${res.count} asignación(es)`,
-          );
-        }
-      } else if (removidos.length > 0 && agregados.length > 0) {
-        this.logger.warn(
-          `Cambio múltiple de valores en atributo ${atributoId} ` +
-            `(removidos: ${removidos.length}, agregados: ${agregados.length}). ` +
-            `No se aplica cascada automática para evitar ambigüedad.`,
-        );
-      }
+    if (rename && rename.count > 0) {
+      this.logger.info(
+        `Cascada de rename de valor "${rename.de}" → "${rename.a}" en ${rename.count} asignación(es)`,
+      );
     }
 
     // Propagar el cambio: invalidar caché + tocar actualizadoEn de los
@@ -308,7 +318,10 @@ export class ProductoAtributoService {
    * Eliminar un atributo (soft delete)
    * Marca como inactivo en vez de eliminar para preservar valores existentes
    */
-  async remove(atributoId: string, empresaId: string): Promise<void> {
+  async remove(
+    atributoId: string,
+    empresaId: string,
+  ): Promise<{ valoresEnUso: number }> {
     this.logger.info('Soft-deleting attribute', { atributoId, empresaId });
 
     const atributo = await this.prisma.productoAtributo.findFirst({
@@ -337,14 +350,29 @@ export class ProductoAtributoService {
       );
     }
 
+    // Valores asignados a productos/variantes: el soft-delete los preserva
+    // pero dejan de mostrarse en fichas/filtros. No se bloquea (el atributo
+    // sería ineliminable en la práctica), pero se informa al cliente y se
+    // deja rastro en el log para auditoría.
+    const valoresEnUso = await this.prisma.productoAtributoValor.count({
+      where: { atributoId },
+    });
+
     await this.prisma.productoAtributo.update({
       where: { id: atributoId },
       data: { isActive: false },
     });
 
+    if (valoresEnUso > 0) {
+      this.logger.warn(
+        `Atributo "${atributo.nombre}" desactivado con ${valoresEnUso} valor(es) aún asignados a productos/variantes`,
+      );
+    }
     this.logger.success('Attribute soft-deleted', { atributoId });
 
     await this.propagarCambioAtributo(atributoId, empresaId);
+
+    return { valoresEnUso };
   }
 
   /**
