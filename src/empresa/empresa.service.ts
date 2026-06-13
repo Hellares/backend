@@ -1037,6 +1037,10 @@ export class EmpresaService {
       web: empresa.web,
       razonSocial: empresa.razonSocial,
       rubro: empresa.rubro,
+      // Tercerización B2B (faltaban en el contexto → el switch del perfil no persistía en la UI)
+      aceptaTercerizacion: empresa.aceptaTercerizacion ?? false,
+      descripcionTercerizacion: empresa.descripcionTercerizacion ?? null,
+      tiposServicioTercerizacion: (empresa.tiposServicioTercerizacion as string[] | null) ?? null,
       tipoContribuyente: empresa.tipoContribuyente,
       estadoContribuyente: empresa.estadoContribuyente,
       condicionContribuyente: empresa.condicionContribuyente,

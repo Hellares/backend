@@ -71,6 +71,26 @@ export class EmpresaInfoDto {
   web?: string;
 
   @ApiProperty({
+    description: 'La empresa acepta tercerización B2B',
+    example: false,
+    required: false,
+  })
+  aceptaTercerizacion?: boolean;
+
+  @ApiProperty({
+    description: 'Descripción del servicio de tercerización B2B',
+    required: false,
+  })
+  descripcionTercerizacion?: string | null;
+
+  @ApiProperty({
+    description: 'Tipos de servicio que acepta tercerizar',
+    example: ['REPARACION', 'MANTENIMIENTO'],
+    required: false,
+  })
+  tiposServicioTercerizacion?: string[] | null;
+
+  @ApiProperty({
     description: 'Razón social registrada en SUNAT',
     example: 'Mi Empresa S.A.C.',
     required: false,
