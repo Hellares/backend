@@ -1,5 +1,28 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  Allow,
+  IsArray,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
+
+/** Dato adicional denormalizado incluido en la tercerización. `valor` es arbitrario
+ *  (string/array/objeto) → @Allow lo deja pasar por el whitelist sin validar tipo. */
+export class DatoAdicionalTercerizacionDto {
+  @IsString()
+  @IsNotEmpty()
+  etiqueta: string;
+
+  @IsOptional()
+  @IsString()
+  tipo?: string;
+
+  @Allow()
+  valor?: unknown;
+}
 
 export class CreateTercerizacionDto {
   @ApiProperty({ description: 'ID de la empresa que ejecutará el servicio' })
@@ -31,12 +54,14 @@ export class CreateTercerizacionDto {
   @ApiPropertyOptional({
     description:
       'Datos adicionales (campos personalizados) elegidos por el origen, denormalizados ' +
-      'para que el destino los renderice sin la config del origen: [{ etiqueta, valor, tipo }]. ' +
-      'Sin @ValidateNested a propósito: los objetos pasan intactos (valores arbitrarios).',
+      'para que el destino los renderice sin la config del origen: [{ etiqueta, valor, tipo }].',
+    type: [DatoAdicionalTercerizacionDto],
   })
   @IsOptional()
   @IsArray()
-  datosAdicionales?: unknown[];
+  @ValidateNested({ each: true })
+  @Type(() => DatoAdicionalTercerizacionDto)
+  datosAdicionales?: DatoAdicionalTercerizacionDto[];
 
   // Set by controller from header
   empresaOrigenId?: string;
