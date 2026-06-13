@@ -16,8 +16,10 @@ import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { TercerizacionService } from './tercerizacion.service';
 import { CreateTercerizacionDto } from './dto/create-tercerizacion.dto';
+import { CreateNotaTercerizacionDto } from './dto/create-nota-tercerizacion.dto';
 import { RespondTercerizacionDto } from './dto/respond-tercerizacion.dto';
 import { CompleteTercerizacionDto } from './dto/complete-tercerizacion.dto';
 import { QueryTercerizacionDto } from './dto/query-tercerizacion.dto';
@@ -140,5 +142,33 @@ export class TercerizacionController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.tercerizacionService.cancelar(id, empresaId);
+  }
+
+  // ─── Bitácora (origen ↔ destino) ───
+
+  @Get(':id/notas')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Listar la bitácora de una tercerización' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  listarNotas(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.tercerizacionService.listarNotas(id, empresaId);
+  }
+
+  @Post(':id/notas')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Agregar nota o requerimiento a la bitácora' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  agregarNota(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+    @Body() dto: CreateNotaTercerizacionDto,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.tercerizacionService.agregarNota(id, empresaId, usuarioId, dto);
   }
 }

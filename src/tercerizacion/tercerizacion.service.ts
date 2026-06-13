@@ -13,8 +13,10 @@ import {
   EstadoVinculacion,
   OrigenOrden,
   TipoNotificacion,
+  TipoNotaTercerizacion,
 } from '@prisma/client';
 import { CreateTercerizacionDto } from './dto/create-tercerizacion.dto';
+import { CreateNotaTercerizacionDto } from './dto/create-nota-tercerizacion.dto';
 import { RespondTercerizacionDto } from './dto/respond-tercerizacion.dto';
 import { CompleteTercerizacionDto } from './dto/complete-tercerizacion.dto';
 import { QueryTercerizacionDto } from './dto/query-tercerizacion.dto';
@@ -63,6 +65,93 @@ export class TercerizacionService {
       data: { tercerizacionId, action, target: 'staff' },
       empresaId,
     });
+  }
+
+  /// Auto-entrada de bitácora en una transición de estado (fire-and-forget:
+  /// no rompe el cambio de estado si falla).
+  private async registrarNotaEstado(
+    tercerizacionId: string,
+    empresaAutorId: string,
+    contenido: string,
+  ) {
+    await this.prisma.tercerizacionNota
+      .create({
+        data: {
+          tercerizacionId,
+          empresaAutorId,
+          tipo: TipoNotaTercerizacion.CAMBIO_ESTADO,
+          contenido,
+        },
+      })
+      .catch(TercerizacionService.logNotifFallida('nota cambio de estado'));
+  }
+
+  // ─── Bitácora compartida (origen ↔ destino): apuntes/requerimientos/estados ───
+
+  async listarNotas(tercerizacionId: string, empresaId: string) {
+    const t = await this.prisma.tercerizacionServicio.findUnique({
+      where: { id: tercerizacionId },
+      select: { empresaOrigenId: true, empresaDestinoId: true },
+    });
+    if (!t) throw new NotFoundException('Tercerización no encontrada');
+    if (t.empresaOrigenId !== empresaId && t.empresaDestinoId !== empresaId) {
+      throw new ForbiddenException('No tienes acceso a esta tercerización');
+    }
+    return this.prisma.tercerizacionNota.findMany({
+      where: { tercerizacionId },
+      orderBy: { creadoEn: 'asc' },
+    });
+  }
+
+  async agregarNota(
+    tercerizacionId: string,
+    empresaId: string,
+    usuarioId: string,
+    dto: CreateNotaTercerizacionDto,
+  ) {
+    const t = await this.prisma.tercerizacionServicio.findUnique({
+      where: { id: tercerizacionId },
+      select: {
+        empresaOrigenId: true,
+        empresaDestinoId: true,
+        ordenOrigen: { select: { codigo: true } },
+      },
+    });
+    if (!t) throw new NotFoundException('Tercerización no encontrada');
+    const esOrigen = t.empresaOrigenId === empresaId;
+    const esDestino = t.empresaDestinoId === empresaId;
+    if (!esOrigen && !esDestino) {
+      throw new ForbiddenException('No tienes acceso a esta tercerización');
+    }
+
+    const tipo =
+      dto.tipo === 'REQUERIMIENTO'
+        ? TipoNotaTercerizacion.REQUERIMIENTO
+        : TipoNotaTercerizacion.NOTA;
+
+    const nota = await this.prisma.tercerizacionNota.create({
+      data: {
+        tercerizacionId,
+        empresaAutorId: empresaId,
+        usuarioId,
+        tipo,
+        contenido: dto.contenido.trim(),
+      },
+    });
+
+    // Avisar a la empresa contraparte (deep-link al detalle de la tercerización).
+    const otraEmpresa = esOrigen ? t.empresaDestinoId : t.empresaOrigenId;
+    const etiquetaTipo =
+      tipo === TipoNotaTercerizacion.REQUERIMIENTO ? 'Requerimiento' : 'Nota';
+    this.notificarAdminsB2B(
+      otraEmpresa,
+      `${etiquetaTipo} en tercerización ${t.ordenOrigen?.codigo ?? ''}`.trim(),
+      dto.contenido.length > 100 ? `${dto.contenido.slice(0, 100)}...` : dto.contenido,
+      tercerizacionId,
+      'b2b_nota',
+    ).catch(TercerizacionService.logNotifFallida('nota B2B'));
+
+    return nota;
   }
 
   // ─── Empresas vinculadas que aceptan tercerización ───
@@ -405,6 +494,12 @@ export class TercerizacionService {
       'b2b_solicitud',
     ).catch(TercerizacionService.logNotifFallida('nueva solicitud'));
 
+    await this.registrarNotaEstado(
+      result.id,
+      empresaOrigenId,
+      `Solicitud de tercerización enviada${notasOrigen ? `. Nota: ${notasOrigen}` : ''}`,
+    );
+
     return result;
   }
 
@@ -492,6 +587,12 @@ export class TercerizacionService {
         tercerizacionId,
         'b2b_rechazada',
       ).catch(TercerizacionService.logNotifFallida('rechazo'));
+
+      await this.registrarNotaEstado(
+        tercerizacionId,
+        empresaId,
+        `Rechazada. Motivo: ${dto.motivoRechazo}`,
+      );
 
       return rechazada;
     }
@@ -593,6 +694,12 @@ export class TercerizacionService {
       tercerizacionId,
       'b2b_aceptada',
     ).catch(TercerizacionService.logNotifFallida('aceptación'));
+
+    await this.registrarNotaEstado(
+      tercerizacionId,
+      empresaId,
+      'Aceptada. El taller iniciará el servicio.',
+    );
 
     return aceptada;
   }
@@ -697,6 +804,12 @@ export class TercerizacionService {
       tercerizacionId,
       'b2b_completada',
     ).catch(TercerizacionService.logNotifFallida('completada'));
+
+    await this.registrarNotaEstado(
+      tercerizacionId,
+      empresaId,
+      `Completada. Precio B2B: S/ ${Number(dto.precioB2B).toFixed(2)}`,
+    );
 
     return completada;
   }
@@ -806,6 +919,12 @@ export class TercerizacionService {
       tercerizacionId,
       'b2b_cancelada',
     ).catch(TercerizacionService.logNotifFallida('cancelación'));
+
+    await this.registrarNotaEstado(
+      tercerizacionId,
+      empresaId,
+      'Cancelada por la empresa origen.',
+    );
 
     return cancelada;
   }
