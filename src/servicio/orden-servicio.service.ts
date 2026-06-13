@@ -74,6 +74,9 @@ const ORDEN_SERVICIO_BASE_INCLUDE = {
   tecnico: { include: { persona: true } },
   modeloEquipo: true,
   servicio: true,
+  // Señal precisa de "cobrada": existe un VentaDetalle vinculado (1:1).
+  // Distingue cobrada vs finalizada-sin-cobro. Solo el id (liviano).
+  ventaDetalle: { select: { id: true } },
 } as const;
 
 const ORDEN_SERVICIO_FULL_INCLUDE = {
