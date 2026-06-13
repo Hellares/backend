@@ -1919,7 +1919,8 @@ export class OrdenServicioService {
       const updated = await tx.ordenServicio.update({
         where: { id: orden.id },
         data: {
-          estado: EstadoOrdenServicio.ENTREGADO,
+          // Al cobrarse, la orden queda FINALIZADA automáticamente (pagada + cerrada).
+          estado: EstadoOrdenServicio.FINALIZADO,
           fechaEntrega: new Date(),
           comprobanteId: comprobante?.id ?? null,
           ...(orden.estadoDiagnostico &&
@@ -1934,9 +1935,9 @@ export class OrdenServicioService {
         data: {
           ordenServicioId: orden.id,
           estadoAnterior: orden.estado,
-          estadoNuevo: EstadoOrdenServicio.ENTREGADO,
+          estadoNuevo: EstadoOrdenServicio.FINALIZADO,
           notas:
-            `Orden cobrada vía Venta Rápida ${ventaCodigo}` +
+            `Orden cobrada y finalizada vía Venta Rápida ${ventaCodigo}` +
             (comprobante ? ` — Comprobante ${comprobante.codigoGenerado}` : ''),
           comunicarCliente: true,
           creadoPor: usuarioId,
@@ -1983,12 +1984,12 @@ export class OrdenServicioService {
       const servicioNombre = orden.servicio?.nombre ?? 'Servicio';
       await this.notificarClienteOrden(
         orden.clienteId,
-        'Servicio entregado',
-        `Tu orden ${orden.codigo} (${servicioNombre}) ha sido cobrada y entregada.`,
+        'Servicio finalizado',
+        `Tu orden ${orden.codigo} (${servicioNombre}) ha sido cobrada y finalizada.`,
         empresaId,
         orden.id,
         'status_changed',
-      ).catch(OrdenServicioService.logNotifFallida('entrega post-cobro'));
+      ).catch(OrdenServicioService.logNotifFallida('finalización post-cobro'));
     }
   }
 
