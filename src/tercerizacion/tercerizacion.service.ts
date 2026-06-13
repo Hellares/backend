@@ -366,6 +366,11 @@ export class TercerizacionService {
           descripcionProblema: dtoDescripcion || orden.descripcionProblema,
           sintomas: dtoSintomas || orden.sintomas,
           componentesData: componentesData.length > 0 ? componentesData : undefined,
+          // Snapshot denormalizado de campos personalizados elegidos por el origen.
+          datosAdicionales:
+            Array.isArray(dto.datosAdicionales) && dto.datosAdicionales.length > 0
+              ? (dto.datosAdicionales as any)
+              : undefined,
           notasOrigen,
         },
       });

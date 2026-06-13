@@ -28,6 +28,16 @@ export class CreateTercerizacionDto {
   @IsString({ each: true })
   sintomas?: string[];
 
+  @ApiPropertyOptional({
+    description:
+      'Datos adicionales (campos personalizados) elegidos por el origen, denormalizados ' +
+      'para que el destino los renderice sin la config del origen: [{ etiqueta, valor, tipo }]. ' +
+      'Sin @ValidateNested a propósito: los objetos pasan intactos (valores arbitrarios).',
+  })
+  @IsOptional()
+  @IsArray()
+  datosAdicionales?: unknown[];
+
   // Set by controller from header
   empresaOrigenId?: string;
 }

@@ -497,6 +497,10 @@ model TercerizacionServicio {
   descripcionProblema String?
   sintomas            Json?
   componentesData     Json? // Snapshot de componentes a reparar
+  // Datos adicionales (campos personalizados) curados, DENORMALIZADOS para que la
+  // empresa destino los renderice sin tener la config CampoServicio del origen:
+  // [{ etiqueta, valor, tipo }]
+  datosAdicionales    Json?
 
   // Pricing B2B
   precioB2B     Decimal? @db.Decimal(10, 2)
@@ -506,6 +510,9 @@ model TercerizacionServicio {
   notasOrigen   String? // Notas de la empresa que terceriza
   notasDestino  String? // Notas de la empresa que ejecuta
   motivoRechazo String?
+
+  // Bitácora compartida (origen ↔ destino): apuntes, requerimientos, cambios de estado
+  notas TercerizacionNota[]
 
   // Timestamps
   fechaSolicitud  DateTime  @default(now())
@@ -520,4 +527,27 @@ model TercerizacionServicio {
   @@index([estado])
   @@index([empresaOrigenId, estado])
   @@index([empresaDestinoId, estado])
+}
+
+enum TipoNotaTercerizacion {
+  NOTA // apunte manual de cualquiera de las dos empresas
+  REQUERIMIENTO // algo que el taller necesita/pide
+  CAMBIO_ESTADO // auto-entrada al cambiar el estado de la tercerización
+  SISTEMA // eventos automáticos varios
+}
+
+/// Bitácora append-only compartida entre empresa origen y destino de una tercerización.
+/// Sirve como historial de requerimientos/apuntes/estados (no es chat en tiempo real).
+model TercerizacionNota {
+  id              String                @id @default(cuid())
+  tercerizacionId String
+  tercerizacion   TercerizacionServicio @relation(fields: [tercerizacionId], references: [id], onDelete: Cascade)
+  empresaAutorId  String // empresa que escribió (origen o destino)
+  usuarioId       String?
+  tipo            TipoNotaTercerizacion @default(NOTA)
+  contenido       String
+  metadata        Json?
+  creadoEn        DateTime              @default(now())
+
+  @@index([tercerizacionId, creadoEn])
 }
