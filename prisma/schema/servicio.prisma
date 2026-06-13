@@ -410,6 +410,7 @@ enum TipoAccionComponente {
   DESMONTAR
   PROBAR
   CALIBRAR
+  COMPRAR
 }
 
 // ─── Avisos de Mantenimiento Preventivo ───
