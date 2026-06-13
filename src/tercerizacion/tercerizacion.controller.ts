@@ -20,6 +20,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { TercerizacionService } from './tercerizacion.service';
 import { CreateTercerizacionDto } from './dto/create-tercerizacion.dto';
 import { CreateNotaTercerizacionDto } from './dto/create-nota-tercerizacion.dto';
+import { PagarTerceroDto } from './dto/pagar-tercero.dto';
 import { RespondTercerizacionDto } from './dto/respond-tercerizacion.dto';
 import { CompleteTercerizacionDto } from './dto/complete-tercerizacion.dto';
 import { QueryTercerizacionDto } from './dto/query-tercerizacion.dto';
@@ -142,6 +143,20 @@ export class TercerizacionController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.tercerizacionService.cancelar(id, empresaId);
+  }
+
+  @Patch(':id/pagar-tercero')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Registrar el pago de la empresa origen al tercero (egreso en caja)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  pagarTercero(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+    @Body() dto: PagarTerceroDto,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.tercerizacionService.registrarPagoTercero(id, empresaId, usuarioId, dto);
   }
 
   // ─── Bitácora (origen ↔ destino) ───

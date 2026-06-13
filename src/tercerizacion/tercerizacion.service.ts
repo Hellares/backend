@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
+import { CajaService } from '../caja/caja.service';
 import {
   EstadoOrdenServicio,
   EstadoTercerizacion,
@@ -14,6 +15,9 @@ import {
   OrigenOrden,
   TipoNotificacion,
   TipoNotaTercerizacion,
+  TipoMovimientoCaja,
+  CategoriaMovimientoCaja,
+  MetodoPagoVenta,
 } from '@prisma/client';
 import { CreateTercerizacionDto } from './dto/create-tercerizacion.dto';
 import { CreateNotaTercerizacionDto } from './dto/create-nota-tercerizacion.dto';
@@ -21,6 +25,7 @@ import { RespondTercerizacionDto } from './dto/respond-tercerizacion.dto';
 import { CompleteTercerizacionDto } from './dto/complete-tercerizacion.dto';
 import { QueryTercerizacionDto } from './dto/query-tercerizacion.dto';
 import { QueryDirectorioDto } from './dto/query-directorio.dto';
+import { PagarTerceroDto } from './dto/pagar-tercero.dto';
 
 @Injectable()
 export class TercerizacionService {
@@ -28,6 +33,7 @@ export class TercerizacionService {
     private prisma: PrismaService,
     private configuracionCodigosService: ConfiguracionCodigosService,
     private notificacionService: NotificacionService,
+    private cajaService: CajaService,
   ) {}
 
   /// Notificaciones fire-and-forget: el fallo no rompe el flujo B2B pero
@@ -152,6 +158,85 @@ export class TercerizacionService {
     ).catch(TercerizacionService.logNotifFallida('nota B2B'));
 
     return nota;
+  }
+
+  // ─── Pago al tercero: EGRESO PAGO_PROVEEDOR en la caja del origen ───
+
+  async registrarPagoTercero(
+    tercerizacionId: string,
+    empresaId: string,
+    usuarioId: string,
+    dto: PagarTerceroDto,
+  ) {
+    const t = await this.prisma.tercerizacionServicio.findUnique({
+      where: { id: tercerizacionId },
+      include: {
+        empresaDestino: { select: { nombre: true } },
+        ordenOrigen: { select: { codigo: true } },
+      },
+    });
+    if (!t) throw new NotFoundException('Tercerización no encontrada');
+    if (t.empresaOrigenId !== empresaId) {
+      throw new ForbiddenException('Solo la empresa origen puede registrar el pago al tercero');
+    }
+    if (t.estado !== EstadoTercerizacion.COMPLETADO) {
+      throw new BadRequestException('Solo se puede pagar una tercerización completada');
+    }
+    if (t.pagadoB2B) {
+      throw new BadRequestException('El pago al tercero ya fue registrado');
+    }
+    const monto = Number(t.precioB2B ?? 0);
+    if (monto <= 0) {
+      throw new BadRequestException('La tercerización no tiene un precio B2B definido');
+    }
+
+    const caja = await this.cajaService.getCajaActiva(empresaId, usuarioId);
+    if (!caja) {
+      throw new BadRequestException(
+        'Necesitas una caja abierta para registrar el pago al tercero',
+      );
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const movimiento = await this.cajaService.crearMovimientoAutomatico(
+        empresaId,
+        caja.id,
+        {
+          tipo: TipoMovimientoCaja.EGRESO,
+          categoria: CategoriaMovimientoCaja.PAGO_PROVEEDOR,
+          metodoPago: dto.metodoPago as MetodoPagoVenta,
+          monto,
+          descripcion:
+            `Pago tercerización ${t.ordenOrigen?.codigo ?? ''} a ${t.empresaDestino?.nombre ?? 'empresa tercera'}`.trim(),
+          ordenServicioId: t.ordenOrigenId,
+          registradoPorId: usuarioId,
+          metadata: { tercerizacionId, pagoB2B: true },
+        },
+        tx,
+      );
+      if (!movimiento) {
+        throw new BadRequestException(
+          'No se pudo registrar el egreso en caja (¿caja cerrada?)',
+        );
+      }
+      return tx.tercerizacionServicio.update({
+        where: { id: tercerizacionId },
+        data: {
+          pagadoB2B: true,
+          fechaPagoB2B: new Date(),
+          movimientoPagoB2BId: movimiento.id,
+          metodoPagoB2B: dto.metodoPago,
+        },
+      });
+    });
+
+    await this.registrarNotaEstado(
+      tercerizacionId,
+      empresaId,
+      `Pago al tercero registrado: S/ ${monto.toFixed(2)} (${dto.metodoPago})`,
+    );
+
+    return result;
   }
 
   // ─── Empresas vinculadas que aceptan tercerización ───
@@ -1023,7 +1108,7 @@ export class TercerizacionService {
           select: {
             id: true, codigo: true, tipoEquipo: true, marcaEquipo: true,
             numeroSerie: true, estado: true, tipoServicio: true,
-            prioridad: true, descripcionProblema: true,
+            prioridad: true, descripcionProblema: true, costoTotal: true,
           },
         },
         ordenDestino: {

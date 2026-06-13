@@ -505,6 +505,11 @@ model TercerizacionServicio {
   // Pricing B2B
   precioB2B     Decimal? @db.Decimal(10, 2)
   metodoPagoB2B String?
+  // Pago de la empresa ORIGEN a la empresa DESTINO por el servicio (precioB2B).
+  // EGRESO PAGO_PROVEEDOR en la caja del origen; la ganancia es costoTotal(orden) − precioB2B.
+  pagadoB2B           Boolean   @default(false)
+  fechaPagoB2B        DateTime?
+  movimientoPagoB2BId String? // MovimientoCaja del egreso (no FK: módulos desacoplados)
 
   // Notas y comunicación
   notasOrigen   String? // Notas de la empresa que terceriza
