@@ -195,6 +195,78 @@ export class StorageController {
     return result;
   }
 
+  /**
+   * Subir imagen de un COMPONENTE de orden de servicio. Permiso laxo
+   * (MANAGE_ORDERS) para que los técnicos puedan adjuntar evidencia sin
+   * MANAGE_SETTINGS. Fuerza `entidadTipo='SERVICIO_COMPONENTE'` y solo
+   * acepta imágenes, evitando que se use para subir archivos arbitrarios.
+   */
+  @Post('upload-componente-imagen')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Subir imagen de un componente de orden de servicio' })
+  @ApiConsumes('multipart/form-data')
+  @ApiResponse({
+    status: 201,
+    description: 'Imagen subida',
+    type: ArchivoResponseDto,
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadComponenteImagen(
+    @UploadedFile() file: any,
+    @Body() uploadDto: UploadArchivoDto,
+    @CurrentUser() user: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó ningún archivo');
+    }
+    const mime = (file.mimetype as string | undefined) ?? '';
+    if (!mime.startsWith('image/')) {
+      throw new BadRequestException(
+        'Solo se permiten archivos de imagen (jpg, png, webp, etc.)',
+      );
+    }
+
+    return this.storageService.uploadArchivo({
+      empresaId: uploadDto.empresaId,
+      file,
+      entidadTipo: 'SERVICIO_COMPONENTE',
+      entidadId: uploadDto.entidadId || undefined,
+      categoria: uploadDto.categoria || 'EVIDENCIA',
+      orden: uploadDto.orden,
+      subidoPor: user.sub,
+    });
+  }
+
+  /**
+   * Eliminar una imagen de COMPONENTE de orden con permiso laxo
+   * (MANAGE_ORDERS). Valida que el archivo sea de tipo
+   * 'SERVICIO_COMPONENTE' y de la misma empresa.
+   */
+  @Delete('componente-imagen/:archivoId')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Eliminar imagen de un componente de orden' })
+  async deleteComponenteImagen(
+    @Param('archivoId') archivoId: string,
+    @Query('empresaId') empresaId: string,
+  ) {
+    const archivo = await this.storageService['prisma'].archivo.findUnique({
+      where: { id: archivoId },
+      select: { entidadTipo: true, empresaId: true },
+    });
+    if (!archivo) {
+      throw new BadRequestException('Archivo no encontrado');
+    }
+    if (archivo.entidadTipo !== 'SERVICIO_COMPONENTE') {
+      throw new BadRequestException(
+        'Este endpoint solo elimina imágenes de componentes de orden.',
+      );
+    }
+    if (archivo.empresaId !== empresaId) {
+      throw new BadRequestException('Archivo de otra empresa');
+    }
+    return this.storageService.deleteArchivo(archivoId, empresaId);
+  }
+
   @Post('upload')
   @RequiresPermission(Permission.MANAGE_SETTINGS)
   @ApiOperation({ summary: 'Subir un archivo' })

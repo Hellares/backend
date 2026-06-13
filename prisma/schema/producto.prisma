@@ -577,6 +577,7 @@ enum EntidadTipo {
   EMPRESA
   COMPROBANTE
   ORDEN_SERVICIO
+  SERVICIO_COMPONENTE // Componente individual dentro de una orden de servicio
   COTIZACION
   USUARIO
   SEDE
