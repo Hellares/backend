@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
-import { EstadoVinculacion } from '@prisma/client';
+import { NotificacionService } from '../notificacion/notificacion.service';
+import { EstadoVinculacion, TipoNotificacion } from '@prisma/client';
 import { CreateVinculacionDto } from './dto/create-vinculacion.dto';
 import { RespondVinculacionDto } from './dto/respond-vinculacion.dto';
 import { QueryVinculacionDto } from './dto/query-vinculacion.dto';
@@ -17,7 +18,36 @@ export class VinculacionService {
   constructor(
     private prisma: PrismaService,
     private configuracionCodigosService: ConfiguracionCodigosService,
+    private notificacionService: NotificacionService,
   ) {}
+
+  /** Notifica a los admins de una empresa (push + in-app). No rompe el flujo si falla. */
+  private async notificarAdminsEmpresa(
+    empresaId: string,
+    titulo: string,
+    cuerpo: string,
+    data: Record<string, string>,
+  ) {
+    try {
+      const admins = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          empresaId,
+          estado: 'ACTIVO',
+          rol: { in: ['EMPRESA_ADMIN', 'SUPER_ADMIN'] },
+        },
+        select: { usuarioId: true },
+      });
+      const ids = [...new Set(admins.map((a) => a.usuarioId))];
+      if (ids.length === 0) return;
+      await this.notificacionService.enviarAUsuarios(ids, titulo, cuerpo, {
+        tipo: TipoNotificacion.SISTEMA,
+        data,
+        empresaId,
+      });
+    } catch {
+      /* no romper el flujo de vinculación si falla la notificación */
+    }
+  }
 
   // ─── Check RUC: verificar si existe una Empresa tenant con ese RUC ───
 
@@ -163,7 +193,7 @@ export class VinculacionService {
       );
     }
 
-    return this.prisma.vinculacionEmpresa.create({
+    const creada = await this.prisma.vinculacionEmpresa.create({
       data: {
         empresaSolicitanteId,
         empresaVinculadaId: empresaVinculada.id,
@@ -179,6 +209,17 @@ export class VinculacionService {
         },
       },
     });
+
+    // Avisar a los admins de la empresa destino que recibieron una solicitud.
+    const solicitanteNombre = creada.empresaSolicitante?.nombre ?? 'Una empresa';
+    await this.notificarAdminsEmpresa(
+      empresaVinculada.id,
+      'Nueva solicitud de vinculación B2B',
+      `${solicitanteNombre} quiere vincularse contigo para tercerización.`,
+      { action: 'VINCULACION_RECIBIDA', vinculacionId: creada.id, route: '/empresa/vinculacion' },
+    );
+
+    return creada;
   }
 
   // ─── Responder solicitud (aceptar/rechazar) ───
@@ -190,6 +231,7 @@ export class VinculacionService {
   ) {
     const vinculacion = await this.prisma.vinculacionEmpresa.findUnique({
       where: { id: vinculacionId },
+      include: { empresaVinculada: { select: { nombre: true } } },
     });
 
     if (!vinculacion) {
@@ -204,12 +246,14 @@ export class VinculacionService {
       throw new BadRequestException('Esta solicitud ya fue respondida');
     }
 
+    const vinculadaNombre = vinculacion.empresaVinculada?.nombre ?? 'La empresa';
+
     if (!dto.aceptar) {
       if (!dto.motivoRechazo) {
         throw new BadRequestException('El motivo de rechazo es requerido');
       }
 
-      return this.prisma.vinculacionEmpresa.update({
+      const rechazada = await this.prisma.vinculacionEmpresa.update({
         where: { id: vinculacionId },
         data: {
           estado: EstadoVinculacion.RECHAZADA,
@@ -217,10 +261,19 @@ export class VinculacionService {
           fechaRespuesta: new Date(),
         },
       });
+
+      await this.notificarAdminsEmpresa(
+        vinculacion.empresaSolicitanteId,
+        'Solicitud de vinculación rechazada',
+        `${vinculadaNombre} rechazó tu solicitud: ${dto.motivoRechazo}`,
+        { action: 'VINCULACION_RESPONDIDA', vinculacionId, route: '/empresa/vinculacion' },
+      );
+
+      return rechazada;
     }
 
     // Aceptar: actualizar vinculación y setear empresaVinculadaId en ClienteEmpresa
-    return this.prisma.$transaction(async (tx) => {
+    const aceptada = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.vinculacionEmpresa.update({
         where: { id: vinculacionId },
         data: {
@@ -236,6 +289,15 @@ export class VinculacionService {
 
       return updated;
     });
+
+    await this.notificarAdminsEmpresa(
+      vinculacion.empresaSolicitanteId,
+      'Solicitud de vinculación aceptada',
+      `${vinculadaNombre} aceptó tu solicitud de vinculación B2B.`,
+      { action: 'VINCULACION_RESPONDIDA', vinculacionId, route: '/empresa/vinculacion' },
+    );
+
+    return aceptada;
   }
 
   // ─── Cancelar solicitud (solo solicitante, solo PENDIENTE) ───
