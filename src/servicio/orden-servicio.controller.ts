@@ -34,6 +34,7 @@ import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
 import { TransitionEstadoDto } from './dto/transition-estado.dto';
 import { QueryOrdenServicioDto } from './dto/query-orden-servicio.dto';
 import { CreateServicioComponenteDto } from './dto/create-servicio-componente.dto';
+import { UpdateServicioComponenteDto } from './dto/update-servicio-componente.dto';
 import { CobrarOrdenDto } from './dto/cobrar-orden.dto';
 
 @ApiTags('Órdenes de Servicio')
@@ -292,6 +293,19 @@ export class OrdenServicioController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.servicioComponenteService.findByOrden(empresaId, id);
+  }
+
+  @Patch(':id/componentes/:componenteId')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Actualizar componente de una orden' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  updateComponente(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('componenteId') componenteId: string,
+    @Body() dto: UpdateServicioComponenteDto,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.servicioComponenteService.update(empresaId, componenteId, dto);
   }
 
   @Delete(':id/componentes/:componenteId')

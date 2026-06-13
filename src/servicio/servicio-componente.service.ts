@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { EstadoOrdenServicio } from '@prisma/client';
 import { CreateServicioComponenteDto } from './dto/create-servicio-componente.dto';
+import { UpdateServicioComponenteDto } from './dto/update-servicio-componente.dto';
 
 // B7 FIX: Estados en los que no se pueden agregar/eliminar componentes
 const ESTADOS_NO_MODIFICABLES: EstadoOrdenServicio[] = [
@@ -66,6 +67,38 @@ export class ServicioComponenteService {
         },
       },
       orderBy: { creadoEn: 'desc' },
+    });
+  }
+
+  async update(
+    empresaId: string,
+    id: string,
+    dto: UpdateServicioComponenteDto,
+  ) {
+    const servicioComponente = await this.prisma.servicioComponente.findUnique({
+      where: { id },
+      include: { ordenServicio: { select: { empresaId: true, estado: true } } },
+    });
+
+    if (!servicioComponente) {
+      throw new NotFoundException('Componente de servicio no encontrado');
+    }
+
+    if (servicioComponente.ordenServicio.empresaId !== empresaId) {
+      throw new BadRequestException('El componente no pertenece a esta empresa');
+    }
+
+    // Mismos estados bloqueados que para agregar/eliminar.
+    if (ESTADOS_NO_MODIFICABLES.includes(servicioComponente.ordenServicio.estado)) {
+      throw new BadRequestException(
+        `No se pueden editar componentes de una orden en estado ${servicioComponente.ordenServicio.estado}`,
+      );
+    }
+
+    return this.prisma.servicioComponente.update({
+      where: { id },
+      data: { ...dto },
+      include: { componente: { include: { tipoComponente: true } } },
     });
   }
 
