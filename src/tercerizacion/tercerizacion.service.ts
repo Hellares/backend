@@ -198,6 +198,20 @@ export class TercerizacionService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Guard ATÓMICO contra doble pago (doble-tap / reintento concurrente):
+      // solo prospera la tx que flipea pagadoB2B false→true (el UPDATE toma el
+      // lock de la fila). El perdedor ve count 0 y aborta SIN crear el egreso.
+      const claim = await tx.tercerizacionServicio.updateMany({
+        where: { id: tercerizacionId, pagadoB2B: false },
+        data: {
+          pagadoB2B: true,
+          fechaPagoB2B: new Date(),
+          metodoPagoB2B: dto.metodoPago,
+        },
+      });
+      if (claim.count === 0) {
+        throw new BadRequestException('El pago al tercero ya fue registrado');
+      }
       const movimiento = await this.cajaService.crearMovimientoAutomatico(
         empresaId,
         caja.id,
@@ -215,18 +229,14 @@ export class TercerizacionService {
         tx,
       );
       if (!movimiento) {
+        // Lanza → rollback: revierte el claim de pagadoB2B.
         throw new BadRequestException(
           'No se pudo registrar el egreso en caja (¿caja cerrada?)',
         );
       }
       return tx.tercerizacionServicio.update({
         where: { id: tercerizacionId },
-        data: {
-          pagadoB2B: true,
-          fechaPagoB2B: new Date(),
-          movimientoPagoB2BId: movimiento.id,
-          metodoPagoB2B: dto.metodoPago,
-        },
+        data: { movimientoPagoB2BId: movimiento.id },
       });
     });
 

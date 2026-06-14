@@ -1573,34 +1573,20 @@ export class OrdenServicioService {
         const subtotal = incluyeIGV ? saldoPendiente / factorIGV : saldoPendiente;
         const igv = incluyeIGV ? saldoPendiente - subtotal : 0;
 
-        // Preparar detalles del comprobante
-        const detallesComprobante = orden.componentes.length > 0
-          ? orden.componentes.map((comp: any) => {
-              const costoAccion = Number(comp.costoAccion || 0);
-              const costoRepuestos = Number(comp.costoRepuestos || 0);
-              const totalItem = costoAccion + costoRepuestos;
-              const valorUnit = incluyeIGV ? totalItem / factorIGV : totalItem;
-              return {
-                descripcion: `${comp.componente?.nombre || 'Componente'} - ${comp.tipoAccion}`,
-                cantidad: new Prisma.Decimal(1),
-                valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
-                precioUnitario: new Prisma.Decimal(totalItem.toFixed(2)),
-                valorVenta: new Prisma.Decimal(valorUnit.toFixed(2)),
-                igv: new Prisma.Decimal((totalItem - valorUnit).toFixed(2)),
-                subtotal: new Prisma.Decimal(valorUnit.toFixed(2)),
-                total: new Prisma.Decimal(totalItem.toFixed(2)),
-              };
-            })
-          : [{
-              descripcion: orden.servicio?.nombre || `Servicio - ${orden.tipoServicio}`,
-              cantidad: new Prisma.Decimal(1),
-              valorUnitario: new Prisma.Decimal(subtotal.toFixed(2)),
-              precioUnitario: new Prisma.Decimal(saldoPendiente.toFixed(2)),
-              valorVenta: new Prisma.Decimal(subtotal.toFixed(2)),
-              igv: new Prisma.Decimal(igv.toFixed(2)),
-              subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
-              total: new Prisma.Decimal(saldoPendiente.toFixed(2)),
-            }];
+        // Detalle del comprobante: línea única por el monto a cobrar (saldoPendiente),
+        // de modo que Σ detalles == total de la cabecera SIEMPRE (las líneas por
+        // componente sumaban el bruto y descuadraban con adelanto/descuento).
+        // NOTA: endpoint legacy (los clientes cobran por /ventas/cobrar).
+        const detallesComprobante = [{
+          descripcion: orden.servicio?.nombre || `Servicio - ${orden.tipoServicio}`,
+          cantidad: new Prisma.Decimal(1),
+          valorUnitario: new Prisma.Decimal(subtotal.toFixed(2)),
+          precioUnitario: new Prisma.Decimal(saldoPendiente.toFixed(2)),
+          valorVenta: new Prisma.Decimal(subtotal.toFixed(2)),
+          igv: new Prisma.Decimal(igv.toFixed(2)),
+          subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
+          total: new Prisma.Decimal(saldoPendiente.toFixed(2)),
+        }];
 
         const comprobante = await tx.comprobanteElectronico.create({
           data: {

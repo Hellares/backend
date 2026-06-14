@@ -20,6 +20,41 @@ const ESTADOS_NO_MODIFICABLES: EstadoOrdenServicio[] = [
 export class ServicioComponenteService {
   constructor(private prisma: PrismaService) {}
 
+  /**
+   * Modelo aditivo: el total facturable = costoTotal (servicio) + Σ componentes.
+   * Al BAJAR/QUITAR un componente, el total puede caer por debajo del
+   * adelanto/descuento ya registrado → la orden quedaría con saldo negativo
+   * (incobrable). Se rechaza el cambio con un mensaje claro.
+   */
+  private async assertSaldoNoNegativoTrasCambio(
+    ordenServicioId: string,
+    proyectar: (
+      actuales: Array<{ id: string; costoAccion: any; costoRepuestos: any }>,
+    ) => Array<{ costoAccion: any; costoRepuestos: any }>,
+  ) {
+    const orden = await this.prisma.ordenServicio.findUnique({
+      where: { id: ordenServicioId },
+      select: {
+        costoTotal: true,
+        adelanto: true,
+        descuento: true,
+        componentes: { select: { id: true, costoAccion: true, costoRepuestos: true } },
+      },
+    });
+    if (!orden) return;
+    const compSub = proyectar(orden.componentes).reduce(
+      (s, c) => s + Number(c.costoAccion ?? 0) + Number(c.costoRepuestos ?? 0),
+      0,
+    );
+    const facturable = Math.round((Number(orden.costoTotal ?? 0) + compSub) * 100) / 100;
+    const cargas = Math.round((Number(orden.adelanto ?? 0) + Number(orden.descuento ?? 0)) * 100) / 100;
+    if (cargas > facturable) {
+      throw new BadRequestException(
+        `Este cambio dejaría el total (S/ ${facturable.toFixed(2)}) por debajo del adelanto/descuento ya registrado (S/ ${cargas.toFixed(2)}). Reduce primero el adelanto/descuento de la orden.`,
+      );
+    }
+  }
+
   async create(empresaId: string, ordenServicioId: string, dto: CreateServicioComponenteDto) {
     const orden = await this.prisma.ordenServicio.findFirst({
       where: { id: ordenServicioId, empresaId },
@@ -95,6 +130,20 @@ export class ServicioComponenteService {
       );
     }
 
+    // Si baja el costo del componente, no dejar la orden con saldo negativo.
+    await this.assertSaldoNoNegativoTrasCambio(
+      servicioComponente.ordenServicioId,
+      (actuales) =>
+        actuales.map((c) =>
+          c.id === id
+            ? {
+                costoAccion: dto.costoAccion !== undefined ? dto.costoAccion : c.costoAccion,
+                costoRepuestos: dto.costoRepuestos !== undefined ? dto.costoRepuestos : c.costoRepuestos,
+              }
+            : c,
+        ),
+    );
+
     return this.prisma.servicioComponente.update({
       where: { id },
       data: { ...dto },
@@ -122,6 +171,12 @@ export class ServicioComponenteService {
         `No se pueden eliminar componentes de una orden en estado ${servicioComponente.ordenServicio.estado}`,
       );
     }
+
+    // Quitar el componente no debe dejar la orden con saldo negativo.
+    await this.assertSaldoNoNegativoTrasCambio(
+      servicioComponente.ordenServicioId,
+      (actuales) => actuales.filter((c) => c.id !== id),
+    );
 
     return this.prisma.servicioComponente.delete({
       where: { id },
