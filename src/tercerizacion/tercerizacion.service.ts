@@ -637,6 +637,14 @@ export class TercerizacionService {
       }
 
       const rechazada = await this.prisma.$transaction(async (tx) => {
+        // Guard atómico contra doble respuesta concurrente (doble-tap).
+        const claim = await tx.tercerizacionServicio.updateMany({
+          where: { id: tercerizacionId, estado: EstadoTercerizacion.PENDIENTE },
+          data: { estado: EstadoTercerizacion.RECHAZADO },
+        });
+        if (claim.count === 0) {
+          throw new BadRequestException('Esta solicitud ya fue respondida');
+        }
         const updated = await tx.tercerizacionServicio.update({
           where: { id: tercerizacionId },
           data: {
@@ -694,6 +702,14 @@ export class TercerizacionService {
 
     // Aceptar: crear orden en empresa destino
     const aceptada = await this.prisma.$transaction(async (tx) => {
+      // Guard atómico contra doble aceptación concurrente (evita 2 órdenes destino).
+      const claim = await tx.tercerizacionServicio.updateMany({
+        where: { id: tercerizacionId, estado: EstadoTercerizacion.PENDIENTE },
+        data: { estado: EstadoTercerizacion.ACEPTADO },
+      });
+      if (claim.count === 0) {
+        throw new BadRequestException('Esta solicitud ya fue respondida');
+      }
       // Buscar o crear la empresa origen como Persona + EmpresaPersona (cliente B2B)
       // Usamos el RUC como identificador único para empresas. Sin RUC,
       // dedup por la observación B2B (antes cada aceptación creaba una
@@ -1119,6 +1135,10 @@ export class TercerizacionService {
             id: true, codigo: true, tipoEquipo: true, marcaEquipo: true,
             numeroSerie: true, estado: true, tipoServicio: true,
             prioridad: true, descripcionProblema: true, costoTotal: true,
+            // Para el margen del pago al tercero: el total REAL que cobró la
+            // empresa origen al cliente = servicio + repuestos − descuento.
+            descuento: true,
+            componentes: { select: { costoAccion: true, costoRepuestos: true } },
           },
         },
         ordenDestino: {

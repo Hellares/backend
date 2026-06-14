@@ -852,15 +852,18 @@ export class OrdenServicioService {
       descripcionProblema: orden.descripcionProblema,
       notas: orden.notas,
       diagnostico: orden.diagnostico,
-      // Costos
+      // Costos (modelo aditivo: el cliente paga servicio + repuestos − descuento)
       costoTotal: orden.costoTotal ? Number(orden.costoTotal) : null,
       descuento: orden.descuento ? Number(orden.descuento) : null,
       adelanto: orden.adelanto ? Number(orden.adelanto) : null,
+      costoFinal: OrdenServicioService.costoNeto(orden), // facturable − descuento (total al cliente)
+      saldoPendiente: OrdenServicioService.saldoPendiente(orden),
       // Componentes
       componentes: orden.componentes?.map((c) => ({
         nombre: c.componente?.codigo ?? 'Componente',
         tipo: c.componente?.tipoComponente?.nombre,
         costoAccion: c.costoAccion ? Number(c.costoAccion) : null,
+        costoRepuestos: c.costoRepuestos ? Number(c.costoRepuestos) : null,
         tipoAccion: c.tipoAccion,
       })),
       // Fechas
@@ -1507,11 +1510,7 @@ export class OrdenServicioService {
         );
       }
 
-      if (!orden.costoTotal || Number(orden.costoTotal) <= 0) {
-        throw new BadRequestException('La orden no tiene costo total definido');
-      }
-
-      const costoTotal = Number(orden.costoTotal);
+      const costoTotal = Number(orden.costoTotal || 0);
       const adelanto = Number(orden.adelanto || 0);
       const descuento = Number(orden.descuento || 0);
       // Modelo aditivo: el cliente paga componentes (repuestos+M.O.) + servicio.
@@ -1521,6 +1520,12 @@ export class OrdenServicioService {
       );
       const facturable = costoTotal + subtotalComp;
       const saldoPendiente = facturable - adelanto - descuento;
+
+      if (facturable <= 0) {
+        throw new BadRequestException(
+          'La orden no tiene un monto a cobrar (servicio + repuestos)',
+        );
+      }
 
       // Datos del cliente
       const nombreCliente = orden.clienteEmpresa?.razonSocial
@@ -1720,10 +1725,11 @@ export class OrdenServicioService {
     componentes?: Array<{ costoAccion: Prisma.Decimal | null; costoRepuestos: Prisma.Decimal | null }> | null;
   }): number {
     if (!orden.componentes) return 0;
-    return orden.componentes.reduce(
+    const total = orden.componentes.reduce(
       (s, c) => s + Number(c.costoAccion ?? 0) + Number(c.costoRepuestos ?? 0),
       0,
     );
+    return Math.round(total * 100) / 100;
   }
 
   /** Base facturable al cliente = costo del servicio + componentes (repuestos+M.O.).
@@ -1890,9 +1896,9 @@ export class OrdenServicioService {
             `Solo se cobran órdenes en REPARADO o LISTO_ENTREGA`,
         );
       }
-      if (!orden.costoTotal || Number(orden.costoTotal) <= 0) {
+      if (OrdenServicioService.facturable(orden) <= 0) {
         throw new BadRequestException(
-          `La orden ${orden.codigo} no tiene costo total definido`,
+          `La orden ${orden.codigo} no tiene un monto a cobrar (servicio + repuestos)`,
         );
       }
       // saldo == 0 (100% adelantada) SÍ es cobrable: el cliente no paga
@@ -2101,7 +2107,8 @@ export class OrdenServicioService {
       where: {
         empresaId,
         estado: { in: OrdenServicioService.ESTADOS_COBRABLES },
-        costoTotal: { not: null },
+        // Sin filtro de costoTotal: una orden de solo repuestos (costoTotal null)
+        // igual es cobrable por el total facturable; se filtra abajo por > 0.
         ventaDetalle: null,
         ...(searchTrim
           ? {
@@ -2190,9 +2197,9 @@ export class OrdenServicioService {
             : null,
         };
       })
-      // saldo == 0 (100% adelantada) se incluye: sigue pendiente de
-      // FACTURAR aunque no haya nada que pagar hoy. Solo se excluye el
+      // costoTotal (=facturable) > 0: hay algo que facturar (servicio y/o
+      // repuestos). saldo == 0 (100% adelantada) se incluye; solo se excluye el
       // saldo negativo (datos inconsistentes).
-      .filter((o) => o.saldoPendiente >= 0);
+      .filter((o) => o.costoTotal > 0 && o.saldoPendiente >= 0);
   }
 }
