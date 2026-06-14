@@ -130,22 +130,28 @@ export class OrdenServicioService {
     costoTotal: number | null;
     adelanto: number;
     descuento: number;
+    /** Subtotal de componentes (repuestos+M.O.) que el cliente paga (modelo aditivo). */
+    subtotalComponentes?: number;
   }) {
-    if (params.costoTotal === null) return;
-    if (params.adelanto > params.costoTotal) {
+    // Base facturable = costo del servicio + componentes (repuestos+M.O.).
+    // Con costoTotal null y sin componentes no hay contra qué validar.
+    const comp = params.subtotalComponentes ?? 0;
+    if (params.costoTotal === null && comp === 0) return;
+    const base = Math.round(((params.costoTotal ?? 0) + comp) * 100) / 100;
+    if (params.adelanto > base) {
       throw new BadRequestException(
-        'El adelanto no puede ser mayor al costo total',
+        'El adelanto no puede ser mayor al total (servicio + repuestos)',
       );
     }
-    if (params.descuento > params.costoTotal) {
+    if (params.descuento > base) {
       throw new BadRequestException(
-        'El descuento no puede ser mayor al costo total',
+        'El descuento no puede ser mayor al total (servicio + repuestos)',
       );
     }
     const suma = Math.round((params.adelanto + params.descuento) * 100) / 100;
-    if (suma > params.costoTotal) {
+    if (suma > base) {
       throw new BadRequestException(
-        'La suma de adelanto y descuento no puede superar el costo total',
+        'La suma de adelanto y descuento no puede superar el total (servicio + repuestos)',
       );
     }
   }
@@ -518,6 +524,7 @@ export class OrdenServicioService {
             (orden.costoTotal ? Number(orden.costoTotal) : null),
           adelanto: dto.adelanto ?? Number(orden.adelanto ?? 0),
           descuento: dto.descuento ?? Number(orden.descuento ?? 0),
+          subtotalComponentes: OrdenServicioService.subtotalComponentes(orden as any),
         });
       }
 
@@ -1005,6 +1012,7 @@ export class OrdenServicioService {
           (existing.costoTotal ? Number(existing.costoTotal) : null),
         adelanto: dto.adelanto ?? Number(existing.adelanto ?? 0),
         descuento: dto.descuento ?? Number(existing.descuento ?? 0),
+        subtotalComponentes: OrdenServicioService.subtotalComponentes(existing as any),
       });
     }
 
