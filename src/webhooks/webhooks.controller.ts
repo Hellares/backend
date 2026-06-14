@@ -54,4 +54,22 @@ export class WebhooksController {
     // Errores no recuperables se propagan (500) y Syncrofact reintenta.
     return result;
   }
+
+  /**
+   * Recepción de confirmaciones de pago de api-yape (Yape/Plin).
+   * Header: X-Yape-Signature: sha256=HMAC-SHA256(body, webhookSecret de la empresa)
+   */
+  @Post('yape')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Recibe pagos confirmados de api-yape (Yape/Plin)' })
+  async recibirYape(
+    @Req() req: Request,
+    @Headers('x-yape-signature') signature: string,
+  ) {
+    const rawBody = (req as any).rawBody as Buffer | undefined;
+    if (!rawBody) {
+      throw new BadRequestException('Raw body no disponible — revisar main.ts');
+    }
+    return this.webhooksService.procesarPagoYape(rawBody, signature);
+  }
 }

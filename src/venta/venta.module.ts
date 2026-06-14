@@ -11,6 +11,7 @@ import { CajaModule } from '../caja/caja.module';
 import { ProductoModule } from '../producto/producto.module';
 import { SunatModule } from '../sunat/sunat.module';
 import { ServicioModule } from '../servicio/servicio.module';
+import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ServicioModule } from '../servicio/servicio.module';
     ProductoModule,
     SunatModule,
     ServicioModule,
+    IntegracionYapeModule,
   ],
   controllers: [VentaAnalyticsController, VentaController],
   providers: [VentaService, VentaAnalyticsService],

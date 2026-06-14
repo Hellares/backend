@@ -65,6 +65,19 @@ export class VentaController {
     return this.ventaService.crearYCobrar(empresaId, dto, cajeroId);
   }
 
+  @Post(':id/cobro-yape')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary: 'Genera el cobro Yape/Plin (monto único) para validar el pago de una venta',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async cobroYape(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.ventaService.cobroYape(empresaId, id);
+  }
+
   @Post('desde-cotizacion/:cotizacionId')
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({ summary: 'Crear venta desde cotizacion pendiente o aprobada' })
