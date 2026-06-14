@@ -77,10 +77,14 @@ const ORDEN_SERVICIO_BASE_INCLUDE = {
   // Señal precisa de "cobrada": existe un VentaDetalle vinculado (1:1).
   // Distingue cobrada vs finalizada-sin-cobro. Solo el id (liviano).
   ventaDetalle: { select: { id: true } },
+  // Costos de componentes (liviano) para que la LISTA calcule el total
+  // facturable aditivo (servicio + repuestos) y el saldo correctos en la card.
+  componentes: { select: { costoAccion: true, costoRepuestos: true } },
 } as const;
 
 const ORDEN_SERVICIO_FULL_INCLUDE = {
   ...ORDEN_SERVICIO_BASE_INCLUDE,
+  // Detalle: componentes completos (sobreescribe el select liviano del BASE).
   componentes: {
     include: { componente: { include: { tipoComponente: true } } },
   },
