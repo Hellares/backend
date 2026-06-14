@@ -10,6 +10,7 @@ import { CajaService } from '../caja/caja.service';
 import { ProductoComboService } from '../producto/producto-combo.service';
 import { PrecioNivelService } from '../producto/precio-nivel.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
+import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { CacheService } from '../redis/cache.service';
@@ -60,10 +61,40 @@ export class VentaService {
     private readonly ordenServicioService: OrdenServicioService,
     private readonly precioNivelService: PrecioNivelService,
     private readonly realtimeInvalidation: RealtimeInvalidationService,
+    private readonly integracionYape: IntegracionYapeService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(VentaService.name);
+  }
+
+  /**
+   * Genera un cobro en api-yape para una venta YA creada (estado CONFIRMADA,
+   * pendiente de pago). Devuelve el monto que el cliente debe pagar (payAmount).
+   * Si la integración no está habilitada o api-yape no responde, devuelve
+   * { habilitado: false } → la app cae al cobro MANUAL (con el screenshot del Yape).
+   * NO marca la venta pagada: eso lo hace el webhook al confirmarse el pago.
+   */
+  async cobroYape(empresaId: string, ventaId: string) {
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId },
+      select: { id: true, total: true, sedeId: true, estado: true },
+    });
+    if (!venta) throw new NotFoundException('Venta no encontrada');
+
+    const cobro = await this.integracionYape.crearCobro({
+      empresaId,
+      ventaId,
+      monto: Number(venta.total),
+    });
+    if (!cobro) {
+      return { habilitado: false as const };
+    }
+    return {
+      habilitado: true as const,
+      payAmount: cobro.payAmount,
+      chargeId: cobro.chargeId,
+    };
   }
 
   /**
