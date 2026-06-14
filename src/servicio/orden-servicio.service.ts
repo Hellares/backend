@@ -77,9 +77,21 @@ const ORDEN_SERVICIO_BASE_INCLUDE = {
   // Señal precisa de "cobrada": existe un VentaDetalle vinculado (1:1).
   // Distingue cobrada vs finalizada-sin-cobro. Solo el id (liviano).
   ventaDetalle: { select: { id: true } },
-  // Costos de componentes (liviano) para que la LISTA calcule el total
-  // facturable aditivo (servicio + repuestos) y el saldo correctos en la card.
-  componentes: { select: { costoAccion: true, costoRepuestos: true } },
+  // Componentes (liviano, sin el join a `componente`) para que la LISTA calcule
+  // el total facturable aditivo (servicio + repuestos) y el saldo en la card.
+  // Incluye los campos que exige el modelo Flutter (id/ordenServicioId/
+  // componenteId/tipoAccion no-nulos) para no romper el parseo de la lista.
+  componentes: {
+    select: {
+      id: true,
+      ordenServicioId: true,
+      componenteId: true,
+      tipoAccion: true,
+      estadoComponente: true,
+      costoAccion: true,
+      costoRepuestos: true,
+    },
+  },
 } as const;
 
 const ORDEN_SERVICIO_FULL_INCLUDE = {
