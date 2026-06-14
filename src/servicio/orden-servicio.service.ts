@@ -1490,7 +1490,13 @@ export class OrdenServicioService {
       const costoTotal = Number(orden.costoTotal);
       const adelanto = Number(orden.adelanto || 0);
       const descuento = Number(orden.descuento || 0);
-      const saldoPendiente = costoTotal - adelanto - descuento;
+      // Modelo aditivo: el cliente paga componentes (repuestos+M.O.) + servicio.
+      const subtotalComp = (orden.componentes ?? []).reduce(
+        (s: number, c: any) => s + Number(c.costoAccion || 0) + Number(c.costoRepuestos || 0),
+        0,
+      );
+      const facturable = costoTotal + subtotalComp;
+      const saldoPendiente = facturable - adelanto - descuento;
 
       // Datos del cliente
       const nombreCliente = orden.clienteEmpresa?.razonSocial
@@ -1699,27 +1705,50 @@ export class OrdenServicioService {
     EstadoOrdenServicio.LISTO_ENTREGA,
   ];
 
+  /** Suma de los componentes (mano de obra + repuestos) que el cliente paga. */
+  private static subtotalComponentes(orden: {
+    componentes?: Array<{ costoAccion: Prisma.Decimal | null; costoRepuestos: Prisma.Decimal | null }> | null;
+  }): number {
+    if (!orden.componentes) return 0;
+    return orden.componentes.reduce(
+      (s, c) => s + Number(c.costoAccion ?? 0) + Number(c.costoRepuestos ?? 0),
+      0,
+    );
+  }
+
+  /** Base facturable al cliente = costo del servicio + componentes (repuestos+M.O.).
+   * MODELO ADITIVO: el cliente paga los repuestos/componentes MÁS el costo del
+   * servicio (factura tipo taller: repuestos + servicio = total). */
+  private static facturable(orden: {
+    costoTotal: Prisma.Decimal | null;
+    componentes?: Array<{ costoAccion: Prisma.Decimal | null; costoRepuestos: Prisma.Decimal | null }> | null;
+  }): number {
+    return Number(orden.costoTotal ?? 0) + OrdenServicioService.subtotalComponentes(orden);
+  }
+
   private static saldoPendiente(orden: {
     costoTotal: Prisma.Decimal | null;
     adelanto: Prisma.Decimal | null;
     descuento: Prisma.Decimal | null;
+    componentes?: Array<{ costoAccion: Prisma.Decimal | null; costoRepuestos: Prisma.Decimal | null }> | null;
   }): number {
-    const costo = Number(orden.costoTotal ?? 0);
+    const facturable = OrdenServicioService.facturable(orden);
     const adelanto = Number(orden.adelanto ?? 0);
     const descuento = Number(orden.descuento ?? 0);
-    return Math.round((costo - adelanto - descuento) * 100) / 100;
+    return Math.round((facturable - adelanto - descuento) * 100) / 100;
   }
 
-  /** Costo neto del servicio (costo − descuento, SIN restar adelanto).
+  /** Costo neto del servicio (facturable − descuento, SIN restar adelanto).
    * Es el monto por el que se factura: el comprobante sale por el TOTAL
-   * del servicio y el adelanto entra como pago aplicado. */
+   * (repuestos + servicio) y el adelanto entra como pago aplicado. */
   static costoNeto(orden: {
     costoTotal: Prisma.Decimal | null;
     descuento: Prisma.Decimal | null;
+    componentes?: Array<{ costoAccion: Prisma.Decimal | null; costoRepuestos: Prisma.Decimal | null }> | null;
   }): number {
-    const costo = Number(orden.costoTotal ?? 0);
+    const facturable = OrdenServicioService.facturable(orden);
     const descuento = Number(orden.descuento ?? 0);
-    return Math.round((costo - descuento) * 100) / 100;
+    return Math.round((facturable - descuento) * 100) / 100;
   }
 
   /**
@@ -1792,7 +1821,10 @@ export class OrdenServicioService {
 
     const ordenes = await tx.ordenServicio.findMany({
       where: { id: { in: ids }, empresaId },
-      include: { servicio: { select: { nombre: true } } },
+      include: {
+        servicio: { select: { nombre: true } },
+        componentes: { select: { costoAccion: true, costoRepuestos: true } },
+      },
     });
 
     const ordenesMap = new Map(ordenes.map((o) => [o.id, o]));
@@ -2103,6 +2135,7 @@ export class OrdenServicioService {
           select: { id: true, razonSocial: true, numeroDocumento: true, email: true, direccion: true },
         },
         servicio: { select: { nombre: true } },
+        componentes: { select: { costoAccion: true, costoRepuestos: true } },
       },
       orderBy: { actualizadoEn: 'desc' },
       take: 30,
@@ -2111,6 +2144,9 @@ export class OrdenServicioService {
     return ordenes
       .map((o) => {
         const saldoPendiente = OrdenServicioService.saldoPendiente(o);
+        // costoTotal expuesto = base facturable (servicio + componentes) para que
+        // el cliente calcule costoNeto = costoTotal − descuento igual que el server.
+        const facturable = OrdenServicioService.costoNeto({ ...o, descuento: null });
         return {
           id: o.id,
           codigo: o.codigo,
@@ -2120,7 +2156,7 @@ export class OrdenServicioService {
           tipoEquipo: o.tipoEquipo,
           marcaEquipo: o.marcaEquipo,
           numeroSerie: o.numeroSerie,
-          costoTotal: Number(o.costoTotal ?? 0),
+          costoTotal: facturable,
           adelanto: Number(o.adelanto ?? 0),
           descuento: Number(o.descuento ?? 0),
           saldoPendiente,
