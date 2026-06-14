@@ -47,6 +47,23 @@ export class RealtimeInvalidationService {
     return out;
   }
 
+  /// Una venta fue PAGADA (confirmación de pago Yape/Plin vía webhook de api-yape).
+  /// El cliente (cajero) que está esperando en venta rápida refresca el estado.
+  notifyVentaPagada(args: { empresaId: string; ventaId: string }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'VENTA_PAGADA',
+          empresaId: args.empresaId,
+          ventaId: args.ventaId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`VENTA_PAGADA send failed: ${err?.message}`);
+      });
+  }
+
   /// Precio (base o por nivel) o ambos campos relacionados cambiaron
   /// para un producto/sede. Cliente debe invalidar cache de niveles
   /// + refrescar el item en el catálogo.

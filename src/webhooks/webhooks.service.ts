@@ -1,7 +1,11 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { EstadoVenta, MetodoPagoVenta } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
+import { VentaService } from '../venta/venta.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 
 /**
  * Payload estándar de Syncrofact (documentacion/webhooks.md).
@@ -82,9 +86,66 @@ export class WebhooksService {
   constructor(
     private readonly prisma: PrismaService,
     loggerService: AppLoggerService,
+    private readonly integracionYape: IntegracionYapeService,
+    private readonly ventaService: VentaService,
+    private readonly realtime: RealtimeInvalidationService,
   ) {
     this.logger = loggerService;
     this.logger.setContext('WebhooksService');
+  }
+
+  /**
+   * Procesa una confirmación de pago de api-yape (evento payment.confirmed):
+   * verifica la firma, ubica la venta por charge.reference y la marca pagada
+   * reutilizando VentaService.procesarPago con el monto LIMPIO de la venta
+   * (no el payAmount con céntimos). Idempotente. Avisa a la app por FCM.
+   */
+  async procesarPagoYape(rawBody: Buffer, firma: string) {
+    const verif = await this.integracionYape.verificarWebhook(rawBody, firma);
+    if (!verif) return { ok: true, accion: 'cuenta-no-mapeada' };
+    const { empresaId, payload } = verif;
+
+    if (payload?.event !== 'payment.confirmed') {
+      return { ok: true, accion: 'evento-ignorado' };
+    }
+    const ventaId: string | undefined = payload?.charge?.reference;
+    if (!ventaId) return { ok: true, accion: 'sin-referencia' };
+
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId },
+      include: { pagos: true },
+    });
+    if (!venta) return { ok: true, accion: 'venta-no-encontrada' };
+    if (venta.estado === EstadoVenta.PAGADA_COMPLETA) {
+      return { ok: true, accion: 'ya-pagada' };
+    }
+
+    const totalPagado = venta.pagos.reduce(
+      (s: number, p: { monto: any }) => s + Number(p.monto),
+      0,
+    );
+    const pendiente = Number(venta.total) - totalPagado;
+    if (pendiente <= 0) return { ok: true, accion: 'sin-saldo' };
+
+    const metodo =
+      payload?.payment?.provider === 'plin'
+        ? MetodoPagoVenta.PLIN
+        : MetodoPagoVenta.YAPE;
+
+    await this.ventaService.procesarPago(
+      ventaId,
+      empresaId,
+      {
+        metodoPago: metodo,
+        monto: pendiente,
+        referencia:
+          payload?.payment?.operationCode || payload?.payment?.id || undefined,
+      } as any,
+      undefined, // sin usuarioId → es un webhook: salta la validación de caja abierta
+    );
+
+    this.realtime.notifyVentaPagada({ empresaId, ventaId });
+    return { ok: true, accion: 'pagada', ventaId };
   }
 
   /**
