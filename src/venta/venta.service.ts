@@ -184,8 +184,20 @@ export class VentaService {
           // propio deal). Evita divergencia 409 al editar cantidades.
           { ignorarNiveles: !!d.origenComboId, vip: vipCtx ?? undefined },
         );
+        // Precio VIP FAVORABLE: si el backend aplicó un precio especial de
+        // cliente que es ≤ al que envió el cliente, NO se rebota con 409. El
+        // cliente puede no haberlo previsto (ej. alcance por categoría, que el
+        // app no resuelve localmente); el backend aplica el precio VIP (más
+        // barato) y la venta procede. No es manipulación: el cliente envió
+        // IGUAL o MÁS. La manipulación (enviar menos que el precio real en
+        // líneas sin VIP) sigue cubierta por el guard.
+        const vipFavorable =
+          calc.vipAplicado === true &&
+          d.precioUnitario != null &&
+          calc.precioUnitario <= d.precioUnitario + 0.01;
         if (
           d.precioUnitario != null &&
+          !vipFavorable &&
           Math.abs(d.precioUnitario - calc.precioUnitario) > 0.01
         ) {
           divergencias.push({
