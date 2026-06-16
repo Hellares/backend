@@ -9,6 +9,7 @@ import {
   CreatePoliticaDescuentoDto,
   UpdatePoliticaDescuentoDto,
   AsignarUsuariosDto,
+  AsignarClientesDto,
   AgregarFamiliarDto,
   AsignarProductosDto,
   AsignarCategoriasDto,
@@ -606,6 +607,240 @@ export class PoliticaDescuentoService {
   }
 
   // =========================================
+  // ASIGNACIÓN DE CLIENTES VIP (precio especial)
+  // =========================================
+
+  async asignarClientes(
+    politicaId: string,
+    dto: AsignarClientesDto,
+    empresaId: string,
+    asignadoPor: string,
+  ) {
+    const politica = await this.obtenerPorId(politicaId, empresaId);
+
+    const clienteIds = dto.clienteIds ?? [];
+    const clienteEmpresaIds = dto.clienteEmpresaIds ?? [];
+    if (clienteIds.length === 0 && clienteEmpresaIds.length === 0) {
+      throw new BadRequestException(
+        'Debe indicar al menos un cliente (clienteIds o clienteEmpresaIds)',
+      );
+    }
+
+    // Validar pertenencia al tenant
+    if (clienteIds.length) {
+      const found = await this.prisma.empresaPersona.findMany({
+        where: { id: { in: clienteIds }, empresaId },
+        select: { id: true },
+      });
+      if (found.length !== new Set(clienteIds).size) {
+        throw new BadRequestException(
+          'Algunos clientes no existen o no pertenecen a la empresa',
+        );
+      }
+    }
+    if (clienteEmpresaIds.length) {
+      const found = await this.prisma.clienteEmpresa.findMany({
+        where: { id: { in: clienteEmpresaIds }, empresaId },
+        select: { id: true },
+      });
+      if (found.length !== new Set(clienteEmpresaIds).size) {
+        throw new BadRequestException(
+          'Algunos clientes empresa no existen o no pertenecen a la empresa',
+        );
+      }
+    }
+
+    const ops = [
+      ...clienteIds.map((clienteId) =>
+        this.prisma.clientePoliticaDescuento.upsert({
+          where: {
+            politicaId_clienteId: { politicaId: politica.id, clienteId },
+          },
+          create: {
+            politicaId: politica.id,
+            empresaId,
+            clienteId,
+            asignadoPor,
+          },
+          update: { isActive: true, deletedAt: null, asignadoPor },
+        }),
+      ),
+      ...clienteEmpresaIds.map((clienteEmpresaId) =>
+        this.prisma.clientePoliticaDescuento.upsert({
+          where: {
+            politicaId_clienteEmpresaId: {
+              politicaId: politica.id,
+              clienteEmpresaId,
+            },
+          },
+          create: {
+            politicaId: politica.id,
+            empresaId,
+            clienteEmpresaId,
+            asignadoPor,
+          },
+          update: { isActive: true, deletedAt: null, asignadoPor },
+        }),
+      ),
+    ];
+
+    return this.prisma.$transaction(ops);
+  }
+
+  async obtenerClientesAsignados(politicaId: string, empresaId: string) {
+    await this.obtenerPorId(politicaId, empresaId);
+
+    const rows = await this.prisma.clientePoliticaDescuento.findMany({
+      where: { politicaId, empresaId, isActive: true, deletedAt: null },
+      orderBy: { creadoEn: 'desc' },
+    });
+
+    const clienteIds = rows
+      .filter((r) => r.clienteId)
+      .map((r) => r.clienteId as string);
+    const clienteEmpresaIds = rows
+      .filter((r) => r.clienteEmpresaId)
+      .map((r) => r.clienteEmpresaId as string);
+
+    const [personas, empresas] = await Promise.all([
+      clienteIds.length
+        ? this.prisma.empresaPersona.findMany({
+            where: { id: { in: clienteIds } },
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true, dni: true } },
+            },
+          })
+        : Promise.resolve([]),
+      clienteEmpresaIds.length
+        ? this.prisma.clienteEmpresa.findMany({
+            where: { id: { in: clienteEmpresaIds } },
+            select: { id: true, razonSocial: true, numeroDocumento: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const personaMap = new Map(personas.map((p) => [p.id, p]));
+    const empresaMap = new Map(empresas.map((e) => [e.id, e]));
+
+    return rows.map((r) => {
+      const persona = r.clienteId ? personaMap.get(r.clienteId) : null;
+      const empresaCli = r.clienteEmpresaId
+        ? empresaMap.get(r.clienteEmpresaId)
+        : null;
+      return {
+        id: r.id,
+        politicaId: r.politicaId,
+        clienteId: r.clienteId,
+        clienteEmpresaId: r.clienteEmpresaId,
+        tipo: r.clienteId ? 'B2C' : 'B2B',
+        nombre: persona
+          ? `${persona.persona.nombres} ${persona.persona.apellidos}`.trim()
+          : empresaCli?.razonSocial ?? null,
+        documento: persona
+          ? persona.persona.dni ?? null
+          : empresaCli?.numeroDocumento ?? null,
+        creadoEn: r.creadoEn,
+      };
+    });
+  }
+
+  async removerCliente(
+    politicaId: string,
+    asignacionId: string,
+    empresaId: string,
+  ) {
+    await this.obtenerPorId(politicaId, empresaId);
+
+    const asignacion = await this.prisma.clientePoliticaDescuento.findFirst({
+      where: { id: asignacionId, politicaId, empresaId },
+    });
+    if (!asignacion) {
+      throw new NotFoundException('Asignación no encontrada');
+    }
+
+    return this.prisma.clientePoliticaDescuento.update({
+      where: { id: asignacion.id },
+      data: { isActive: false, deletedAt: new Date() },
+    });
+  }
+
+  /**
+   * Devuelve las políticas de precio especial vigentes para un cliente, con la
+   * config completa para que el cliente (Flutter) recalcule el precio VIP de
+   * forma idéntica al backend y evite el guard 409 al cobrar.
+   */
+  async obtenerPoliticasVigentesCliente(
+    empresaId: string,
+    args: { clienteId?: string; clienteEmpresaId?: string },
+  ) {
+    const { clienteId, clienteEmpresaId } = args;
+    if (!clienteId && !clienteEmpresaId) {
+      throw new BadRequestException(
+        'Debe indicar clienteId o clienteEmpresaId',
+      );
+    }
+
+    const now = new Date();
+    const asignaciones = await this.prisma.clientePoliticaDescuento.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+        ...(clienteId ? { clienteId } : { clienteEmpresaId }),
+        politica: {
+          isActive: true,
+          deletedAt: null,
+          AND: [
+            { OR: [{ fechaInicio: null }, { fechaInicio: { lte: now } }] },
+            { OR: [{ fechaFin: null }, { fechaFin: { gte: now } }] },
+          ],
+        },
+      },
+      include: {
+        politica: {
+          include: {
+            productosAplicables: {
+              select: { productoId: true, descuentoOverride: true },
+            },
+            categoriasAplicables: {
+              select: { categoriaId: true, descuentoOverride: true },
+            },
+          },
+        },
+      },
+      orderBy: { creadoEn: 'desc' },
+    });
+
+    return asignaciones.map((a) => {
+      const p = a.politica;
+      return {
+        politicaId: p.id,
+        nombre: p.nombre,
+        tipoCalculo: p.tipoCalculo,
+        valorDescuento: Number(p.valorDescuento),
+        markupSobreCosto:
+          p.markupSobreCosto != null ? Number(p.markupSobreCosto) : null,
+        estrategiaMayor: p.estrategiaMayor,
+        descuentoMaximo:
+          p.descuentoMaximo != null ? Number(p.descuentoMaximo) : null,
+        prioridad: p.prioridad,
+        aplicarATodos: p.aplicarATodos,
+        productosAplicables: p.productosAplicables.map((x) => ({
+          productoId: x.productoId,
+          descuentoOverride:
+            x.descuentoOverride != null ? Number(x.descuentoOverride) : null,
+        })),
+        categoriasAplicables: p.categoriasAplicables.map((x) => ({
+          categoriaId: x.categoriaId,
+          descuentoOverride:
+            x.descuentoOverride != null ? Number(x.descuentoOverride) : null,
+        })),
+      };
+    });
+  }
+
+  // =========================================
   // CÁLCULO DE DESCUENTOS
   // =========================================
 
@@ -651,9 +886,9 @@ export class PoliticaDescuentoService {
       };
     }
 
-    // Obtener el producto para verificar su categoría
-    const producto = await this.prisma.producto.findUnique({
-      where: { id: dto.productoId },
+    // Obtener el producto para verificar su categoría (scoped al tenant).
+    const producto = await this.prisma.producto.findFirst({
+      where: { id: dto.productoId, empresaId },
       select: { empresaCategoriaId: true },
     });
 

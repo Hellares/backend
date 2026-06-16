@@ -1,6 +1,7 @@
 export * from './create-politica-descuento.dto';
 export * from './update-politica-descuento.dto';
 export * from './asignar-usuarios.dto';
+export * from './asignar-clientes.dto';
 export * from './agregar-familiar.dto';
 export * from './asignar-productos.dto';
 export * from './asignar-categorias.dto';

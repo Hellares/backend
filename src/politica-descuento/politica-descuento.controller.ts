@@ -24,6 +24,7 @@ import {
   CreatePoliticaDescuentoDto,
   UpdatePoliticaDescuentoDto,
   AsignarUsuariosDto,
+  AsignarClientesDto,
   AgregarFamiliarDto,
   AsignarProductosDto,
   AsignarCategoriasDto,
@@ -296,6 +297,95 @@ export class PoliticaDescuentoController {
       politicaId,
       asignarDto,
       empresaId,
+    );
+  }
+
+  // =========================================
+  // ASIGNACIÓN DE CLIENTES VIP (precio especial)
+  // =========================================
+
+  @Post(':id/clientes')
+  @RequiresPermission(Permission.ASSIGN_DISCOUNTS)
+  @ApiOperation({ summary: 'Asignar clientes (VIP) a una política de precio especial' })
+  @ApiResponse({ status: 201, description: 'Clientes asignados exitosamente' })
+  @ApiResponse({ status: 404, description: 'Política no encontrada' })
+  async asignarClientes(
+    @Param('id') politicaId: string,
+    @Body() dto: AsignarClientesDto,
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') usuarioId: string,
+  ) {
+    return this.politicaDescuentoService.asignarClientes(
+      politicaId,
+      dto,
+      empresaId,
+      usuarioId,
+    );
+  }
+
+  @Get(':id/clientes')
+  @RequiresPermission(Permission.VIEW_DISCOUNTS)
+  @ApiOperation({ summary: 'Listar clientes asignados a una política' })
+  @ApiResponse({ status: 200, description: 'Clientes asignados' })
+  async obtenerClientesAsignados(
+    @Param('id') politicaId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return this.politicaDescuentoService.obtenerClientesAsignados(
+      politicaId,
+      empresaId,
+    );
+  }
+
+  @Delete(':id/clientes/:asignacionId')
+  @RequiresPermission(Permission.ASSIGN_DISCOUNTS)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Remover un cliente de una política de precio especial' })
+  @ApiResponse({ status: 204, description: 'Cliente removido exitosamente' })
+  @ApiResponse({ status: 404, description: 'Asignación no encontrada' })
+  async removerCliente(
+    @Param('id') politicaId: string,
+    @Param('asignacionId') asignacionId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    await this.politicaDescuentoService.removerCliente(
+      politicaId,
+      asignacionId,
+      empresaId,
+    );
+  }
+
+  @Get('cliente/:clienteId/vigentes')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Políticas de precio especial vigentes de un cliente B2C (para preview en venta)',
+  })
+  @ApiResponse({ status: 200, description: 'Políticas vigentes del cliente' })
+  async obtenerVigentesClienteB2C(
+    @Param('clienteId') clienteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return this.politicaDescuentoService.obtenerPoliticasVigentesCliente(
+      empresaId,
+      { clienteId },
+    );
+  }
+
+  @Get('cliente-empresa/:clienteEmpresaId/vigentes')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Políticas de precio especial vigentes de un cliente B2B (para preview en venta)',
+  })
+  @ApiResponse({ status: 200, description: 'Políticas vigentes del cliente B2B' })
+  async obtenerVigentesClienteB2B(
+    @Param('clienteEmpresaId') clienteEmpresaId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return this.politicaDescuentoService.obtenerPoliticasVigentesCliente(
+      empresaId,
+      { clienteEmpresaId },
     );
   }
 
