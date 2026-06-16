@@ -15,6 +15,33 @@ import { RealtimeInvalidationService } from '../notificacion/realtime-invalidati
 // Usar Prisma.Decimal para los valores decimales
 const Decimal = Prisma.Decimal;
 
+/** Redondea a 4 decimales (igual que el storage Decimal(14,4)). */
+const round4 = (v: number): number => Math.round(v * 10000) / 10000;
+
+/**
+ * Contexto de precio especial de un cliente VIP, resuelto por VentaService a
+ * partir de la política aplicable a la línea. PrecioNivelService es agnóstico
+ * del dominio de descuentos: solo recibe la intención de precio ya resuelta.
+ */
+export interface VipPrecioContexto {
+  politicaId: string;
+  /** Etiqueta para el snapshot de la línea, ej. "VIP: Mayoristas". */
+  etiqueta: string;
+  modo:
+    | 'PRECIO_COSTO'
+    | 'PRECIO_MAYOR_DESDE_UNIDAD'
+    | 'PORCENTAJE'
+    | 'MONTO_FIJO';
+  /** % o monto fijo, según modo PORCENTAJE / MONTO_FIJO. */
+  valor?: number;
+  /** % sobre costo (modo PRECIO_COSTO). null/0 = costo puro. */
+  markupSobreCosto?: number;
+  /** Estrategia de escalón (modo PRECIO_MAYOR_DESDE_UNIDAD). */
+  estrategiaMayor?: 'PRIMER_NIVEL' | 'MEJOR_NIVEL';
+  /** Tope de descuento en monto (modos PORCENTAJE / MONTO_FIJO). */
+  descuentoMaximo?: number | null;
+}
+
 @Injectable()
 export class PrecioNivelService {
   private readonly logger: AppLoggerService;
@@ -375,7 +402,7 @@ export class PrecioNivelService {
     varianteId: string | null,
     sedeId: string,
     cantidad: number,
-    opts?: { ignorarNiveles?: boolean },
+    opts?: { ignorarNiveles?: boolean; vip?: VipPrecioContexto },
   ): Promise<{
     precioUnitario: number;
     nivelAplicado: string;
@@ -385,6 +412,10 @@ export class PrecioNivelService {
     motivoLiquidacion?: string | null;
     /** Costo del producto en la sede al momento del cálculo. Usado por VentaService para snapshot de margen. */
     precioCosto?: number | null;
+    /** true si el precio ganador vino de una política de precio especial (VIP). */
+    vipAplicado?: boolean;
+    /** ID de la política VIP que ganó (null si no aplicó/ no ganó). */
+    vipPoliticaId?: string | null;
   }> {
     this.logger.info('Calculating price by quantity', {
       productoId,
@@ -496,9 +527,33 @@ export class PrecioNivelService {
     // nivel "Por Mayor PRECIO_FIJO S/9" sobre un producto en liquidacion
     // a S/5 podria llevarlo de vuelta a S/9 si vende 12 unidades, lo cual
     // contradice el remate. La liquidacion gana siempre.
-    const candidatos: Array<{ valor: number; etiqueta: string; motivoLiquidacion?: string | null }> = [
-      { valor: precioBase, etiqueta: 'Precio base' },
-    ];
+    const candidatos: Array<{
+      valor: number;
+      etiqueta: string;
+      motivoLiquidacion?: string | null;
+      vipPoliticaId?: string;
+    }> = [{ valor: precioBase, etiqueta: 'Precio base' }];
+
+    // ===== Candidato de precio especial VIP =====
+    // El VIP entra como un candidato más del reduce (gana el menor): el cliente
+    // nunca paga más que una oferta/liquidación pública más barata. No aplica a
+    // componentes de combo (ignorarNiveles), que tienen su propio deal.
+    if (opts?.vip && !opts?.ignorarNiveles) {
+      const vipCandidato = await this._calcularCandidatoVip(
+        opts.vip,
+        productoId,
+        varianteId,
+        precioBase,
+        precioCosto,
+      );
+      if (vipCandidato != null) {
+        candidatos.push({
+          valor: vipCandidato,
+          etiqueta: opts.vip.etiqueta,
+          vipPoliticaId: opts.vip.politicaId,
+        });
+      }
+    }
     // `ignorarNiveles`: los componentes de combo (origenComboId) NO usan
     // niveles por mayor — el combo es su propio deal de precio. Sin esto, el
     // backend preciaría el componente por volumen y divergiría del precio
@@ -535,7 +590,71 @@ export class PrecioNivelService {
       precioBase,
       motivoLiquidacion: ganador.motivoLiquidacion ?? null,
       precioCosto,
+      vipAplicado: !!ganador.vipPoliticaId,
+      vipPoliticaId: ganador.vipPoliticaId ?? null,
     };
+  }
+
+  /**
+   * Calcula el precio candidato de una política de precio especial (VIP) para
+   * la línea. Devuelve null si el modo no puede resolverse (ej. PRECIO_COSTO
+   * sin costo configurado, o MAYOR sin niveles).
+   */
+  private async _calcularCandidatoVip(
+    vip: VipPrecioContexto,
+    productoId: string | null,
+    varianteId: string | null,
+    precioBase: number,
+    precioCosto: number | null,
+  ): Promise<number | null> {
+    switch (vip.modo) {
+      case 'PRECIO_COSTO': {
+        if (precioCosto == null) return null;
+        return round4(precioCosto * (1 + (vip.markupSobreCosto ?? 0) / 100));
+      }
+      case 'PRECIO_MAYOR_DESDE_UNIDAD': {
+        // Todos los niveles activos, sin filtrar por cantidad (desde la unidad 1).
+        const niveles = await this.prisma.precioNivel.findMany({
+          where: {
+            ...(productoId && { productoId }),
+            ...(varianteId && { varianteId }),
+            isActive: true,
+          },
+          orderBy: { cantidadMinima: 'asc' },
+        });
+        if (!niveles.length) return null;
+        const precioDeNivel = (n: (typeof niveles)[number]): number =>
+          n.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO
+            ? n.precio!.toNumber()
+            : precioBase * (1 - n.porcentajeDesc!.toNumber() / 100);
+        // Escalones "por mayor" = cantidadMinima > 1 (el de 1 es retail/base).
+        const mayoristas = niveles.filter((n) => n.cantidadMinima > 1);
+        const pool = mayoristas.length ? mayoristas : niveles;
+        const elegido =
+          (vip.estrategiaMayor ?? 'PRIMER_NIVEL') === 'MEJOR_NIVEL'
+            ? pool.reduce((best, n) =>
+                precioDeNivel(n) < precioDeNivel(best) ? n : best,
+              )
+            : pool[0]; // PRIMER_NIVEL: menor cantidadMinima (pool ya ordenado asc)
+        return round4(precioDeNivel(elegido));
+      }
+      case 'PORCENTAJE': {
+        let desc = precioBase * ((vip.valor ?? 0) / 100);
+        if (vip.descuentoMaximo != null && desc > vip.descuentoMaximo) {
+          desc = vip.descuentoMaximo;
+        }
+        return round4(Math.max(precioBase - desc, 0));
+      }
+      case 'MONTO_FIJO': {
+        let desc = vip.valor ?? 0;
+        if (vip.descuentoMaximo != null && desc > vip.descuentoMaximo) {
+          desc = vip.descuentoMaximo;
+        }
+        return round4(Math.max(precioBase - desc, 0));
+      }
+      default:
+        return null;
+    }
   }
 
   /**

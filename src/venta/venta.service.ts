@@ -8,7 +8,10 @@ import {
 } from '@nestjs/common';
 import { CajaService } from '../caja/caja.service';
 import { ProductoComboService } from '../producto/producto-combo.service';
-import { PrecioNivelService } from '../producto/precio-nivel.service';
+import {
+  PrecioNivelService,
+  VipPrecioContexto,
+} from '../producto/precio-nivel.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +33,7 @@ import {
   MotivoLiquidacion,
   Prisma,
   Rol,
+  TipoCalculoDescuento,
 } from '@prisma/client';
 import { FacturacionService } from '../sunat/facturacion.service';
 import { OrdenServicioService } from '../servicio/orden-servicio.service';
@@ -45,6 +49,26 @@ type DetalleConSnapshot = CreateVentaDetalleDto & {
   precioCostoSnapshot: number;
   motivoLiquidacionSnapshot: MotivoLiquidacion | null;
   nivelAplicadoSnapshot: string | null;
+  /** ID de la política VIP que fijó el precio de esta línea (null si no aplicó). */
+  vipPoliticaId?: string | null;
+  /** Precio base antes del precio especial VIP (para el historial de uso). */
+  precioBaseVip?: number | null;
+};
+
+/**
+ * Resolver de precio especial VIP de un cliente, construido una sola vez por
+ * cobro. `resolver(productoId, varianteId)` devuelve la intención de precio de
+ * la política aplicable (mayor prioridad), o null si ninguna aplica.
+ */
+type ResolverVip = {
+  resolver: (
+    productoId: string | null,
+    varianteId: string | null,
+  ) => VipPrecioContexto | null;
+  politicasById: Map<
+    string,
+    { id: string; nombre: string; tipoCalculo: string; valorDescuento: unknown }
+  >;
 };
 
 @Injectable()
@@ -117,6 +141,7 @@ export class VentaService {
   private async aplicarPreciosBackendNivel(
     detalles: CreateVentaDetalleDto[],
     sedeId: string,
+    vipResolver?: ResolverVip | null,
   ): Promise<DetalleConSnapshot[]> {
     const result: DetalleConSnapshot[] = [];
 
@@ -143,6 +168,12 @@ export class VentaService {
         result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
         continue;
       }
+      // Precio especial VIP: solo para líneas de producto/variante reales
+      // (no combos ni componentes de combo, que tienen su propio deal).
+      const vipCtx =
+        vipResolver && !d.origenComboId && !d.comboId
+          ? vipResolver.resolver(d.productoId ?? null, d.varianteId ?? null)
+          : null;
       try {
         const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
           productoIdParaNivel,
@@ -151,7 +182,7 @@ export class VentaService {
           d.cantidad,
           // Componentes de combo: sin niveles por mayor (el combo es su
           // propio deal). Evita divergencia 409 al editar cantidades.
-          { ignorarNiveles: !!d.origenComboId },
+          { ignorarNiveles: !!d.origenComboId, vip: vipCtx ?? undefined },
         );
         if (
           d.precioUnitario != null &&
@@ -184,6 +215,9 @@ export class VentaService {
             calc.nivelAplicado !== 'Precio base'
               ? calc.nivelAplicado
               : null,
+          // Trazabilidad VIP para el historial de uso (solo si el precio VIP ganó).
+          vipPoliticaId: calc.vipAplicado ? calc.vipPoliticaId ?? null : null,
+          precioBaseVip: calc.vipAplicado ? calc.precioBase : null,
         });
       } catch (err) {
         // Producto sin precio configurado en sede, etc. — caso edge donde el
@@ -215,6 +249,169 @@ export class VentaService {
     }
 
     return result;
+  }
+
+  /**
+   * Construye el resolver de precio especial VIP para el cliente de la venta.
+   * Carga las políticas activas+vigentes asignadas al cliente (B2C o B2B) y
+   * devuelve una función que, por línea, resuelve la política aplicable (mayor
+   * prioridad) según su alcance (todos / productos / categorías).
+   *
+   * Devuelve null si no hay cliente o no tiene políticas VIP → costo cero para
+   * ventas normales (no se ejecutan queries extra).
+   */
+  private async _buildResolverVip(
+    empresaId: string,
+    clienteId: string | null | undefined,
+    clienteEmpresaId: string | null | undefined,
+    detalles: CreateVentaDetalleDto[],
+  ): Promise<ResolverVip | null> {
+    if (!clienteId && !clienteEmpresaId) return null;
+
+    const now = new Date();
+    const asignaciones = await this.prisma.clientePoliticaDescuento.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+        ...(clienteId ? { clienteId } : { clienteEmpresaId }),
+        politica: {
+          isActive: true,
+          deletedAt: null,
+          AND: [
+            { OR: [{ fechaInicio: null }, { fechaInicio: { lte: now } }] },
+            { OR: [{ fechaFin: null }, { fechaFin: { gte: now } }] },
+          ],
+        },
+      },
+      include: {
+        politica: {
+          include: {
+            productosAplicables: {
+              select: { productoId: true, descuentoOverride: true },
+            },
+            categoriasAplicables: {
+              select: { categoriaId: true, descuentoOverride: true },
+            },
+          },
+        },
+      },
+    });
+    if (!asignaciones.length) return null;
+
+    const politicas = asignaciones.map((a) => a.politica);
+
+    // Resolver categorías solo si alguna política usa alcance por categoría.
+    const usaCategorias = politicas.some(
+      (p) => !p.aplicarATodos && p.categoriasAplicables.length > 0,
+    );
+    const categoriaPorProducto = new Map<string, string | null>();
+    const categoriaPorVariante = new Map<string, string | null>();
+    if (usaCategorias) {
+      const productoIds = new Set<string>();
+      const varianteIds = new Set<string>();
+      for (const d of detalles) {
+        if (d.productoId && !d.comboId) productoIds.add(d.productoId);
+        if (d.varianteId) varianteIds.add(d.varianteId);
+      }
+      if (productoIds.size) {
+        const prods = await this.prisma.producto.findMany({
+          where: { id: { in: [...productoIds] }, empresaId },
+          select: { id: true, empresaCategoriaId: true },
+        });
+        prods.forEach((p) =>
+          categoriaPorProducto.set(p.id, p.empresaCategoriaId ?? null),
+        );
+      }
+      if (varianteIds.size) {
+        const vars = await this.prisma.productoVariante.findMany({
+          where: { id: { in: [...varianteIds] }, empresaId },
+          select: {
+            id: true,
+            producto: { select: { empresaCategoriaId: true } },
+          },
+        });
+        vars.forEach((v) =>
+          categoriaPorVariante.set(v.id, v.producto?.empresaCategoriaId ?? null),
+        );
+      }
+    }
+
+    const resolver = (
+      productoId: string | null,
+      varianteId: string | null,
+    ): VipPrecioContexto | null => {
+      const categoria = varianteId
+        ? categoriaPorVariante.get(varianteId) ?? null
+        : productoId
+          ? categoriaPorProducto.get(productoId) ?? null
+          : null;
+
+      const aplicables = politicas.filter((p) => {
+        if (p.aplicarATodos) return true;
+        if (
+          productoId &&
+          p.productosAplicables.some((x) => x.productoId === productoId)
+        ) {
+          return true;
+        }
+        if (
+          categoria &&
+          p.categoriasAplicables.some((x) => x.categoriaId === categoria)
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (!aplicables.length) return null;
+
+      // Mayor prioridad gana (desempate: la primera encontrada).
+      const g = aplicables.reduce((best, p) =>
+        p.prioridad > best.prioridad ? p : best,
+      );
+
+      // Override de descuento por producto/categoría (modos PORCENTAJE/MONTO_FIJO).
+      let valor = Number(g.valorDescuento);
+      const ovProd = productoId
+        ? g.productosAplicables.find(
+            (x) => x.productoId === productoId && x.descuentoOverride != null,
+          )
+        : null;
+      const ovCat =
+        !ovProd && categoria
+          ? g.categoriasAplicables.find(
+              (x) => x.categoriaId === categoria && x.descuentoOverride != null,
+            )
+          : null;
+      if (ovProd?.descuentoOverride != null) valor = Number(ovProd.descuentoOverride);
+      else if (ovCat?.descuentoOverride != null) valor = Number(ovCat.descuentoOverride);
+
+      return {
+        politicaId: g.id,
+        etiqueta: `VIP: ${g.nombre}`,
+        modo: g.tipoCalculo as VipPrecioContexto['modo'],
+        valor,
+        markupSobreCosto:
+          g.markupSobreCosto != null ? Number(g.markupSobreCosto) : 0,
+        estrategiaMayor: g.estrategiaMayor as 'PRIMER_NIVEL' | 'MEJOR_NIVEL',
+        descuentoMaximo:
+          g.descuentoMaximo != null ? Number(g.descuentoMaximo) : null,
+      };
+    };
+
+    const politicasById = new Map(
+      politicas.map((p) => [
+        p.id,
+        {
+          id: p.id,
+          nombre: p.nombre,
+          tipoCalculo: p.tipoCalculo as string,
+          valorDescuento: p.valorDescuento,
+        },
+      ]),
+    );
+
+    return { resolver, politicasById };
   }
 
   /**
@@ -814,6 +1011,15 @@ export class VentaService {
     // empresaId pero las inserciones de detalle confían en los IDs del DTO.
     await this._validarPertenenciaTenant(empresaId, dto, canalVenta);
 
+    // Resolver de precio especial VIP del cliente (solo lecturas; fuera de la tx).
+    // null si el cliente no tiene políticas VIP → sin overhead en ventas normales.
+    const vipResolver = await this._buildResolverVip(
+      empresaId,
+      dto.clienteId,
+      dto.clienteEmpresaId,
+      dto.detalles,
+    );
+
     const result = await this.prisma.$transaction(
       async (tx) => {
         // 1. Generar código
@@ -829,6 +1035,7 @@ export class VentaService {
         const detallesEnforced = await this.aplicarPreciosBackendNivel(
           dto.detalles,
           dto.sedeId,
+          vipResolver,
         );
         const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
@@ -1019,6 +1226,40 @@ export class VentaService {
           },
           include: this.getInclude(),
         });
+
+        // 3b. Historial de uso de precio especial VIP (auditoría + reportería).
+        // Solo se registran las líneas donde el precio VIP efectivamente ganó.
+        const vipLineas = detallesCalculados.filter((d) => d.vipPoliticaId);
+        if (vipLineas.length && vipResolver) {
+          await tx.descuentoUsoHistorial.createMany({
+            data: vipLineas.map((d) => {
+              const pol = vipResolver.politicasById.get(d.vipPoliticaId!);
+              const precioOriginal = round2(d.precioBaseVip ?? d.precioUnitario);
+              const precioFinal = round2(d.precioUnitario);
+              return {
+                politicaId: d.vipPoliticaId!,
+                usuarioId: null,
+                empresaId,
+                clienteId: dto.clienteId ?? null,
+                clienteEmpresaId: dto.clienteEmpresaId ?? null,
+                ventaId: venta.id,
+                productoId: d.productoId ?? null,
+                varianteId: d.varianteId ?? null,
+                cantidad: Math.round(d.cantidad),
+                precioOriginal,
+                descuentoAplicado: round2(
+                  Math.max(precioOriginal - precioFinal, 0),
+                ),
+                precioFinal,
+                tipoCalculo: (pol?.tipoCalculo ??
+                  'PORCENTAJE') as TipoCalculoDescuento,
+                valorDescuento: pol ? Number(pol.valorDescuento) : 0,
+                sedeId: dto.sedeId,
+                cajeroId,
+              };
+            }),
+          });
+        }
 
         // 4. Descontar stock (optimizado: batch queries en vez de N loops)
         const detallesConProducto = detallesCalculados.filter(
@@ -3634,6 +3875,8 @@ export class VentaService {
       'motivoLiquidacionSnapshot' in dto ? dto.motivoLiquidacionSnapshot : null;
     const nivelAplicadoSnapshot =
       'nivelAplicadoSnapshot' in dto ? dto.nivelAplicadoSnapshot : null;
+    const vipPoliticaId = 'vipPoliticaId' in dto ? dto.vipPoliticaId ?? null : null;
+    const precioBaseVip = 'precioBaseVip' in dto ? dto.precioBaseVip ?? null : null;
     const descuentoUnitario = cantidad > 0 ? descuento / cantidad : 0;
     const ingresoNetoUnitario = precioUnitario - descuentoUnitario;
     const margenSnapshot = ingresoNetoUnitario - precioCostoSnapshot;
@@ -3662,6 +3905,9 @@ export class VentaService {
       margenSnapshot: round2(margenSnapshot),
       motivoLiquidacionSnapshot,
       nivelAplicadoSnapshot,
+      // Passthrough VIP para el historial de uso (no se persiste en VentaDetalle).
+      vipPoliticaId,
+      precioBaseVip,
     };
   }
 

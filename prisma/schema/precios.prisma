@@ -130,6 +130,13 @@ model PoliticaDescuento {
   // Control de familiares (solo para FAMILIAR_TRABAJADOR)
   maxFamiliaresPorTrabajador Int? // Límite de familiares por trabajador
 
+  // ===== Precio especial de cliente (VIP) =====
+  // Solo para tipoCalculo = PRECIO_COSTO: markup % sobre el costo de la sede
+  // (null o 0 = costo puro, margen 0).
+  markupSobreCosto Decimal? @db.Decimal(5, 2)
+  // Solo para tipoCalculo = PRECIO_MAYOR_DESDE_UNIDAD: qué escalón aplicar desde la unidad 1.
+  estrategiaMayor  EstrategiaMayor @default(PRIMER_NIVEL)
+
   // Control
   isActive      Boolean   @default(true)
   deletedAt     DateTime?
@@ -139,6 +146,7 @@ model PoliticaDescuento {
   // Relaciones
   empresa              Empresa                      @relation(fields: [empresaId], references: [id])
   usuariosConDescuento UsuarioDescuento[] // Usuarios que tienen este descuento
+  clientesAsignados    ClientePoliticaDescuento[] // Clientes VIP con este precio especial
   productosAplicables  PoliticaDescuentoProducto[] // Productos donde aplica
   categoriasAplicables PoliticaDescuentoCategoria[] // Categorías donde aplica
   usosHistorial        DescuentoUsoHistorial[] // Historial de usos
@@ -194,6 +202,42 @@ model UsuarioDescuento {
   @@index([esFamiliar])
 }
 
+/// Asignación de políticas de descuento (precio especial VIP) a CLIENTES.
+/// A diferencia de UsuarioDescuento (que apunta a Usuario/trabajador), esta
+/// tabla vincula la política al comprador: EmpresaPersona (B2C) o
+/// ClienteEmpresa (B2B). Es la base del feature "Cliente VIP con precio especial".
+model ClientePoliticaDescuento {
+  id               String  @id @default(cuid())
+  politicaId       String
+  empresaId        String
+  clienteId        String? // EmpresaPersona (B2C)
+  clienteEmpresaId String? // ClienteEmpresa (B2B)
+
+  asignadoPor String? // Usuario que asignó el VIP
+
+  // Control
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  // Relaciones
+  // Cliente: se guarda como FK escalar (clienteId/clienteEmpresaId) sin relación
+  // Prisma para no exigir back-relations en EmpresaPersona/ClienteEmpresa.
+  // La pertenencia al tenant se valida a nivel de servicio.
+  politica PoliticaDescuento @relation(fields: [politicaId], references: [id], onDelete: Cascade)
+
+  // Postgres trata NULLs como distintos → varias filas B2B (clienteId NULL)
+  // no chocan con el unique, y viceversa.
+  @@unique([politicaId, clienteId])
+  @@unique([politicaId, clienteEmpresaId])
+  @@index([empresaId])
+  @@index([clienteId])
+  @@index([clienteEmpresaId])
+  @@index([politicaId])
+  @@index([isActive])
+}
+
 /// Relación M2M entre políticas de descuento y productos
 /// Define en qué productos específicos aplica cada política
 model PoliticaDescuentoProducto {
@@ -239,14 +283,21 @@ model PoliticaDescuentoCategoria {
 /// Historial de uso de descuentos
 /// Auditoría completa de cuándo y cómo se aplicaron los descuentos
 model DescuentoUsoHistorial {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   politicaId String
-  usuarioId  String
+  // Opcional: las ventas VIP son a CLIENTE (no a Usuario). Para descuentos de
+  // trabajador/familiar sigue apuntando al Usuario.
+  usuarioId  String?
   empresaId  String
 
-  // Información de la venta/cotización (futuro)
-  ventaId      String? // ID de la venta (cuando se implemente)
-  cotizacionId String? // ID de la cotización (cuando se implemente)
+  // Cliente comprador (precio especial VIP)
+  clienteId        String? // EmpresaPersona (B2C)
+  clienteEmpresaId String? // ClienteEmpresa (B2B)
+
+  // Información de la venta/cotización
+  ventaId        String? // ID de la venta
+  ventaDetalleId String? // Línea específica de la venta
+  cotizacionId   String? // ID de la cotización (cuando se implemente)
 
   // Productos con descuento aplicado
   productoId String?
@@ -270,7 +321,7 @@ model DescuentoUsoHistorial {
 
   // Relaciones
   politica PoliticaDescuento @relation(fields: [politicaId], references: [id])
-  usuario  Usuario           @relation("UsuarioUsaDescuento", fields: [usuarioId], references: [id])
+  usuario  Usuario?          @relation("UsuarioUsaDescuento", fields: [usuarioId], references: [id])
   empresa  Empresa           @relation(fields: [empresaId], references: [id])
   producto Producto?         @relation(fields: [productoId], references: [id])
   variante ProductoVariante? @relation(fields: [varianteId], references: [id])
@@ -280,6 +331,8 @@ model DescuentoUsoHistorial {
   @@index([politicaId])
   @@index([usuarioId])
   @@index([empresaId])
+  @@index([clienteId])
+  @@index([clienteEmpresaId])
   @@index([ventaId])
   @@index([cotizacionId])
   @@index([productoId])
@@ -302,6 +355,15 @@ enum TipoDescuento {
 enum TipoCalculoDescuento {
   PORCENTAJE // Descuento en porcentaje (15%)
   MONTO_FIJO // Descuento de monto fijo (S/50)
+  PRECIO_COSTO // VIP: vende al precioCosto de la sede (× markup opcional)
+  PRECIO_MAYOR_DESDE_UNIDAD // VIP: aplica el precio por mayor desde la unidad 1
+}
+
+/// Estrategia para resolver qué escalón por mayor aplicar desde la unidad 1
+/// (solo para tipoCalculo = PRECIO_MAYOR_DESDE_UNIDAD)
+enum EstrategiaMayor {
+  PRIMER_NIVEL // El primer escalón por mayor (menor cantidadMinima > 1)
+  MEJOR_NIVEL // El nivel de menor precio disponible
 }
 
 /// Parentesco familiar para descuentos
