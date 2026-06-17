@@ -1606,6 +1606,8 @@ export class EmpresaService {
         ...(data.porcentajeMoraDiario !== undefined && { porcentajeMoraDiario: data.porcentajeMoraDiario }),
         ...(data.moraMaximaPorcentaje !== undefined && { moraMaximaPorcentaje: data.moraMaximaPorcentaje }),
         ...(data.diasGraciaMora !== undefined && { diasGraciaMora: data.diasGraciaMora }),
+        ...(data.qrYapeUrl !== undefined && { qrYapeUrl: data.qrYapeUrl || null }),
+        ...(data.qrPlinUrl !== undefined && { qrPlinUrl: data.qrPlinUrl || null }),
       },
       create: {
         empresaId,

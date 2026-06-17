@@ -605,6 +605,12 @@ model ConfiguracionEmpresa {
   moraMaximaPorcentaje Decimal? @default(30.0) @db.Decimal(5, 2) // Tope máximo 30% del monto cuota
   diasGraciaMora       Int      @default(0) // Días de gracia antes de aplicar mora
 
+  // QR de cobro Yape/Plin: imagen ESTÁTICA del comercio que se muestra en la
+  // hoja de cobro para que el cliente la escanee. El monto (con céntimos) se
+  // teclea aparte (el QR estático no lleva monto). Independiente de api-yape.
+  qrYapeUrl String?
+  qrPlinUrl String?
+
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
   empresa       Empresa  @relation(fields: [empresaId], references: [id])

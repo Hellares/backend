@@ -108,18 +108,31 @@ export class VentaService {
     });
     if (!venta) throw new NotFoundException('Venta no encontrada');
 
+    // QR de cobro (imagen estática del comercio) para mostrar en la hoja. Va en
+    // ambos paths: incluso si api-yape no genera cobro (modo manual), el cliente
+    // puede pagar escaneando el QR y el cajero confirma a mano.
+    const cfgQr = await this.prisma.configuracionEmpresa.findUnique({
+      where: { empresaId },
+      select: { qrYapeUrl: true, qrPlinUrl: true },
+    });
+    const qr = {
+      qrYapeUrl: cfgQr?.qrYapeUrl ?? null,
+      qrPlinUrl: cfgQr?.qrPlinUrl ?? null,
+    };
+
     const cobro = await this.integracionYape.crearCobro({
       empresaId,
       ventaId,
       monto: Number(venta.total),
     });
     if (!cobro) {
-      return { habilitado: false as const };
+      return { habilitado: false as const, ...qr };
     }
     return {
       habilitado: true as const,
       payAmount: cobro.payAmount,
       chargeId: cobro.chargeId,
+      ...qr,
     };
   }
 

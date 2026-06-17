@@ -141,6 +141,17 @@ export class ConfiguracionEmpresaDto {
   @IsInt()
   @Min(0)
   diasGraciaMora?: number;
+
+  // QR de cobro (imagen estática del comercio). URL del archivo ya subido.
+  @ApiPropertyOptional({ description: 'URL del QR de cobro Yape' })
+  @IsOptional()
+  @IsString()
+  qrYapeUrl?: string;
+
+  @ApiPropertyOptional({ description: 'URL del QR de cobro Plin' })
+  @IsOptional()
+  @IsString()
+  qrPlinUrl?: string;
 }
 
 export class ConfiguracionEmpresaResponseDto {
@@ -188,6 +199,12 @@ export class ConfiguracionEmpresaResponseDto {
 
   @ApiProperty({ default: true })
   mostrarSeccionEquipo: boolean;
+
+  @ApiPropertyOptional()
+  qrYapeUrl?: string;
+
+  @ApiPropertyOptional()
+  qrPlinUrl?: string;
 
   @ApiProperty()
   creadoEn: Date;
