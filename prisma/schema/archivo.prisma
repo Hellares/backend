@@ -87,6 +87,7 @@ enum CategoriaArchivo {
   CONTRATO
   EVIDENCIA
   FIRMA
+  QR_COBRO
 }
 
 enum ProveedorStorage {
