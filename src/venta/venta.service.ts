@@ -3079,7 +3079,7 @@ export class VentaService {
   ) {
     this.logger.info('Procesando pago', { id, empresaId });
 
-    return this.prisma.$transaction(async (tx) => {
+    const ventaPagada = await this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
         where: { id, empresaId },
         include: { pagos: true },
@@ -3317,6 +3317,23 @@ export class VentaService {
       );
       return updatedVenta;
     });
+
+    // Pago MANUAL Yape/Plin (cajero, con usuarioId): la notificación de Yape no
+    // llegó y el cajero confirmó a mano. Liberamos el cobro pendiente en api-yape
+    // para que su monto único deje de estar reservado (si no, la próxima venta
+    // del mismo monto saldría con un céntimo menos hasta que expire el TTL).
+    // El webhook automático pasa usuarioId=undefined → no entra aquí (y allá el
+    // cobro ya quedó `matched`). Fire-and-forget: nunca bloquea ni rompe el pago.
+    if (
+      usuarioId &&
+      (dto.metodoPago === 'YAPE' || dto.metodoPago === 'PLIN')
+    ) {
+      this.integracionYape
+        .cancelarCobro({ empresaId, ventaId: id })
+        .catch(() => undefined);
+    }
+
+    return ventaPagada;
   }
 
   /**

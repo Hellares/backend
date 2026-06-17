@@ -59,6 +59,48 @@ export class IntegracionYapeService {
   }
 
   /**
+   * Cancela el cobro pendiente de una venta en api-yape (por reference=ventaId).
+   * Se llama cuando la venta se confirma/anula por otra vía (ej. pago manual
+   * porque la notificación de Yape nunca llegó): libera el monto único reservado
+   * al instante para que la próxima venta del mismo monto no salga con un céntimo
+   * menos. Resiliente: si la integración no aplica o api-yape no responde, no
+   * hace nada (nunca bloquea el flujo de venta). Devuelve cuántos cobros canceló.
+   */
+  async cancelarCobro(args: {
+    empresaId: string;
+    ventaId: string;
+  }): Promise<number> {
+    const cfg = await this.prisma.integracionYape.findUnique({
+      where: { empresaId: args.empresaId },
+    });
+    if (!cfg || !cfg.habilitado) return 0;
+    try {
+      const res = await fetch(`${cfg.apiBaseUrl}/api/charges/cancel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': cfg.accountApiKey,
+        },
+        body: JSON.stringify({ reference: args.ventaId }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        this.logger.warn(
+          `api-yape /charges/cancel respondió ${res.status} (venta ${args.ventaId})`,
+        );
+        return 0;
+      }
+      const data: any = await res.json();
+      return Number(data?.canceled ?? 0);
+    } catch (e) {
+      this.logger.warn(
+        `api-yape no disponible al cancelar cobro (venta ${args.ventaId}): ${(e as Error).message}`,
+      );
+      return 0;
+    }
+  }
+
+  /**
    * Verifica la firma HMAC del webhook entrante con el secret de la empresa
    * dueña de la cuenta api-yape (resuelta por payload.account.id). Devuelve la
    * empresa + el payload, o null si la cuenta no está mapeada. Lanza
