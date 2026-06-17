@@ -3114,6 +3114,22 @@ export class VentaService {
         include: { pagos: true },
       });
 
+      // Idempotente: si la venta YA está pagada completa, no agregamos otro pago
+      // (evita sobre-pago). Caso real: el webhook Yape ya cerró la venta pero la
+      // hoja siguió abierta por un FCM lento, y el cajero presionó "Marcar pagado
+      // manual". Devolvemos la venta tal cual → la hoja cierra como pagada. Va
+      // ANTES de la validación de caja: cerrar una venta ya pagada no debe exigir
+      // caja abierta. (PAGADA_PARCIAL sí sigue: ahí faltan pagos por registrar.)
+      if (venta && venta.estado === EstadoVenta.PAGADA_COMPLETA) {
+        this.logger.warn(
+          `Pago ignorado: la venta ${venta.codigo} ya está pagada completamente`,
+        );
+        return tx.venta.findFirst({
+          where: { id },
+          include: this.getInclude(),
+        });
+      }
+
       // Verificar caja según canal de la venta original (POS/COTIZACION requieren caja)
       if (usuarioId && venta && venta.canalVenta !== 'ONLINE') {
         const cajaActiva = await tx.caja.findFirst({
