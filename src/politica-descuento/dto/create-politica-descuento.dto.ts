@@ -26,6 +26,13 @@ export enum TipoDescuento {
 export enum TipoCalculoDescuento {
   PORCENTAJE = 'PORCENTAJE',
   MONTO_FIJO = 'MONTO_FIJO',
+  PRECIO_COSTO = 'PRECIO_COSTO',
+  PRECIO_MAYOR_DESDE_UNIDAD = 'PRECIO_MAYOR_DESDE_UNIDAD',
+}
+
+export enum EstrategiaMayor {
+  PRIMER_NIVEL = 'PRIMER_NIVEL',
+  MEJOR_NIVEL = 'MEJOR_NIVEL',
 }
 
 export class CreatePoliticaDescuentoDto {
@@ -150,4 +157,25 @@ export class CreatePoliticaDescuentoDto {
   @IsOptional()
   @Type(() => Number)
   maxFamiliaresPorTrabajador?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Markup % sobre el costo (solo tipoCalculo PRECIO_COSTO). 0 = costo puro.',
+    example: 5,
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @IsOptional()
+  @Type(() => Number)
+  markupSobreCosto?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Estrategia de escalón (solo tipoCalculo PRECIO_MAYOR_DESDE_UNIDAD).',
+    enum: EstrategiaMayor,
+    example: EstrategiaMayor.PRIMER_NIVEL,
+  })
+  @IsEnum(EstrategiaMayor)
+  @IsOptional()
+  estrategiaMayor?: EstrategiaMayor;
 }
