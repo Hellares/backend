@@ -402,7 +402,7 @@ export class PrecioNivelService {
     varianteId: string | null,
     sedeId: string,
     cantidad: number,
-    opts?: { ignorarNiveles?: boolean; vip?: VipPrecioContexto },
+    opts?: { ignorarNiveles?: boolean; vips?: VipPrecioContexto[] },
   ): Promise<{
     precioUnitario: number;
     nivelAplicado: string;
@@ -534,24 +534,27 @@ export class PrecioNivelService {
       vipPoliticaId?: string;
     }> = [{ valor: precioBase, etiqueta: 'Precio base' }];
 
-    // ===== Candidato de precio especial VIP =====
-    // El VIP entra como un candidato más del reduce (gana el menor): el cliente
+    // ===== Candidatos de precio especial VIP =====
+    // Cada política VIP aplicable entra como un candidato más del reduce (gana
+    // el menor): el cliente recibe el menor precio entre TODAS sus políticas y
     // nunca paga más que una oferta/liquidación pública más barata. No aplica a
     // componentes de combo (ignorarNiveles), que tienen su propio deal.
-    if (opts?.vip && !opts?.ignorarNiveles) {
-      const vipCandidato = await this._calcularCandidatoVip(
-        opts.vip,
-        productoId,
-        varianteId,
-        precioBase,
-        precioCosto,
-      );
-      if (vipCandidato != null) {
-        candidatos.push({
-          valor: vipCandidato,
-          etiqueta: opts.vip.etiqueta,
-          vipPoliticaId: opts.vip.politicaId,
-        });
+    if (opts?.vips?.length && !opts?.ignorarNiveles) {
+      for (const vip of opts.vips) {
+        const vipCandidato = await this._calcularCandidatoVip(
+          vip,
+          productoId,
+          varianteId,
+          precioBase,
+          precioCosto,
+        );
+        if (vipCandidato != null) {
+          candidatos.push({
+            valor: vipCandidato,
+            etiqueta: vip.etiqueta,
+            vipPoliticaId: vip.politicaId,
+          });
+        }
       }
     }
     // `ignorarNiveles`: los componentes de combo (origenComboId) NO usan

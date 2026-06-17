@@ -57,14 +57,16 @@ type DetalleConSnapshot = CreateVentaDetalleDto & {
 
 /**
  * Resolver de precio especial VIP de un cliente, construido una sola vez por
- * cobro. `resolver(productoId, varianteId)` devuelve la intención de precio de
- * la política aplicable (mayor prioridad), o null si ninguna aplica.
+ * cobro. `resolver(productoId, varianteId)` devuelve TODAS las intenciones de
+ * precio aplicables a la línea (el cliente puede estar en varias políticas);
+ * el cálculo de precio elige el menor entre ellas (gana el menor). Lista vacía
+ * si ninguna aplica.
  */
 type ResolverVip = {
   resolver: (
     productoId: string | null,
     varianteId: string | null,
-  ) => VipPrecioContexto | null;
+  ) => VipPrecioContexto[];
   politicasById: Map<
     string,
     { id: string; nombre: string; tipoCalculo: string; valorDescuento: unknown }
@@ -169,11 +171,12 @@ export class VentaService {
         continue;
       }
       // Precio especial VIP: solo para líneas de producto/variante reales
-      // (no combos ni componentes de combo, que tienen su propio deal).
-      const vipCtx =
+      // (no combos ni componentes de combo, que tienen su propio deal). Puede
+      // haber VARIAS políticas aplicables; el cálculo elige el menor precio.
+      const vipCtxs =
         vipResolver && !d.origenComboId && !d.comboId
           ? vipResolver.resolver(d.productoId ?? null, d.varianteId ?? null)
-          : null;
+          : [];
       try {
         const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
           productoIdParaNivel,
@@ -182,7 +185,7 @@ export class VentaService {
           d.cantidad,
           // Componentes de combo: sin niveles por mayor (el combo es su
           // propio deal). Evita divergencia 409 al editar cantidades.
-          { ignorarNiveles: !!d.origenComboId, vip: vipCtx ?? undefined },
+          { ignorarNiveles: !!d.origenComboId, vips: vipCtxs },
         );
         // Precio VIP FAVORABLE: si el backend aplicó un precio especial de
         // cliente que es ≤ al que envió el cliente, NO se rebota con 409. El
@@ -352,7 +355,7 @@ export class VentaService {
     const resolver = (
       productoId: string | null,
       varianteId: string | null,
-    ): VipPrecioContexto | null => {
+    ): VipPrecioContexto[] => {
       const categoria = varianteId
         ? categoriaPorVariante.get(varianteId) ?? null
         : productoId
@@ -375,40 +378,41 @@ export class VentaService {
         }
         return false;
       });
-      if (!aplicables.length) return null;
-
-      // Mayor prioridad gana (desempate: la primera encontrada).
-      const g = aplicables.reduce((best, p) =>
-        p.prioridad > best.prioridad ? p : best,
-      );
-
-      // Override de descuento por producto/categoría (modos PORCENTAJE/MONTO_FIJO).
-      let valor = Number(g.valorDescuento);
-      const ovProd = productoId
-        ? g.productosAplicables.find(
-            (x) => x.productoId === productoId && x.descuentoOverride != null,
-          )
-        : null;
-      const ovCat =
-        !ovProd && categoria
-          ? g.categoriasAplicables.find(
-              (x) => x.categoriaId === categoria && x.descuentoOverride != null,
+      // TODAS las aplicables (el cliente puede estar en varias políticas). El
+      // cálculo de precio elige el menor entre ellas (gana el menor).
+      return aplicables.map((g) => {
+        // Override de descuento por producto/categoría (modos PORCENTAJE/MONTO_FIJO).
+        let valor = Number(g.valorDescuento);
+        const ovProd = productoId
+          ? g.productosAplicables.find(
+              (x) => x.productoId === productoId && x.descuentoOverride != null,
             )
           : null;
-      if (ovProd?.descuentoOverride != null) valor = Number(ovProd.descuentoOverride);
-      else if (ovCat?.descuentoOverride != null) valor = Number(ovCat.descuentoOverride);
+        const ovCat =
+          !ovProd && categoria
+            ? g.categoriasAplicables.find(
+                (x) =>
+                  x.categoriaId === categoria && x.descuentoOverride != null,
+              )
+            : null;
+        if (ovProd?.descuentoOverride != null) {
+          valor = Number(ovProd.descuentoOverride);
+        } else if (ovCat?.descuentoOverride != null) {
+          valor = Number(ovCat.descuentoOverride);
+        }
 
-      return {
-        politicaId: g.id,
-        etiqueta: `VIP: ${g.nombre}`,
-        modo: g.tipoCalculo as VipPrecioContexto['modo'],
-        valor,
-        markupSobreCosto:
-          g.markupSobreCosto != null ? Number(g.markupSobreCosto) : 0,
-        estrategiaMayor: g.estrategiaMayor as 'PRIMER_NIVEL' | 'MEJOR_NIVEL',
-        descuentoMaximo:
-          g.descuentoMaximo != null ? Number(g.descuentoMaximo) : null,
-      };
+        return {
+          politicaId: g.id,
+          etiqueta: `VIP: ${g.nombre}`,
+          modo: g.tipoCalculo as VipPrecioContexto['modo'],
+          valor,
+          markupSobreCosto:
+            g.markupSobreCosto != null ? Number(g.markupSobreCosto) : 0,
+          estrategiaMayor: g.estrategiaMayor as 'PRIMER_NIVEL' | 'MEJOR_NIVEL',
+          descuentoMaximo:
+            g.descuentoMaximo != null ? Number(g.descuentoMaximo) : null,
+        };
+      });
     };
 
     const politicasById = new Map(

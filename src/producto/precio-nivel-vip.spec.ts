@@ -223,7 +223,7 @@ describe('PrecioNivelService.calcularPrecioSegunCantidad (reduce con VIP)', () =
 
   it('VIP costo gana cuando es el menor', async () => {
     const calc = makeCalc(stockObj({ precio: 47, costo: 27.5 }));
-    const r = await calc('prod-1', null, 'sede-1', 1, { vip: VIP_COSTO });
+    const r = await calc('prod-1', null, 'sede-1', 1, { vips: [VIP_COSTO] });
     expect(r.precioUnitario).toBe(27.5);
     expect(r.vipAplicado).toBe(true);
     expect(r.vipPoliticaId).toBe('pol-1');
@@ -232,14 +232,14 @@ describe('PrecioNivelService.calcularPrecioSegunCantidad (reduce con VIP)', () =
 
   it('liquidación gana sobre VIP costo (gana el menor)', async () => {
     const calc = makeCalc(stockObj({ precio: 47, costo: 27.5, liq: 5 }));
-    const r = await calc('prod-1', null, 'sede-1', 1, { vip: VIP_COSTO });
+    const r = await calc('prod-1', null, 'sede-1', 1, { vips: [VIP_COSTO] });
     expect(r.precioUnitario).toBe(5);
     expect(r.vipAplicado).toBe(false);
   });
 
   it('VIP costo gana sobre oferta más cara', async () => {
     const calc = makeCalc(stockObj({ precio: 47, costo: 27.5, oferta: 40 }));
-    const r = await calc('prod-1', null, 'sede-1', 1, { vip: VIP_COSTO });
+    const r = await calc('prod-1', null, 'sede-1', 1, { vips: [VIP_COSTO] });
     expect(r.precioUnitario).toBe(27.5);
     expect(r.vipAplicado).toBe(true);
   });
@@ -247,10 +247,36 @@ describe('PrecioNivelService.calcularPrecioSegunCantidad (reduce con VIP)', () =
   it('combo (ignorarNiveles) NO aplica VIP', async () => {
     const calc = makeCalc(stockObj({ precio: 47, costo: 27.5 }));
     const r = await calc('prod-1', null, 'sede-1', 1, {
-      vip: VIP_COSTO,
+      vips: [VIP_COSTO],
       ignorarNiveles: true,
     });
     expect(r.precioUnitario).toBe(47);
     expect(r.vipAplicado).toBe(false);
+  });
+
+  it('DOS políticas (costo + mayor) → gana el menor', async () => {
+    // Producto base 47, costo 27.5; nivel por mayor desde 3 uds = 39.9.
+    const niveles = [
+      {
+        cantidadMinima: 3,
+        tipoPrecio: TipoPrecioNivel.PRECIO_FIJO,
+        precio: D(39.9),
+        porcentajeDesc: null,
+        isActive: true,
+      },
+    ];
+    const calc = makeCalc(stockObj({ precio: 47, costo: 27.5 }), niveles);
+    const vipMayor = {
+      politicaId: 'pol-2',
+      etiqueta: 'VIP: Mayor',
+      modo: 'PRECIO_MAYOR_DESDE_UNIDAD',
+      estrategiaMayor: 'PRIMER_NIVEL',
+    };
+    const r = await calc('prod-1', null, 'sede-1', 1, {
+      vips: [VIP_COSTO, vipMayor], // costo 27.5 vs mayor 39.9
+    });
+    expect(r.precioUnitario).toBe(27.5); // gana el costo (más barato)
+    expect(r.vipAplicado).toBe(true);
+    expect(r.vipPoliticaId).toBe('pol-1');
   });
 });
