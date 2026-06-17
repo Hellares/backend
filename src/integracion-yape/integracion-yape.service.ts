@@ -75,8 +75,9 @@ export class IntegracionYapeService {
       throw new UnauthorizedException('Payload inválido');
     }
     const accountId: string | undefined = payload?.account?.id;
+    // accountId es @unique: la resolución cuenta→empresa es determinística.
     const cfg = accountId
-      ? await this.prisma.integracionYape.findFirst({ where: { accountId } })
+      ? await this.prisma.integracionYape.findUnique({ where: { accountId } })
       : null;
     if (!cfg) {
       this.logger.warn(`Webhook api-yape: cuenta no mapeada (${accountId})`);

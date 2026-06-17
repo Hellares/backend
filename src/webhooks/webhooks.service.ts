@@ -119,6 +119,14 @@ export class WebhooksService {
     if (venta.estado === EstadoVenta.PAGADA_COMPLETA) {
       return { ok: true, accion: 'ya-pagada' };
     }
+    // Webhook tardío sobre una venta que el TTL ya anuló (cliente no pagó a
+    // tiempo, se liberó el stock). No reabrir ni "cobrar" una venta anulada.
+    if (venta.estado === EstadoVenta.ANULADA) {
+      this.logger.warn(
+        `Webhook Yape para venta ${ventaId} ya ANULADA (expirada por TTL) — ignorado`,
+      );
+      return { ok: true, accion: 'venta-anulada' };
+    }
 
     const totalPagado = venta.pagos.reduce(
       (s: number, p: { monto: any }) => s + Number(p.monto),

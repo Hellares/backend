@@ -3,6 +3,7 @@ import { VentaController } from './venta.controller';
 import { VentaService } from './venta.service';
 import { VentaAnalyticsController } from './analytics/venta-analytics.controller';
 import { VentaAnalyticsService } from './analytics/venta-analytics.service';
+import { VentaYapeTasksService } from './venta-yape-tasks.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LoggerModule } from '../common/logger/logger.module';
 import { AuthModule } from '../auth/auth.module';
@@ -26,7 +27,7 @@ import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.modu
     IntegracionYapeModule,
   ],
   controllers: [VentaAnalyticsController, VentaController],
-  providers: [VentaService, VentaAnalyticsService],
+  providers: [VentaService, VentaAnalyticsService, VentaYapeTasksService],
   exports: [VentaService],
 })
 export class VentaModule {}

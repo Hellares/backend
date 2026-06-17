@@ -5,7 +5,7 @@ model IntegracionYape {
   empresaId     String   @unique
   apiBaseUrl    String // https://yape-beta.syncronize.net.pe (beta) | https://yape.syncronize.net.pe (prod)
   accountApiKey String // acc_... : key de cuenta en api-yape (para crear cobros)
-  accountId     String // id de la cuenta en api-yape (mapea el webhook entrante a la empresa)
+  accountId     String   @unique // id de la cuenta en api-yape (mapea el webhook entrante a la empresa, 1:1)
   webhookSecret String // whsec_... : verifica la firma HMAC del webhook entrante
   habilitado    Boolean  @default(true)
   creadoEn      DateTime @default(now())
@@ -13,6 +13,5 @@ model IntegracionYape {
 
   empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
-  @@index([accountId])
   @@map("integracion_yape")
 }

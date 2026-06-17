@@ -3322,7 +3322,13 @@ export class VentaService {
   /**
    * Anular venta → reversar stock
    */
-  async anular(id: string, empresaId: string, usuarioId: string, dto?: { autorizadoPorId: string; motivo: string }) {
+  async anular(
+    id: string,
+    empresaId: string,
+    usuarioId: string,
+    dto?: { autorizadoPorId: string; motivo: string },
+    opts?: { soloSiPendienteSinPagos?: boolean },
+  ) {
     this.logger.info('Anulando venta', { id, empresaId });
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -3349,6 +3355,23 @@ export class VentaService {
         throw new BadRequestException(
           'No se puede anular una venta en BORRADOR, eliminela en su lugar',
         );
+      }
+
+      // Anulación automática por TTL (cron Yape): solo proceder si la venta
+      // SIGUE pendiente sin pagos. Si entre la selección del cron y esta
+      // transacción llegó el webhook y la pagó, abortamos para no revertir el
+      // stock de una venta ya cobrada. La verificación es dentro de la misma
+      // transacción → ve el commit del webhook (read-committed).
+      if (opts?.soloSiPendienteSinPagos) {
+        const pagado = venta.pagos.reduce(
+          (s, p) => s + Number(p.monto),
+          0,
+        );
+        if (venta.estado !== EstadoVenta.CONFIRMADA || pagado > 0) {
+          throw new BadRequestException(
+            'La venta dejó de estar pendiente sin pagos — no se anula',
+          );
+        }
       }
 
       // Reversar stock para cada detalle con producto/variante
