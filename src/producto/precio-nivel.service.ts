@@ -609,7 +609,9 @@ export class PrecioNivelService {
   ): Promise<number | null> {
     switch (vip.modo) {
       case 'PRECIO_COSTO': {
-        if (precioCosto == null) return null;
+        // Costo no configurado (null) o <= 0 → no aplica VIP (evita vender a 0).
+        // Debe coincidir con Flutter (_calcularCandidatoVip) o saltaría el 409.
+        if (precioCosto == null || precioCosto <= 0) return null;
         return round4(precioCosto * (1 + (vip.markupSobreCosto ?? 0) / 100));
       }
       case 'PRECIO_MAYOR_DESDE_UNIDAD': {
