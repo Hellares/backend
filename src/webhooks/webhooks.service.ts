@@ -140,6 +140,10 @@ export class WebhooksService {
         ? MetodoPagoVenta.PLIN
         : MetodoPagoVenta.YAPE;
 
+    // Pasamos el cajero que CREÓ la venta como usuarioId para que el INGRESO
+    // Yape entre a SU caja (la misma donde fue el efectivo en un mixto), con
+    // skipCajaValidacion para no fallar si su caja ya cerró (registro best-effort).
+    // Antes iba `undefined` → saltaba el registro y el pago Yape no entraba a caja.
     await this.ventaService.procesarPago(
       ventaId,
       empresaId,
@@ -149,7 +153,8 @@ export class WebhooksService {
         referencia:
           payload?.payment?.operationCode || payload?.payment?.id || undefined,
       } as any,
-      undefined, // sin usuarioId → es un webhook: salta la validación de caja abierta
+      venta.cajeroId ?? undefined,
+      { skipCajaValidacion: true },
     );
 
     this.realtime.notifyVentaPagada({ empresaId, ventaId });

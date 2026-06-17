@@ -55,12 +55,13 @@ describe('WebhooksService.procesarPagoYape', () => {
     );
   });
 
-  it('happy path 100% Yape: cobra el total, mapea YAPE, notifica y devuelve pagada', async () => {
+  it('happy path 100% Yape: cobra el total, mapea YAPE, registra en caja del cajero, notifica', async () => {
     conPayload(payloadPago());
     prisma.venta.findFirst.mockResolvedValue({
       id: 'venta-1',
       estado: EstadoVenta.CONFIRMADA,
       total: 50,
+      cajeroId: 'caj-1',
       pagos: [],
     });
 
@@ -75,7 +76,8 @@ describe('WebhooksService.procesarPagoYape', () => {
         monto: 50,
         referencia: 'OP-123',
       }),
-      undefined, // sin usuarioId → webhook salta validación de caja
+      'caj-1', // cajero que creó la venta → su caja recibe el INGRESO Yape
+      { skipCajaValidacion: true }, // pero sin exigir caja abierta
     );
     expect(realtime.notifyVentaPagada).toHaveBeenCalledWith({
       empresaId: 'emp-1',
@@ -89,6 +91,7 @@ describe('WebhooksService.procesarPagoYape', () => {
       id: 'venta-1',
       estado: EstadoVenta.CONFIRMADA,
       total: 50,
+      cajeroId: 'caj-1',
       pagos: [{ monto: 30 }], // efectivo ya cobrado al crear la venta
     });
 
@@ -98,7 +101,8 @@ describe('WebhooksService.procesarPagoYape', () => {
       'venta-1',
       'emp-1',
       expect.objectContaining({ monto: 20 }), // 50 − 30 = porción Yape
-      undefined,
+      'caj-1',
+      { skipCajaValidacion: true },
     );
   });
 
@@ -108,6 +112,7 @@ describe('WebhooksService.procesarPagoYape', () => {
       id: 'venta-1',
       estado: EstadoVenta.CONFIRMADA,
       total: 10,
+      cajeroId: 'caj-1',
       pagos: [],
     });
 
@@ -117,7 +122,8 @@ describe('WebhooksService.procesarPagoYape', () => {
       'venta-1',
       'emp-1',
       expect.objectContaining({ metodoPago: MetodoPagoVenta.PLIN }),
-      undefined,
+      'caj-1',
+      { skipCajaValidacion: true },
     );
   });
 

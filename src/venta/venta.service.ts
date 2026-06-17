@@ -3105,6 +3105,7 @@ export class VentaService {
     empresaId: string,
     dto: ProcesarPagoDto,
     usuarioId?: string,
+    opts?: { skipCajaValidacion?: boolean },
   ) {
     this.logger.info('Procesando pago', { id, empresaId });
 
@@ -3130,8 +3131,17 @@ export class VentaService {
         });
       }
 
-      // Verificar caja según canal de la venta original (POS/COTIZACION requieren caja)
-      if (usuarioId && venta && venta.canalVenta !== 'ONLINE') {
+      // Verificar caja según canal de la venta original (POS/COTIZACION requieren caja).
+      // skipCajaValidacion = true en el webhook Yape: ahí `usuarioId` es el cajero
+      // que creó la venta (para registrar el INGRESO en SU caja), pero NO debe
+      // fallar si su caja ya cerró — el registro es best-effort vía
+      // registrarMovimientoSiHayCaja (no lanza si no hay caja abierta).
+      if (
+        usuarioId &&
+        !opts?.skipCajaValidacion &&
+        venta &&
+        venta.canalVenta !== 'ONLINE'
+      ) {
         const cajaActiva = await tx.caja.findFirst({
           where: { empresaId, usuarioId, estado: 'ABIERTA' },
         });
@@ -3369,8 +3379,11 @@ export class VentaService {
     // del mismo monto saldría con un céntimo menos hasta que expire el TTL).
     // El webhook automático pasa usuarioId=undefined → no entra aquí (y allá el
     // cobro ya quedó `matched`). Fire-and-forget: nunca bloquea ni rompe el pago.
+    // Solo el path MANUAL libera el cobro (skipCajaValidacion=false). En el
+    // webhook el cobro ya quedó `matched` en api-yape → cancelar sería no-op.
     if (
       usuarioId &&
+      !opts?.skipCajaValidacion &&
       (dto.metodoPago === 'YAPE' || dto.metodoPago === 'PLIN')
     ) {
       this.integracionYape
