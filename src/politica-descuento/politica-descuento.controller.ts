@@ -300,6 +300,42 @@ export class PoliticaDescuentoController {
     );
   }
 
+  @Delete(':id/productos/:productoId')
+  @RequiresPermission(Permission.MANAGE_DISCOUNTS)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Quitar un producto de una política de descuento' })
+  @ApiResponse({ status: 204, description: 'Producto removido' })
+  @ApiResponse({ status: 404, description: 'Política no encontrada' })
+  async removerProducto(
+    @Param('id') politicaId: string,
+    @Param('productoId') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    await this.politicaDescuentoService.removerProducto(
+      politicaId,
+      productoId,
+      empresaId,
+    );
+  }
+
+  @Delete(':id/categorias/:categoriaId')
+  @RequiresPermission(Permission.MANAGE_DISCOUNTS)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Quitar una categoría de una política de descuento' })
+  @ApiResponse({ status: 204, description: 'Categoría removida' })
+  @ApiResponse({ status: 404, description: 'Política no encontrada' })
+  async removerCategoria(
+    @Param('id') politicaId: string,
+    @Param('categoriaId') categoriaId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    await this.politicaDescuentoService.removerCategoria(
+      politicaId,
+      categoriaId,
+      empresaId,
+    );
+  }
+
   // =========================================
   // ASIGNACIÓN DE CLIENTES VIP (precio especial)
   // =========================================

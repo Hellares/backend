@@ -606,6 +606,29 @@ export class PoliticaDescuentoService {
     return asignaciones;
   }
 
+  async removerProducto(
+    politicaId: string,
+    productoId: string,
+    empresaId: string,
+  ) {
+    // Valida que la política pertenezca al tenant (404 si no).
+    await this.obtenerPorId(politicaId, empresaId);
+    await this.prisma.politicaDescuentoProducto.deleteMany({
+      where: { politicaId, productoId },
+    });
+  }
+
+  async removerCategoria(
+    politicaId: string,
+    categoriaId: string,
+    empresaId: string,
+  ) {
+    await this.obtenerPorId(politicaId, empresaId);
+    await this.prisma.politicaDescuentoCategoria.deleteMany({
+      where: { politicaId, categoriaId },
+    });
+  }
+
   // =========================================
   // ASIGNACIÓN DE CLIENTES VIP (precio especial)
   // =========================================
