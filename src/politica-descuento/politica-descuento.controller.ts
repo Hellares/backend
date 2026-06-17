@@ -29,7 +29,6 @@ import {
   AsignarProductosDto,
   AsignarCategoriasDto,
   QueryPoliticaDescuentoDto,
-  CalcularDescuentoDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
@@ -422,27 +421,6 @@ export class PoliticaDescuentoController {
     return this.politicaDescuentoService.obtenerPoliticasVigentesCliente(
       empresaId,
       { clienteEmpresaId },
-    );
-  }
-
-  // =========================================
-  // CÁLCULO DE DESCUENTOS
-  // =========================================
-
-  @Post('calcular-descuento')
-  @RequiresPermission(Permission.VIEW_DISCOUNTS)
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Calcular descuento aplicable para un usuario y producto',
-  })
-  @ApiResponse({ status: 200, description: 'Descuento calculado exitosamente' })
-  async calcularDescuento(
-    @Body() calcularDto: CalcularDescuentoDto,
-    @Headers('x-tenant-id') empresaId: string,
-  ) {
-    return this.politicaDescuentoService.calcularDescuento(
-      calcularDto,
-      empresaId,
     );
   }
 

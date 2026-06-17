@@ -6,4 +6,3 @@ export * from './agregar-familiar.dto';
 export * from './asignar-productos.dto';
 export * from './asignar-categorias.dto';
 export * from './query-politica-descuento.dto';
-export * from './calcular-descuento.dto';
