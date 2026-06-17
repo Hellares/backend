@@ -104,7 +104,13 @@ export class VentaService {
   async cobroYape(empresaId: string, ventaId: string) {
     const venta = await this.prisma.venta.findFirst({
       where: { id: ventaId, empresaId },
-      select: { id: true, total: true, sedeId: true, estado: true },
+      select: {
+        id: true,
+        total: true,
+        sedeId: true,
+        estado: true,
+        pagos: { select: { monto: true } },
+      },
     });
     if (!venta) throw new NotFoundException('Venta no encontrada');
 
@@ -120,10 +126,20 @@ export class VentaService {
       qrPlinUrl: cfgQr?.qrPlinUrl ?? null,
     };
 
+    // Cobramos el PENDIENTE (total − pagos ya registrados), no el total. Para un
+    // pago 100% Yape la venta nace sin pagos → pendiente = total. Para un pago
+    // MIXTO (ej. efectivo + Yape) el efectivo ya se registró al crear la venta
+    // → pendiente = solo la porción Yape, que es lo que api-yape debe validar.
+    const pagado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
+    const pendiente = round2(Number(venta.total) - pagado);
+    if (pendiente <= 0) {
+      return { habilitado: false as const, ...qr };
+    }
+
     const cobro = await this.integracionYape.crearCobro({
       empresaId,
       ventaId,
-      monto: Number(venta.total),
+      monto: pendiente,
     });
     if (!cobro) {
       return { habilitado: false as const, ...qr };
