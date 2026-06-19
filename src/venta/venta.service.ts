@@ -3829,7 +3829,7 @@ export class VentaService {
     ventaId: string,
     empresaId: string,
     usuarioId: string,
-  ): Promise<{ anulada: boolean; yaPagada: boolean }> {
+  ): Promise<{ anulada: boolean; yaPagada: boolean; devuelto?: number }> {
     // Liberar el monto único reservado en api-yape (best-effort).
     await this.integracionYape
       .cancelarCobro({ empresaId, ventaId })
@@ -3841,14 +3841,25 @@ export class VentaService {
     });
     if (!venta) return { anulada: false, yaPagada: false };
 
-    // Carrera con el webhook: si el pago llegó justo antes, NO tocar la venta.
     const pagado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
-    if (
-      venta.estado === EstadoVenta.PAGADA_COMPLETA ||
-      venta.estado === EstadoVenta.PAGADA_PARCIAL ||
-      pagado > 0
-    ) {
+
+    // Venta YA COMPLETA (carrera: el webhook la pagó justo antes de cancelar).
+    // No tocar — la hoja debe cerrar como pagada.
+    if (venta.estado === EstadoVenta.PAGADA_COMPLETA) {
       return { anulada: false, yaPagada: true };
+    }
+
+    // PAGO PARCIAL (entró plata pero no cubre el total — ej. el cliente agotó su
+    // límite Yape diario a mitad de los tramos y desiste): el cajero cancela →
+    // se ANULA la venta + se reversa caja (la plata recibida sale como EGRESO).
+    // NO se emite comprobante (la venta nunca se concretó). El cajero devuelve
+    // el dinero al cliente; `devuelto` = lo que hay que reintegrar.
+    if (pagado > 0) {
+      await this.anular(ventaId, empresaId, usuarioId, {
+        autorizadoPorId: usuarioId,
+        motivo: 'Cobro Yape/Plin cancelado — pago parcial devuelto al cliente',
+      });
+      return { anulada: true, yaPagada: false, devuelto: pagado };
     }
 
     // Venta DIFERIDA pendiente sin pagos → BORRAR + devolver stock (no deja

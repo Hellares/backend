@@ -173,6 +173,26 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
       expect(tx.venta.delete).not.toHaveBeenCalled();
     });
 
+    it('PAGO PARCIAL: anula la venta + reversa caja (devolución) y devuelve `devuelto`', async () => {
+      prisma.venta.findFirst.mockResolvedValue({
+        estado: EstadoVenta.PAGADA_PARCIAL,
+        cobroDiferido: true,
+        pagos: [{ monto: 500 }, { monto: 500 }], // 1000 recibido (no cubre el total)
+        sedeId: 'sede-1',
+        detalles: [],
+      });
+      const anularSpy = jest.spyOn(service, 'anular').mockResolvedValue({} as any);
+
+      const r = await service.cancelarCobroYapePendiente('venta-1', 'emp-1', 'caj-1');
+
+      expect(anularSpy).toHaveBeenCalledWith(
+        'venta-1', 'emp-1', 'caj-1',
+        expect.objectContaining({ autorizadoPorId: 'caj-1' }),
+      );
+      expect(tx.venta.delete).not.toHaveBeenCalled();
+      expect(r).toEqual({ anulada: true, yaPagada: false, devuelto: 1000 });
+    });
+
     it('venta NO diferida (legacy): no borra, usa el camino anular', async () => {
       prisma.venta.findFirst.mockResolvedValue({
         estado: EstadoVenta.CONFIRMADA,
