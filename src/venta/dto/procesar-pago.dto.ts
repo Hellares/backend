@@ -26,6 +26,14 @@ export class ProcesarPagoDto {
   @IsString()
   referencia?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Banco / entidad financiera. Requerido por bancarización (Ley 28194) en TARJETA/TRANSFERENCIA cuando la venta supera el umbral.',
+  })
+  @IsOptional()
+  @IsString()
+  banco?: string;
+
   @ApiPropertyOptional({ description: 'ID de cuota especifica a pagar' })
   @IsOptional()
   @IsString()

@@ -3488,6 +3488,7 @@ export class VentaService {
           metodoPago: dto.metodoPago,
           monto: dto.monto,
           referencia: dto.referencia,
+          banco: (dto as any).banco ?? null,
         },
       });
 
