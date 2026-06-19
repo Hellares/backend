@@ -8,6 +8,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CatalogosModule } from '../catalogos/catalogos.module';
 import { ConfiguracionDocumentosModule } from '../configuracion-documentos/configuracion-documentos.module';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
+import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteristica-empresa.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { PlanLimitsService } from '../common/services/plan-limits.service';
     AuthModule,
     CatalogosModule,
     ConfiguracionDocumentosModule,
+    CaracteristicaEmpresaModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

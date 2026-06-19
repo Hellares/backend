@@ -14,6 +14,8 @@ import {
 } from '../producto/precio-nivel.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
+import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
+import { CaracteristicaPremium } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { CacheService } from '../redis/cache.service';
@@ -89,6 +91,7 @@ export class VentaService {
     private readonly realtimeInvalidation: RealtimeInvalidationService,
     private readonly integracionYape: IntegracionYapeService,
     loggerService: AppLoggerService,
+    private readonly caracteristicaEmpresa: CaracteristicaEmpresaService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(VentaService.name);
@@ -113,6 +116,17 @@ export class VentaService {
       },
     });
     if (!venta) throw new NotFoundException('Venta no encontrada');
+
+    // GATE PREMIUM: Yape/QR es una característica premium. Si la empresa no la
+    // tiene habilitada (no activada por el super admin / trial vencido), NO se
+    // ofrece ni el cobro api-yape ni el QR → el app cae a pago normal.
+    const yapeHabilitado = await this.caracteristicaEmpresa.estaHabilitada(
+      empresaId,
+      CaracteristicaPremium.YAPE_QR,
+    );
+    if (!yapeHabilitado) {
+      return { habilitado: false as const, qrYapeUrl: null, qrPlinUrl: null };
+    }
 
     // QR de cobro (imagen estática del comercio) para mostrar en la hoja. Va en
     // ambos paths: incluso si api-yape no genera cobro (modo manual), el cliente

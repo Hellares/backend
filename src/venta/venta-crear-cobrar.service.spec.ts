@@ -122,7 +122,7 @@ describe('VentaService.crearYCobrar', () => {
     service = new VentaService(
       prisma, null as any, configuracionCodigos, cajaService, null as any,
       facturacionService, ordenServicioService, null as any, realtimeInvalidation,
-      null as any, logger as any,
+      null as any, logger as any, null as any,
     );
 
     // Métodos internos que tocan BD: stub para aislar la orquestación.

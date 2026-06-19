@@ -14,12 +14,13 @@ describe('VentaService.cobroYape (pendiente / mixto)', () => {
     VentaService.prototype as any
   ).cobroYape;
 
-  const armarThis = (venta: any, cobro: any, qr: any = { qrYapeUrl: 'u-yape', qrPlinUrl: null }) => ({
+  const armarThis = (venta: any, cobro: any, qr: any = { qrYapeUrl: 'u-yape', qrPlinUrl: null }, yapeHabilitado = true) => ({
     prisma: {
       venta: { findFirst: jest.fn().mockResolvedValue(venta) },
       configuracionEmpresa: { findUnique: jest.fn().mockResolvedValue(qr) },
     },
     integracionYape: { crearCobro: jest.fn().mockResolvedValue(cobro) },
+    caracteristicaEmpresa: { estaHabilitada: jest.fn().mockResolvedValue(yapeHabilitado) },
   });
 
   it('100% Yape (sin pagos): pide validar el TOTAL y devuelve habilitado + QR', async () => {
@@ -73,5 +74,19 @@ describe('VentaService.cobroYape (pendiente / mixto)', () => {
 
     expect(ctx.integracionYape.crearCobro).toHaveBeenCalled();
     expect(r).toMatchObject({ habilitado: false, qrYapeUrl: 'u-yape', qrPlinUrl: null });
+  });
+
+  it('GATE PREMIUM: empresa SIN YAPE_QR habilitado → habilitado:false, SIN QR, no llama api-yape', async () => {
+    const ctx = armarThis(
+      { id: 'v1', total: 50, sedeId: 's1', estado: 'CONFIRMADA', pagos: [] },
+      { payAmount: 50, chargeId: 'c1' },
+      { qrYapeUrl: 'u-yape', qrPlinUrl: 'u-plin' },
+      false, // YAPE_QR NO habilitado
+    );
+    const r = await cobroYape.call(ctx, 'emp-1', 'v1');
+
+    expect(ctx.caracteristicaEmpresa.estaHabilitada).toHaveBeenCalledWith('emp-1', 'YAPE_QR');
+    expect(ctx.integracionYape.crearCobro).not.toHaveBeenCalled();
+    expect(r).toEqual({ habilitado: false, qrYapeUrl: null, qrPlinUrl: null });
   });
 });

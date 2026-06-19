@@ -18,6 +18,7 @@ import { AdminEmpresaFiltersDto } from './dto/admin-empresa-filters.dto';
 import { AdminEmpresaUpdateDto } from './dto/admin-empresa-update.dto';
 import { AdminEmpresaPlanDto } from './dto/admin-empresa-plan.dto';
 import { AdminEmpresaSuscripcionDto } from './dto/admin-empresa-suscripcion.dto';
+import { AdminCaracteristicaDto } from './dto/admin-caracteristica.dto';
 import { AdminUsuarioFiltersDto } from './dto/admin-usuario-filters.dto';
 import { AdminUsuarioUpdateDto } from './dto/admin-usuario-update.dto';
 import { AdminPlanUpdateDto } from './dto/admin-plan-update.dto';
@@ -84,6 +85,22 @@ export class AdminController {
     @Body() dto: AdminEmpresaSuscripcionDto,
   ) {
     return this.adminService.updateEmpresaSuscripcion(id, dto);
+  }
+
+  // ===== Características PREMIUM (gating) =====
+
+  @Get('empresas/:id/caracteristicas')
+  async listarCaracteristicas(@Param('id') id: string) {
+    return this.adminService.listarCaracteristicasEmpresa(id);
+  }
+
+  @Patch('empresas/:id/caracteristicas')
+  async gestionarCaracteristica(
+    @Param('id') id: string,
+    @Body() dto: AdminCaracteristicaDto,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.adminService.gestionarCaracteristicaEmpresa(id, dto, adminId);
   }
 
   // ==========================================

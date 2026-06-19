@@ -17,6 +17,8 @@ import { RedisService } from '../redis/redis.service';
 import { ConfigService } from '@nestjs/config';
 import { EstadoSuscripcion, PeriodoSuscripcion, EstadoPagoSuscripcion, TipoNotificacion } from '@prisma/client';
 import { AuthSessionService } from '../auth/auth.session.service';
+import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
+import { AdminCaracteristicaDto } from './dto/admin-caracteristica.dto';
 
 @Injectable()
 export class AdminService {
@@ -28,8 +30,55 @@ export class AdminService {
     private redisService: RedisService,
     private configService: ConfigService,
     private authSessionService: AuthSessionService,
+    private caracteristicaEmpresa: CaracteristicaEmpresaService,
   ) {
     this.logger.setContext(AdminService.name);
+  }
+
+  // ===========================================================================
+  // Características PREMIUM por empresa (gating) — solo super admin
+  // ===========================================================================
+
+  /** Lista las características premium configuradas de una empresa. */
+  async listarCaracteristicasEmpresa(empresaId: string) {
+    return this.caracteristicaEmpresa.listarPorEmpresa(empresaId);
+  }
+
+  /**
+   * Activa/desactiva una característica premium de la empresa. Invalida el cache
+   * del contexto de TODOS los usuarios de la empresa para que el cambio (mostrar/
+   * ocultar la opción) se refleje al instante en sus apps.
+   */
+  async gestionarCaracteristicaEmpresa(
+    empresaId: string,
+    dto: AdminCaracteristicaDto,
+    adminUserId: string,
+  ) {
+    // undefined = no cambiar la vigencia; null = permanente; string = fecha.
+    const vigenteHasta =
+      dto.vigenteHasta === undefined
+        ? undefined
+        : dto.vigenteHasta
+          ? new Date(dto.vigenteHasta)
+          : null;
+
+    const row = await this.caracteristicaEmpresa.upsert(
+      empresaId,
+      dto.caracteristica,
+      {
+        habilitado: dto.habilitado,
+        vigenteHasta,
+        origen: dto.origen,
+        notaAdmin: dto.notaAdmin,
+        otorgadoPorId: adminUserId,
+      },
+    );
+
+    await this.cache.invalidatePattern(`context:empresa:${empresaId}:user:*`);
+    this.logger.info(
+      `[ADMIN] Característica ${dto.caracteristica}=${dto.habilitado} para empresa ${empresaId} por ${adminUserId}`,
+    );
+    return row;
   }
 
   // ==========================================

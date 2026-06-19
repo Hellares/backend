@@ -85,7 +85,7 @@ describe('VentaService.procesarPago — comprobante diferido (Yape)', () => {
     service = new VentaService(
       prisma, null as any, null as any, cajaService, null as any,
       facturacionService, ordenServicioService, null as any, null as any,
-      integracionYape, logger as any,
+      integracionYape, logger as any, null as any,
     );
 
     // _emitirComprobante ya está testeado aparte: aquí lo espiamos.

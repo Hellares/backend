@@ -246,4 +246,12 @@ export class EmpresaContextResponseDto {
     required: false,
   })
   planLimits?: any;
+
+  @ApiProperty({
+    description:
+      'Características PREMIUM vigentes por empresa (gating). Ej: { YAPE_QR: true }. El front muestra/oculta según esto.',
+    required: false,
+    example: { YAPE_QR: true },
+  })
+  caracteristicas?: Record<string, boolean>;
 }

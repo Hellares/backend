@@ -10,6 +10,7 @@ import { CacheService } from '../redis/cache.service';
 import { PermissionsService } from '../auth/services/permissions.service';
 import { ConfiguracionDocumentosService } from '../configuracion-documentos/configuracion-documentos.service';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
+import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
 import {
   EmpresaContextResponseDto,
   EmpresaPermissionsDto,
@@ -93,6 +94,7 @@ export class EmpresaService {
     private readonly permissionsService: PermissionsService,
     private readonly configuracionDocumentosService: ConfiguracionDocumentosService,
     private readonly planLimitsService: PlanLimitsService,
+    private readonly caracteristicaEmpresa: CaracteristicaEmpresaService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(EmpresaService.name);
@@ -978,9 +980,11 @@ export class EmpresaService {
     });
 
     // 4. Calcular estadísticas y límites del plan
-    const [statistics, planLimits] = await Promise.all([
+    const [statistics, planLimits, caracteristicas] = await Promise.all([
       this.calculateStatistics(empresaId),
       this.planLimitsService.getPlanLimitsInfo(empresaId),
+      // Features premium vigentes (gating) → el front muestra/oculta opciones.
+      this.caracteristicaEmpresa.mapaHabilitadas(empresaId),
     ]);
 
     // 5. Calcular permisos basados en roles + overrides individuales
@@ -1124,6 +1128,7 @@ export class EmpresaService {
       permissions,
       statistics,
       planLimits,
+      caracteristicas,
     };
   }
 

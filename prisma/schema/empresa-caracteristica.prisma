@@ -1,0 +1,36 @@
+/// Características PREMIUM habilitadas por empresa (feature flags con vigencia).
+/// Genérico y escalable: hoy YAPE_QR, mañana otras. El super admin las activa
+/// por empresa (con o sin vencimiento). Gate runtime:
+///   habilitada = habilitado && (vigenteHasta == null || vigenteHasta > now)
+/// Sin row para una (empresa, caracteristica) = NO habilitada.
+model EmpresaCaracteristica {
+  id             String                @id @default(cuid())
+  empresaId      String
+  caracteristica CaracteristicaPremium
+  habilitado     Boolean               @default(true)
+  /// null = permanente (sin vencimiento); fecha = expira (trial/suscripción)
+  vigenteHasta   DateTime?
+  origen         OrigenCaracteristica  @default(ADMIN)
+  notaAdmin      String?
+  /// Usuario (super admin) que la otorgó/modificó. String sin FK (auditoría).
+  otorgadoPorId  String?
+  creadoEn       DateTime              @default(now())
+  actualizadoEn  DateTime              @updatedAt
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, caracteristica])
+  @@index([empresaId])
+  @@map("empresa_caracteristica")
+}
+
+enum CaracteristicaPremium {
+  YAPE_QR // Cobro Yape/Plin validado por api-yape + QR en la hoja de cobro
+}
+
+enum OrigenCaracteristica {
+  PLAN // Incluida en el plan de suscripción
+  TRIAL // Periodo de prueba (con vencimiento)
+  ADMIN // Activada manualmente por el super admin
+  CORTESIA // Cortesía / acuerdo comercial
+}

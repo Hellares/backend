@@ -1,6 +1,7 @@
 model Empresa {
   id          String       @id @default(cuid())
   integracionYape IntegracionYape? // config de validación de pagos Yape/Plin (api-yape)
+  caracteristicas EmpresaCaracteristica[] // features premium habilitadas (gating)
   nombre      String
   ruc         String?      @unique
   subdominio  String?      @unique

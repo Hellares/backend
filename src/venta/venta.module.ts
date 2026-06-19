@@ -13,6 +13,7 @@ import { ProductoModule } from '../producto/producto.module';
 import { SunatModule } from '../sunat/sunat.module';
 import { ServicioModule } from '../servicio/servicio.module';
 import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
+import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteristica-empresa.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.modu
     SunatModule,
     ServicioModule,
     IntegracionYapeModule,
+    CaracteristicaEmpresaModule,
   ],
   controllers: [VentaAnalyticsController, VentaController],
   providers: [VentaService, VentaAnalyticsService, VentaYapeTasksService],
