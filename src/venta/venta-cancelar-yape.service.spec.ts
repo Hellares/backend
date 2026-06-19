@@ -102,6 +102,34 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
       expect(r.eliminada).toBe(false);
       expect(tx.venta.delete).not.toHaveBeenCalled();
     });
+
+    it('múltiples detalles: devuelve stock de producto y variante, salta la línea de servicio', async () => {
+      prisma.venta.findFirst.mockResolvedValue(
+        ventaDiferida({
+          detalles: [
+            { productoId: 'prod-1', varianteId: null, cantidad: 2 },
+            { productoId: null, varianteId: 'var-1', cantidad: 3 },
+            { productoId: null, varianteId: null, cantidad: 1 }, // servicio: no toca stock
+          ],
+        }),
+      );
+      tx.productoStock.findFirst
+        .mockResolvedValueOnce({ id: 'ps-prod' })
+        .mockResolvedValueOnce({ id: 'ps-var' });
+
+      const r = await service.eliminarVentaYapeDiferidaPendiente('venta-1', 'emp-1');
+
+      expect(r.eliminada).toBe(true);
+      // Solo 2 updates de stock (la línea de servicio se salta)
+      expect(tx.productoStock.update).toHaveBeenCalledTimes(2);
+      expect(tx.productoStock.update).toHaveBeenCalledWith({
+        where: { id: 'ps-prod' }, data: { stockActual: { increment: 2 } },
+      });
+      expect(tx.productoStock.update).toHaveBeenCalledWith({
+        where: { id: 'ps-var' }, data: { stockActual: { increment: 3 } },
+      });
+      expect(tx.venta.delete).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('cancelarCobroYapePendiente', () => {
@@ -131,6 +159,26 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
       const r = await service.cancelarCobroYapePendiente('venta-1', 'emp-1', 'caj-1');
       expect(r).toEqual({ anulada: false, yaPagada: true });
       expect(tx.venta.delete).not.toHaveBeenCalled();
+    });
+
+    it('venta NO diferida (legacy): no borra, usa el camino anular', async () => {
+      prisma.venta.findFirst.mockResolvedValue({
+        estado: EstadoVenta.CONFIRMADA,
+        cobroDiferido: false,
+        pagos: [],
+        sedeId: 'sede-1',
+        detalles: [{ productoId: 'prod-1', varianteId: null, cantidad: 1 }],
+      });
+      const anularSpy = jest.spyOn(service, 'anular').mockResolvedValue({} as any);
+
+      const r = await service.cancelarCobroYapePendiente('venta-1', 'emp-1', 'caj-1');
+
+      expect(anularSpy).toHaveBeenCalledWith(
+        'venta-1', 'emp-1', 'caj-1', undefined,
+        { soloSiPendienteSinPagos: true },
+      );
+      expect(tx.venta.delete).not.toHaveBeenCalled();
+      expect(r).toEqual({ anulada: true, yaPagada: false });
     });
   });
 });

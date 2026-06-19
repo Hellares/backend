@@ -256,7 +256,7 @@ describe('OrdenServicioService.validarYBloquearCobroVenta', () => {
 });
 
 describe('OrdenServicioService.marcarOrdenesCobradasPorVenta', () => {
-  it('marca ENTREGADO, vincula comprobante, crea historial y sync componentes', async () => {
+  it('marca FINALIZADO, vincula comprobante, crea historial y sync componentes', async () => {
     const tx = makeTx();
     const result = await marcar(tx, {
       ordenes: [ordenBase()],
@@ -270,7 +270,8 @@ describe('OrdenServicioService.marcarOrdenesCobradasPorVenta', () => {
       expect.objectContaining({
         where: { id: 'orden-1' },
         data: expect.objectContaining({
-          estado: EstadoOrdenServicio.ENTREGADO,
+          // Al cobrarse vía venta, la orden queda FINALIZADA (pagada + cerrada).
+          estado: EstadoOrdenServicio.FINALIZADO,
           comprobanteId: 'comp-1',
           fechaEntrega: expect.any(Date),
         }),
@@ -280,7 +281,7 @@ describe('OrdenServicioService.marcarOrdenesCobradasPorVenta', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           estadoAnterior: EstadoOrdenServicio.LISTO_ENTREGA,
-          estadoNuevo: EstadoOrdenServicio.ENTREGADO,
+          estadoNuevo: EstadoOrdenServicio.FINALIZADO,
           notas: expect.stringContaining('VTA-00123'),
         }),
       }),

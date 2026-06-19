@@ -15,6 +15,7 @@ describe('VentaService.procesarPago — comprobante diferido (Yape)', () => {
   let cajaService: any;
   let facturacionService: any;
   let integracionYape: any;
+  let ordenServicioService: any;
   let emitirSpy: jest.SpyInstance;
 
   const logger = {
@@ -38,6 +39,7 @@ describe('VentaService.procesarPago — comprobante diferido (Yape)', () => {
     nombreCliente: 'CLIENTES VARIOS',
     direccionCliente: null,
     emailCliente: null,
+    cobroDiferido: true,
     tipoComprobanteDiferido: 'BOLETA',
     sedeFacturacionIdDiferido: null,
     tipoDocumentoClienteDiferido: null,
@@ -75,10 +77,14 @@ describe('VentaService.procesarPago — comprobante diferido (Yape)', () => {
     cajaService = { registrarMovimientoSiHayCaja: jest.fn().mockResolvedValue(undefined) };
     facturacionService = { enviarComprobante: jest.fn().mockResolvedValue(undefined) };
     integracionYape = { cancelarCobro: jest.fn().mockResolvedValue(0) };
+    ordenServicioService = {
+      marcarOrdenesCobradasPorVenta: jest.fn().mockResolvedValue([{ id: 'os-1', codigo: 'ORD-1' }]),
+      procesarPostCobroOrdenes: jest.fn().mockResolvedValue(undefined),
+    };
 
     service = new VentaService(
       prisma, null as any, null as any, cajaService, null as any,
-      facturacionService, null as any, null as any, null as any,
+      facturacionService, ordenServicioService, null as any, null as any,
       integracionYape, logger as any,
     );
 
@@ -110,9 +116,9 @@ describe('VentaService.procesarPago — comprobante diferido (Yape)', () => {
     expect(facturacionService.enviarComprobante).toHaveBeenCalledWith('comp-1', 'emp-1');
   });
 
-  it('venta NORMAL (sin intención diferida): NO emite comprobante en procesarPago', async () => {
+  it('venta NORMAL (no diferida): NO emite comprobante en procesarPago', async () => {
     tx.venta.findFirst.mockResolvedValue(
-      ventaDiferida({ tipoComprobanteDiferido: null }),
+      ventaDiferida({ cobroDiferido: false, tipoComprobanteDiferido: null }),
     );
 
     await service.procesarPago('venta-1', 'emp-1', dtoYape, 'caj-1', {
@@ -142,5 +148,93 @@ describe('VentaService.procesarPago — comprobante diferido (Yape)', () => {
     });
 
     expect(emitirSpy).not.toHaveBeenCalled();
+  });
+
+  it('FACTURA diferida: emite con tipoComprobante=FACTURA y datos de cliente RUC', async () => {
+    tx.venta.findFirst.mockResolvedValue(
+      ventaDiferida({
+        tipoComprobanteDiferido: 'FACTURA',
+        documentoCliente: '20614166674',
+        tipoDocumentoClienteDiferido: '6',
+        nombreCliente: 'ACME SAC',
+      }),
+    );
+
+    await service.procesarPago('venta-1', 'emp-1', dtoYape, 'caj-1', {
+      skipCajaValidacion: true,
+    });
+
+    expect(emitirSpy).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        tipoComprobante: 'FACTURA',
+        cliente: expect.objectContaining({
+          documentoCliente: '20614166674',
+          tipoDocumentoCliente: '6',
+        }),
+      }),
+    );
+    expect(facturacionService.enviarComprobante).toHaveBeenCalledWith('comp-1', 'emp-1');
+  });
+
+  it('PLIN diferido: el comprobante refleja el pago PLIN', async () => {
+    tx.venta.findFirst.mockResolvedValue(ventaDiferida());
+    tx.pagoVenta.create.mockResolvedValue({
+      id: 'pago-1', monto: 50, metodoPago: 'PLIN', referencia: 'OP-9',
+    });
+
+    await service.procesarPago(
+      'venta-1', 'emp-1',
+      { metodoPago: 'PLIN', monto: 50, referencia: 'OP-9' } as any,
+      'caj-1', { skipCajaValidacion: true },
+    );
+
+    expect(emitirSpy).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        pagos: [expect.objectContaining({ metodoPago: 'PLIN', monto: 50 })],
+      }),
+    );
+  });
+
+  it('ORDEN diferida: al pagar marca la orden FINALIZADA y emite comprobante con su adelanto', async () => {
+    // Venta diferida cuyo detalle es una orden de servicio (sin productoId).
+    tx.venta.findFirst.mockResolvedValue(
+      ventaDiferida({
+        detalles: [{
+          descripcion: 'Servicio X', cantidad: 1, tipoAfectacion: '10',
+          porcentajeIGV: 18, subtotal: 42.37, igv: 7.63, total: 50, icbper: 0,
+          productoId: null, ordenServicioId: 'os-1',
+        }],
+      }),
+    );
+    // La orden con su adelanto (se carga al pagar).
+    tx.ordenServicio = {
+      findMany: jest.fn().mockResolvedValue([
+        { id: 'os-1', codigo: 'ORD-1', estado: 'LISTO_ENTREGA', estadoDiagnostico: null, adelanto: 20, metodoPagoAdelanto: 'EFECTIVO' },
+      ]),
+    };
+
+    await service.procesarPago('venta-1', 'emp-1', dtoYape, 'caj-1', {
+      skipCajaValidacion: true,
+    });
+
+    // El comprobante incluye el adelanto de la orden en el desglose.
+    expect(emitirSpy).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        ordenesACobrar: [expect.objectContaining({ codigo: 'ORD-1', adelanto: 20 })],
+      }),
+    );
+    // La orden se marca FINALIZADA recién al pagar (no al crear).
+    expect(ordenServicioService.marcarOrdenesCobradasPorVenta).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        ordenes: [expect.objectContaining({ id: 'os-1' })],
+        comprobante: expect.objectContaining({ id: 'comp-1' }),
+      }),
+    );
+    // Post-commit: notifica al cliente (servicio finalizado).
+    expect(ordenServicioService.procesarPostCobroOrdenes).toHaveBeenCalled();
   });
 });

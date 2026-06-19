@@ -226,15 +226,17 @@ describe('VentaService.crearYCobrar', () => {
       });
     });
 
-    it('rechaza si el carrito tiene una orden de servicio', async () => {
-      const spy = jest.spyOn(service, 'crearYCobrar');
+    it('PERMITE órdenes de servicio (entran al diferido): delega en crearYCobrar', async () => {
+      const spy = jest
+        .spyOn(service, 'crearYCobrar')
+        .mockResolvedValue({ id: 'venta-1' } as any);
       const dto = dtoBase({
         detalles: [{ ordenServicioId: 'os-1', descripcion: 'OS', cantidad: 1, precioUnitario: 50 }],
       });
-      await expect(
-        service.crearVentaYapeDiferida('emp-1', dto as any, 'caj-1'),
-      ).rejects.toThrow(/órdenes|combos/i);
-      expect(spy).not.toHaveBeenCalled();
+      await service.crearVentaYapeDiferida('emp-1', dto as any, 'caj-1');
+      expect(spy).toHaveBeenCalledWith('emp-1', expect.anything(), 'caj-1', {
+        diferirComprobante: true,
+      });
     });
 
     it('rechaza si el carrito tiene un combo', async () => {
@@ -247,5 +249,74 @@ describe('VentaService.crearYCobrar', () => {
       ).rejects.toThrow(/órdenes|combos/i);
       expect(spy).not.toHaveBeenCalled();
     });
+
+    it('rechaza si el carrito tiene un componente de combo expandido (origenComboId)', async () => {
+      const spy = jest.spyOn(service, 'crearYCobrar');
+      const dto = dtoBase({
+        detalles: [{
+          productoId: 'prod-1', origenComboId: 'combo-1',
+          descripcion: 'Componente', cantidad: 1, precioUnitario: 50,
+        }],
+      });
+      await expect(
+        service.crearVentaYapeDiferida('emp-1', dto as any, 'caj-1'),
+      ).rejects.toThrow(/órdenes|combos/i);
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── diferido con FACTURA (persiste la intención fiscal correcta) ──
+  it('diferirComprobante con FACTURA: guarda tipoComprobanteDiferido=FACTURA', async () => {
+    const dto = dtoBase({
+      tipoComprobante: 'FACTURA',
+      documentoCliente: '20614166674',
+      tipoDocumentoCliente: '6',
+      montoRecibido: undefined,
+      pagos: undefined,
+    });
+    await service.crearYCobrar('emp-1', dto as any, 'caj-1', {
+      diferirComprobante: true,
+    });
+    expect(tx.venta.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          estado: EstadoVenta.CONFIRMADA,
+          tipoComprobanteDiferido: 'FACTURA',
+          tipoDocumentoClienteDiferido: '6',
+          cobroDiferido: true,
+        }),
+      }),
+    );
+    // No emite comprobante al crear
+    expect(tx.comprobanteElectronico.create).not.toHaveBeenCalled();
+  });
+
+  it('diferido con ORDEN de servicio: NO marca la orden al crear (se difiere al pago)', async () => {
+    ordenServicioService.validarYBloquearCobroVenta.mockResolvedValue([
+      { id: 'os-1', codigo: 'ORD-1', estado: 'LISTO_ENTREGA', estadoDiagnostico: null },
+    ]);
+    const dto = dtoBase({
+      montoRecibido: undefined,
+      pagos: undefined,
+      detalles: [{
+        ordenServicioId: 'os-1', descripcion: 'Servicio X',
+        cantidad: 1, precioUnitario: 50, porcentajeIGV: 18, precioIncluyeIgv: true,
+      }],
+    });
+
+    await service.crearYCobrar('emp-1', dto as any, 'caj-1', {
+      diferirComprobante: true,
+    });
+
+    // La orden NO se marca al crear (se marcará al confirmarse el pago).
+    expect(ordenServicioService.marcarOrdenesCobradasPorVenta).not.toHaveBeenCalled();
+    // Tampoco se emite comprobante al crear.
+    expect(tx.comprobanteElectronico.create).not.toHaveBeenCalled();
+    // La venta queda CONFIRMADA (pendiente de pago).
+    expect(tx.venta.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ estado: EstadoVenta.CONFIRMADA, cobroDiferido: true }),
+      }),
+    );
   });
 });
