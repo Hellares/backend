@@ -3395,6 +3395,55 @@ export class VentaService {
   }
 
   /**
+   * Cancela el cobro Yape/Plin PENDIENTE de una venta (cajero pulsa "Cancelar"
+   * en la hoja de cobro). Libera el monto único en api-yape y anula la venta
+   * recién creada devolviendo el stock — pero SOLO si sigue pendiente sin pagos.
+   *
+   * Cierra la carrera con el webhook: si el pago llegó justo antes de cancelar,
+   * NO se anula (devuelve `yaPagada: true`) para no perder una venta cobrada.
+   * Es best-effort: nunca lanza al cajero (si algo falla, el cron TTL la limpia).
+   */
+  async cancelarCobroYapePendiente(
+    ventaId: string,
+    empresaId: string,
+    usuarioId: string,
+  ): Promise<{ anulada: boolean; yaPagada: boolean }> {
+    // Liberar el monto único reservado en api-yape (best-effort).
+    await this.integracionYape
+      .cancelarCobro({ empresaId, ventaId })
+      .catch(() => undefined);
+
+    try {
+      await this.anular(ventaId, empresaId, usuarioId, undefined, {
+        soloSiPendienteSinPagos: true,
+      });
+      await this.prisma.venta.update({
+        where: { id: ventaId },
+        data: {
+          motivoAnulacion: 'Cobro Yape/Plin cancelado por el cajero',
+          fechaAnulacion: new Date(),
+        },
+      });
+      return { anulada: true, yaPagada: false };
+    } catch (err) {
+      // No se pudo anular: la venta dejó de estar pendiente sin pagos (el
+      // webhook la pagó justo ahora) o ya estaba anulada. Resolvemos por el
+      // estado real para que el app sepa si cerrar como pagada.
+      const v = await this.prisma.venta.findFirst({
+        where: { id: ventaId, empresaId },
+        select: { estado: true },
+      });
+      const yaPagada =
+        v?.estado === EstadoVenta.PAGADA_COMPLETA ||
+        v?.estado === EstadoVenta.PAGADA_PARCIAL;
+      this.logger.warn(
+        `No se anuló el cobro Yape de la venta ${ventaId}: ${(err as Error).message} (estado=${v?.estado})`,
+      );
+      return { anulada: false, yaPagada };
+    }
+  }
+
+  /**
    * Anular venta → reversar stock
    */
   async anular(

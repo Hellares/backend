@@ -8,6 +8,7 @@ import {
   Query,
   UseGuards,
   Headers,
+  HttpCode,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -76,6 +77,22 @@ export class VentaController {
     @Param('id') id: string,
   ) {
     return this.ventaService.cobroYape(empresaId, id);
+  }
+
+  @Post(':id/cancelar-cobro-yape')
+  @HttpCode(200)
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Cancela el cobro Yape/Plin pendiente de una venta (anula la venta y devuelve stock si sigue sin pagar)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async cancelarCobroYape(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @CurrentUser('id') usuarioId: string,
+  ) {
+    return this.ventaService.cancelarCobroYapePendiente(id, empresaId, usuarioId);
   }
 
   @Post('desde-cotizacion/:cotizacionId')
