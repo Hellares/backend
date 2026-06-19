@@ -108,7 +108,8 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
         ventaDiferida({
           detalles: [
             { productoId: 'prod-1', varianteId: null, cantidad: 2 },
-            { productoId: null, varianteId: 'var-1', cantidad: 3 },
+            // Variante: trae el productoId del padre + varianteId (caso real).
+            { productoId: 'prod-2', varianteId: 'var-1', cantidad: 3 },
             { productoId: null, varianteId: null, cantidad: 1 }, // servicio: no toca stock
           ],
         }),
@@ -122,6 +123,17 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
       expect(r.eliminada).toBe(true);
       // Solo 2 updates de stock (la línea de servicio se salta)
       expect(tx.productoStock.update).toHaveBeenCalledTimes(2);
+      // Producto simple → consulta por productoId + varianteId:null
+      expect(tx.productoStock.findFirst).toHaveBeenCalledWith({
+        where: { sedeId: 'sede-1', productoId: 'prod-1', varianteId: null },
+        select: { id: true },
+      });
+      // VARIANTE → consulta SOLO por varianteId (su stock tiene productoId=NULL);
+      // NO debe incluir el productoId del padre o no encontraría la fila.
+      expect(tx.productoStock.findFirst).toHaveBeenCalledWith({
+        where: { sedeId: 'sede-1', varianteId: 'var-1' },
+        select: { id: true },
+      });
       expect(tx.productoStock.update).toHaveBeenCalledWith({
         where: { id: 'ps-prod' }, data: { stockActual: { increment: 2 } },
       });

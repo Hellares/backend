@@ -3949,12 +3949,14 @@ export class VentaService {
     // Devolver stock (increment atómico) por cada detalle de producto/variante.
     for (const d of venta.detalles) {
       if (!d.productoId && !d.varianteId) continue;
+      // El stock de una VARIANTE vive con productoId=NULL → se consulta SOLO por
+      // varianteId. Para producto simple, por productoId con varianteId=null.
+      // (Mismo branch que crearYCobrar; un AND productoId+varianteId no matchea
+      // la fila de variante y dejaría stock sin devolver.)
       const ps = await tx.productoStock.findFirst({
-        where: {
-          sedeId: venta.sedeId,
-          productoId: d.productoId ?? null,
-          varianteId: d.varianteId ?? null,
-        },
+        where: d.varianteId
+          ? { sedeId: venta.sedeId, varianteId: d.varianteId }
+          : { sedeId: venta.sedeId, productoId: d.productoId, varianteId: null },
         select: { id: true },
       });
       if (!ps) continue;
