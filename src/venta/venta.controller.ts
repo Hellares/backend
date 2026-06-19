@@ -90,8 +90,9 @@ export class VentaController {
   async cobroYape(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
+    @Body() body: { monto?: number },
   ) {
-    return this.ventaService.cobroYape(empresaId, id);
+    return this.ventaService.cobroYape(empresaId, id, body?.monto);
   }
 
   @Post(':id/cancelar-cobro-yape')

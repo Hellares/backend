@@ -76,6 +76,18 @@ describe('VentaService.cobroYape (pendiente / mixto)', () => {
     expect(r).toMatchObject({ habilitado: false, qrYapeUrl: 'u-yape', qrPlinUrl: null });
   });
 
+  it('SPLIT: con `monto` (tramo) crea el charge por ese monto, no por el pendiente', async () => {
+    const ctx = armarThis(
+      { id: 'v1', total: 1500, sedeId: 's1', estado: 'CONFIRMADA', pagos: [] },
+      { payAmount: 500, chargeId: 'c1' },
+    );
+    await cobroYape.call(ctx, 'emp-1', 'v1', 500); // tramo de 500 sobre 1500
+
+    expect(ctx.integracionYape.crearCobro).toHaveBeenCalledWith(
+      expect.objectContaining({ monto: 500 }), // el tramo, no 1500
+    );
+  });
+
   it('GATE PREMIUM: empresa SIN YAPE_QR habilitado → habilitado:false, SIN QR, no llama api-yape', async () => {
     const ctx = armarThis(
       { id: 'v1', total: 50, sedeId: 's1', estado: 'CONFIRMADA', pagos: [] },

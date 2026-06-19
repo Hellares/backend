@@ -140,16 +140,27 @@ export class WebhooksService {
         ? MetodoPagoVenta.PLIN
         : MetodoPagoVenta.YAPE;
 
+    // PAGOS DIVIDIDOS: registramos el monto del CHARGE confirmado (su
+    // `baseAmount`, el tramo que pidió la caja), NO el pendiente completo. Así
+    // una venta cobrada en varios Yape/Plin (ej. 3×500) acumula tramo a tramo:
+    // cada webhook agrega su PagoVenta y, al cubrir el total, queda
+    // PAGADA_COMPLETA (y se emite el comprobante diferido). Para un pago único,
+    // baseAmount = pendiente → mismo comportamiento de antes. Cap a `pendiente`
+    // por si el último tramo viniera con sobrante. Fallback al pendiente si el
+    // payload no trajera baseAmount (compat).
+    const chargeBase = Number(payload?.charge?.baseAmount ?? 0);
+    const montoTramo =
+      chargeBase > 0 ? Math.min(chargeBase, pendiente) : pendiente;
+
     // Pasamos el cajero que CREÓ la venta como usuarioId para que el INGRESO
     // Yape entre a SU caja (la misma donde fue el efectivo en un mixto), con
     // skipCajaValidacion para no fallar si su caja ya cerró (registro best-effort).
-    // Antes iba `undefined` → saltaba el registro y el pago Yape no entraba a caja.
-    await this.ventaService.procesarPago(
+    const ventaActualizada = await this.ventaService.procesarPago(
       ventaId,
       empresaId,
       {
         metodoPago: metodo,
-        monto: pendiente,
+        monto: montoTramo,
         referencia:
           payload?.payment?.operationCode || payload?.payment?.id || undefined,
       } as any,
@@ -157,8 +168,19 @@ export class WebhooksService {
       { skipCajaValidacion: true },
     );
 
-    this.realtime.notifyVentaPagada({ empresaId, ventaId });
-    return { ok: true, accion: 'pagada', ventaId };
+    // Solo avisamos "venta pagada" (cierra la hoja) cuando quedó COMPLETA. En un
+    // split, los tramos intermedios quedan PAGADA_PARCIAL → la hoja avanza al
+    // siguiente cobro, no cierra.
+    const completa =
+      (ventaActualizada as any)?.estado === EstadoVenta.PAGADA_COMPLETA;
+    if (completa) {
+      this.realtime.notifyVentaPagada({ empresaId, ventaId });
+    }
+    return {
+      ok: true,
+      accion: completa ? 'pagada' : 'pago-parcial',
+      ventaId,
+    };
   }
 
   /**

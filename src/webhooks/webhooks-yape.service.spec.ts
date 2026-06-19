@@ -44,7 +44,9 @@ describe('WebhooksService.procesarPagoYape', () => {
   beforeEach(() => {
     integracionYape = { verificarWebhook: jest.fn() };
     prisma = { venta: { findFirst: jest.fn() } };
-    ventaService = { procesarPago: jest.fn().mockResolvedValue({}) };
+    ventaService = {
+      procesarPago: jest.fn().mockResolvedValue({ estado: EstadoVenta.PAGADA_COMPLETA }),
+    };
     realtime = { notifyVentaPagada: jest.fn() };
     service = new WebhooksService(
       prisma,
@@ -104,6 +106,54 @@ describe('WebhooksService.procesarPagoYape', () => {
       'caj-1',
       { skipCajaValidacion: true },
     );
+  });
+
+  it('SPLIT: registra el baseAmount del CHARGE (tramo), no el pendiente completo', async () => {
+    // Venta de 1500 cobrada en tramos de 500; llega el webhook de UN tramo.
+    conPayload(payloadPago({ charge: { reference: 'venta-1', baseAmount: 500 } }));
+    prisma.venta.findFirst.mockResolvedValue({
+      id: 'venta-1',
+      estado: EstadoVenta.CONFIRMADA,
+      total: 1500,
+      cajeroId: 'caj-1',
+      pagos: [], // pendiente = 1500
+    });
+    // Aún no completa (1er tramo) → PAGADA_PARCIAL
+    ventaService.procesarPago.mockResolvedValue({ estado: EstadoVenta.PAGADA_PARCIAL });
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+
+    // Registra 500 (el tramo), NO 1500 (el pendiente)
+    expect(ventaService.procesarPago).toHaveBeenCalledWith(
+      'venta-1', 'emp-1',
+      expect.objectContaining({ monto: 500 }),
+      'caj-1', { skipCajaValidacion: true },
+    );
+    // Tramo intermedio → NO cierra la hoja, accion pago-parcial
+    expect(r).toMatchObject({ accion: 'pago-parcial' });
+    expect(realtime.notifyVentaPagada).not.toHaveBeenCalled();
+  });
+
+  it('SPLIT: el último tramo completa → notifica pagada', async () => {
+    conPayload(payloadPago({ charge: { reference: 'venta-1', baseAmount: 500 } }));
+    prisma.venta.findFirst.mockResolvedValue({
+      id: 'venta-1',
+      estado: EstadoVenta.PAGADA_PARCIAL,
+      total: 1500,
+      cajeroId: 'caj-1',
+      pagos: [{ monto: 500 }, { monto: 500 }], // ya 1000, este tramo completa
+    });
+    ventaService.procesarPago.mockResolvedValue({ estado: EstadoVenta.PAGADA_COMPLETA });
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+
+    expect(ventaService.procesarPago).toHaveBeenCalledWith(
+      'venta-1', 'emp-1',
+      expect.objectContaining({ monto: 500 }), // min(500, pendiente 500)
+      'caj-1', { skipCajaValidacion: true },
+    );
+    expect(r).toMatchObject({ accion: 'pagada' });
+    expect(realtime.notifyVentaPagada).toHaveBeenCalledWith({ empresaId: 'emp-1', ventaId: 'venta-1' });
   });
 
   it('mapea provider plin → método PLIN', async () => {

@@ -104,7 +104,7 @@ export class VentaService {
    * { habilitado: false } → la app cae al cobro MANUAL (con el screenshot del Yape).
    * NO marca la venta pagada: eso lo hace el webhook al confirmarse el pago.
    */
-  async cobroYape(empresaId: string, ventaId: string) {
+  async cobroYape(empresaId: string, ventaId: string, monto?: number) {
     const venta = await this.prisma.venta.findFirst({
       where: { id: ventaId, empresaId },
       select: {
@@ -150,10 +150,17 @@ export class VentaService {
       return { habilitado: false as const, ...qr };
     }
 
+    // PAGOS DIVIDIDOS: si se pide un `monto` (tramo, ej. 500 de 1500), se crea
+    // un charge por ese monto (cap al pendiente); cada tramo es un charge/QR
+    // independiente que el cliente escanea por separado. Sin `monto` → cobra el
+    // pendiente completo (pago único, comportamiento de siempre).
+    const montoCobro =
+      monto && monto > 0 ? Math.min(round2(monto), pendiente) : pendiente;
+
     const cobro = await this.integracionYape.crearCobro({
       empresaId,
       ventaId,
-      monto: pendiente,
+      monto: montoCobro,
     });
     if (!cobro) {
       return { habilitado: false as const, ...qr };
