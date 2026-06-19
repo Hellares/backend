@@ -73,6 +73,18 @@ export class CompraService {
       const totalImpuestos = detallesCalculados.reduce((sum, d) => sum + d.igv, 0);
       const total = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
 
+      // Crédito: resuelve términos/días/vencimiento (calcula fechaVencimiento =
+      // fechaRecepción + días si no viene explícita) y valida el límite de
+      // crédito del proveedor.
+      const fechaRecepcion = dto.fechaRecepcion ? new Date(dto.fechaRecepcion) : new Date();
+      const credito = this._resolverCredito({
+        terminos: dto.terminosPago ?? proveedor.terminosPago,
+        diasCredito: dto.diasCredito ?? proveedor.diasCredito,
+        fechaBase: fechaRecepcion,
+        fechaVencimientoExplicita: dto.fechaVencimientoPago,
+      });
+      await this._validarLimiteCredito(tx, empresaId, proveedor, total, credito.terminosPago);
+
       const compra = await tx.compra.create({
         data: {
           empresaId,
@@ -84,11 +96,9 @@ export class CompraService {
           tipoDocumentoProveedor: dto.tipoDocumentoProveedor,
           serieDocumentoProveedor: dto.serieDocumentoProveedor,
           numeroDocumentoProveedor: dto.numeroDocumentoProveedor,
-          terminosPago: dto.terminosPago ?? proveedor.terminosPago,
-          diasCredito: dto.diasCredito ?? proveedor.diasCredito,
-          fechaVencimientoPago: dto.fechaVencimientoPago
-            ? new Date(dto.fechaVencimientoPago)
-            : null,
+          terminosPago: credito.terminosPago,
+          diasCredito: credito.diasCredito,
+          fechaVencimientoPago: credito.fechaVencimientoPago,
           moneda: dto.moneda ?? 'PEN',
           tipoCambio: dto.tipoCambio,
           precioIncluyeIgv,
@@ -96,9 +106,7 @@ export class CompraService {
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
-          fechaRecepcion: dto.fechaRecepcion
-            ? new Date(dto.fechaRecepcion)
-            : new Date(),
+          fechaRecepcion,
           observaciones: dto.observaciones,
           creadoPor: usuarioId,
           detalles: {
@@ -250,6 +258,22 @@ export class CompraService {
 
       const codigo = await this.configuracionCodigos.generarCodigoCompra(empresaId, tx);
 
+      // Crédito + validación de límite (igual que en create standalone).
+      const fechaRecepcion = dto.fechaRecepcion ? new Date(dto.fechaRecepcion) : new Date();
+      const credito = this._resolverCredito({
+        terminos: dto.terminosPago ?? oc.terminosPago,
+        diasCredito: dto.diasCredito ?? oc.diasCredito,
+        fechaBase: fechaRecepcion,
+        fechaVencimientoExplicita: dto.fechaVencimientoPago,
+      });
+      const proveedorOc = await tx.proveedor.findFirst({
+        where: { id: oc.proveedorId, empresaId },
+        select: { id: true, limiteCredito: true },
+      });
+      if (proveedorOc) {
+        await this._validarLimiteCredito(tx, empresaId, proveedorOc, total, credito.terminosPago);
+      }
+
       const compra = await tx.compra.create({
         data: {
           empresaId,
@@ -262,17 +286,16 @@ export class CompraService {
           tipoDocumentoProveedor: dto.tipoDocumentoProveedor,
           serieDocumentoProveedor: dto.serieDocumentoProveedor,
           numeroDocumentoProveedor: dto.numeroDocumentoProveedor,
-          terminosPago: dto.terminosPago ?? oc.terminosPago,
-          diasCredito: dto.diasCredito ?? oc.diasCredito,
-          fechaVencimientoPago: dto.fechaVencimientoPago
-            ? new Date(dto.fechaVencimientoPago)
-            : null,
+          terminosPago: credito.terminosPago,
+          diasCredito: credito.diasCredito,
+          fechaVencimientoPago: credito.fechaVencimientoPago,
           moneda: dto.moneda ?? oc.moneda,
           tipoCambio: dto.tipoCambio ?? oc.tipoCambio,
           subtotal,
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
+          fechaRecepcion,
           observaciones: dto.observaciones,
           creadoPor: usuarioId,
           detalles: {
@@ -1373,6 +1396,107 @@ export class CompraService {
         : (stockAnterior * costoAnterior + cantidadEntra * precioCompra) /
           (stockAnterior + cantidadEntra);
     return Math.round(nuevo * 100) / 100;
+  }
+
+  /** Días de crédito: explícito si vino, si no derivado del enum TerminosPago. */
+  private _diasDeTerminos(
+    terminos?: string | null,
+    diasExplicito?: number | null,
+  ): number {
+    if (diasExplicito != null && diasExplicito > 0) return diasExplicito;
+    switch (terminos) {
+      case 'CREDITO_7':
+        return 7;
+      case 'CREDITO_15':
+        return 15;
+      case 'CREDITO_30':
+        return 30;
+      case 'CREDITO_45':
+        return 45;
+      case 'CREDITO_60':
+        return 60;
+      case 'CREDITO_90':
+        return 90;
+      default:
+        return diasExplicito ?? 0; // CONTADO / PERSONALIZADO sin días → 0
+    }
+  }
+
+  /**
+   * Resuelve términos de pago → { terminosPago, diasCredito, fechaVencimientoPago }.
+   * Para crédito calcula fechaVencimiento = fechaBase + díasCrédito si no vino
+   * explícita. Exige días o fecha para créditos (excepto que sea CONTADO).
+   */
+  private _resolverCredito(opts: {
+    terminos?: string | null;
+    diasCredito?: number | null;
+    fechaBase: Date;
+    fechaVencimientoExplicita?: string | null;
+  }): {
+    terminosPago: any;
+    diasCredito: number | null;
+    fechaVencimientoPago: Date | null;
+  } {
+    const terminos = opts.terminos ?? 'CONTADO';
+    if (terminos === 'CONTADO') {
+      return { terminosPago: 'CONTADO', diasCredito: null, fechaVencimientoPago: null };
+    }
+    const dias = this._diasDeTerminos(terminos, opts.diasCredito);
+    let venc: Date | null = opts.fechaVencimientoExplicita
+      ? new Date(opts.fechaVencimientoExplicita)
+      : null;
+    if (!venc && dias > 0) {
+      venc = new Date(opts.fechaBase);
+      venc.setDate(venc.getDate() + dias);
+    }
+    if (!venc) {
+      throw new BadRequestException(
+        'Compra a crédito: indicá los días de crédito o la fecha de vencimiento.',
+      );
+    }
+    return {
+      terminosPago: terminos,
+      diasCredito: dias > 0 ? dias : (opts.diasCredito ?? null),
+      fechaVencimientoPago: venc,
+    };
+  }
+
+  /**
+   * Valida el límite de crédito del proveedor: deuda actual (saldos de compras
+   * CONFIRMADAS a crédito) + esta compra no debe superar `limiteCredito`. Si el
+   * proveedor no tiene límite configurado, no valida.
+   */
+  private async _validarLimiteCredito(
+    tx: any,
+    empresaId: string,
+    proveedor: { id: string; limiteCredito?: any },
+    totalCompra: number,
+    terminos: string,
+  ): Promise<void> {
+    if (terminos === 'CONTADO') return;
+    const limite = proveedor.limiteCredito != null ? Number(proveedor.limiteCredito) : 0;
+    if (!limite || limite <= 0) return;
+
+    const compras = await tx.compra.findMany({
+      where: {
+        empresaId,
+        proveedorId: proveedor.id,
+        estado: 'CONFIRMADA',
+        terminosPago: { not: 'CONTADO' },
+      },
+      select: { total: true, pagos: { select: { monto: true } } },
+    });
+    const deuda = compras.reduce((s: number, c: any) => {
+      const pagado = c.pagos.reduce((p: number, x: any) => p + Number(x.monto), 0);
+      return s + Math.max(0, Number(c.total) - pagado);
+    }, 0);
+
+    if (deuda + totalCompra > limite + 0.01) {
+      throw new BadRequestException(
+        `Límite de crédito del proveedor superado: deuda S/ ${deuda.toFixed(2)} + esta compra ` +
+          `S/ ${totalCompra.toFixed(2)} supera el límite de S/ ${limite.toFixed(2)}.`,
+      );
+    }
   }
 
   private calcularDetalle(

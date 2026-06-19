@@ -265,3 +265,71 @@ describe('CompraService.calcularNuevoCostoPromedio — costo promedio ponderado'
     );
   });
 });
+
+// --- Crédito en compras (helpers privados; _resolverCredito usa `this`) ---
+const _inst = Object.create(CompraService.prototype);
+const _dayDiff = (a: Date, b: Date) =>
+  Math.round((a.getTime() - b.getTime()) / 86400000);
+
+describe('CompraService._resolverCredito', () => {
+  const base = new Date('2026-01-01T12:00:00Z');
+
+  it('CONTADO: sin días ni vencimiento', () => {
+    const r = _inst._resolverCredito({ terminos: 'CONTADO', fechaBase: base });
+    expect(r).toEqual({ terminosPago: 'CONTADO', diasCredito: null, fechaVencimientoPago: null });
+  });
+
+  it('CREDITO_30: vencimiento = base + 30 días, diasCredito=30', () => {
+    const r = _inst._resolverCredito({ terminos: 'CREDITO_30', fechaBase: base });
+    expect(r.terminosPago).toBe('CREDITO_30');
+    expect(r.diasCredito).toBe(30);
+    expect(_dayDiff(r.fechaVencimientoPago, base)).toBe(30);
+  });
+
+  it('días explícitos ganan sobre el enum', () => {
+    const r = _inst._resolverCredito({ terminos: 'PERSONALIZADO', diasCredito: 45, fechaBase: base });
+    expect(r.diasCredito).toBe(45);
+    expect(_dayDiff(r.fechaVencimientoPago, base)).toBe(45);
+  });
+
+  it('fecha de vencimiento explícita se respeta', () => {
+    const r = _inst._resolverCredito({
+      terminos: 'CREDITO_30', fechaBase: base, fechaVencimientoExplicita: '2026-03-01',
+    });
+    expect(r.fechaVencimientoPago.toISOString().slice(0, 10)).toBe('2026-03-01');
+  });
+
+  it('crédito sin días ni fecha → lanza', () => {
+    expect(() => _inst._resolverCredito({ terminos: 'PERSONALIZADO', fechaBase: base })).toThrow();
+  });
+});
+
+describe('CompraService._validarLimiteCredito', () => {
+  const tx = (compras: any[]) => ({ compra: { findMany: jest.fn().mockResolvedValue(compras) } });
+
+  it('CONTADO no valida (aunque exceda)', async () => {
+    await expect(
+      _inst._validarLimiteCredito(tx([]), 'e', { id: 'p', limiteCredito: 100 }, 9999, 'CONTADO'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('proveedor sin límite configurado → no valida', async () => {
+    await expect(
+      _inst._validarLimiteCredito(tx([]), 'e', { id: 'p', limiteCredito: 0 }, 9999, 'CREDITO_30'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('deuda + compra dentro del límite → OK', async () => {
+    const t = tx([{ total: 500, pagos: [{ monto: 200 }] }]); // deuda 300
+    await expect(
+      _inst._validarLimiteCredito(t, 'e', { id: 'p', limiteCredito: 1000 }, 600, 'CREDITO_30'),
+    ).resolves.toBeUndefined(); // 300+600=900 ≤ 1000
+  });
+
+  it('deuda + compra supera el límite → lanza', async () => {
+    const t = tx([{ total: 800, pagos: [] }]); // deuda 800
+    await expect(
+      _inst._validarLimiteCredito(t, 'e', { id: 'p', limiteCredito: 1000 }, 300, 'CREDITO_30'),
+    ).rejects.toThrow(/[Ll]ímite de crédito/);
+  });
+});

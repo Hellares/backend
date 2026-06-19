@@ -83,6 +83,11 @@ export class CreateCompraDesdeOcDto {
   @IsDateString()
   fechaVencimientoPago?: string;
 
+  @ApiPropertyOptional({ description: 'Fecha de recepción' })
+  @IsOptional()
+  @IsDateString()
+  fechaRecepcion?: string;
+
   @ApiPropertyOptional({ description: 'Moneda', example: 'PEN' })
   @IsOptional()
   @IsString()

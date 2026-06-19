@@ -695,6 +695,26 @@ export class ProductoController {
     return this.trazabilidadService.trazabilidad(empresaId, id, { varianteId });
   }
 
+  @Get(':id/historial-compras')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Historial de compras de un producto (ligero, para el form de compra)',
+    description:
+      'Últimas compras CONFIRMADAS (fecha, proveedor, costo unitario) + agregado por proveedor (veces, costo promedio, último costo). Pasar varianteId para acotar.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async historialCompras(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('varianteId') varianteId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.trazabilidadService.historialCompras(empresaId, id, {
+      varianteId,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+  }
+
   @Get(':id/historial-precios')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({

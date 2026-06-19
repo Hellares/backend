@@ -199,6 +199,123 @@ export class ProductoTrazabilidadService {
     }));
   }
 
+  /**
+   * Historial LIGERO de compras de un producto/variante (para mostrar al comprar):
+   * últimas compras CONFIRMADAS (fecha, proveedor, costo unitario) + agregado por
+   * proveedor (veces, costo promedio, último costo, última fecha). Sin kardex ni
+   * el 360 completo. Costo unitario efectivo = total/cantidad (incluye IGV).
+   */
+  async historialCompras(
+    empresaId: string,
+    productoId: string,
+    opts: { varianteId?: string; limit?: number } = {},
+  ) {
+    const producto = await this.prisma.producto.findFirst({
+      where: { id: productoId, empresaId },
+      select: { id: true, variantes: { where: { deletedAt: null }, select: { id: true } } },
+    });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+
+    const varianteId = opts.varianteId ?? null;
+    const varianteIds = producto.variantes.map((v) => v.id);
+    const orProductoOVariante = varianteId
+      ? [{ varianteId }]
+      : [
+          { productoId, varianteId: null },
+          ...(varianteIds.length ? [{ varianteId: { in: varianteIds } }] : []),
+        ];
+    const limit = Math.min(opts.limit ?? 15, 50);
+
+    const rows = await this.prisma.compraDetalle.findMany({
+      where: { OR: orProductoOVariante, compra: { empresaId, estado: 'CONFIRMADA' } },
+      orderBy: { compra: { fechaRecepcion: 'desc' } },
+      select: {
+        cantidad: true,
+        precioUnitario: true,
+        total: true,
+        usaUnidadCompra: true,
+        cantidadOriginal: true,
+        unidadOriginalSimbolo: true,
+        compra: {
+          select: {
+            id: true,
+            codigo: true,
+            fechaRecepcion: true,
+            proveedorId: true,
+            nombreProveedor: true,
+            moneda: true,
+          },
+        },
+      },
+    });
+
+    const costoUnit = (r: (typeof rows)[number]) =>
+      r.cantidad > 0 ? Number(r.total) / r.cantidad : Number(r.precioUnitario);
+
+    const compras = rows.slice(0, limit).map((r) => ({
+      compraId: r.compra.id,
+      codigo: r.compra.codigo,
+      fecha: r.compra.fechaRecepcion,
+      proveedorId: r.compra.proveedorId,
+      proveedor: r.compra.nombreProveedor,
+      moneda: r.compra.moneda,
+      cantidad: r.cantidad,
+      precioUnitario: Number(r.precioUnitario),
+      total: Number(r.total),
+      costoUnitario: +costoUnit(r).toFixed(4),
+      usaUnidadCompra: r.usaUnidadCompra,
+      cantidadOriginal: r.cantidadOriginal != null ? Number(r.cantidadOriginal) : null,
+      unidadOriginalSimbolo: r.unidadOriginalSimbolo,
+    }));
+
+    // Agregado por proveedor (sobre TODAS las filas, no solo el slice).
+    const map = new Map<string, any>();
+    for (const r of rows) {
+      const key = r.compra.proveedorId ?? r.compra.nombreProveedor;
+      const cu = costoUnit(r);
+      const e = map.get(key) ?? {
+        proveedorId: r.compra.proveedorId,
+        proveedor: r.compra.nombreProveedor,
+        veces: 0,
+        cantidadAcum: 0,
+        sumaCostoXCant: 0,
+        ultimaFecha: null as Date | null,
+        ultimoCosto: null as number | null,
+      };
+      e.veces++;
+      e.cantidadAcum += r.cantidad;
+      e.sumaCostoXCant += cu * r.cantidad;
+      if (!e.ultimaFecha || r.compra.fechaRecepcion > e.ultimaFecha) {
+        e.ultimaFecha = r.compra.fechaRecepcion;
+        e.ultimoCosto = +cu.toFixed(4);
+      }
+      map.set(key, e);
+    }
+    const proveedores = Array.from(map.values())
+      .map((e) => ({
+        proveedorId: e.proveedorId,
+        proveedor: e.proveedor,
+        veces: e.veces,
+        cantidadAcum: e.cantidadAcum,
+        costoPromedio: e.cantidadAcum > 0 ? +(e.sumaCostoXCant / e.cantidadAcum).toFixed(4) : 0,
+        ultimoCosto: e.ultimoCosto,
+        ultimaFecha: e.ultimaFecha,
+      }))
+      .sort((a, b) => (b.ultimaFecha?.getTime() ?? 0) - (a.ultimaFecha?.getTime() ?? 0));
+
+    // Mejor proveedor = menor costo promedio (al menos 1 compra).
+    const mejorProveedor = proveedores.length
+      ? [...proveedores].sort((a, b) => a.costoPromedio - b.costoPromedio)[0]
+      : null;
+
+    return {
+      compras,
+      proveedores,
+      ultimoCosto: compras.length ? compras[0].costoUnitario : null,
+      mejorProveedorId: mejorProveedor?.proveedorId ?? null,
+    };
+  }
+
   /** Últimas compras donde entró el producto/variante. */
   private async _compras(empresaId: string, orProductoOVariante: any[]) {
     const rows = await this.prisma.compraDetalle.findMany({
