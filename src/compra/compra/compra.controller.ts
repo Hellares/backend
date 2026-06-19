@@ -71,6 +71,19 @@ export class CompraController {
     return this.compraService.findAll(empresaId, queryDto);
   }
 
+  @Get('reposicion-sugerida')
+  @RequiresPermission(Permission.VIEW_COMPRAS)
+  @ApiOperation({
+    summary: 'Reposición sugerida: productos con stock ≤ mínimo + mejor proveedor y cantidad sugerida',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async reposicionSugerida(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return this.compraService.reposicionSugerida(empresaId, sedeId);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_COMPRAS)
   @ApiOperation({ summary: 'Obtener compra por ID' })

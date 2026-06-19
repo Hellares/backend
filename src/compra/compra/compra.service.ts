@@ -1398,6 +1398,130 @@ export class CompraService {
     return Math.round(nuevo * 100) / 100;
   }
 
+  /**
+   * REPOSICIÓN SUGERIDA: productos con stock ≤ stockMínimo (compras proactivas).
+   * Por cada uno sugiere cuánto comprar (hasta 2× el mínimo) y a QUIÉN comprarle
+   * (mejor proveedor = menor costo promedio histórico) + último costo. Ordena los
+   * más críticos primero (menor stock).
+   */
+  async reposicionSugerida(empresaId: string, sedeId?: string) {
+    const stocks = await this.prisma.productoStock.findMany({
+      where: {
+        empresaId,
+        ...(sedeId ? { sedeId } : {}),
+        stockMinimo: { not: null, gt: 0 },
+      },
+      select: {
+        productoId: true,
+        varianteId: true,
+        sedeId: true,
+        stockActual: true,
+        stockMinimo: true,
+        precioCosto: true,
+        producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+        variante: {
+          select: {
+            id: true,
+            nombre: true,
+            producto: { select: { id: true, nombre: true, codigoEmpresa: true } },
+          },
+        },
+        sede: { select: { nombre: true } },
+      },
+    });
+    const bajos = stocks.filter(
+      (s) => s.stockMinimo != null && s.stockActual <= s.stockMinimo,
+    );
+    if (!bajos.length) return [];
+
+    // Mejor proveedor + último costo por (producto/variante) desde compras
+    // CONFIRMADAS, en UN solo query batcheado.
+    const or = bajos.map((s) =>
+      s.varianteId
+        ? { varianteId: s.varianteId }
+        : { productoId: s.productoId, varianteId: null },
+    );
+    const detalles = await this.prisma.compraDetalle.findMany({
+      where: { OR: or, compra: { empresaId, estado: 'CONFIRMADA' } },
+      select: {
+        productoId: true,
+        varianteId: true,
+        cantidad: true,
+        total: true,
+        compra: {
+          select: { proveedorId: true, nombreProveedor: true, fechaRecepcion: true },
+        },
+      },
+    });
+
+    const keyOf = (productoId: string | null, varianteId: string | null) =>
+      varianteId ?? `p:${productoId}`;
+    const aggr = new Map<string, any>();
+    for (const d of detalles) {
+      const k = keyOf(d.productoId, d.varianteId);
+      const cu = d.cantidad > 0 ? Number(d.total) / d.cantidad : 0;
+      let e = aggr.get(k);
+      if (!e) {
+        e = { provs: new Map(), ultimoCosto: null, ultFecha: null as Date | null };
+        aggr.set(k, e);
+      }
+      const pk = d.compra.proveedorId ?? d.compra.nombreProveedor;
+      let pe = e.provs.get(pk);
+      if (!pe) {
+        pe = {
+          id: d.compra.proveedorId,
+          nombre: d.compra.nombreProveedor,
+          sumCxC: 0,
+          cant: 0,
+        };
+        e.provs.set(pk, pe);
+      }
+      pe.sumCxC += cu * d.cantidad;
+      pe.cant += d.cantidad;
+      if (!e.ultFecha || d.compra.fechaRecepcion > e.ultFecha) {
+        e.ultFecha = d.compra.fechaRecepcion;
+        e.ultimoCosto = +cu.toFixed(4);
+      }
+    }
+
+    return bajos
+      .map((s) => {
+        const nombre =
+          s.producto?.nombre ?? s.variante?.producto?.nombre ?? 'Producto';
+        const e = aggr.get(keyOf(s.productoId, s.varianteId));
+        let mejorProveedor: any = null;
+        if (e) {
+          const arr = [...e.provs.values()]
+            .map((p: any) => ({
+              proveedorId: p.id,
+              proveedor: p.nombre,
+              costoPromedio: p.cant > 0 ? +(p.sumCxC / p.cant).toFixed(4) : 0,
+            }))
+            .sort((a, b) => a.costoPromedio - b.costoPromedio);
+          mejorProveedor = arr[0] ?? null;
+        }
+        const min = s.stockMinimo ?? 0;
+        return {
+          productoId: s.productoId ?? s.variante?.producto?.id ?? null,
+          varianteId: s.varianteId,
+          nombre,
+          varianteNombre: s.variante?.nombre ?? null,
+          codigoEmpresa:
+            s.producto?.codigoEmpresa ?? s.variante?.producto?.codigoEmpresa ?? null,
+          sedeId: s.sedeId,
+          sedeNombre: s.sede?.nombre ?? null,
+          stockActual: s.stockActual,
+          stockMinimo: min,
+          faltante: Math.max(0, min - s.stockActual),
+          sugeridoComprar: Math.max(1, min * 2 - s.stockActual),
+          costoActual: s.precioCosto != null ? Number(s.precioCosto) : null,
+          ultimoCosto: e?.ultimoCosto ?? null,
+          mejorProveedor,
+        };
+      })
+      .sort((a, b) => a.stockActual - b.stockActual);
+  }
+
   /** Días de crédito: explícito si vino, si no derivado del enum TerminosPago. */
   private _diasDeTerminos(
     terminos?: string | null,
