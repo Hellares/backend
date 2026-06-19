@@ -63,6 +63,7 @@ import { ConfiguracionSistemaModule } from './configuracion-sistema/configuracio
 import { AuditModule } from './audit/audit.module';
 import { SunatModule } from './sunat/sunat.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { IntegracionYapeModule } from './integracion-yape/integracion-yape.module';
 import { GuiaRemisionModule } from './guia-remision/guia-remision.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
@@ -82,6 +83,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     AuditModule,
     SunatModule,
     WebhooksModule,
+    IntegracionYapeModule,
     LoggerModule, // Logger global
     PrismaModule,
     AuthModule,

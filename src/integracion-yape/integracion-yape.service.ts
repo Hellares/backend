@@ -1,6 +1,18 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  UnauthorizedException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { Rol } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  UpdateIntegracionYapeDto,
+  IntegracionYapeResponseDto,
+  ProbarConexionResponseDto,
+} from './dto/integracion-yape.dto';
 
 /**
  * Integración con api-yape (servicio externo de validación de pagos Yape/Plin).
@@ -135,5 +147,181 @@ export class IntegracionYapeService {
       throw new UnauthorizedException('Firma inválida');
     }
     return { empresaId: cfg.empresaId, payload };
+  }
+
+  // ===========================================================================
+  // Gestión de la configuración (panel admin de la empresa)
+  // ===========================================================================
+
+  /**
+   * Verifica que el usuario sea administrador de la empresa. Mismo criterio que
+   * EmpresaService.updateConfiguracion (SUPER_ADMIN / EMPRESA_ADMIN activos).
+   */
+  private async verificarAdmin(empresaId: string, userId: string): Promise<void> {
+    const userRole = await this.prisma.empresaUsuarioRol.findFirst({
+      where: {
+        empresaId,
+        usuarioId: userId,
+        isActive: true,
+        deletedAt: null,
+        rol: { in: [Rol.SUPER_ADMIN, Rol.EMPRESA_ADMIN] },
+      },
+    });
+    if (!userRole) {
+      throw new ForbiddenException(
+        'No tienes permisos para gestionar la integración Yape',
+      );
+    }
+  }
+
+  /** Máscara segura de un secreto: prefijo (hasta el primer '_') + últimos 4. */
+  private enmascarar(secreto: string | null | undefined): string | null {
+    if (!secreto) return null;
+    const us = secreto.indexOf('_');
+    const prefijo = us >= 0 ? secreto.slice(0, us + 5) : secreto.slice(0, 4);
+    const sufijo = secreto.slice(-4);
+    return `${prefijo}…${sufijo}`;
+  }
+
+  /** URL del webhook receptor de Syncronize (a configurar en api-yape). */
+  private webhookUrlPara(apiBaseUrl: string | null | undefined): string {
+    const esBeta = (apiBaseUrl ?? '').includes('beta');
+    return esBeta
+      ? 'https://saas-beta.syncronize.net.pe/api/webhooks/yape'
+      : 'https://saas.syncronize.net.pe/api/webhooks/yape';
+  }
+
+  /** Devuelve la config de la empresa con los secretos enmascarados. */
+  async getConfig(
+    empresaId: string,
+    userId: string,
+  ): Promise<IntegracionYapeResponseDto> {
+    await this.verificarAdmin(empresaId, userId);
+    const cfg = await this.prisma.integracionYape.findUnique({
+      where: { empresaId },
+    });
+    return {
+      configurado: !!cfg,
+      habilitado: cfg?.habilitado ?? false,
+      apiBaseUrl: cfg?.apiBaseUrl ?? null,
+      accountId: cfg?.accountId ?? null,
+      accountApiKeyMask: this.enmascarar(cfg?.accountApiKey),
+      webhookSecretMask: this.enmascarar(cfg?.webhookSecret),
+      webhookUrl: this.webhookUrlPara(cfg?.apiBaseUrl),
+      actualizadoEn: cfg?.actualizadoEn ?? null,
+    };
+  }
+
+  /**
+   * Crea o actualiza la integración. Los secretos solo se reemplazan si vienen
+   * con valor (en blanco = conservar el actual). Al crear desde cero, todos los
+   * campos requeridos deben venir.
+   */
+  async upsertConfig(
+    empresaId: string,
+    userId: string,
+    dto: UpdateIntegracionYapeDto,
+  ): Promise<IntegracionYapeResponseDto> {
+    await this.verificarAdmin(empresaId, userId);
+
+    const existente = await this.prisma.integracionYape.findUnique({
+      where: { empresaId },
+    });
+
+    const apiKey = dto.accountApiKey?.trim();
+    const whSecret = dto.webhookSecret?.trim();
+
+    if (!existente) {
+      // Creación: exige todos los campos (las columnas son NOT NULL).
+      const faltan: string[] = [];
+      if (!dto.apiBaseUrl?.trim()) faltan.push('apiBaseUrl');
+      if (!apiKey) faltan.push('accountApiKey');
+      if (!dto.accountId?.trim()) faltan.push('accountId');
+      if (!whSecret) faltan.push('webhookSecret');
+      if (faltan.length) {
+        throw new BadRequestException(
+          `Faltan campos para crear la integración: ${faltan.join(', ')}`,
+        );
+      }
+      await this.prisma.integracionYape.create({
+        data: {
+          empresaId,
+          apiBaseUrl: dto.apiBaseUrl!.trim(),
+          accountApiKey: apiKey!,
+          accountId: dto.accountId!.trim(),
+          webhookSecret: whSecret!,
+          habilitado: dto.habilitado ?? true,
+        },
+      });
+    } else {
+      await this.prisma.integracionYape.update({
+        where: { empresaId },
+        data: {
+          ...(dto.apiBaseUrl?.trim() && { apiBaseUrl: dto.apiBaseUrl.trim() }),
+          ...(dto.accountId?.trim() && { accountId: dto.accountId.trim() }),
+          ...(apiKey && { accountApiKey: apiKey }),
+          ...(whSecret && { webhookSecret: whSecret }),
+          ...(dto.habilitado !== undefined && { habilitado: dto.habilitado }),
+        },
+      });
+    }
+
+    this.logger.log(`IntegracionYape actualizada (empresa ${empresaId})`);
+    return this.getConfig(empresaId, userId);
+  }
+
+  /**
+   * Prueba la conexión con api-yape: crea un cobro de S/1 con referencia de
+   * prueba y lo cancela acto seguido. No deja rastro de cobro pendiente.
+   */
+  async probarConexion(
+    empresaId: string,
+    userId: string,
+  ): Promise<ProbarConexionResponseDto> {
+    await this.verificarAdmin(empresaId, userId);
+    const cfg = await this.prisma.integracionYape.findUnique({
+      where: { empresaId },
+    });
+    if (!cfg) {
+      throw new BadRequestException('La integración Yape no está configurada');
+    }
+    const reference = `TEST-CONEXION-${empresaId}`;
+    try {
+      const res = await fetch(`${cfg.apiBaseUrl}/api/charges`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': cfg.accountApiKey,
+        },
+        body: JSON.stringify({ amount: 1, reference }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        const msg =
+          res.status === 401
+            ? 'api-yape rechazó la API key (401). Revisa accountApiKey.'
+            : `api-yape respondió ${res.status}.`;
+        return { ok: false, mensaje: msg };
+      }
+      // Limpieza: cancelar el cobro de prueba (best-effort).
+      await fetch(`${cfg.apiBaseUrl}/api/charges/cancel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': cfg.accountApiKey,
+        },
+        body: JSON.stringify({ reference }),
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => undefined);
+      return {
+        ok: true,
+        mensaje: 'Conexión exitosa con api-yape. La cuenta está operativa.',
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        mensaje: `No se pudo contactar api-yape: ${(e as Error).message}`,
+      };
+    }
   }
 }
