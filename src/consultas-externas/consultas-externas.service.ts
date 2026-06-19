@@ -99,6 +99,114 @@ export class ConsultasExternasService {
     );
   }
 
+  /**
+   * Consulta una Guía de Remisión Electrónica (GRE) en SUNAT vía Factiliza (v2).
+   * `numero` = RUC-tipo-serie-número (ej. 20132373958-09-T290-120). Devuelve una
+   * forma limpia (emisor, receptor, traslado, bienes, origen/destino, vehículo,
+   * conductor). Útil para verificar/registrar guías de proveedores al recibir.
+   */
+  async consultarGuia(numero: string): Promise<any> {
+    const limpio = (numero ?? '').trim().toUpperCase();
+    if (!/^\d{11}-\d{1,2}-[A-Z0-9]+-\d+$/.test(limpio)) {
+      throw new BadRequestException(
+        'Formato de guía inválido. Use RUC-tipo-serie-número (ej. 20132373958-09-T290-120).',
+      );
+    }
+    if (!this.apiToken) {
+      throw new ServiceUnavailableException(
+        'El servicio de consulta de guías no está configurado. Contacte al administrador.',
+      );
+    }
+    const apiBase = this.apiUrl.replace(/\/v\d+\/?$/, '');
+    const cacheKey = `consulta:guia:${limpio}`;
+    return this.cache.getOrSet<any>(
+      cacheKey,
+      async () => {
+        this.logger.info('Consultando guía en SUNAT (Factiliza v2)', { guia: limpio });
+        try {
+          const response = await fetch(`${apiBase}/v2/sunat/guia/json/${limpio}`, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${this.apiToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          if (!response.ok) {
+            this.logger.warn('Error consulta guía - HTTP', { guia: limpio, status: response.status });
+            throw new BadRequestException(`No se pudo consultar la guía ${limpio}.`);
+          }
+          const body = await response.json();
+          if (!body.success || body.status !== 200 || !body.data) {
+            throw new BadRequestException(`No se encontró la guía ${limpio}.`);
+          }
+          return this._mapGuia(body.data);
+        } catch (error) {
+          if (error instanceof BadRequestException) throw error;
+          this.logger.error(`Error al consultar guía ${limpio}`, error.stack);
+          throw new ServiceUnavailableException(
+            'No se pudo conectar con el servicio de consulta SUNAT. Intente nuevamente.',
+          );
+        }
+      },
+      this.CACHE_TTL,
+    );
+  }
+
+  private _mapGuia(d: any) {
+    const t = d.traslado ?? {};
+    const dir = (x: any) =>
+      x?.direccion
+        ? {
+            direccion: x.direccion.desDireccion ?? null,
+            ubigeo: x.direccion.codUbigeo ?? null,
+            ruc: x.direccion.contribuyente?.numRuc ?? null,
+          }
+        : null;
+    const veh = (t.vehiculo ?? [])[0];
+    const cond = (t.conductor ?? [])[0];
+    return {
+      serie: d.numSerie ?? null,
+      numero: d.numCpe ?? null,
+      tipoCpe: d.codCpe ?? null,
+      tipoDesc: d.desTipoCpe || 'Guía de remisión',
+      fechaEmision: d.emision?.fecEmision ?? null,
+      emisor: { ruc: d.numRuc ?? null, nombre: d.emisor?.desNombre ?? null },
+      receptor: {
+        tipoDoc: d.receptor?.desTipoDocIdentidad ?? null,
+        doc: d.receptor?.numDocIdentidad ?? null,
+        nombre: d.receptor?.desNombre ?? null,
+      },
+      remitente: {
+        doc: d.remitente?.numDocIdentidad ?? null,
+        nombre: d.remitente?.desNombre ?? null,
+      },
+      traslado: {
+        motivoCod: t.codMotivoTraslado ?? null,
+        motivoDesc: t.desMotivoTraslado || t.desMotivoTrasladoOtros || null,
+        fechaInicio: t.fecInicioTraslado ?? null,
+        fechaEntrega: t.fecEntrega ?? null,
+        pesoBruto: t.numPesoBruto ?? null,
+        modalidad: t.desModalidadTraslado ?? null,
+      },
+      bienes: (t.bien ?? []).map((b: any) => ({
+        orden: b.numOrden ?? null,
+        descripcion: b.desBien ?? null,
+        cantidad: b.numCantidad ?? null,
+        unidad: b.codUniMedida ?? null,
+      })),
+      origen: dir(t.partida),
+      destino: dir(t.llegada),
+      vehiculo: veh ? { placa: veh.numPlaca ?? null, tipo: veh.desTipoVehiculo ?? null } : null,
+      conductor: cond
+        ? {
+            nombre: (cond.desNombre ?? '').trim() || null,
+            doc: cond.numDocIdentidad ?? null,
+            licencia: cond.numLicencia ?? null,
+          }
+        : null,
+    };
+  }
+
   async consultarDni(dni: string): Promise<ConsultaDniResponseDto> {
     // Validar formato DNI
     if (!/^\d{8}$/.test(dni)) {

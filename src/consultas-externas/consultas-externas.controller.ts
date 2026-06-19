@@ -29,6 +29,21 @@ export class ConsultasExternasController {
     return this.consultasService.consultarRuc(ruc);
   }
 
+  @Get('guia/:numero')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Consultar Guía de Remisión Electrónica (GRE) en SUNAT' })
+  @ApiParam({
+    name: 'numero',
+    description: 'RUC-tipo-serie-número',
+    example: '20132373958-09-T290-120',
+  })
+  @ApiResponse({ status: 200, description: 'Datos de la guía' })
+  @ApiResponse({ status: 400, description: 'Formato inválido o guía no encontrada' })
+  @ApiResponse({ status: 503, description: 'Servicio de consulta no disponible' })
+  async consultarGuia(@Param('numero') numero: string): Promise<any> {
+    return this.consultasService.consultarGuia(numero);
+  }
+
   // Público + throttled: necesario en la pantalla de registro para
   // autocompletar nombres/apellidos antes de que exista sesión.
   @Get('dni/:dni')
