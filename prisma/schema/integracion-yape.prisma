@@ -8,6 +8,11 @@ model IntegracionYape {
   accountId     String   @unique // id de la cuenta en api-yape (mapea el webhook entrante a la empresa, 1:1)
   webhookSecret String // whsec_... : verifica la firma HMAC del webhook entrante
   habilitado    Boolean  @default(true)
+  // Límites para PAGOS DIVIDIDOS (Perú). Por transacción = tamaño máximo de cada
+  // tramo (dispara el auto-split). Por día = tope diario por método (advertencia
+  // — es del cliente, no se enforce). Configurables (los límites cambian).
+  montoMaxPorTransaccion Decimal @default(500) @db.Decimal(10, 2)
+  montoMaxPorDia         Decimal @default(2000) @db.Decimal(10, 2)
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 

@@ -254,4 +254,12 @@ export class EmpresaContextResponseDto {
     example: { YAPE_QR: true },
   })
   caracteristicas?: Record<string, boolean>;
+
+  @ApiProperty({
+    description:
+      'Límites Yape/Plin para el auto-split de pagos divididos. maxPorTransaccion = tamaño máx de cada tramo; maxPorDia = tope diario por método (advertencia).',
+    required: false,
+    example: { maxPorTransaccion: 500, maxPorDia: 2000 },
+  })
+  yapeLimites?: { maxPorTransaccion: number; maxPorDia: number };
 }

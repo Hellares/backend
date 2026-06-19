@@ -980,12 +980,21 @@ export class EmpresaService {
     });
 
     // 4. Calcular estadísticas y límites del plan
-    const [statistics, planLimits, caracteristicas] = await Promise.all([
+    const [statistics, planLimits, caracteristicas, integYape] = await Promise.all([
       this.calculateStatistics(empresaId),
       this.planLimitsService.getPlanLimitsInfo(empresaId),
       // Features premium vigentes (gating) → el front muestra/oculta opciones.
       this.caracteristicaEmpresa.mapaHabilitadas(empresaId),
+      // Límites Yape/Plin (para el auto-split de pagos divididos en el app).
+      this.prisma.integracionYape.findUnique({
+        where: { empresaId },
+        select: { montoMaxPorTransaccion: true, montoMaxPorDia: true },
+      }),
     ]);
+    const yapeLimites = {
+      maxPorTransaccion: Number(integYape?.montoMaxPorTransaccion ?? 500),
+      maxPorDia: Number(integYape?.montoMaxPorDia ?? 2000),
+    };
 
     // 5. Calcular permisos basados en roles + overrides individuales
     //    cargados de UsuarioSedeRol (puedeAbrirCaja, puedeCerrarCaja).
@@ -1129,6 +1138,7 @@ export class EmpresaService {
       statistics,
       planLimits,
       caracteristicas,
+      yapeLimites,
     };
   }
 
