@@ -84,6 +84,43 @@ export class CompraController {
     return this.compraService.reposicionSugerida(empresaId, sedeId);
   }
 
+  @Post('guia/sugerir-mapeo')
+  @RequiresPermission(Permission.VIEW_COMPRAS)
+  @ApiOperation({
+    summary: 'Sugiere el mapeo de bienes de una guía → catálogo (alias proveedor + similitud)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async sugerirMapeoGuia(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body()
+    body: {
+      proveedorId: string;
+      bienes: Array<{ descripcion: string; cantidad?: number; unidad?: string }>;
+    },
+  ) {
+    return this.compraService.sugerirMapeoGuia(empresaId, body.proveedorId, body.bienes ?? []);
+  }
+
+  @Post('proveedor-alias')
+  @RequiresPermission(Permission.MANAGE_COMPRAS)
+  @ApiOperation({ summary: 'Guarda el alias del proveedor para tus productos (recordar nombres)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async guardarAliasProveedor(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body()
+    body: {
+      proveedorId: string;
+      items: Array<{
+        descripcionProveedor: string;
+        productoId: string;
+        varianteId?: string | null;
+        precioCompra?: number;
+      }>;
+    },
+  ) {
+    return this.compraService.guardarAliasProveedor(empresaId, body.proveedorId, body.items ?? []);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_COMPRAS)
   @ApiOperation({ summary: 'Obtener compra por ID' })

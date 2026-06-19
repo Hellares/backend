@@ -1522,6 +1522,143 @@ export class CompraService {
       .sort((a, b) => a.stockActual - b.stockActual);
   }
 
+  /**
+   * Sugiere el mapeo de los bienes de una GUÍA del proveedor → tu catálogo.
+   * Por cada descripción: (1) alias guardado del proveedor (match exacto
+   * normalizado) → tu producto; (2) si no, sugerencia por SIMILITUD (trigram
+   * sobre Producto.nombre). Devuelve el producto sugerido + factorCompra/unidad
+   * de compra para la conversión (paquete → unidades).
+   */
+  async sugerirMapeoGuia(
+    empresaId: string,
+    proveedorId: string,
+    bienes: Array<{ descripcion: string; cantidad?: number; unidad?: string }>,
+  ) {
+    const norm = (s: string) => (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+    const aliases = await this.prisma.proveedorProducto.findMany({
+      where: { empresaId, proveedorId, descripcionProveedor: { not: null }, isActive: true },
+      select: { descripcionProveedor: true, productoId: true, varianteId: true },
+    });
+    const aliasMap = new Map(
+      aliases
+        .filter((a) => a.descripcionProveedor)
+        .map((a) => [norm(a.descripcionProveedor as string), a]),
+    );
+
+    const filas: Array<any> = [];
+    for (const b of bienes) {
+      const a = aliasMap.get(norm(b.descripcion));
+      if (a) {
+        filas.push({
+          descripcion: b.descripcion,
+          cantidadGuia: b.cantidad ?? null,
+          unidadGuia: b.unidad ?? null,
+          productoId: a.productoId,
+          varianteId: a.varianteId,
+          fuente: 'alias',
+        });
+        continue;
+      }
+      // Sugerencia por similitud (trigram). Guías traen pocos bienes → N queries OK.
+      let sugId: string | null = null;
+      try {
+        const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM "Producto"
+          WHERE "empresaId" = ${empresaId} AND "isActive" = true AND nombre % ${b.descripcion}
+          ORDER BY similarity(nombre, ${b.descripcion}) DESC
+          LIMIT 1`;
+        sugId = rows[0]?.id ?? null;
+      } catch {
+        sugId = null;
+      }
+      filas.push({
+        descripcion: b.descripcion,
+        cantidadGuia: b.cantidad ?? null,
+        unidadGuia: b.unidad ?? null,
+        productoId: sugId,
+        varianteId: null,
+        fuente: sugId ? 'similitud' : null,
+      });
+    }
+
+    // Detalles de los productos sugeridos (nombre + factorCompra + unidad compra).
+    const ids = [...new Set(filas.filter((f) => f.productoId).map((f) => f.productoId))];
+    const prods = ids.length
+      ? await this.prisma.producto.findMany({
+          where: { id: { in: ids } },
+          select: {
+            id: true,
+            nombre: true,
+            factorCompra: true,
+            unidadCompra: {
+              select: {
+                simboloLocal: true,
+                simboloPersonalizado: true,
+                unidadMaestra: { select: { simbolo: true } },
+              },
+            },
+          },
+        })
+      : [];
+    const pmap = new Map(prods.map((p) => [p.id, p]));
+    return filas.map((f) => {
+      const p = f.productoId ? pmap.get(f.productoId) : null;
+      const uc = p?.unidadCompra;
+      return {
+        ...f,
+        productoNombre: p?.nombre ?? null,
+        factorCompra: p?.factorCompra != null ? Number(p.factorCompra) : null,
+        unidadCompraSimbolo: uc
+          ? (uc.simboloPersonalizado ?? uc.simboloLocal ?? uc.unidadMaestra?.simbolo ?? null)
+          : null,
+      };
+    });
+  }
+
+  /**
+   * Guarda/actualiza el alias del proveedor para tus productos (recordar que
+   * "OSO AZUL" del proveedor = tu "OSO LUCIFER"). Upsert sobre ProveedorProducto.
+   */
+  async guardarAliasProveedor(
+    empresaId: string,
+    proveedorId: string,
+    items: Array<{
+      descripcionProveedor: string;
+      productoId: string;
+      varianteId?: string | null;
+      precioCompra?: number;
+    }>,
+  ) {
+    let guardados = 0;
+    for (const it of items) {
+      if (!it.descripcionProveedor?.trim() || !it.productoId) continue;
+      const existing = await this.prisma.proveedorProducto.findFirst({
+        where: { empresaId, proveedorId, productoId: it.productoId, varianteId: it.varianteId ?? null },
+        select: { id: true },
+      });
+      if (existing) {
+        await this.prisma.proveedorProducto.update({
+          where: { id: existing.id },
+          data: { descripcionProveedor: it.descripcionProveedor.trim() },
+        });
+      } else {
+        await this.prisma.proveedorProducto.create({
+          data: {
+            empresaId,
+            proveedorId,
+            productoId: it.productoId,
+            varianteId: it.varianteId ?? null,
+            descripcionProveedor: it.descripcionProveedor.trim(),
+            precioCompra: it.precioCompra ?? 0,
+          },
+        });
+      }
+      guardados++;
+    }
+    return { ok: true, guardados };
+  }
+
   /** Días de crédito: explícito si vino, si no derivado del enum TerminosPago. */
   private _diasDeTerminos(
     terminos?: string | null,

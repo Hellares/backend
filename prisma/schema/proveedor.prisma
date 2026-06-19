@@ -179,6 +179,12 @@ model ProveedorProducto {
   precioCompra Decimal  @db.Decimal(15, 2)
   descuento    Decimal? @db.Decimal(5, 2)
 
+  // Diccionario de alias: cómo nombra/codifica este proveedor a TU producto en
+  // sus guías/facturas (ej. proveedor dice "OSO AZUL" = tu "OSO LUCIFER"). Se usa
+  // para auto-mapear los bienes de una guía SUNAT a tu catálogo al recibir.
+  descripcionProveedor String?
+  codigoProveedor      String?
+
   // Stock
   esPreferido Boolean @default(false)
 
