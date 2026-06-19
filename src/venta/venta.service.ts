@@ -1034,6 +1034,7 @@ export class VentaService {
     empresaId: string,
     dto: CrearYCobrarVentaDto,
     cajeroId: string,
+    opts?: { diferirComprobante?: boolean },
   ) {
     const canalVenta = dto.canalVenta ?? 'POS';
     this.logger.info('Creando y cobrando venta', { empresaId, sede: dto.sedeId, canal: canalVenta });
@@ -1242,6 +1243,20 @@ export class VentaService {
             estado: estaPagada
               ? EstadoVenta.PAGADA_COMPLETA
               : EstadoVenta.CONFIRMADA,
+            // Comprobante DIFERIDO (flujo Yape pendiente): guardamos la
+            // intención fiscal; el comprobante se emite al confirmarse el pago
+            // (finalizarVentaYape). En ventas normales estos campos van null.
+            tipoComprobanteDiferido:
+              opts?.diferirComprobante && (dto.tipoComprobante || 'TICKET') !== 'TICKET'
+                ? dto.tipoComprobante
+                : null,
+            sedeFacturacionIdDiferido: opts?.diferirComprobante
+              ? dto.sedeFacturacionId ?? null
+              : null,
+            tipoDocumentoClienteDiferido: opts?.diferirComprobante
+              ? dto.tipoDocumentoCliente ?? null
+              : null,
+            cobroDiferido: opts?.diferirComprobante ?? false,
             detalles: {
               create: detallesCalculados.map((d) => ({
                 productoId: d.productoId,
@@ -1610,7 +1625,10 @@ export class VentaService {
         let comprobanteGenerado: { id: string; codigoGenerado: string } | null = null;
         const tipoComprobante = dto.tipoComprobante || 'TICKET';
 
-        if (tipoComprobante !== 'TICKET') {
+        // `diferirComprobante` (flujo Yape pendiente): NO se emite ahora; se
+        // emitirá al confirmarse el pago. La intención quedó guardada en las
+        // columnas *Diferido de la venta.
+        if (tipoComprobante !== 'TICKET' && !opts?.diferirComprobante) {
         // Validar documento del cliente para comprobante electrónico
         const validacionDoc = validarDocumentoParaComprobante(tipoComprobante, dto.documentoCliente);
         if (!validacionDoc.valido) {
@@ -1874,6 +1892,236 @@ export class VentaService {
     }
 
     return result.venta;
+  }
+
+  /**
+   * Crea una venta Yape/Plin con REGISTRO DIFERIDO: nace CONFIRMADA con el stock
+   * descontado pero SIN comprobante (se emite al confirmarse el pago) y SIN
+   * caja/pago. Si se cancela/expira sin pagar → se BORRA (devuelve stock), no
+   * deja venta ANULADA ni boleta. Reusa `crearYCobrar` con `diferirComprobante`.
+   *
+   * Alcance Fase 1: NO soporta órdenes de servicio ni combos (sus reservas
+   * complican el borrado) → esos carritos van por el cobro estándar inmediato.
+   */
+  async crearVentaYapeDiferida(
+    empresaId: string,
+    dto: CrearYCobrarVentaDto,
+    cajeroId: string,
+  ) {
+    const tieneOrden = dto.detalles?.some((d) => d.ordenServicioId);
+    const tieneCombo = dto.detalles?.some(
+      (d) => (d as any).comboId || (d as any).origenComboId,
+    );
+    if (tieneOrden || tieneCombo) {
+      throw new BadRequestException(
+        'El cobro Yape diferido no soporta órdenes de servicio ni combos. Usá el cobro estándar.',
+      );
+    }
+    return this.crearYCobrar(empresaId, dto, cajeroId, {
+      diferirComprobante: true,
+    });
+  }
+
+  /**
+   * Emite el comprobante electrónico (BOLETA/FACTURA) de una venta dentro de la
+   * transacción `tx`: bloquea la sede (FOR UPDATE), incrementa el correlativo,
+   * crea el ComprobanteElectronico con sus detalles y los PagoComprobante.
+   *
+   * Extraído de `crearYCobrar` (sin cambio de comportamiento) para poder
+   * reutilizarlo al EMITIR EL COMPROBANTE EN EL MOMENTO DEL PAGO (flujo Yape
+   * diferido), no al crear la venta. Por eso `pagos`/`metodoPagoFallback` se
+   * reciben como parámetro (al crear = dto.pagos; al finalizar Yape = el pago
+   * Yape confirmado). Devuelve null si la sede no tiene serie configurada.
+   */
+  private async _emitirComprobante(
+    tx: any,
+    p: {
+      empresaId: string;
+      ventaId: string;
+      ventaCodigo: string;
+      tipoComprobante: string;
+      detallesCalculados: any[];
+      cliente: {
+        documentoCliente?: string | null;
+        clienteId?: string | null;
+        clienteEmpresaId?: string | null;
+        tipoDocumentoCliente?: string | null;
+        nombreCliente?: string | null;
+        direccionCliente?: string | null;
+        emailCliente?: string | null;
+      };
+      sedeFacturacionId?: string | null;
+      sedeId: string;
+      moneda?: string | null;
+      pagos?: Array<{ metodoPago: string; monto: number; referencia?: string | null }>;
+      metodoPagoFallback?: string | null;
+      ordenesACobrar: any[];
+      esCredito: boolean;
+      totalVenta: number;
+      totalACobrarHoy: number;
+      montoRecibido: number;
+    },
+  ): Promise<{ comprobanteId: string; codigoGenerado: string } | null> {
+    // Validar documento del cliente para comprobante electrónico
+    const validacionDoc = validarDocumentoParaComprobante(
+      p.tipoComprobante,
+      p.cliente.documentoCliente ?? undefined,
+    );
+    if (!validacionDoc.valido) {
+      throw new BadRequestException(validacionDoc.error);
+    }
+
+    // Usar sede de facturación si se especificó (multi-RUC), sino la sede operativa
+    const sedeIdFacturacion = p.sedeFacturacionId || p.sedeId;
+    const [sedeLocked] = await tx.$queryRaw<
+      Array<{
+        id: string;
+        serieFactura: string;
+        serieBoleta: string;
+        ultimoNumeroFactura: number;
+        ultimoNumeroBoleta: number;
+      }>
+    >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
+        FROM "Sede" WHERE id = ${sedeIdFacturacion} FOR UPDATE`;
+
+    if (!sedeLocked) return null;
+
+    const serie =
+      p.tipoComprobante === 'FACTURA'
+        ? sedeLocked.serieFactura
+        : sedeLocked.serieBoleta;
+
+    // Increment atómico para evitar race conditions en concurrencia
+    const campoContador =
+      p.tipoComprobante === 'FACTURA'
+        ? 'ultimoNumeroFactura'
+        : 'ultimoNumeroBoleta';
+    const sedeActualizada = await tx.sede.update({
+      where: { id: sedeLocked.id },
+      data: { [campoContador]: { increment: 1 } },
+      select: { [campoContador]: true },
+    });
+    const nuevoCorrelativo: number = (sedeActualizada as any)[campoContador];
+
+    const correlativo = String(nuevoCorrelativo);
+    const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
+
+    // Calcular totales tributarios por tipo de afectación
+    const tributario = this.calcularTotalesTributarios(p.detallesCalculados);
+
+    const comprobante = await tx.comprobanteElectronico.create({
+      data: {
+        ventaId: p.ventaId,
+        empresaId: p.empresaId,
+        sedeId: p.sedeFacturacionId || p.sedeId,
+        clienteId: p.cliente.clienteId,
+        clienteEmpresaId: p.cliente.clienteEmpresaId,
+        tipoComprobante: p.tipoComprobante as any,
+        serie,
+        correlativo: correlativo.padStart(8, '0'),
+        codigoGenerado,
+        tipoDocumento:
+          p.cliente.tipoDocumentoCliente ||
+          (p.tipoComprobante === 'FACTURA' ? '6' : '1'),
+        numeroDocumento: p.cliente.documentoCliente,
+        nombreCliente: p.cliente.nombreCliente || 'CLIENTE VARIOS',
+        direccionCliente: p.cliente.direccionCliente,
+        emailCliente: p.cliente.emailCliente,
+        moneda: p.moneda || 'PEN',
+        gravada: new Prisma.Decimal(tributario.gravada.toFixed(2)),
+        exonerada: new Prisma.Decimal(tributario.exonerada.toFixed(2)),
+        inafecta: new Prisma.Decimal(tributario.inafecta.toFixed(2)),
+        igv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+        totalIgv: new Prisma.Decimal(tributario.igv.toFixed(2)),
+        icbper: new Prisma.Decimal(tributario.icbper.toFixed(2)),
+        total: new Prisma.Decimal(p.totalVenta.toFixed(2)),
+        estado: 'REGISTRADO' as any,
+        detalles: {
+          create: p.detallesCalculados.map((d) => {
+            const subtotalItem = d.subtotal;
+            const igvItem = d.igv;
+            const totalItem = d.total;
+            const cant = d.cantidad || 1;
+            const valorUnit = cant > 0 ? subtotalItem / cant : 0;
+            const precioUnit = cant > 0 ? totalItem / cant : 0;
+            return {
+              descripcion: d.descripcion,
+              cantidad: d.cantidad,
+              tipoAfectacion: d.tipoAfectacion,
+              porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
+              valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
+              precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
+              valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
+              igv: new Prisma.Decimal(igvItem.toFixed(2)),
+              icbper: new Prisma.Decimal((d.icbper || 0).toFixed(2)),
+              subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
+              total: new Prisma.Decimal(totalItem.toFixed(2)),
+              ...(d.productoId
+                ? { producto: { connect: { id: d.productoId } } }
+                : {}),
+            };
+          }),
+        },
+      },
+    });
+
+    // Multi-medio: 1 PagoComprobante por cada PagoVenta no-CREDITO.
+    // Si la venta es a crédito puro o no hay pagos[], crear UN registro
+    // marcador (PENDIENTE para crédito, COMPLETADO para legacy).
+    // Adelantos de órdenes aplicados al comprobante: completan el
+    // total (total = adelantos + cobrado hoy).
+    const pagosAdelantoComprobante = p.ordenesACobrar
+      .filter((o) => Number(o.adelanto ?? 0) > 0)
+      .map((o) => ({
+        comprobanteId: comprobante.id,
+        metodoPago: OrdenServicioService.toMetodoPagoVenta(
+          o.metodoPagoAdelanto,
+        ) as string,
+        monto: new Prisma.Decimal(Number(o.adelanto).toFixed(2)),
+        referencia: `Adelanto ${o.codigo}`,
+        estado: 'COMPLETADO',
+      }));
+
+    const pagosComprobanteData =
+      !p.esCredito && p.pagos && p.pagos.length > 0
+        ? p.pagos
+            .filter((pago) => pago.metodoPago !== 'CREDITO')
+            .map((pago) => ({
+              comprobanteId: comprobante.id,
+              metodoPago: pago.metodoPago,
+              monto: new Prisma.Decimal(Number(pago.monto).toFixed(2)),
+              referencia: pago.referencia || null,
+              estado: 'COMPLETADO',
+            }))
+        : !p.esCredito &&
+            p.totalACobrarHoy <= 0 &&
+            pagosAdelantoComprobante.length > 0
+          ? []
+          : [
+              {
+                comprobanteId: comprobante.id,
+                metodoPago: p.metodoPagoFallback || 'EFECTIVO',
+                monto: new Prisma.Decimal(
+                  (p.esCredito
+                    ? 0
+                    : Math.min(
+                        p.montoRecibido || p.totalACobrarHoy,
+                        p.totalACobrarHoy,
+                      )
+                  ).toFixed(2),
+                ),
+                estado: p.esCredito ? 'PENDIENTE' : 'COMPLETADO',
+              },
+            ];
+
+    await tx.pagoComprobante.createMany({
+      data: [...pagosComprobanteData, ...pagosAdelantoComprobante],
+    });
+
+    this.logger.log(
+      `Comprobante ${codigoGenerado} generado para venta POS ${p.ventaCodigo}`,
+    );
+    return { comprobanteId: comprobante.id, codigoGenerado };
   }
 
   /**
@@ -3109,10 +3357,14 @@ export class VentaService {
   ) {
     this.logger.info('Procesando pago', { id, empresaId });
 
+    // Comprobante diferido (flujo Yape): si esta venta emite su comprobante al
+    // pagar, capturamos el id para disparar el envío a Nubefact tras el commit.
+    let comprobanteDiferidoId: string | null = null;
+
     const ventaPagada = await this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
         where: { id, empresaId },
-        include: { pagos: true },
+        include: { pagos: true, detalles: true },
       });
 
       // Idempotente: si la venta YA está pagada completa, no agregamos otro pago
@@ -3337,6 +3589,68 @@ export class VentaService {
         include: this.getInclude(),
       });
 
+      // ── Comprobante DIFERIDO (flujo Yape pendiente) ──
+      // La venta nació CONFIRMADA sin comprobante (intención guardada en
+      // *Diferido). Al quedar PAGADA_COMPLETA, recién aquí emitimos el
+      // comprobante — con el pago realmente confirmado. La condición
+      // `tipoComprobanteDiferido` garantiza que NUNCA se dispara en ventas
+      // normales (ahí es null). Idempotente: no re-emite si ya existe.
+      if (
+        nuevoEstado === EstadoVenta.PAGADA_COMPLETA &&
+        venta.tipoComprobanteDiferido
+      ) {
+        const yaTiene = await tx.comprobanteElectronico.findFirst({
+          where: { ventaId: id },
+          select: { id: true },
+        });
+        if (!yaTiene) {
+          // Detalles a números planos (de DB vienen como Decimal).
+          const detallesNum = venta.detalles.map((d: any) => ({
+            descripcion: d.descripcion,
+            cantidad: Number(d.cantidad),
+            tipoAfectacion: d.tipoAfectacion,
+            porcentajeIGV: Number(d.porcentajeIGV ?? 18),
+            subtotal: Number(d.subtotal),
+            igv: Number(d.igv),
+            total: Number(d.total),
+            icbper: Number(d.icbper ?? 0),
+            productoId: d.productoId,
+          }));
+          const pagosVenta = [...venta.pagos, pago].map((pp: any) => ({
+            metodoPago: String(pp.metodoPago),
+            monto: Number(pp.monto),
+            referencia: pp.referencia ?? null,
+          }));
+          const comp = await this._emitirComprobante(tx, {
+            empresaId,
+            ventaId: id,
+            ventaCodigo: venta.codigo,
+            tipoComprobante: venta.tipoComprobanteDiferido,
+            detallesCalculados: detallesNum,
+            cliente: {
+              documentoCliente: venta.documentoCliente,
+              clienteId: venta.clienteId,
+              clienteEmpresaId: venta.clienteEmpresaId,
+              tipoDocumentoCliente: venta.tipoDocumentoClienteDiferido,
+              nombreCliente: venta.nombreCliente,
+              direccionCliente: venta.direccionCliente,
+              emailCliente: venta.emailCliente,
+            },
+            sedeFacturacionId: venta.sedeFacturacionIdDiferido,
+            sedeId: venta.sedeId,
+            moneda: venta.moneda,
+            pagos: pagosVenta,
+            metodoPagoFallback: dto.metodoPago,
+            ordenesACobrar: [],
+            esCredito: false,
+            totalVenta: ventaTotal,
+            totalACobrarHoy: ventaTotal,
+            montoRecibido: totalPagado,
+          });
+          if (comp) comprobanteDiferidoId = comp.comprobanteId;
+        }
+      }
+
       // Registrar movimiento en caja activa (si hay)
       if (usuarioId) {
         try {
@@ -3391,6 +3705,18 @@ export class VentaService {
         .catch(() => undefined);
     }
 
+    // Fire-after-commit: enviar a Nubefact el comprobante recién emitido en el
+    // flujo Yape diferido (no bloquea el pago).
+    if (comprobanteDiferidoId) {
+      this.facturacionService
+        .enviarComprobante(comprobanteDiferidoId, empresaId)
+        .catch((err) =>
+          this.logger.warn(
+            `Envío del comprobante diferido ${comprobanteDiferidoId} falló: ${err?.message}`,
+          ),
+        );
+    }
+
     return ventaPagada;
   }
 
@@ -3413,6 +3739,30 @@ export class VentaService {
       .cancelarCobro({ empresaId, ventaId })
       .catch(() => undefined);
 
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId },
+      include: { pagos: { select: { monto: true } }, detalles: true },
+    });
+    if (!venta) return { anulada: false, yaPagada: false };
+
+    // Carrera con el webhook: si el pago llegó justo antes, NO tocar la venta.
+    const pagado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
+    if (
+      venta.estado === EstadoVenta.PAGADA_COMPLETA ||
+      venta.estado === EstadoVenta.PAGADA_PARCIAL ||
+      pagado > 0
+    ) {
+      return { anulada: false, yaPagada: true };
+    }
+
+    // Venta DIFERIDA pendiente sin pagos → BORRAR + devolver stock (no deja
+    // venta ANULADA ni comprobante: nunca llegó a materializarse).
+    if (venta.cobroDiferido && venta.estado === EstadoVenta.CONFIRMADA) {
+      const r = await this.eliminarVentaYapeDiferidaPendiente(ventaId, empresaId);
+      return { anulada: r.eliminada, yaPagada: r.yaPagada };
+    }
+
+    // Compat (venta NO diferida, ej. flujo viejo): anular como antes.
     try {
       await this.anular(ventaId, empresaId, usuarioId, undefined, {
         soloSiPendienteSinPagos: true,
@@ -3426,9 +3776,6 @@ export class VentaService {
       });
       return { anulada: true, yaPagada: false };
     } catch (err) {
-      // No se pudo anular: la venta dejó de estar pendiente sin pagos (el
-      // webhook la pagó justo ahora) o ya estaba anulada. Resolvemos por el
-      // estado real para que el app sepa si cerrar como pagada.
       const v = await this.prisma.venta.findFirst({
         where: { id: ventaId, empresaId },
         select: { estado: true },
@@ -3441,6 +3788,112 @@ export class VentaService {
       );
       return { anulada: false, yaPagada };
     }
+  }
+
+  /**
+   * Borra una venta Yape DIFERIDA pendiente (CONFIRMADA, `cobroDiferido`, sin
+   * pagos) devolviendo el stock. Reutilizado por el cancel manual (hoja de
+   * cobro) y por el cron TTL. Cierra la carrera con el webhook re-validando
+   * dentro de la transacción. Devuelve `yaPagada` si el pago llegó justo antes.
+   */
+  async eliminarVentaYapeDiferidaPendiente(
+    ventaId: string,
+    empresaId: string,
+  ): Promise<{ eliminada: boolean; yaPagada: boolean }> {
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId, cobroDiferido: true },
+      include: { pagos: { select: { monto: true } }, detalles: true },
+    });
+    if (!venta) return { eliminada: false, yaPagada: false };
+
+    const pagado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
+    if (venta.estado !== EstadoVenta.CONFIRMADA || pagado > 0) {
+      const yaPagada =
+        venta.estado === EstadoVenta.PAGADA_COMPLETA ||
+        venta.estado === EstadoVenta.PAGADA_PARCIAL;
+      return { eliminada: false, yaPagada };
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // Re-validar dentro de la tx (cierra carrera con el webhook que pudo
+        // pagar entre el findFirst de arriba y este borrado).
+        const fresca = await tx.venta.findFirst({
+          where: { id: ventaId },
+          select: { estado: true, pagos: { select: { id: true } } },
+        });
+        if (
+          !fresca ||
+          fresca.estado !== EstadoVenta.CONFIRMADA ||
+          fresca.pagos.length > 0
+        ) {
+          throw new Error('La venta dejó de estar pendiente sin pagos');
+        }
+        await this._eliminarVentaDiferidaPendiente(tx, venta);
+      });
+      this.realtimeInvalidation.notifyStockCambiado({
+        empresaId,
+        sedeId: venta.sedeId,
+      });
+      await this.invalidateProductCache(empresaId).catch(() => undefined);
+      return { eliminada: true, yaPagada: false };
+    } catch (err) {
+      const v = await this.prisma.venta.findFirst({
+        where: { id: ventaId, empresaId },
+        select: { estado: true },
+      });
+      const yaPagada =
+        v?.estado === EstadoVenta.PAGADA_COMPLETA ||
+        v?.estado === EstadoVenta.PAGADA_PARCIAL;
+      this.logger.warn(
+        `No se borró el cobro Yape diferido ${ventaId}: ${(err as Error).message} (estado=${v?.estado})`,
+      );
+      return { eliminada: false, yaPagada };
+    }
+  }
+
+  /**
+   * Borra una venta Yape DIFERIDA pendiente (CONFIRMADA, sin comprobante ni
+   * pagos) devolviendo el stock al inventario. No deja venta ANULADA: la venta
+   * nunca llegó a materializarse fiscalmente. Solo para `cobroDiferido` (el
+   * flujo diferido excluye combos y órdenes de servicio). Debe llamarse dentro
+   * de una transacción que ya validó estado=CONFIRMADA y pagos=0.
+   */
+  private async _eliminarVentaDiferidaPendiente(
+    tx: any,
+    venta: {
+      id: string;
+      sedeId: string;
+      detalles: Array<{
+        productoId: string | null;
+        varianteId: string | null;
+        cantidad: any;
+      }>;
+    },
+  ): Promise<void> {
+    // Devolver stock (increment atómico) por cada detalle de producto/variante.
+    for (const d of venta.detalles) {
+      if (!d.productoId && !d.varianteId) continue;
+      const ps = await tx.productoStock.findFirst({
+        where: {
+          sedeId: venta.sedeId,
+          productoId: d.productoId ?? null,
+          varianteId: d.varianteId ?? null,
+        },
+        select: { id: true },
+      });
+      if (!ps) continue;
+      await tx.productoStock.update({
+        where: { id: ps.id },
+        data: { stockActual: { increment: Number(d.cantidad) } },
+      });
+    }
+    // Borrar hijos (no hay onDelete cascade) y luego la venta. Una diferida sin
+    // pagar no tiene pagos/comprobante/caja/cuotas.
+    await tx.movimientoStock.deleteMany({ where: { ventaId: venta.id } });
+    await tx.descuentoUsoHistorial.deleteMany({ where: { ventaId: venta.id } });
+    await tx.ventaDetalle.deleteMany({ where: { ventaId: venta.id } });
+    await tx.venta.delete({ where: { id: venta.id } });
   }
 
   /**

@@ -66,6 +66,21 @@ export class VentaController {
     return this.ventaService.crearYCobrar(empresaId, dto, cajeroId);
   }
 
+  @Post('cobrar-yape')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Crea una venta Yape/Plin con registro DIFERIDO (CONFIRMADA sin comprobante; se emite al pagar)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async crearVentaYapeDiferida(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CrearYCobrarVentaDto,
+    @CurrentUser('id') cajeroId: string,
+  ) {
+    return this.ventaService.crearVentaYapeDiferida(empresaId, dto, cajeroId);
+  }
+
   @Post(':id/cobro-yape')
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({

@@ -57,7 +57,7 @@ export class VentaYapeTasksService {
           creadoEn: { lt: limite },
           pagos: { none: {} },
         },
-        select: { id: true, empresaId: true, sedeId: true, codigo: true },
+        select: { id: true, empresaId: true, sedeId: true, codigo: true, cobroDiferido: true },
         take: 100, // batch — el resto en la próxima corrida
       });
 
@@ -71,25 +71,35 @@ export class VentaYapeTasksService {
 
       for (const v of ventas) {
         try {
-          // anular sin dto → no setea anuladoPorId/autorizadoPorId (FK a
-          // Usuario; aquí es el sistema). El guard cierra la carrera con el
-          // webhook. Revierte stock + cotización + órdenes.
-          await this.ventaService.anular(
-            v.id,
-            v.empresaId,
-            'SYSTEM-YAPE-TTL',
-            undefined,
-            { soloSiPendienteSinPagos: true },
-          );
-          // Sellar el motivo (anular sin dto no lo registra).
-          await this.prisma.venta.update({
-            where: { id: v.id },
-            data: {
-              motivoAnulacion:
-                'Expiración automática: pago Yape/Plin no confirmado',
-              fechaAnulacion: new Date(),
-            },
-          });
+          if (v.cobroDiferido) {
+            // Venta DIFERIDA (registro diferido): nació CONFIRMADA sin
+            // comprobante esperando el pago. Abandonada → se BORRA y se
+            // devuelve el stock (no deja venta ANULADA). El método re-valida
+            // pendiente-sin-pagos dentro de su tx (carrera con el webhook).
+            await this.ventaService.eliminarVentaYapeDiferidaPendiente(
+              v.id,
+              v.empresaId,
+            );
+          } else {
+            // Venta NO diferida (flujo viejo): anular como antes — revierte
+            // stock + cotización + órdenes, deja registro ANULADA.
+            await this.ventaService.anular(
+              v.id,
+              v.empresaId,
+              'SYSTEM-YAPE-TTL',
+              undefined,
+              { soloSiPendienteSinPagos: true },
+            );
+            // Sellar el motivo (anular sin dto no lo registra).
+            await this.prisma.venta.update({
+              where: { id: v.id },
+              data: {
+                motivoAnulacion:
+                  'Expiración automática: pago Yape/Plin no confirmado',
+                fechaAnulacion: new Date(),
+              },
+            });
+          }
           const sedes = empresasAfectadas.get(v.empresaId) ?? new Set();
           sedes.add(v.sedeId);
           empresasAfectadas.set(v.empresaId, sedes);

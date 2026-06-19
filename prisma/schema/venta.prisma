@@ -84,6 +84,20 @@ model Venta {
   // de no poder deducir IGV / sustento de gasto).
   bancarizacionAdvertida Boolean @default(false)
 
+  // Comprobante DIFERIDO (flujo Yape pendiente): cuando la venta nace como
+  // BORRADOR esperando el pago Yape/Plin, el comprobante NO se emite al crear
+  // sino al confirmarse el pago. Estos 3 campos guardan la intención fiscal que
+  // hoy vive solo en el DTO (el resto de datos del cliente ya están en columnas
+  // de Venta). Null en ventas normales. Ver VentaService.finalizarVentaYape.
+  tipoComprobanteDiferido      String? // BOLETA | FACTURA (TICKET no emite)
+  sedeFacturacionIdDiferido    String? // sede emisora (multi-RUC); null = sedeId
+  tipoDocumentoClienteDiferido String? // 1=DNI, 6=RUC, etc.
+  // Marca que la venta es un cobro Yape/Plin DIFERIDO (nació CONFIRMADA sin
+  // comprobante, esperando el pago). Sirve incluso para TICKET (donde los
+  // *Diferido van null). Si se cancela/expira sin pagar → se BORRA (devuelve
+  // stock), no se anula. true solo en el flujo Yape pendiente.
+  cobroDiferido                Boolean @default(false)
+
   // Crédito
   esCredito           Boolean  @default(false)
   plazoCredito        Int? // Días de crédito
