@@ -84,6 +84,25 @@ describe('aplicarPagoCompra', () => {
       aplicarPagoCompra(tx, caja, { ...base, moneda: 'USD', metodoPago: 'TRANSFERENCIA' as any, fuente: 'TESORERIA' as any }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('compra USD pagada desde banco PEN → BadRequest (moneda no coincide)', async () => {
+    tx.empresaBanco.findFirst.mockResolvedValue({ id: 'banco-pen', moneda: 'PEN' });
+    await expect(
+      aplicarPagoCompra(tx, caja, {
+        ...base, moneda: 'USD', metodoPago: 'TRANSFERENCIA' as any, fuente: 'BANCO' as any, bancoId: 'banco-pen',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.empresaBanco.update).not.toHaveBeenCalled();
+  });
+
+  it('compra USD pagada desde banco USD → OK, decrementa', async () => {
+    tx.empresaBanco.findFirst.mockResolvedValue({ id: 'banco-usd', moneda: 'USD' });
+    const pago = await aplicarPagoCompra(tx, caja, {
+      ...base, moneda: 'USD', metodoPago: 'TRANSFERENCIA' as any, fuente: 'BANCO' as any, bancoId: 'banco-usd',
+    });
+    expect(tx.empresaBanco.update).toHaveBeenCalledWith({ where: { id: 'banco-usd' }, data: { saldoActual: { decrement: 100 } } });
+    expect(pago).toMatchObject({ fuente: 'BANCO', bancoId: 'banco-usd' });
+  });
 });
 
 describe('revertirPagoCompra', () => {

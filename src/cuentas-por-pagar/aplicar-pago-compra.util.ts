@@ -61,9 +61,19 @@ export async function aplicarPagoCompra(
   if (fuente === FuentePagoCompra.BANCO) {
     const banco = await tx.empresaBanco.findFirst({
       where: { id: input.bancoId, empresaId: input.empresaId, isActive: true },
-      select: { id: true },
+      select: { id: true, moneda: true },
     });
     if (!banco) throw new BadRequestException('Cuenta bancaria no encontrada');
+    // La moneda del banco debe coincidir con la de la compra: no se paga una
+    // deuda en USD desde una cuenta en soles (ni viceversa) — son saldos por
+    // moneda, mezclarlos descuadra.
+    const bancoMoneda = banco.moneda ?? 'PEN';
+    const compraMoneda = input.moneda || 'PEN';
+    if (bancoMoneda !== compraMoneda) {
+      throw new BadRequestException(
+        `La compra es en ${compraMoneda} pero la cuenta bancaria es en ${bancoMoneda}. Elegí una cuenta en ${compraMoneda}.`,
+      );
+    }
     await tx.empresaBanco.update({
       where: { id: banco.id },
       data: { saldoActual: { decrement: input.monto } },

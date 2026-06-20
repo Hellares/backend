@@ -354,9 +354,23 @@ export class CuentasPorPagarService {
     const pendientes = cuentas.filter((c) => c.estado === 'PENDIENTE');
     const vencidas = cuentas.filter((c) => c.estado === 'VENCIDA');
 
+    // Deuda separada por moneda: NUNCA sumar PEN + USD en un mismo total (sería
+    // engañoso). El total plano se mantiene para compatibilidad, pero el front
+    // debe mostrar el desglose por moneda.
+    const porMoneda = (items: typeof cuentas): Record<string, number> => {
+      const m: Record<string, number> = {};
+      for (const c of items) {
+        const mon = c.moneda || 'PEN';
+        m[mon] = Math.round(((m[mon] ?? 0) + c.saldoPendiente) * 100) / 100;
+      }
+      return m;
+    };
+
     return {
       totalPendiente: Math.round(pendientes.reduce((s, c) => s + c.saldoPendiente, 0) * 100) / 100,
       totalVencido: Math.round(vencidas.reduce((s, c) => s + c.saldoPendiente, 0) * 100) / 100,
+      pendientePorMoneda: porMoneda(pendientes),
+      vencidoPorMoneda: porMoneda(vencidas),
       cantidadPendientes: pendientes.length,
       cantidadVencidas: vencidas.length,
       totalCuentas: cuentas.length,

@@ -344,3 +344,17 @@ describe('CuentasPorPagarService.anularPago', () => {
     await expect(service.anularPago(EMPRESA, 'pago-1', USER)).rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+describe('CuentasPorPagarService.getResumen (por moneda)', () => {
+  it('separa el pendiente por moneda (no suma PEN + USD)', async () => {
+    const service = new CuentasPorPagarService({} as any, {} as any, {} as any);
+    jest.spyOn(service, 'listar').mockResolvedValue([
+      { estado: 'PENDIENTE', saldoPendiente: 100, moneda: 'PEN', diasVencimiento: null },
+      { estado: 'PENDIENTE', saldoPendiente: 50, moneda: 'USD', diasVencimiento: null },
+      { estado: 'VENCIDA', saldoPendiente: 30, moneda: 'USD', diasVencimiento: -2 },
+    ] as any);
+    const r = await service.getResumen('emp-1');
+    expect(r.pendientePorMoneda).toEqual({ PEN: 100, USD: 50 });
+    expect(r.vencidoPorMoneda).toEqual({ USD: 30 });
+  });
+});
