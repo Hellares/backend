@@ -254,6 +254,35 @@ export class ProveedorService {
       ? await this.cxcService.listar(empresaId, { clienteEmpresaId })
       : [];
 
+    // Ítems de cada documento (para el desplegable), en 2 queries batch.
+    const compraIds = cxp.map((c) => c.compraId);
+    const ventaIds = cxc.map((v) => v.ventaId);
+    const [detCompras, detVentas] = await Promise.all([
+      compraIds.length
+        ? this.prisma.compraDetalle.findMany({
+            where: { compraId: { in: compraIds } },
+            select: { compraId: true, descripcion: true, cantidad: true, total: true },
+          })
+        : Promise.resolve([]),
+      ventaIds.length
+        ? this.prisma.ventaDetalle.findMany({
+            where: { ventaId: { in: ventaIds } },
+            select: { ventaId: true, descripcion: true, cantidad: true, total: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const itemsPorDoc = new Map<string, { descripcion: string; cantidad: number; total: number }[]>();
+    for (const d of detCompras) {
+      const arr = itemsPorDoc.get(d.compraId) ?? [];
+      arr.push({ descripcion: d.descripcion, cantidad: Number(d.cantidad), total: Number(d.total) });
+      itemsPorDoc.set(d.compraId, arr);
+    }
+    for (const d of detVentas) {
+      const arr = itemsPorDoc.get(d.ventaId) ?? [];
+      arr.push({ descripcion: d.descripcion, cantidad: Number(d.cantidad), total: Number(d.total) });
+      itemsPorDoc.set(d.ventaId, arr);
+    }
+
     const r2 = (n: number) => Math.round(n * 100) / 100;
     const sumarPorMoneda = (items: { moneda?: string | null; saldoPendiente: number }[]) => {
       const m: Record<string, number> = {};
@@ -280,6 +309,7 @@ export class ProveedorService {
       ...cxp.map((c) => ({
         tipo: 'COMPRA' as const,
         lado: 'LE_DEBO' as const,
+        id: c.compraId,
         codigo: c.codigo,
         fecha: c.fechaCompra,
         total: c.totalCompra,
@@ -287,10 +317,12 @@ export class ProveedorService {
         saldoPendiente: c.saldoPendiente,
         moneda: c.moneda || 'PEN',
         estado: c.estado,
+        items: itemsPorDoc.get(c.compraId) ?? [],
       })),
       ...cxc.map((v) => ({
         tipo: 'VENTA' as const,
         lado: 'ME_DEBE' as const,
+        id: v.ventaId,
         codigo: v.codigo,
         fecha: v.fechaVenta,
         total: v.totalVenta,
@@ -298,6 +330,7 @@ export class ProveedorService {
         saldoPendiente: v.saldoPendiente,
         moneda: v.moneda || 'PEN',
         estado: v.estado,
+        items: itemsPorDoc.get(v.ventaId) ?? [],
       })),
     ].sort(
       (a, b) => new Date(b.fecha ?? 0).getTime() - new Date(a.fecha ?? 0).getTime(),

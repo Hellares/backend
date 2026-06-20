@@ -16,7 +16,11 @@ describe('ProveedorService.estadoCuenta', () => {
   const logger = { info: jest.fn(), setContext: jest.fn(), log: jest.fn(), error: jest.fn() };
 
   beforeEach(() => {
-    prisma = { proveedor: { findFirst: jest.fn() } };
+    prisma = {
+      proveedor: { findFirst: jest.fn() },
+      compraDetalle: { findMany: jest.fn().mockResolvedValue([]) },
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue([]) },
+    };
     cxp = { listar: jest.fn().mockResolvedValue([]) };
     cxc = { listar: jest.fn().mockResolvedValue([]) };
     service = new ProveedorService(prisma, logger as any, {} as any, {} as any, cxp, cxc);
@@ -33,11 +37,14 @@ describe('ProveedorService.estadoCuenta', () => {
       clienteEmpresa: { id: 'ce-1', codigo: 'CE-002' },
     });
     cxp.listar.mockResolvedValue([
-      { codigo: 'COMPRA-1', moneda: 'PEN', saldoPendiente: 100, totalCompra: 100, totalPagado: 0, fechaCompra: '2026-06-01', estado: 'PENDIENTE' },
-      { codigo: 'COMPRA-2', moneda: 'USD', saldoPendiente: 50, totalCompra: 50, totalPagado: 0, fechaCompra: '2026-06-03', estado: 'PENDIENTE' },
+      { compraId: 'c1', codigo: 'COMPRA-1', moneda: 'PEN', saldoPendiente: 100, totalCompra: 100, totalPagado: 0, fechaCompra: '2026-06-01', estado: 'PENDIENTE' },
+      { compraId: 'c2', codigo: 'COMPRA-2', moneda: 'USD', saldoPendiente: 50, totalCompra: 50, totalPagado: 0, fechaCompra: '2026-06-03', estado: 'PENDIENTE' },
     ]);
     cxc.listar.mockResolvedValue([
-      { codigo: 'VTA-1', moneda: 'PEN', saldoPendiente: 30, totalVenta: 30, totalPagado: 0, fechaVenta: '2026-06-02', estado: 'PENDIENTE' },
+      { ventaId: 'v1', codigo: 'VTA-1', moneda: 'PEN', saldoPendiente: 30, totalVenta: 30, totalPagado: 0, fechaVenta: '2026-06-02', estado: 'PENDIENTE' },
+    ]);
+    prisma.compraDetalle.findMany.mockResolvedValue([
+      { compraId: 'c1', descripcion: 'Gaseosa', cantidad: 2, total: 100 },
     ]);
 
     const r = await service.estadoCuenta(EMP, PROV);
@@ -49,6 +56,10 @@ describe('ProveedorService.estadoCuenta', () => {
     // Ordenado por fecha desc: COMPRA-2 (06-03) primero
     expect(r.movimientos[0].codigo).toBe('COMPRA-2');
     expect(r.esTercero).toBe(true);
+    // El movimiento de COMPRA-1 trae sus ítems + id para navegar
+    const c1 = r.movimientos.find((m: any) => m.codigo === 'COMPRA-1') as any;
+    expect(c1.id).toBe('c1');
+    expect(c1.items).toEqual([{ descripcion: 'Gaseosa', cantidad: 2, total: 100 }]);
   });
 
   it('proveedor sin cliente vinculado → solo CxP, no consulta CxC', async () => {
