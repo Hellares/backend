@@ -2393,18 +2393,32 @@ export class CajaService {
     }
 
     // Bancos + métodos que recauda cada uno
-    const [bancos, recaud] = await Promise.all([
+    const [bancos, recaud, recaudado] = await Promise.all([
       this.prisma.empresaBanco.findMany({
         where: { empresaId, isActive: true },
         orderBy: [{ esPrincipal: 'desc' }, { nombreBanco: 'asc' }],
       }),
       this.prisma.cuentaRecaudacion.findMany({ where: { empresaId } }),
+      // Cuánto entró a cada banco por método (barrido del cierre + migración).
+      // Son los EGRESO de caja/tesorería con metadata.bancoId hacia ese banco.
+      this.prisma.$queryRaw<{ bancoId: string; metodoPago: string; total: number }[]>`
+        SELECT (metadata->>'bancoId') AS "bancoId", "metodoPago", SUM("monto")::float8 AS total
+        FROM "MovimientoCaja"
+        WHERE "empresaId" = ${empresaId} AND tipo = 'EGRESO' AND anulado = false
+          AND (metadata->>'bancoId') IS NOT NULL
+        GROUP BY 1, 2`,
     ]);
     const metodosPorBanco = new Map<string, string[]>();
     for (const r of recaud) {
       const arr = metodosPorBanco.get(r.bancoId) ?? [];
       arr.push(r.metodoPago);
       metodosPorBanco.set(r.bancoId, arr);
+    }
+    const recaudadoPorBanco = new Map<string, Record<string, number>>();
+    for (const r of recaudado) {
+      const m = recaudadoPorBanco.get(r.bancoId) ?? {};
+      m[r.metodoPago] = Math.round(Number(r.total) * 100) / 100;
+      recaudadoPorBanco.set(r.bancoId, m);
     }
 
     const bancosOut = bancos.map((b) => ({
@@ -2415,6 +2429,9 @@ export class CajaService {
       esPrincipal: b.esPrincipal,
       saldoActual: b.saldoActual != null ? Number(b.saldoActual) : 0,
       metodos: metodosPorBanco.get(b.id) ?? [],
+      // Acumulado de lo que entró por cada método (recaudación). No es el saldo
+      // partido por método (los pagos salientes no se atribuyen a un método).
+      recaudadoPorMetodo: recaudadoPorBanco.get(b.id) ?? {},
     }));
 
     const bancosPorMoneda: Record<string, number> = {};

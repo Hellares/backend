@@ -15,6 +15,7 @@ describe('CajaService.getTesoreriaConsolidado', () => {
       movimientoCaja: { groupBy: jest.fn() },
       empresaBanco: { findMany: jest.fn() },
       cuentaRecaudacion: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([]),
     };
     service = new CajaService(prisma, {} as any);
   });
@@ -37,6 +38,10 @@ describe('CajaService.getTesoreriaConsolidado', () => {
       { metodoPago: 'YAPE', bancoId: 'bcp' },
       { metodoPago: 'PLIN', bancoId: 'bcp' },
     ]);
+    prisma.$queryRaw.mockResolvedValue([
+      { bancoId: 'bcp', metodoPago: 'YAPE', total: 700 },
+      { bancoId: 'bcp', metodoPago: 'PLIN', total: 500 },
+    ]);
 
     const res = await service.getTesoreriaConsolidado(EMPRESA);
 
@@ -53,8 +58,10 @@ describe('CajaService.getTesoreriaConsolidado', () => {
     const bcp = res.bancos.find((b) => b.id === 'bcp');
     expect(bcp).toMatchObject({ saldoActual: 1200, moneda: 'PEN' });
     expect(bcp!.metodos.sort()).toEqual(['PLIN', 'YAPE']);
+    expect(bcp!.recaudadoPorMetodo).toEqual({ YAPE: 700, PLIN: 500 });
     const wise = res.bancos.find((b) => b.id === 'wise');
     expect(wise!.metodos).toEqual([]);
+    expect(wise!.recaudadoPorMetodo).toEqual({});
 
     expect(res.bancosPorMoneda).toEqual({ PEN: 1200, USD: 300 });
   });
