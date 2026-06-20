@@ -4571,6 +4571,18 @@ export class VentaService {
     const incluyeIgv = dto.precioIncluyeIgv ?? false;
 
     const subtotalBruto = cantidad * precioUnitario;
+
+    // Guard: el descuento de la línea no puede superar el precio (cantidad ×
+    // precioUnitario). Si lo supera, la línea quedaría NEGATIVA → SUNAT rechaza
+    // la boleta ("mto_precio_unitario must be at least 0"). Bloquea descuentos
+    // manuales mal cargados (ej. descuento 3.40 sobre un ítem de 3.00).
+    if (descuento > subtotalBruto + 0.001) {
+      throw new BadRequestException(
+        `El descuento de "${dto.descripcion}" (S/ ${descuento.toFixed(2)}) no puede ` +
+          `superar el precio de la línea (S/ ${subtotalBruto.toFixed(2)}).`,
+      );
+    }
+
     let subtotal: number;
     let igv: number;
     let total: number;
