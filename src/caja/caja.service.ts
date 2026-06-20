@@ -2346,6 +2346,91 @@ export class CajaService {
   }
 
   /**
+   * Vista consolidada de tesorería de la empresa: la(s) bóveda(s) de efectivo
+   * (Caja Central por sede) + las cuentas bancarias con su saldo y qué método
+   * recauda cada una. Es el "dónde está mi plata" tras F2 (digital→bancos).
+   * `saldoDigitalHistorico` = digital que quedó en la central de cierres
+   * previos a F2 (idealmente 0 de acá en adelante).
+   */
+  async getTesoreriaConsolidado(empresaId: string) {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+
+    const centrales = await this.prisma.caja.findMany({
+      where: { empresaId, esCajaCentral: true },
+      include: { sede: { select: { id: true, nombre: true } } },
+    });
+
+    const bovedas: any[] = [];
+    let totalEfectivo = 0;
+    let totalDigitalHistorico = 0;
+
+    for (const central of centrales) {
+      const totales = await this.prisma.movimientoCaja.groupBy({
+        by: ['metodoPago', 'tipo'],
+        where: { cajaId: central.id, anulado: false },
+        _sum: { monto: true },
+      });
+      let efectivo = 0;
+      let digital = 0;
+      for (const row of totales) {
+        const monto = Number(row._sum.monto ?? 0);
+        const signed = row.tipo === TipoMovimientoCaja.INGRESO ? monto : -monto;
+        if (row.metodoPago === MetodoPagoVenta.EFECTIVO) efectivo += signed;
+        else digital += signed;
+      }
+      efectivo = r2(efectivo);
+      digital = r2(digital);
+      totalEfectivo += efectivo;
+      totalDigitalHistorico += digital;
+      bovedas.push({
+        sedeId: central.sede?.id ?? central.sedeId,
+        sedeNombre: central.sede?.nombre ?? null,
+        cajaId: central.id,
+        saldoEfectivo: efectivo,
+        saldoDigitalHistorico: digital,
+      });
+    }
+
+    // Bancos + métodos que recauda cada uno
+    const [bancos, recaud] = await Promise.all([
+      this.prisma.empresaBanco.findMany({
+        where: { empresaId, isActive: true },
+        orderBy: [{ esPrincipal: 'desc' }, { nombreBanco: 'asc' }],
+      }),
+      this.prisma.cuentaRecaudacion.findMany({ where: { empresaId } }),
+    ]);
+    const metodosPorBanco = new Map<string, string[]>();
+    for (const r of recaud) {
+      const arr = metodosPorBanco.get(r.bancoId) ?? [];
+      arr.push(r.metodoPago);
+      metodosPorBanco.set(r.bancoId, arr);
+    }
+
+    const bancosOut = bancos.map((b) => ({
+      id: b.id,
+      nombreBanco: b.nombreBanco,
+      numeroCuenta: b.numeroCuenta,
+      moneda: b.moneda ?? 'PEN',
+      esPrincipal: b.esPrincipal,
+      saldoActual: b.saldoActual != null ? Number(b.saldoActual) : 0,
+      metodos: metodosPorBanco.get(b.id) ?? [],
+    }));
+
+    const bancosPorMoneda: Record<string, number> = {};
+    for (const b of bancosOut) {
+      bancosPorMoneda[b.moneda] = r2((bancosPorMoneda[b.moneda] ?? 0) + b.saldoActual);
+    }
+
+    return {
+      bovedas,
+      totalEfectivo: r2(totalEfectivo),
+      totalDigitalHistorico: r2(totalDigitalHistorico),
+      bancos: bancosOut,
+      bancosPorMoneda,
+    };
+  }
+
+  /**
    * Listado paginado de movimientos de la Caja Central de una sede, con
    * filtros opcionales (tipo, metodo, categoria, fechas, busqueda libre).
    */

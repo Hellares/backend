@@ -210,6 +210,17 @@ export class CajaController {
   // IMPORTANTE: los endpoints 'tesoreria/:sedeId*' deben declararse ANTES
   // del comodín ':id' para que NestJS no los capture como id.
 
+  @Get('tesoreria-consolidado')
+  @RequiresPermission(Permission.VIEW_CAJA)
+  @ApiOperation({
+    summary:
+      'Vista consolidada de tesorería: bóveda(s) de efectivo por sede + cuentas bancarias con saldo y método que recaudan.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getTesoreriaConsolidado(@Headers('x-tenant-id') empresaId: string) {
+    return this.cajaService.getTesoreriaConsolidado(empresaId);
+  }
+
   @Get('tesoreria/:sedeId')
   @RequiresPermission(Permission.VIEW_CAJA)
   @ApiOperation({
