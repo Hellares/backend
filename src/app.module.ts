@@ -45,6 +45,7 @@ import { CuentasPorCobrarModule } from './cuentas-por-cobrar/cuentas-por-cobrar.
 import { CuentasPorPagarModule } from './cuentas-por-pagar/cuentas-por-pagar.module';
 import { EmpresaBancoModule } from './empresa-banco/empresa-banco.module';
 import { CuentasRecaudacionModule } from './cuentas-recaudacion/cuentas-recaudacion.module';
+import { ImpresorasDispositivoModule } from './impresoras-dispositivo/impresoras-dispositivo.module';
 import { ResumenFinancieroModule } from './resumen-financiero/resumen-financiero.module';
 import { PrestamoModule } from './prestamo/prestamo.module';
 import { LibroContableModule } from './libro-contable/libro-contable.module';
@@ -132,6 +133,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     CuentasPorPagarModule,
     EmpresaBancoModule,
     CuentasRecaudacionModule,
+    ImpresorasDispositivoModule,
     ResumenFinancieroModule,
     PrestamoModule,
     LibroContableModule,

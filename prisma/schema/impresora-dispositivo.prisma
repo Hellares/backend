@@ -1,0 +1,22 @@
+// =========================================
+// IMPRESORAS POR DISPOSITIVO
+// Persiste la config de impresoras del app en el servidor, identificada por
+// el dispositivo (ANDROID_ID, estable entre reinstalaciones). Al reinstalar y
+// loguearse, el app restaura su lista desde acá.
+// =========================================
+
+model ImpresoraDispositivo {
+  id        String @id @default(cuid())
+  empresaId String
+  deviceId  String // ANDROID_ID
+
+  // Lista de ImpresoraConfig tal cual la guarda el app (nombre, conexión,
+  // dirección MAC/IP, ancho, fuente, autoImprimir, esPrincipal).
+  config Json @default("[]")
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  @@unique([empresaId, deviceId])
+  @@index([empresaId])
+}
