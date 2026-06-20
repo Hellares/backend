@@ -15,6 +15,7 @@ export class CuentasPorCobrarService {
     filtros?: {
       estado?: 'PENDIENTE' | 'VENCIDA' | 'PAGADA';
       clienteId?: string;
+      clienteEmpresaId?: string;
       sedeId?: string;
       search?: string;
     },
@@ -26,6 +27,7 @@ export class CuentasPorCobrarService {
     };
 
     if (filtros?.clienteId) where.clienteId = filtros.clienteId;
+    if (filtros?.clienteEmpresaId) where.clienteEmpresaId = filtros.clienteEmpresaId;
     if (filtros?.sedeId) where.sedeId = filtros.sedeId;
     if (filtros?.search) {
       where.OR = [

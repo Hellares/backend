@@ -54,6 +54,17 @@ export class ProveedorController {
     return this.clienteEmpresaService.vincularDesdeProveedor(empresaId, id, user.sub);
   }
 
+  @Get(':id/estado-cuenta')
+  @RequiresPermission(Permission.VIEW_PROVEEDORES)
+  @ApiOperation({ summary: 'Estado de cuenta del tercero: compras (le debo) + ventas (me debe) + neto por moneda' })
+  @ApiParam({ name: 'empresaId', type: 'string' })
+  async estadoCuenta(
+    @Param('empresaId') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.proveedorService.estadoCuenta(empresaId, id);
+  }
+
   /**
    * Crear nuevo proveedor
    */

@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { AuditLoggerService, AuditAction } from '../common/logger/audit-logger.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
+import { CuentasPorPagarService } from '../cuentas-por-pagar/cuentas-por-pagar.service';
+import { CuentasPorCobrarService } from '../cuentas-por-cobrar/cuentas-por-cobrar.service';
 import { CreateProveedorDto, UpdateProveedorDto, EvaluarProveedorDto } from './dto';
 
 @Injectable()
@@ -19,6 +21,8 @@ export class ProveedorService {
     loggerService: AppLoggerService,
     private readonly auditLogger: AuditLoggerService,
     private readonly configuracionCodigosService: ConfiguracionCodigosService,
+    private readonly cxpService: CuentasPorPagarService,
+    private readonly cxcService: CuentasPorCobrarService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ProveedorService.name);
@@ -229,6 +233,90 @@ export class ProveedorService {
     }
 
     return proveedor;
+  }
+
+  /**
+   * Estado de cuenta del TERCERO (proveedor que también es cliente): cruza
+   * Cuentas por Pagar (lo que le debo por compras) con Cuentas por Cobrar (lo
+   * que me debe por ventas) y calcula el NETO por moneda. Devuelve además los
+   * documentos (compras + ventas) unificados y ordenados por fecha.
+   */
+  async estadoCuenta(empresaId: string, proveedorId: string) {
+    const prov = await this.prisma.proveedor.findFirst({
+      where: { id: proveedorId, empresaId },
+      include: { clienteEmpresa: { select: { id: true, codigo: true } } },
+    });
+    if (!prov) throw new NotFoundException('Proveedor no encontrado');
+    const clienteEmpresaId = prov.clienteEmpresa?.id ?? null;
+
+    const cxp = await this.cxpService.listar(empresaId, { proveedorId });
+    const cxc = clienteEmpresaId
+      ? await this.cxcService.listar(empresaId, { clienteEmpresaId })
+      : [];
+
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const sumarPorMoneda = (items: { moneda?: string | null; saldoPendiente: number }[]) => {
+      const m: Record<string, number> = {};
+      for (const it of items) {
+        if (it.saldoPendiente <= 0) continue;
+        const mon = it.moneda || 'PEN';
+        m[mon] = r2((m[mon] ?? 0) + it.saldoPendiente);
+      }
+      return m;
+    };
+
+    const leDeboPorMoneda = sumarPorMoneda(cxp); // lo que le debo (CxP)
+    const meDebePorMoneda = sumarPorMoneda(cxc); // lo que me debe (CxC)
+    const monedas = [
+      ...new Set([...Object.keys(leDeboPorMoneda), ...Object.keys(meDebePorMoneda)]),
+    ];
+    const netoPorMoneda: Record<string, number> = {};
+    for (const mon of monedas) {
+      // > 0: le debo neto · < 0: me debe neto
+      netoPorMoneda[mon] = r2((leDeboPorMoneda[mon] ?? 0) - (meDebePorMoneda[mon] ?? 0));
+    }
+
+    const movimientos = [
+      ...cxp.map((c) => ({
+        tipo: 'COMPRA' as const,
+        lado: 'LE_DEBO' as const,
+        codigo: c.codigo,
+        fecha: c.fechaCompra,
+        total: c.totalCompra,
+        pagado: c.totalPagado,
+        saldoPendiente: c.saldoPendiente,
+        moneda: c.moneda || 'PEN',
+        estado: c.estado,
+      })),
+      ...cxc.map((v) => ({
+        tipo: 'VENTA' as const,
+        lado: 'ME_DEBE' as const,
+        codigo: v.codigo,
+        fecha: v.fechaVenta,
+        total: v.totalVenta,
+        pagado: v.totalPagado,
+        saldoPendiente: v.saldoPendiente,
+        moneda: v.moneda || 'PEN',
+        estado: v.estado,
+      })),
+    ].sort(
+      (a, b) => new Date(b.fecha ?? 0).getTime() - new Date(a.fecha ?? 0).getTime(),
+    );
+
+    return {
+      proveedor: {
+        id: prov.id,
+        nombre: prov.nombre,
+        numeroDocumento: prov.numeroDocumento,
+        clienteEmpresaCodigo: prov.clienteEmpresa?.codigo ?? null,
+      },
+      clienteEmpresaId,
+      esTercero: clienteEmpresaId != null,
+      leDeboPorMoneda,
+      meDebePorMoneda,
+      netoPorMoneda,
+      movimientos,
+    };
   }
 
   /**
