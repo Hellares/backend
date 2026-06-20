@@ -214,6 +214,51 @@ describe('VentaService.crearYCobrar', () => {
     );
   });
 
+  // ── Guard: el descuento de línea no puede superar el precio ──
+  describe('guard de descuento por línea', () => {
+    it('rechaza si el descuento supera el precio (caso real: desc 3.40 sobre ítem de 3.00)', async () => {
+      const dto = dtoBase({
+        montoRecibido: 3,
+        pagos: [{ metodoPago: 'EFECTIVO', monto: 3 }],
+        detalles: [
+          {
+            productoId: 'prod-1',
+            descripcion: 'PORTA AUDIFONOS',
+            cantidad: 1,
+            precioUnitario: 3,
+            descuento: 3.4,
+            porcentajeIGV: 18,
+            precioIncluyeIgv: true,
+          },
+        ],
+      });
+      await expect(
+        service.crearYCobrar('emp-1', dto as any, 'caj-1'),
+      ).rejects.toThrow(/no puede superar el precio/i);
+      expect(tx.venta.create).not.toHaveBeenCalled();
+    });
+
+    it('considera la cantidad: descuento 3.40 con 2 unidades a 3.00 (bruto 6) es válido', async () => {
+      const dto = dtoBase({
+        montoRecibido: 2.6,
+        pagos: [{ metodoPago: 'EFECTIVO', monto: 2.6 }],
+        detalles: [
+          {
+            productoId: 'prod-1',
+            descripcion: 'PORTA AUDIFONOS',
+            cantidad: 2,
+            precioUnitario: 3,
+            descuento: 3.4,
+            porcentajeIGV: 18,
+            precioIncluyeIgv: true,
+          },
+        ],
+      });
+      await service.crearYCobrar('emp-1', dto as any, 'caj-1');
+      expect(tx.venta.create).toHaveBeenCalled();
+    });
+  });
+
   // ── crearVentaYapeDiferida: guard de alcance (sin órdenes/combos) ──
   describe('crearVentaYapeDiferida', () => {
     it('producto estándar: delega en crearYCobrar con diferirComprobante=true', async () => {
