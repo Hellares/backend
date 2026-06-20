@@ -238,7 +238,7 @@ export class EmpresaBancoService {
       }),
       // Egresos: pagos a proveedor desde este banco.
       this.prisma.pagoCompra.findMany({
-        where: { bancoId: id, fechaPago: { gte: desde, lte: hasta } },
+        where: { bancoId: id, anulado: false, fechaPago: { gte: desde, lte: hasta } },
         select: { monto: true, fechaPago: true, compra: { select: { codigo: true, nombreProveedor: true } } },
       }),
       // Egresos: pagos de gastos recurrentes desde este banco.

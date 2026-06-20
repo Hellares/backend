@@ -14,7 +14,7 @@ import {
   CategoriaArchivo,
   FuentePagoCompra,
 } from '@prisma/client';
-import { aplicarPagoCompra } from './aplicar-pago-compra.util';
+import { aplicarPagoCompra, revertirPagoCompra } from './aplicar-pago-compra.util';
 
 @Injectable()
 export class CuentasPorPagarService {
@@ -110,7 +110,7 @@ export class CuentasPorPagarService {
     const compras = await this.prisma.compra.findMany({
       where,
       include: {
-        pagos: true,
+        pagos: { where: { anulado: false } },
         proveedor: {
           include: {
             bancos: { where: { esPrincipal: true }, take: 1 },
@@ -184,7 +184,7 @@ export class CuentasPorPagarService {
       where: { id: compraId, empresaId },
       include: {
         detalles: { orderBy: { orden: 'asc' } },
-        pagos: { orderBy: { fechaPago: 'asc' } },
+        pagos: { where: { anulado: false }, orderBy: { fechaPago: 'asc' } },
         proveedor: {
           include: { bancos: { where: { esPrincipal: true }, take: 1 } },
         },
@@ -417,7 +417,7 @@ export class CuentasPorPagarService {
       }
 
       const pagosPrevios = await tx.pagoCompra.findMany({
-        where: { compraId },
+        where: { compraId, anulado: false },
         select: { monto: true },
       });
       const totalPagado = pagosPrevios.reduce((s, p) => s + Number(p.monto), 0);
@@ -446,6 +446,31 @@ export class CuentasPorPagarService {
         cuentaDestino: data.cuentaDestino,
         comprobanteUrl: data.comprobanteUrl,
       });
+    });
+  }
+
+  /**
+   * Anula un pago a proveedor: revierte el egreso (caja/tesorería: marca el
+   * movimiento anulado; banco: devuelve el saldo) y marca el pago anulado. El
+   * saldo de la compra vuelve a subir (reaparece como pendiente en CxP).
+   */
+  async anularPago(empresaId: string, pagoId: string, usuarioId: string, motivo?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const pago = await tx.pagoCompra.findFirst({
+        where: { id: pagoId, compra: { empresaId } },
+        select: {
+          id: true,
+          monto: true,
+          fuente: true,
+          bancoId: true,
+          movimientoCajaId: true,
+          anulado: true,
+        },
+      });
+      if (!pago) throw new NotFoundException('Pago no encontrado');
+      if (pago.anulado) throw new BadRequestException('Este pago ya fue anulado');
+
+      return revertirPagoCompra(tx, pago, usuarioId, motivo?.trim() || 'Anulación de pago');
     });
   }
 

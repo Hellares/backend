@@ -134,3 +134,57 @@ export async function aplicarPagoCompra(
     },
   });
 }
+
+export interface PagoARevertir {
+  id: string;
+  monto: Prisma.Decimal | number;
+  fuente: FuentePagoCompra | null;
+  bancoId: string | null;
+  movimientoCajaId: string | null;
+}
+
+/**
+ * Revierte un PagoCompra (anulación soft-delete) DENTRO de una transacción:
+ *  - TESORERIA/CAJA → marca el MovimientoCaja del egreso como anulado.
+ *  - BANCO → devuelve el monto a EmpresaBanco.saldoActual (increment).
+ *  - marca el PagoCompra como anulado.
+ * Usado por "anular pago" (CxP) y por anular una compra paga.
+ */
+export async function revertirPagoCompra(
+  tx: Prisma.TransactionClient,
+  pago: PagoARevertir,
+  usuarioId: string,
+  motivo: string,
+) {
+  const monto = Number(pago.monto);
+
+  if (
+    (pago.fuente === FuentePagoCompra.TESORERIA || pago.fuente === FuentePagoCompra.CAJA) &&
+    pago.movimientoCajaId
+  ) {
+    await tx.movimientoCaja.update({
+      where: { id: pago.movimientoCajaId },
+      data: {
+        anulado: true,
+        motivoAnulacion: `[PAGO PROVEEDOR] ${motivo}`,
+        anuladoPorId: usuarioId,
+        fechaAnulacion: new Date(),
+      },
+    });
+  } else if (pago.fuente === FuentePagoCompra.BANCO && pago.bancoId) {
+    await tx.empresaBanco.update({
+      where: { id: pago.bancoId },
+      data: { saldoActual: { increment: monto } },
+    });
+  }
+
+  return tx.pagoCompra.update({
+    where: { id: pago.id },
+    data: {
+      anulado: true,
+      motivoAnulacion: motivo,
+      anuladoPorId: usuarioId,
+      fechaAnulacion: new Date(),
+    },
+  });
+}

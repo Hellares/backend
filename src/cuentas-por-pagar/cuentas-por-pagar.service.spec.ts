@@ -302,3 +302,45 @@ describe('CuentasPorPagarService comprobantes', () => {
     });
   });
 });
+
+describe('CuentasPorPagarService.anularPago', () => {
+  const EMPRESA = 'emp-1';
+  const USER = 'user-1';
+  let prisma: any;
+  let tx: any;
+  let service: CuentasPorPagarService;
+
+  beforeEach(() => {
+    tx = {
+      pagoCompra: {
+        findFirst: jest.fn(),
+        update: jest.fn().mockResolvedValue({ anulado: true }),
+      },
+      empresaBanco: { update: jest.fn().mockResolvedValue({}) },
+      movimientoCaja: { update: jest.fn().mockResolvedValue({}) },
+    };
+    prisma = { $transaction: jest.fn().mockImplementation((cb: any) => cb(tx)) };
+    service = new CuentasPorPagarService(prisma, {} as any, {} as any);
+  });
+
+  it('anula un pago BANCO: devuelve el saldo + marca anulado', async () => {
+    tx.pagoCompra.findFirst.mockResolvedValue({
+      id: 'pago-1', monto: 100, fuente: 'BANCO', bancoId: 'banco-1', movimientoCajaId: null, anulado: false,
+    });
+    await service.anularPago(EMPRESA, 'pago-1', USER, 'error de tipeo');
+    expect(tx.empresaBanco.update).toHaveBeenCalledWith({ where: { id: 'banco-1' }, data: { saldoActual: { increment: 100 } } });
+    expect(tx.pagoCompra.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ anulado: true, motivoAnulacion: 'error de tipeo' }) }),
+    );
+  });
+
+  it('pago inexistente → NotFound', async () => {
+    tx.pagoCompra.findFirst.mockResolvedValue(null);
+    await expect(service.anularPago(EMPRESA, 'x', USER)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('pago ya anulado → BadRequest', async () => {
+    tx.pagoCompra.findFirst.mockResolvedValue({ id: 'pago-1', anulado: true });
+    await expect(service.anularPago(EMPRESA, 'pago-1', USER)).rejects.toBeInstanceOf(BadRequestException);
+  });
+});

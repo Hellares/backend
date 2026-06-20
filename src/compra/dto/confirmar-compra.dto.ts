@@ -4,6 +4,8 @@ import {
   IsOptional,
   IsString,
   IsNotEmpty,
+  IsNumber,
+  Min,
   ValidateNested,
   ValidateIf,
 } from 'class-validator';
@@ -31,6 +33,12 @@ export class PagoContadoCompraDto {
   @IsOptional()
   @IsString()
   referencia?: string;
+
+  @ApiProperty({ required: false, description: 'Pago parcial. Si se omite, paga el total.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  monto?: number;
 }
 
 export class ConfirmarCompraDto {

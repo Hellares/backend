@@ -404,6 +404,14 @@ model PagoCompra {
   bancoId          String? // FK EmpresaBanco (requerido si fuente=BANCO)
   movimientoCajaId String?           @unique // FK MovimientoCaja (set si TESORERIA/CAJA)
 
+  // Anulación (soft-delete): al anular se revierte el egreso (caja: marca el
+  // movimiento anulado; banco: devuelve el saldo) y se marca el pago. Los pagos
+  // anulados NO cuentan para el saldo de la compra.
+  anulado         Boolean   @default(false)
+  motivoAnulacion String?
+  anuladoPorId    String?
+  fechaAnulacion  DateTime?
+
   compra         Compra          @relation(fields: [compraId], references: [id], onDelete: Cascade)
   banco          EmpresaBanco?   @relation(fields: [bancoId], references: [id])
   movimientoCaja MovimientoCaja? @relation(fields: [movimientoCajaId], references: [id])

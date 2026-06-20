@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { aplicarPagoCompra } from './aplicar-pago-compra.util';
+import { aplicarPagoCompra, revertirPagoCompra } from './aplicar-pago-compra.util';
 
 /**
  * Tests del helper compartido de pago de compra (ruteo TESORERIA/CAJA/BANCO).
@@ -83,5 +83,45 @@ describe('aplicarPagoCompra', () => {
     await expect(
       aplicarPagoCompra(tx, caja, { ...base, moneda: 'USD', metodoPago: 'TRANSFERENCIA' as any, fuente: 'TESORERIA' as any }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('revertirPagoCompra', () => {
+  let tx: any;
+
+  beforeEach(() => {
+    tx = {
+      movimientoCaja: { update: jest.fn().mockResolvedValue({}) },
+      empresaBanco: { update: jest.fn().mockResolvedValue({}) },
+      pagoCompra: { update: jest.fn().mockResolvedValue({ anulado: true }) },
+    };
+  });
+
+  it('BANCO → devuelve el saldo (increment) y marca el pago anulado', async () => {
+    await revertirPagoCompra(
+      tx,
+      { id: 'pago-1', monto: 100, fuente: 'BANCO' as any, bancoId: 'banco-1', movimientoCajaId: null },
+      'user-1',
+      'motivo',
+    );
+    expect(tx.empresaBanco.update).toHaveBeenCalledWith({ where: { id: 'banco-1' }, data: { saldoActual: { increment: 100 } } });
+    expect(tx.movimientoCaja.update).not.toHaveBeenCalled();
+    expect(tx.pagoCompra.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'pago-1' }, data: expect.objectContaining({ anulado: true }) }),
+    );
+  });
+
+  it('TESORERIA → marca el MovimientoCaja anulado y el pago anulado', async () => {
+    await revertirPagoCompra(
+      tx,
+      { id: 'pago-1', monto: 50, fuente: 'TESORERIA' as any, bancoId: null, movimientoCajaId: 'mov-1' },
+      'user-1',
+      'motivo',
+    );
+    expect(tx.movimientoCaja.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'mov-1' }, data: expect.objectContaining({ anulado: true }) }),
+    );
+    expect(tx.empresaBanco.update).not.toHaveBeenCalled();
+    expect(tx.pagoCompra.update).toHaveBeenCalled();
   });
 });

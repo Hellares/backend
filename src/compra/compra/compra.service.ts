@@ -28,7 +28,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { CajaService } from '../../caja/caja.service';
-import { aplicarPagoCompra } from '../../cuentas-por-pagar/aplicar-pago-compra.util';
+import { aplicarPagoCompra, revertirPagoCompra } from '../../cuentas-por-pagar/aplicar-pago-compra.util';
 
 @Injectable()
 export class CompraService {
@@ -346,6 +346,7 @@ export class CompraService {
       fuente?: FuentePagoCompra;
       bancoId?: string;
       referencia?: string;
+      monto?: number; // pago parcial; default = total de la compra
     },
   ) {
     this.logger.info('Confirmando compra', { id, empresaId });
@@ -612,11 +613,18 @@ export class CompraService {
 
       // 5a. ¿Entra al flujo de pagos (CxP)?
       //   - Crédito → siempre pagoPendiente (se paga después).
-      //   - Contado + pago provisto → se paga ACÁ → no queda pendiente.
+      //   - Contado + pago TOTAL → se paga ACÁ → no queda pendiente.
+      //   - Contado + pago PARCIAL → paga lo indicado, el resto cae en CxP.
       //   - Contado SIN pago → cae en CxP (lo paga después).
+      const total = Number(compra.total);
       const esContado = !compra.terminosPago || compra.terminosPago === 'CONTADO';
+      const montoPago = Math.min(pago?.monto ?? total, total);
+      if (pago && montoPago <= 0) {
+        throw new BadRequestException('El monto del pago debe ser mayor a 0');
+      }
       const pagarAhora = esContado && !!pago;
-      const pagoPendiente = !esContado || !pago;
+      // Queda pendiente si: es crédito, o contado sin pago, o contado con pago parcial.
+      const pagoPendiente = !esContado || !pago || montoPago < total - 0.001;
 
       // 5. Actualizar compra a CONFIRMADA
       const compraConfirmada = await tx.compra.update({
@@ -642,7 +650,7 @@ export class CompraService {
           codigo: compra.codigo,
           moneda: compra.moneda,
           metodoPago: pago!.metodoPago,
-          monto: Number(compra.total),
+          monto: montoPago,
           fuente: pago!.fuente,
           bancoId: pago!.bancoId,
           referencia: pago!.referencia,
@@ -812,6 +820,16 @@ export class CompraService {
         );
       }
 
+      // Revertir los pagos hechos a la compra (devuelve la plata: caja/tesorería
+      // marca el movimiento anulado; banco devuelve el saldo).
+      const pagos = await tx.pagoCompra.findMany({
+        where: { compraId: id, anulado: false },
+        select: { id: true, monto: true, fuente: true, bancoId: true, movimientoCajaId: true },
+      });
+      for (const pago of pagos) {
+        await revertirPagoCompra(tx, pago, usuarioId, `Compra anulada (${compra.codigo})`);
+      }
+
       // Actualizar estado de OC si aplica
       if (compra.ordenCompraId) {
         await this.ordenCompraService.actualizarEstadoPorRecepcion(
@@ -824,6 +842,7 @@ export class CompraService {
         where: { id },
         data: {
           estado: EstadoCompra.ANULADA,
+          pagoPendiente: false,
           actualizadoPor: usuarioId,
         },
         include: this.getInclude(),

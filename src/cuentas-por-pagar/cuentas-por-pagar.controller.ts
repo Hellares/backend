@@ -108,6 +108,19 @@ export class CuentasPorPagarController {
     return this.service.subirComprobante(empresaId, usuarioId, file);
   }
 
+  @Post('pagos/:pagoId/anular')
+  @RequiresPermission(Permission.MANAGE_COMPRAS)
+  @ApiOperation({ summary: 'Anular un pago a proveedor (revierte el egreso y devuelve el saldo)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async anularPago(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('pagoId') pagoId: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() body: { motivo?: string },
+  ) {
+    return this.service.anularPago(empresaId, pagoId, usuarioId, body?.motivo);
+  }
+
   @Post('pagos/:pagoId/comprobante')
   @RequiresPermission(Permission.MANAGE_COMPRAS)
   @ApiOperation({ summary: 'Adjuntar comprobante (voucher) a un pago ya registrado' })
