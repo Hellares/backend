@@ -283,6 +283,8 @@ export class CuentasPorPagarService {
         cantidadCompras: number;
         cantidadVencidas: number;
         proximoVencimiento: Date | null;
+        // Deuda separada por moneda (PEN/USD/...) para no sumar monedas distintas.
+        deudaPorMoneda: Record<string, number>;
       }
     >();
 
@@ -299,11 +301,14 @@ export class CuentasPorPagarService {
           cantidadCompras: 0,
           cantidadVencidas: 0,
           proximoVencimiento: null,
+          deudaPorMoneda: {},
         });
       }
       const d = map.get(key)!;
       d.totalDeuda += c.saldoPendiente;
       d.cantidadCompras++;
+      const moneda = c.moneda || 'PEN';
+      d.deudaPorMoneda[moneda] = (d.deudaPorMoneda[moneda] ?? 0) + c.saldoPendiente;
       if (c.estado === 'VENCIDA') {
         d.totalVencido += c.saldoPendiente;
         d.cantidadVencidas++;
@@ -323,6 +328,12 @@ export class CuentasPorPagarService {
         ...d,
         totalDeuda: Math.round(d.totalDeuda * 100) / 100,
         totalVencido: Math.round(d.totalVencido * 100) / 100,
+        deudaPorMoneda: Object.fromEntries(
+          Object.entries(d.deudaPorMoneda).map(([m, v]) => [
+            m,
+            Math.round(v * 100) / 100,
+          ]),
+        ),
       }))
       .sort((a, b) => b.totalDeuda - a.totalDeuda);
   }
