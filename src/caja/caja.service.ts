@@ -902,6 +902,21 @@ export class CajaService {
       });
       const mapaBanco = new Map(recaudacion.map((r) => [r.metodoPago, r.banco]));
 
+      // Resumen del barrido (informativo): todos los métodos con conteo > 0 y a
+      // dónde fueron (bóveda o banco). Se adjunta a la metadata del INGRESO de
+      // tesorería para que la card del cierre muestre el desglose completo,
+      // aunque el digital ya no entre a la bóveda (va a los bancos).
+      const barridoResumen: { metodoPago: string; monto: number; aBanco: boolean }[] = [];
+      for (const metodo of metodosPago) {
+        const cf = dto.conteos.find((c) => c.metodoPago === metodo)?.conteoFisico ?? 0;
+        if (cf <= 0) continue;
+        barridoResumen.push({
+          metodoPago: String(metodo),
+          monto: cf,
+          aBanco: destinoBarrido(metodo, mapaBanco.get(metodo)) === 'BANCO',
+        });
+      }
+
       for (const metodo of metodosPago) {
         const conteoFisico =
           dto.conteos.find((c) => c.metodoPago === metodo)?.conteoFisico ?? 0;
@@ -960,6 +975,9 @@ export class CajaService {
                 movimientoEspejoId: egreso.id,
                 cierreId: cierre.id,
                 barrido: true,
+                // Desglose completo del barrido (efectivo + digital→banco) para
+                // mostrarlo informativo en la card de tesorería.
+                barridoResumen,
               },
             },
           });
