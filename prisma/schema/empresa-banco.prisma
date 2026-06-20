@@ -23,6 +23,7 @@ model EmpresaBanco {
 
   empresa              Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   pagosGastoRecurrente PagoGastoRecurrente[]
+  pagosCompra          PagoCompra[]
 
   @@index([empresaId])
   @@index([empresaId, isActive])

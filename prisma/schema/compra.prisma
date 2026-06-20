@@ -373,6 +373,13 @@ model Lote {
   @@index([codigo(ops: raw("gin_trgm_ops"))], type: Gin, map: "Lote_codigo_trgm_idx")
 }
 
+/// De dónde sale el dinero al pagar una compra a proveedor (CxP).
+enum FuentePagoCompra {
+  TESORERIA // Caja Central de la sede (default para efectivo) → MovimientoCaja EGRESO
+  CAJA // Caja operativa abierta del usuario → MovimientoCaja EGRESO
+  BANCO // Cuenta bancaria de la empresa → decrementa EmpresaBanco.saldoActual
+}
+
 /// Pagos realizados a proveedores por compras
 model PagoCompra {
   id            String          @id @default(cuid())
@@ -386,8 +393,17 @@ model PagoCompra {
   fechaPago     DateTime        @default(now())
   creadoEn      DateTime        @default(now())
 
-  compra Compra @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  // Origen del dinero (Tesorería/Caja/Banco). Se setea bancoId si BANCO y
+  // movimientoCajaId si TESORERIA/CAJA, para poder revertir al anular.
+  fuente           FuentePagoCompra?
+  bancoId          String? // FK EmpresaBanco (requerido si fuente=BANCO)
+  movimientoCajaId String?           @unique // FK MovimientoCaja (set si TESORERIA/CAJA)
+
+  compra         Compra          @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  banco          EmpresaBanco?   @relation(fields: [bancoId], references: [id])
+  movimientoCaja MovimientoCaja? @relation(fields: [movimientoCajaId], references: [id])
 
   @@index([compraId])
   @@index([fechaPago])
+  @@index([bancoId])
 }

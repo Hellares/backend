@@ -1,6 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
-import { MetodoPagoVenta } from '@prisma/client';
+import {
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateIf,
+  IsNotEmpty,
+} from 'class-validator';
+import { MetodoPagoVenta, FuentePagoCompra } from '@prisma/client';
 
 export class RegistrarPagoCuentaPagarDto {
   @ApiProperty({ enum: MetodoPagoVenta })
@@ -31,4 +39,23 @@ export class RegistrarPagoCuentaPagarDto {
   @IsOptional()
   @IsString()
   comprobanteUrl?: string;
+
+  @ApiProperty({
+    enum: FuentePagoCompra,
+    required: false,
+    description:
+      'De dónde sale el dinero. Default: EFECTIVO→TESORERIA, digital→BANCO.',
+  })
+  @IsOptional()
+  @IsEnum(FuentePagoCompra)
+  fuente?: FuentePagoCompra;
+
+  @ApiProperty({
+    required: false,
+    description: 'FK EmpresaBanco. Requerido si fuente=BANCO.',
+  })
+  @ValidateIf((o) => o.fuente === FuentePagoCompra.BANCO)
+  @IsString()
+  @IsNotEmpty({ message: 'bancoId es obligatorio cuando fuente=BANCO' })
+  bancoId?: string;
 }

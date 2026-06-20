@@ -24,20 +24,29 @@ describe('CuentasPorPagarService.registrarPago', () => {
   let service: CuentasPorPagarService;
 
   /** Fila tal como la devuelve el SELECT ... FOR UPDATE. */
-  const filaCompra = (over: Partial<{ total: number; estado: string; terminosPago: string | null }> = {}) => ({
+  const filaCompra = (
+    over: Partial<{ total: number; estado: string; terminosPago: string | null; moneda: string }> = {},
+  ) => ({
     id: COMPRA,
     total: over.total ?? 100,
     estado: over.estado ?? 'CONFIRMADA',
     terminosPago: over.terminosPago === undefined ? 'CREDITO' : over.terminosPago,
+    sedeId: 'sede-1',
+    nombreProveedor: 'Proveedor SAC',
+    codigo: 'COM-001',
+    moneda: over.moneda ?? 'PEN',
   });
 
   /**
    * Configura el `tx` mock que recibe el callback de `$transaction`.
    * @param pagosPrevios montos ya pagados (para simular el recálculo de saldo).
+   * @param opts.cajaAbierta si hay caja operativa abierta (para fuente=CAJA).
+   * @param opts.banco la cuenta que devuelve empresaBanco.findFirst (null = no existe).
    */
   const armarTx = (
     fila: ReturnType<typeof filaCompra> | undefined,
     pagosPrevios: number[] = [],
+    opts: { cajaAbierta?: boolean; banco?: any } = {},
   ) => {
     const tx = {
       $queryRaw: jest.fn().mockResolvedValue(fila ? [fila] : []),
@@ -45,47 +54,53 @@ describe('CuentasPorPagarService.registrarPago', () => {
         findMany: jest.fn().mockResolvedValue(pagosPrevios.map((monto) => ({ monto }))),
         create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'pago-1', ...data })),
       },
+      caja: {
+        findFirst: jest.fn().mockResolvedValue(opts.cajaAbierta ? { id: 'caja-op-1' } : null),
+      },
+      empresaBanco: {
+        findFirst: jest.fn().mockResolvedValue('banco' in opts ? opts.banco : { id: 'banco-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
     };
     prisma.$transaction.mockImplementation((cb: any) => cb(tx));
     return tx;
   };
 
   beforeEach(() => {
-    prisma = {
-      $transaction: jest.fn(),
-      compra: {
-        findFirst: jest.fn().mockResolvedValue({
-          sedeId: 'sede-1',
-          nombreProveedor: 'Proveedor SAC',
-          codigo: 'COM-001',
-        }),
-      },
+    prisma = { $transaction: jest.fn() };
+    caja = {
+      getOrCreateCajaCentral: jest.fn().mockResolvedValue({ id: 'central-1' }),
+      crearMovimientoAutomatico: jest.fn().mockResolvedValue({ id: 'mov-1' }),
     };
-    caja = { registrarMovimientoSiHayCaja: jest.fn().mockResolvedValue(undefined) };
     storage = { uploadArchivo: jest.fn() };
     service = new CuentasPorPagarService(prisma, caja, storage);
   });
 
-  const pagar = (monto: number) =>
+  // Pago en EFECTIVO (fuente por default = TESORERIA).
+  const pagar = (monto: number, extra: any = {}) =>
     service.registrarPago(EMPRESA, COMPRA, USUARIO, {
       metodoPago: 'EFECTIVO' as any,
       monto,
+      ...extra,
     });
 
-  it('registra el pago y el EGRESO en caja (happy path)', async () => {
+  it('EFECTIVO por default sale de Tesorería (Caja Central) y guarda el movimiento', async () => {
     const tx = armarTx(filaCompra({ total: 100 }), []);
     const pago = await pagar(100);
 
+    expect(caja.getOrCreateCajaCentral).toHaveBeenCalledWith(EMPRESA, 'sede-1', tx);
+    expect(caja.crearMovimientoAutomatico).toHaveBeenCalledWith(
+      EMPRESA,
+      'central-1',
+      expect.objectContaining({ tipo: 'EGRESO', categoria: 'PAGO_PROVEEDOR', monto: 100, compraId: COMPRA }),
+      tx,
+    );
     expect(tx.pagoCompra.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ compraId: COMPRA, monto: 100 }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ fuente: 'TESORERIA', movimientoCajaId: 'mov-1' }),
+      }),
     );
     expect(pago).toMatchObject({ id: 'pago-1', monto: 100 });
-    expect(caja.registrarMovimientoSiHayCaja).toHaveBeenCalledWith(
-      EMPRESA,
-      'sede-1',
-      USUARIO,
-      expect.objectContaining({ tipo: 'EGRESO', categoria: 'PAGO_PROVEEDOR', monto: 100, compraId: COMPRA }),
-    );
   });
 
   it('lanza NotFoundException si la compra no existe (FOR UPDATE → vacío)', async () => {
@@ -129,23 +144,88 @@ describe('CuentasPorPagarService.registrarPago', () => {
 
   it('tolera redondeo de céntimos al cubrir el saldo exacto (+0.001)', async () => {
     armarTx(filaCompra({ total: 100 }), [99.999]);
-    // saldo ~0.001 → pagar 0.001 no debe romper por float
     const pago = await pagar(0.001);
     expect(pago).toMatchObject({ monto: 0.001 });
   });
 
-  it('si la creación del pago falla, NO registra movimiento en caja', async () => {
-    const tx = armarTx(filaCompra({ total: 100 }), []);
-    tx.pagoCompra.create.mockRejectedValue(new Error('db down'));
-    await expect(pagar(50)).rejects.toThrow('db down');
-    expect(caja.registrarMovimientoSiHayCaja).not.toHaveBeenCalled();
+  // ─── Fuente del dinero ───
+
+  it('fuente=CAJA sin caja abierta → BadRequest', async () => {
+    armarTx(filaCompra({ total: 100 }), [], { cajaAbierta: false });
+    await expect(pagar(100, { fuente: 'CAJA' })).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('un fallo al registrar la caja NO revierte el pago (se loguea y se devuelve el pago)', async () => {
+  it('fuente=CAJA con caja abierta registra el EGRESO en la caja operativa', async () => {
+    const tx = armarTx(filaCompra({ total: 100 }), [], { cajaAbierta: true });
+    await pagar(100, { fuente: 'CAJA' });
+    expect(caja.crearMovimientoAutomatico).toHaveBeenCalledWith(
+      EMPRESA,
+      'caja-op-1',
+      expect.objectContaining({ categoria: 'PAGO_PROVEEDOR' }),
+      tx,
+    );
+    expect(tx.pagoCompra.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ fuente: 'CAJA', movimientoCajaId: 'mov-1' }) }),
+    );
+  });
+
+  it('fuente=BANCO decrementa el saldo de la cuenta y persiste bancoId', async () => {
+    const tx = armarTx(filaCompra({ total: 100 }), []);
+    await service.registrarPago(EMPRESA, COMPRA, USUARIO, {
+      metodoPago: 'TRANSFERENCIA' as any,
+      monto: 100,
+      fuente: 'BANCO' as any,
+      bancoId: 'banco-1',
+    });
+    expect(tx.empresaBanco.update).toHaveBeenCalledWith({
+      where: { id: 'banco-1' },
+      data: { saldoActual: { decrement: 100 } },
+    });
+    expect(tx.pagoCompra.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ fuente: 'BANCO', bancoId: 'banco-1' }) }),
+    );
+    expect(caja.crearMovimientoAutomatico).not.toHaveBeenCalled();
+  });
+
+  it('fuente=BANCO sin bancoId → BadRequest', async () => {
     armarTx(filaCompra({ total: 100 }), []);
-    caja.registrarMovimientoSiHayCaja.mockRejectedValue(new Error('sin caja abierta'));
-    const pago = await pagar(100);
-    expect(pago).toMatchObject({ id: 'pago-1', monto: 100 });
+    await expect(
+      service.registrarPago(EMPRESA, COMPRA, USUARIO, {
+        metodoPago: 'TRANSFERENCIA' as any,
+        monto: 100,
+        fuente: 'BANCO' as any,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('fuente=BANCO con cuenta inexistente → BadRequest', async () => {
+    armarTx(filaCompra({ total: 100 }), [], { banco: null });
+    await expect(
+      service.registrarPago(EMPRESA, COMPRA, USUARIO, {
+        metodoPago: 'TRANSFERENCIA' as any,
+        monto: 100,
+        fuente: 'BANCO' as any,
+        bancoId: 'no-existe',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('EFECTIVO con fuente=BANCO → BadRequest (efectivo no sale de banco)', async () => {
+    armarTx(filaCompra({ total: 100 }), []);
+    await expect(pagar(100, { fuente: 'BANCO', bancoId: 'banco-1' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('compra en USD pagada desde Tesorería → BadRequest (debe ser banco)', async () => {
+    armarTx(filaCompra({ total: 15, moneda: 'USD' }), []);
+    await expect(
+      service.registrarPago(EMPRESA, COMPRA, USUARIO, {
+        metodoPago: 'TRANSFERENCIA' as any,
+        monto: 15,
+        fuente: 'TESORERIA' as any,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('persiste comprobanteUrl al registrar el pago si se provee', async () => {
@@ -153,6 +233,7 @@ describe('CuentasPorPagarService.registrarPago', () => {
     await service.registrarPago(EMPRESA, COMPRA, USUARIO, {
       metodoPago: 'YAPE' as any,
       monto: 100,
+      fuente: 'TESORERIA' as any,
       comprobanteUrl: 'https://s3/voucher.jpg',
     });
     expect(tx.pagoCompra.create).toHaveBeenCalledWith(
