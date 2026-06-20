@@ -25,12 +25,12 @@ describe('CuentasPorPagarService.registrarPago', () => {
 
   /** Fila tal como la devuelve el SELECT ... FOR UPDATE. */
   const filaCompra = (
-    over: Partial<{ total: number; estado: string; terminosPago: string | null; moneda: string }> = {},
+    over: Partial<{ total: number; estado: string; pagoPendiente: boolean; moneda: string }> = {},
   ) => ({
     id: COMPRA,
     total: over.total ?? 100,
     estado: over.estado ?? 'CONFIRMADA',
-    terminosPago: over.terminosPago === undefined ? 'CREDITO' : over.terminosPago,
+    pagoPendiente: over.pagoPendiente ?? true,
     sedeId: 'sede-1',
     nombreProveedor: 'Proveedor SAC',
     codigo: 'COM-001',
@@ -113,13 +113,8 @@ describe('CuentasPorPagarService.registrarPago', () => {
     await expect(pagar(50)).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('rechaza si la compra es al CONTADO (no genera CxP)', async () => {
-    armarTx(filaCompra({ terminosPago: 'CONTADO' }));
-    await expect(pagar(50)).rejects.toBeInstanceOf(BadRequestException);
-  });
-
-  it('rechaza si la compra no tiene términos de pago (null)', async () => {
-    armarTx(filaCompra({ terminosPago: null }));
+  it('rechaza si la compra NO está pendiente de pago (contado ya pagado al confirmar)', async () => {
+    armarTx(filaCompra({ pagoPendiente: false }));
     await expect(pagar(50)).rejects.toBeInstanceOf(BadRequestException);
   });
 

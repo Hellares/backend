@@ -23,8 +23,12 @@ import {
   EstadoLote,
   TipoMovimientoStock,
   TipoCambioPrecio,
+  MetodoPagoVenta,
+  FuentePagoCompra,
   Prisma,
 } from '@prisma/client';
+import { CajaService } from '../../caja/caja.service';
+import { aplicarPagoCompra } from '../../cuentas-por-pagar/aplicar-pago-compra.util';
 
 @Injectable()
 export class CompraService {
@@ -35,6 +39,7 @@ export class CompraService {
     private readonly cacheService: CacheService,
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     private readonly ordenCompraService: OrdenCompraService,
+    private readonly cajaService: CajaService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -332,7 +337,17 @@ export class CompraService {
    * CONFIRMAR COMPRA - LA TRANSACCIÓN CRÍTICA
    * Actualiza stock, crea lotes, registra movimientos
    */
-  async confirmar(id: string, empresaId: string, usuarioId: string) {
+  async confirmar(
+    id: string,
+    empresaId: string,
+    usuarioId: string,
+    pago?: {
+      metodoPago: MetodoPagoVenta;
+      fuente?: FuentePagoCompra;
+      bancoId?: string;
+      referencia?: string;
+    },
+  ) {
     this.logger.info('Confirmando compra', { id, empresaId });
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -595,6 +610,14 @@ export class CompraService {
         );
       }
 
+      // 5a. ¿Entra al flujo de pagos (CxP)?
+      //   - Crédito → siempre pagoPendiente (se paga después).
+      //   - Contado + pago provisto → se paga ACÁ → no queda pendiente.
+      //   - Contado SIN pago → cae en CxP (lo paga después).
+      const esContado = !compra.terminosPago || compra.terminosPago === 'CONTADO';
+      const pagarAhora = esContado && !!pago;
+      const pagoPendiente = !esContado || !pago;
+
       // 5. Actualizar compra a CONFIRMADA
       const compraConfirmada = await tx.compra.update({
         where: { id },
@@ -602,9 +625,29 @@ export class CompraService {
           estado: EstadoCompra.CONFIRMADA,
           confirmadoPor: usuarioId,
           confirmadoEn: new Date(),
+          pagoPendiente,
         },
         include: this.getInclude(),
       });
+
+      // 5b. Si es contado y se indicó cómo se pagó, registrar el pago + egreso
+      //     (reutiliza el ruteo de CxP: tesorería/caja/banco).
+      if (pagarAhora) {
+        await aplicarPagoCompra(tx, this.cajaService, {
+          empresaId,
+          compraId: id,
+          usuarioId,
+          sedeId: compra.sedeId,
+          nombreProveedor: compra.nombreProveedor,
+          codigo: compra.codigo,
+          moneda: compra.moneda,
+          metodoPago: pago!.metodoPago,
+          monto: Number(compra.total),
+          fuente: pago!.fuente,
+          bancoId: pago!.bancoId,
+          referencia: pago!.referencia,
+        });
+      }
 
       this.logger.log(`Compra confirmada: ${compra.codigo}`);
       return compraConfirmada;

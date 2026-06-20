@@ -14,6 +14,7 @@ import {
   CategoriaArchivo,
   FuentePagoCompra,
 } from '@prisma/client';
+import { aplicarPagoCompra } from './aplicar-pago-compra.util';
 
 @Injectable()
 export class CuentasPorPagarService {
@@ -92,7 +93,10 @@ export class CuentasPorPagarService {
     const where: Prisma.CompraWhereInput = {
       empresaId,
       estado: 'CONFIRMADA',
-      terminosPago: { not: 'CONTADO' },
+      // En CxP entran las compras que están en el flujo de pagos: crédito y
+      // contado-no-pagado-al-confirmar (pagoPendiente=true). El contado pagado
+      // al confirmar (pagoPendiente=false) NO aparece.
+      pagoPendiente: true,
     };
 
     if (filtros?.proveedorId) where.proveedorId = filtros.proveedorId;
@@ -381,23 +385,6 @@ export class CuentasPorPagarService {
       bancoId?: string;
     },
   ) {
-    // Default de fuente: efectivo → Tesorería; digital → Banco.
-    const fuente: FuentePagoCompra =
-      data.fuente ??
-      (data.metodoPago === MetodoPagoVenta.EFECTIVO
-        ? FuentePagoCompra.TESORERIA
-        : FuentePagoCompra.BANCO);
-
-    // EFECTIVO no puede salir de una cuenta bancaria.
-    if (data.metodoPago === MetodoPagoVenta.EFECTIVO && fuente === FuentePagoCompra.BANCO) {
-      throw new BadRequestException(
-        'Un pago en efectivo no puede salir de una cuenta bancaria',
-      );
-    }
-    if (fuente === FuentePagoCompra.BANCO && !data.bancoId) {
-      throw new BadRequestException('Falta la cuenta bancaria (bancoId) para fuente=BANCO');
-    }
-
     // Todo en una transacción: lock + recálculo del saldo + movimiento de la
     // fuente (caja/tesorería/banco) + creación del pago, para que sea atómico.
     return this.prisma.$transaction(async (tx) => {
@@ -407,13 +394,13 @@ export class CuentasPorPagarService {
           id: string;
           total: Prisma.Decimal;
           estado: string;
-          terminosPago: string | null;
+          pagoPendiente: boolean;
           sedeId: string;
           nombreProveedor: string;
           codigo: string;
           moneda: string;
         }[]
-      >`SELECT "id", "total", "estado", "terminosPago", "sedeId", "nombreProveedor", "codigo", "moneda" FROM "Compra" WHERE "id" = ${compraId} AND "empresaId" = ${empresaId} FOR UPDATE`;
+      >`SELECT "id", "total", "estado", "pagoPendiente", "sedeId", "nombreProveedor", "codigo", "moneda" FROM "Compra" WHERE "id" = ${compraId} AND "empresaId" = ${empresaId} FOR UPDATE`;
 
       const compra = filas[0];
       if (!compra) throw new NotFoundException('Compra no encontrada');
@@ -423,17 +410,9 @@ export class CuentasPorPagarService {
           'Solo se pueden registrar pagos sobre compras confirmadas',
         );
       }
-      if (!compra.terminosPago || compra.terminosPago === 'CONTADO') {
+      if (!compra.pagoPendiente) {
         throw new BadRequestException(
-          'Esta compra no es a crédito (no genera cuenta por pagar)',
-        );
-      }
-
-      // Caja/Tesorería son en soles; una compra en otra moneda debe pagarse
-      // desde una cuenta bancaria de esa moneda.
-      if (compra.moneda && compra.moneda !== 'PEN' && fuente !== FuentePagoCompra.BANCO) {
-        throw new BadRequestException(
-          `Una compra en ${compra.moneda} debe pagarse desde una cuenta bancaria`,
+          'Esta compra no está pendiente de pago (ya fue pagada al confirmar)',
         );
       }
 
@@ -450,90 +429,22 @@ export class CuentasPorPagarService {
         );
       }
 
-      const descripcion = `Pago proveedor - ${compra.nombreProveedor} (${compra.codigo})`;
-      let movimientoCajaId: string | null = null;
-      let bancoId: string | null = null;
-
-      if (fuente === FuentePagoCompra.BANCO) {
-        const banco = await tx.empresaBanco.findFirst({
-          where: { id: data.bancoId, empresaId, isActive: true },
-          select: { id: true },
-        });
-        if (!banco) throw new BadRequestException('Cuenta bancaria no encontrada');
-        await tx.empresaBanco.update({
-          where: { id: banco.id },
-          data: { saldoActual: { decrement: data.monto } },
-        });
-        bancoId = banco.id;
-      } else if (fuente === FuentePagoCompra.CAJA) {
-        // Caja operativa abierta del usuario en la sede (NO la central).
-        const cajaOp = await tx.caja.findFirst({
-          where: {
-            empresaId,
-            sedeId: compra.sedeId,
-            usuarioId,
-            estado: 'ABIERTA',
-            esCajaCentral: false,
-          },
-          select: { id: true },
-        });
-        if (!cajaOp) {
-          throw new BadRequestException(
-            'No tenés una caja abierta en esta sede. Pagá desde Tesorería o abrí caja.',
-          );
-        }
-        const mov = await this.cajaService.crearMovimientoAutomatico(
-          empresaId,
-          cajaOp.id,
-          {
-            tipo: 'EGRESO',
-            categoria: 'PAGO_PROVEEDOR',
-            metodoPago: data.metodoPago,
-            monto: data.monto,
-            descripcion,
-            compraId,
-            registradoPorId: usuarioId,
-          },
-          tx,
-        );
-        movimientoCajaId = mov?.id ?? null;
-      } else {
-        // TESORERIA: Caja Central de la sede (perpetua).
-        const central = await this.cajaService.getOrCreateCajaCentral(
-          empresaId,
-          compra.sedeId,
-          tx,
-        );
-        const mov = await this.cajaService.crearMovimientoAutomatico(
-          empresaId,
-          central.id,
-          {
-            tipo: 'EGRESO',
-            categoria: 'PAGO_PROVEEDOR',
-            metodoPago: data.metodoPago,
-            monto: data.monto,
-            descripcion: `[TESORERÍA] ${descripcion}`,
-            compraId,
-            registradoPorId: usuarioId,
-          },
-          tx,
-        );
-        movimientoCajaId = mov?.id ?? null;
-      }
-
-      return tx.pagoCompra.create({
-        data: {
-          compraId,
-          metodoPago: data.metodoPago,
-          monto: data.monto,
-          referencia: data.referencia,
-          bancoDestino: data.bancoDestino,
-          cuentaDestino: data.cuentaDestino,
-          comprobanteUrl: data.comprobanteUrl,
-          fuente,
-          bancoId,
-          movimientoCajaId,
-        },
+      return aplicarPagoCompra(tx, this.cajaService, {
+        empresaId,
+        compraId,
+        usuarioId,
+        sedeId: compra.sedeId,
+        nombreProveedor: compra.nombreProveedor,
+        codigo: compra.codigo,
+        moneda: compra.moneda,
+        metodoPago: data.metodoPago,
+        monto: data.monto,
+        fuente: data.fuente,
+        bancoId: data.bancoId,
+        referencia: data.referencia,
+        bancoDestino: data.bancoDestino,
+        cuentaDestino: data.cuentaDestino,
+        comprobanteUrl: data.comprobanteUrl,
       });
     });
   }

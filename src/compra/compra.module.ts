@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LoggerModule } from '../common/logger/logger.module';
 import { AuthModule } from '../auth/auth.module';
+import { CajaModule } from '../caja/caja.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
 import { OrdenCompraController } from './orden-compra/orden-compra.controller';
 import { OrdenCompraService } from './orden-compra/orden-compra.service';
@@ -18,6 +19,7 @@ import { CompraAnalyticsExportService } from './analytics/compra-analytics-expor
     PrismaModule,
     LoggerModule,
     AuthModule,
+    CajaModule,
     ConfiguracionCodigosModule,
   ],
   controllers: [

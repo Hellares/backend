@@ -25,7 +25,7 @@ import { Permission } from '../../auth/enums/permission.enum';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CompraService } from './compra.service';
-import { CreateCompraDto, CreateCompraDesdeOcDto, DistribuirCompraDto, QueryComprasDto } from '../dto';
+import { CreateCompraDto, CreateCompraDesdeOcDto, DistribuirCompraDto, QueryComprasDto, ConfirmarCompraDto } from '../dto';
 
 @ApiTags('Compras')
 @Controller('empresas/:empresaId/compras')
@@ -147,14 +147,15 @@ export class CompraController {
 
   @Post(':id/confirmar')
   @RequiresPermission(Permission.MANAGE_COMPRAS)
-  @ApiOperation({ summary: 'Confirmar compra (actualiza stock y crea lotes)' })
+  @ApiOperation({ summary: 'Confirmar compra (stock + lotes). Contado: pago opcional; si se omite, cae en CxP.' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async confirmar(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
+    @Body() dto?: ConfirmarCompraDto,
   ) {
-    return this.compraService.confirmar(id, empresaId, user.sub);
+    return this.compraService.confirmar(id, empresaId, user.sub, dto?.pago);
   }
 
   @Post(':id/anular')

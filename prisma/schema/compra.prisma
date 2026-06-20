@@ -200,6 +200,11 @@ model Compra {
   // Estado
   estado EstadoCompra @default(BORRADOR)
 
+  // Marca que la compra entró al flujo de PAGOS (CxP): true para crédito, y
+  // para contado cuando NO se pagó al confirmar (se paga después). false si se
+  // pagó al confirmar (contado pagado). Define qué aparece en Cuentas por Pagar.
+  pagoPendiente Boolean @default(false)
+
   // Observaciones
   observaciones String?
 
