@@ -145,50 +145,78 @@ export class CuentasPorPagarService {
       cuentaDestino?: string;
     },
   ) {
-    const compra = await this.prisma.compra.findFirst({
-      where: { id: compraId, empresaId },
-      include: { pagos: true },
+    // Transacción + recálculo del saldo bajo lock para evitar sobre-pago por
+    // carrera (dos pagos concurrentes que pasen ambos la validación).
+    const pago = await this.prisma.$transaction(async (tx) => {
+      // Lock pesimista sobre la fila de la compra (FOR UPDATE).
+      const filas = await tx.$queryRaw<
+        { id: string; total: Prisma.Decimal; estado: string; terminosPago: string | null }[]
+      >`SELECT "id", "total", "estado", "terminosPago" FROM "Compra" WHERE "id" = ${compraId} AND "empresaId" = ${empresaId} FOR UPDATE`;
+
+      const compra = filas[0];
+      if (!compra) throw new NotFoundException('Compra no encontrada');
+
+      if (compra.estado !== 'CONFIRMADA') {
+        throw new BadRequestException(
+          'Solo se pueden registrar pagos sobre compras confirmadas',
+        );
+      }
+      if (!compra.terminosPago || compra.terminosPago === 'CONTADO') {
+        throw new BadRequestException(
+          'Esta compra no es a crédito (no genera cuenta por pagar)',
+        );
+      }
+
+      const pagosPrevios = await tx.pagoCompra.findMany({
+        where: { compraId },
+        select: { monto: true },
+      });
+      const totalPagado = pagosPrevios.reduce((s, p) => s + Number(p.monto), 0);
+      const saldoPendiente = Number(compra.total) - totalPagado;
+
+      if (data.monto > saldoPendiente + 0.001) {
+        throw new BadRequestException(
+          `El monto (${data.monto}) excede el saldo pendiente (${saldoPendiente.toFixed(2)})`,
+        );
+      }
+
+      return tx.pagoCompra.create({
+        data: {
+          compraId,
+          metodoPago: data.metodoPago,
+          monto: data.monto,
+          referencia: data.referencia,
+          bancoDestino: data.bancoDestino,
+          cuentaDestino: data.cuentaDestino,
+        },
+      });
     });
 
-    if (!compra) throw new NotFoundException('Compra no encontrada');
-
-    const totalPagado = compra.pagos.reduce((s, p) => s + Number(p.monto), 0);
-    const saldoPendiente = Number(compra.total) - totalPagado;
-
-    if (data.monto > saldoPendiente) {
-      throw new BadRequestException(
-        `El monto (${data.monto}) excede el saldo pendiente (${saldoPendiente.toFixed(2)})`,
-      );
-    }
-
-    const pago = await this.prisma.pagoCompra.create({
-      data: {
-        compraId,
-        metodoPago: data.metodoPago,
-        monto: data.monto,
-        referencia: data.referencia,
-        bancoDestino: data.bancoDestino,
-        cuentaDestino: data.cuentaDestino,
-      },
+    // Recuperamos datos de la compra para el movimiento de caja (fuera del lock).
+    const compra = await this.prisma.compra.findFirst({
+      where: { id: compraId, empresaId },
+      select: { sedeId: true, nombreProveedor: true, codigo: true },
     });
 
     // Registrar egreso en caja
-    try {
-      await this.cajaService.registrarMovimientoSiHayCaja(
-        empresaId,
-        compra.sedeId,
-        usuarioId,
-        {
-          tipo: 'EGRESO',
-          categoria: 'PAGO_PROVEEDOR',
-          metodoPago: data.metodoPago,
-          monto: data.monto,
-          descripcion: `Pago proveedor - ${compra.nombreProveedor} (${compra.codigo})`,
-          compraId,
-        },
-      );
-    } catch (e) {
-      this.logger.warn(`Error registrando egreso caja para pago proveedor ${compra.codigo}: ${e?.message ?? e}`);
+    if (compra) {
+      try {
+        await this.cajaService.registrarMovimientoSiHayCaja(
+          empresaId,
+          compra.sedeId,
+          usuarioId,
+          {
+            tipo: 'EGRESO',
+            categoria: 'PAGO_PROVEEDOR',
+            metodoPago: data.metodoPago,
+            monto: data.monto,
+            descripcion: `Pago proveedor - ${compra.nombreProveedor} (${compra.codigo})`,
+            compraId,
+          },
+        );
+      } catch (e) {
+        this.logger.warn(`Error registrando egreso caja para pago proveedor ${compra.codigo}: ${e?.message ?? e}`);
+      }
     }
 
     return pago;
