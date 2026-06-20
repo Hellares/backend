@@ -2438,12 +2438,22 @@ export class CajaService {
       bancosPorMoneda[b.moneda] = r2((bancosPorMoneda[b.moneda] ?? 0) + b.saldoActual);
     }
 
+    // Total global por método (suma de lo recaudado en TODOS los bancos): los
+    // chips "Yape X / Plin Y / Tarjeta Z" del desglose de medios digitales.
+    const recaudadoPorMetodo: Record<string, number> = {};
+    for (const r of recaudado) {
+      recaudadoPorMetodo[r.metodoPago] = r2(
+        (recaudadoPorMetodo[r.metodoPago] ?? 0) + Number(r.total),
+      );
+    }
+
     return {
       bovedas,
       totalEfectivo: r2(totalEfectivo),
       totalDigitalHistorico: r2(totalDigitalHistorico),
       bancos: bancosOut,
       bancosPorMoneda,
+      recaudadoPorMetodo,
     };
   }
 
