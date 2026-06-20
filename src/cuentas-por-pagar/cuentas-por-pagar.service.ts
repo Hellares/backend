@@ -6,7 +6,13 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CajaService } from '../caja/caja.service';
-import { Prisma, MetodoPagoVenta } from '@prisma/client';
+import { StorageService } from '../storage/storage.service';
+import {
+  Prisma,
+  MetodoPagoVenta,
+  EntidadTipo,
+  CategoriaArchivo,
+} from '@prisma/client';
 
 @Injectable()
 export class CuentasPorPagarService {
@@ -15,7 +21,61 @@ export class CuentasPorPagarService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cajaService: CajaService,
+    private readonly storageService: StorageService,
   ) {}
+
+  /**
+   * Sube un comprobante (voucher Yape/Plin/transferencia) a S3 SIN asociarlo
+   * todavía a un pago. Devuelve la URL para mandarla en `registrarPago`
+   * (flujo "subir al momento de pagar").
+   */
+  async subirComprobante(empresaId: string, usuarioId: string, file: any) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó ningún archivo');
+    }
+    const archivo = await this.storageService.uploadArchivo({
+      empresaId,
+      file,
+      entidadTipo: EntidadTipo.PAGO_COMPRA,
+      categoria: CategoriaArchivo.EVIDENCIA,
+      subidoPor: usuarioId,
+    });
+    return { archivoId: archivo.id, url: archivo.url };
+  }
+
+  /**
+   * Sube y ADJUNTA un comprobante a un pago YA registrado (flujo del ícono en
+   * el historial). Valida que el pago pertenezca a una compra de la empresa.
+   */
+  async adjuntarComprobantePago(
+    empresaId: string,
+    pagoId: string,
+    usuarioId: string,
+    file: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó ningún archivo');
+    }
+    const pago = await this.prisma.pagoCompra.findFirst({
+      where: { id: pagoId, compra: { empresaId } },
+      select: { id: true },
+    });
+    if (!pago) throw new NotFoundException('Pago no encontrado');
+
+    const archivo = await this.storageService.uploadArchivo({
+      empresaId,
+      file,
+      entidadTipo: EntidadTipo.PAGO_COMPRA,
+      entidadId: pagoId,
+      categoria: CategoriaArchivo.EVIDENCIA,
+      subidoPor: usuarioId,
+    });
+    await this.prisma.pagoCompra.update({
+      where: { id: pagoId },
+      data: { comprobanteUrl: archivo.url },
+    });
+    return { archivoId: archivo.id, url: archivo.url };
+  }
 
   /**
    * Listar cuentas por pagar (compras a crédito con saldo pendiente)
@@ -197,6 +257,7 @@ export class CuentasPorPagarService {
         referencia: p.referencia,
         bancoDestino: p.bancoDestino,
         cuentaDestino: p.cuentaDestino,
+        comprobanteUrl: p.comprobanteUrl,
         fechaPago: p.fechaPago,
       })),
     };
@@ -237,6 +298,7 @@ export class CuentasPorPagarService {
       referencia?: string;
       bancoDestino?: string;
       cuentaDestino?: string;
+      comprobanteUrl?: string;
     },
   ) {
     // Transacción + recálculo del saldo bajo lock para evitar sobre-pago por
@@ -282,6 +344,7 @@ export class CuentasPorPagarService {
           referencia: data.referencia,
           bancoDestino: data.bancoDestino,
           cuentaDestino: data.cuentaDestino,
+          comprobanteUrl: data.comprobanteUrl,
         },
       });
     });

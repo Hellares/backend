@@ -591,6 +591,7 @@ enum EntidadTipo {
   PEDIDO_MARKETPLACE
   PAGO_SUSCRIPCION
   PAGO_GASTO_RECURRENTE // Comprobante (foto del recibo) de un pago de gasto recurrente
+  PAGO_COMPRA // Comprobante (voucher Yape/Plin/transferencia) de un pago a proveedor (CxP)
 }
 
 enum TipoPrecioCombo {

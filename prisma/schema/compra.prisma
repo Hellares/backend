@@ -382,6 +382,7 @@ model PagoCompra {
   referencia    String? // Número de operación, voucher
   bancoDestino  String? // Nombre del banco del proveedor
   cuentaDestino String? // Número de cuenta destino
+  comprobanteUrl String? // Foto/PDF del voucher (Yape/Plin/transferencia) en S3
   fechaPago     DateTime        @default(now())
   creadoEn      DateTime        @default(now())
 

@@ -7,8 +7,18 @@ import {
   Query,
   UseGuards,
   Headers,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiHeader,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -67,5 +77,48 @@ export class CuentasPorPagarController {
     @Body() body: RegistrarPagoCuentaPagarDto,
   ) {
     return this.service.registrarPago(empresaId, compraId, usuarioId, body);
+  }
+
+  @Post('comprobante')
+  @RequiresPermission(Permission.MANAGE_COMPRAS)
+  @ApiOperation({ summary: 'Subir comprobante (voucher) a S3 — para mandar su URL al registrar el pago' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  subirComprobante(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') usuarioId: string,
+    @UploadedFile() file: any,
+  ) {
+    return this.service.subirComprobante(empresaId, usuarioId, file);
+  }
+
+  @Post('pagos/:pagoId/comprobante')
+  @RequiresPermission(Permission.MANAGE_COMPRAS)
+  @ApiOperation({ summary: 'Adjuntar comprobante (voucher) a un pago ya registrado' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  adjuntarComprobante(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('pagoId') pagoId: string,
+    @CurrentUser('id') usuarioId: string,
+    @UploadedFile() file: any,
+  ) {
+    return this.service.adjuntarComprobantePago(empresaId, pagoId, usuarioId, file);
   }
 }

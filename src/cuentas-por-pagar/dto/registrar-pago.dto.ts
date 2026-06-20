@@ -26,4 +26,9 @@ export class RegistrarPagoCuentaPagarDto {
   @IsOptional()
   @IsString()
   cuentaDestino?: string;
+
+  @ApiProperty({ required: false, description: 'URL del comprobante ya subido (S3)' })
+  @IsOptional()
+  @IsString()
+  comprobanteUrl?: string;
 }

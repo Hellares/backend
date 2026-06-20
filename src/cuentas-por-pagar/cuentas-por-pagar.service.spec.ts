@@ -20,6 +20,7 @@ describe('CuentasPorPagarService.registrarPago', () => {
 
   let prisma: any;
   let caja: any;
+  let storage: any;
   let service: CuentasPorPagarService;
 
   /** Fila tal como la devuelve el SELECT ... FOR UPDATE. */
@@ -61,7 +62,8 @@ describe('CuentasPorPagarService.registrarPago', () => {
       },
     };
     caja = { registrarMovimientoSiHayCaja: jest.fn().mockResolvedValue(undefined) };
-    service = new CuentasPorPagarService(prisma, caja);
+    storage = { uploadArchivo: jest.fn() };
+    service = new CuentasPorPagarService(prisma, caja, storage);
   });
 
   const pagar = (monto: number) =>
@@ -144,5 +146,83 @@ describe('CuentasPorPagarService.registrarPago', () => {
     caja.registrarMovimientoSiHayCaja.mockRejectedValue(new Error('sin caja abierta'));
     const pago = await pagar(100);
     expect(pago).toMatchObject({ id: 'pago-1', monto: 100 });
+  });
+
+  it('persiste comprobanteUrl al registrar el pago si se provee', async () => {
+    const tx = armarTx(filaCompra({ total: 100 }), []);
+    await service.registrarPago(EMPRESA, COMPRA, USUARIO, {
+      metodoPago: 'YAPE' as any,
+      monto: 100,
+      comprobanteUrl: 'https://s3/voucher.jpg',
+    });
+    expect(tx.pagoCompra.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ comprobanteUrl: 'https://s3/voucher.jpg' }),
+      }),
+    );
+  });
+});
+
+describe('CuentasPorPagarService comprobantes', () => {
+  const EMPRESA = 'emp-1';
+  const USUARIO = 'user-1';
+  let prisma: any;
+  let storage: any;
+  let service: CuentasPorPagarService;
+
+  beforeEach(() => {
+    prisma = {
+      pagoCompra: { findFirst: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+    };
+    storage = {
+      uploadArchivo: jest.fn().mockResolvedValue({ id: 'arch-1', url: 'https://s3/v.jpg' }),
+    };
+    service = new CuentasPorPagarService(prisma, {} as any, storage);
+  });
+
+  const file = { buffer: Buffer.from('x'), mimetype: 'image/jpeg', size: 10, originalname: 'v.jpg' };
+
+  describe('subirComprobante', () => {
+    it('sube a S3 con entidadTipo PAGO_COMPRA y devuelve la url (sin asociar a pago)', async () => {
+      const res = await service.subirComprobante(EMPRESA, USUARIO, file);
+      expect(storage.uploadArchivo).toHaveBeenCalledWith(
+        expect.objectContaining({ empresaId: EMPRESA, entidadTipo: 'PAGO_COMPRA', subidoPor: USUARIO }),
+      );
+      expect(res).toEqual({ archivoId: 'arch-1', url: 'https://s3/v.jpg' });
+    });
+
+    it('lanza BadRequest si no se envía archivo', async () => {
+      await expect(service.subirComprobante(EMPRESA, USUARIO, null)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(storage.uploadArchivo).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('adjuntarComprobantePago', () => {
+    it('valida que el pago sea de la empresa, sube y setea comprobanteUrl', async () => {
+      prisma.pagoCompra.findFirst.mockResolvedValue({ id: 'pago-1' });
+      const res = await service.adjuntarComprobantePago(EMPRESA, 'pago-1', USUARIO, file);
+      expect(prisma.pagoCompra.findFirst).toHaveBeenCalledWith({
+        where: { id: 'pago-1', compra: { empresaId: EMPRESA } },
+        select: { id: true },
+      });
+      expect(storage.uploadArchivo).toHaveBeenCalledWith(
+        expect.objectContaining({ entidadTipo: 'PAGO_COMPRA', entidadId: 'pago-1' }),
+      );
+      expect(prisma.pagoCompra.update).toHaveBeenCalledWith({
+        where: { id: 'pago-1' },
+        data: { comprobanteUrl: 'https://s3/v.jpg' },
+      });
+      expect(res).toEqual({ archivoId: 'arch-1', url: 'https://s3/v.jpg' });
+    });
+
+    it('lanza NotFound si el pago no pertenece a la empresa', async () => {
+      prisma.pagoCompra.findFirst.mockResolvedValue(null);
+      await expect(
+        service.adjuntarComprobantePago(EMPRESA, 'pago-x', USUARIO, file),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(storage.uploadArchivo).not.toHaveBeenCalled();
+    });
   });
 });
