@@ -217,7 +217,11 @@ export class EmpresaBancoService {
 
     const now = new Date();
     const desde = fechaDesde ? new Date(fechaDesde) : new Date(now.getFullYear(), now.getMonth(), 1);
-    const hasta = fechaHasta ? new Date(fechaHasta) : now;
+    // Si fechaHasta viene como fecha sin hora (YYYY-MM-DD), incluirla hasta el
+    // FIN del día (si no, "2026-06-20" = medianoche excluye todo lo de hoy).
+    const hasta = fechaHasta
+      ? new Date(fechaHasta.includes('T') ? fechaHasta : `${fechaHasta}T23:59:59.999`)
+      : now;
     const r2 = (n: number) => Math.round(n * 100) / 100;
 
     const [recaud, pagosCompra, pagosGasto, ajustes, recaudadoTotal] = await Promise.all([
