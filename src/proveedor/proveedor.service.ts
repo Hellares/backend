@@ -241,7 +241,11 @@ export class ProveedorService {
    * que me debe por ventas) y calcula el NETO por moneda. Devuelve además los
    * documentos (compras + ventas) unificados y ordenados por fecha.
    */
-  async estadoCuenta(empresaId: string, proveedorId: string) {
+  async estadoCuenta(
+    empresaId: string,
+    proveedorId: string,
+    opts?: { fechaDesde?: string; fechaHasta?: string },
+  ) {
     const prov = await this.prisma.proveedor.findFirst({
       where: { id: proveedorId, empresaId },
       include: { clienteEmpresa: { select: { id: true, codigo: true } } },
@@ -305,36 +309,60 @@ export class ProveedorService {
       netoPorMoneda[mon] = r2((leDeboPorMoneda[mon] ?? 0) - (meDebePorMoneda[mon] ?? 0));
     }
 
-    const movimientos = [
-      ...cxp.map((c) => ({
-        tipo: 'COMPRA' as const,
-        lado: 'LE_DEBO' as const,
-        id: c.compraId,
-        codigo: c.codigo,
-        fecha: c.fechaCompra,
-        total: c.totalCompra,
-        pagado: c.totalPagado,
-        saldoPendiente: c.saldoPendiente,
-        moneda: c.moneda || 'PEN',
-        estado: c.estado,
-        items: itemsPorDoc.get(c.compraId) ?? [],
-      })),
-      ...cxc.map((v) => ({
-        tipo: 'VENTA' as const,
-        lado: 'ME_DEBE' as const,
-        id: v.ventaId,
-        codigo: v.codigo,
-        fecha: v.fechaVenta,
-        total: v.totalVenta,
-        pagado: v.totalPagado,
-        saldoPendiente: v.saldoPendiente,
-        moneda: v.moneda || 'PEN',
-        estado: v.estado,
-        items: itemsPorDoc.get(v.ventaId) ?? [],
-      })),
-    ].sort(
-      (a, b) => new Date(b.fecha ?? 0).getTime() - new Date(a.fecha ?? 0).getTime(),
-    );
+    const docCompra = (c: any) => ({
+      tipo: 'COMPRA' as const,
+      lado: 'LE_DEBO' as const,
+      id: c.compraId,
+      codigo: c.codigo,
+      fecha: c.fechaCompra,
+      total: c.totalCompra,
+      pagado: c.totalPagado,
+      saldoPendiente: c.saldoPendiente,
+      moneda: c.moneda || 'PEN',
+      estado: c.estado,
+      items: itemsPorDoc.get(c.compraId) ?? [],
+    });
+    const docVenta = (v: any) => ({
+      tipo: 'VENTA' as const,
+      lado: 'ME_DEBE' as const,
+      id: v.ventaId,
+      codigo: v.codigo,
+      fecha: v.fechaVenta,
+      total: v.totalVenta,
+      pagado: v.totalPagado,
+      saldoPendiente: v.saldoPendiente,
+      moneda: v.moneda || 'PEN',
+      estado: v.estado,
+      items: itemsPorDoc.get(v.ventaId) ?? [],
+    });
+    const comprasDocs = cxp.map(docCompra);
+    const ventasDocs = cxc.map(docVenta);
+    const porFechaDesc = (a: any, b: any) =>
+      new Date(b.fecha ?? 0).getTime() - new Date(a.fecha ?? 0).getTime();
+
+    // PENDIENTES (saldo > 0, cualquier fecha): es la deuda viva → siempre arriba.
+    const pendientes = {
+      ventas: ventasDocs.filter((d) => d.saldoPendiente > 0.001).sort(porFechaDesc),
+      compras: comprasDocs.filter((d) => d.saldoPendiente > 0.001).sort(porFechaDesc),
+    };
+
+    // HISTORIAL en rango de fechas (default: mes en curso del servidor; el front
+    // manda el rango ya calculado en hora local).
+    const ahora = new Date();
+    const desde = opts?.fechaDesde
+      ? new Date(opts.fechaDesde)
+      : new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+    const hasta = opts?.fechaHasta
+      ? new Date(opts.fechaHasta.includes('T') ? opts.fechaHasta : `${opts.fechaHasta}T23:59:59.999`)
+      : ahora;
+    const enRango = (d: any) => {
+      const f = new Date(d.fecha ?? 0).getTime();
+      return f >= desde.getTime() && f <= hasta.getTime();
+    };
+    const historial = {
+      ventas: ventasDocs.filter(enRango).sort(porFechaDesc),
+      compras: comprasDocs.filter(enRango).sort(porFechaDesc),
+    };
 
     return {
       proveedor: {
@@ -348,7 +376,9 @@ export class ProveedorService {
       leDeboPorMoneda,
       meDebePorMoneda,
       netoPorMoneda,
-      movimientos,
+      rango: { desde: desde.toISOString(), hasta: hasta.toISOString() },
+      pendientes,
+      historial,
     };
   }
 

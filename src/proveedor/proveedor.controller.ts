@@ -61,8 +61,10 @@ export class ProveedorController {
   async estadoCuenta(
     @Param('empresaId') empresaId: string,
     @Param('id') id: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
   ) {
-    return this.proveedorService.estadoCuenta(empresaId, id);
+    return this.proveedorService.estadoCuenta(empresaId, id, { fechaDesde, fechaHasta });
   }
 
   /**

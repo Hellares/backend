@@ -47,17 +47,24 @@ describe('ProveedorService.estadoCuenta', () => {
       { compraId: 'c1', descripcion: 'Gaseosa', cantidad: 2, total: 100 },
     ]);
 
-    const r = await service.estadoCuenta(EMP, PROV);
+    const r = await service.estadoCuenta(EMP, PROV, {
+      fechaDesde: '2026-06-01',
+      fechaHasta: '2026-06-30',
+    });
     expect(cxc.listar).toHaveBeenCalledWith(EMP, { clienteEmpresaId: 'ce-1' });
     expect(r.leDeboPorMoneda).toEqual({ PEN: 100, USD: 50 });
     expect(r.meDebePorMoneda).toEqual({ PEN: 30 });
     expect(r.netoPorMoneda).toEqual({ PEN: 70, USD: 50 });
-    expect(r.movimientos).toHaveLength(3);
-    // Ordenado por fecha desc: COMPRA-2 (06-03) primero
-    expect(r.movimientos[0].codigo).toBe('COMPRA-2');
+    // Pendientes (saldo>0): 2 compras + 1 venta
+    expect(r.pendientes.compras).toHaveLength(2);
+    expect(r.pendientes.ventas).toHaveLength(1);
+    // Historial en junio: incluye los 3 (ordenado fecha desc → COMPRA-2 primero)
+    expect(r.historial.compras).toHaveLength(2);
+    expect(r.historial.ventas).toHaveLength(1);
+    expect(r.historial.compras[0].codigo).toBe('COMPRA-2');
     expect(r.esTercero).toBe(true);
-    // El movimiento de COMPRA-1 trae sus ítems + id para navegar
-    const c1 = r.movimientos.find((m: any) => m.codigo === 'COMPRA-1') as any;
+    // COMPRA-1 trae sus ítems + id para navegar
+    const c1 = r.pendientes.compras.find((m: any) => m.codigo === 'COMPRA-1') as any;
     expect(c1.id).toBe('c1');
     expect(c1.items).toEqual([{ descripcion: 'Gaseosa', cantidad: 2, total: 100 }]);
   });
@@ -74,5 +81,7 @@ describe('ProveedorService.estadoCuenta', () => {
     expect(r.meDebePorMoneda).toEqual({});
     expect(r.netoPorMoneda).toEqual({ PEN: 100 });
     expect(r.esTercero).toBe(false);
+    expect(r.pendientes.ventas).toEqual([]);
+    expect(r.pendientes.compras).toHaveLength(1);
   });
 });
