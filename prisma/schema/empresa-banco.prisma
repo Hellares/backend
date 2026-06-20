@@ -24,7 +24,28 @@ model EmpresaBanco {
   empresa              Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   pagosGastoRecurrente PagoGastoRecurrente[]
   pagosCompra          PagoCompra[]
+  cuentasRecaudacion   CuentaRecaudacion[]
 
   @@index([empresaId])
   @@index([empresaId, isActive])
+}
+
+/// Cuenta bancaria donde se recauda cada método de pago digital. Al cerrar
+/// caja, el total de cada método cae en su banco (Yape→BCP, Plin→Interbank…).
+/// EFECTIVO no se mapea (va a la bóveda/Tesorería). Una cuenta por método.
+model CuentaRecaudacion {
+  id         String          @id @default(cuid())
+  empresaId  String
+  metodoPago MetodoPagoVenta
+  bancoId    String
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  banco   EmpresaBanco @relation(fields: [bancoId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, metodoPago])
+  @@index([empresaId])
+  @@index([bancoId])
 }

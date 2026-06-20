@@ -179,6 +179,7 @@ model Empresa {
   gastosCajaChica      GastoCajaChica[]
   rendicionesCajaChica RendicionCajaChica[]
   cuentasBancarias     EmpresaBanco[]
+  cuentasRecaudacion   CuentaRecaudacion[]
   prestamos            Prestamo[]
   categoriasGasto      CategoriaGasto[]
   metasFinancieras     MetaFinanciera[]
