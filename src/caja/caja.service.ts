@@ -13,7 +13,6 @@ import {
   CategoriaMovimientoCaja,
   MetodoPagoVenta,
   TipoArqueoCaja,
-  OrigenAjusteBanco,
   Prisma,
 } from '@prisma/client';
 import { AbrirCajaDto } from './dto/abrir-caja.dto';
@@ -2523,29 +2522,18 @@ export class CajaService {
             },
           });
 
-          // 2) Incrementa el banco + registra el ajuste auditable.
+          // 2) Incrementa el saldo del banco. El registro/auditoría es el
+          //    MovimientoCaja "[MIGRACIÓN]" de arriba (que también aparece como
+          //    recaudación en el estado de cuenta). NO creamos AjusteBanco para
+          //    no contar el mismo movimiento dos veces.
           const cuenta = await tx.empresaBanco.findUnique({
             where: { id: banco.id },
             select: { saldoActual: true },
           });
           const anterior = cuenta?.saldoActual != null ? Number(cuenta.saldoActual) : 0;
-          const nuevo = r2(anterior + monto);
           await tx.empresaBanco.update({
             where: { id: banco.id },
-            data: { saldoActual: nuevo },
-          });
-          await tx.ajusteBanco.create({
-            data: {
-              empresaId,
-              bancoId: banco.id,
-              tipo: TipoMovimientoCaja.INGRESO,
-              monto,
-              motivo: `Migración digital histórico (${metodo})`,
-              origen: OrigenAjusteBanco.AJUSTE_MANUAL,
-              saldoAnterior: anterior,
-              saldoNuevo: nuevo,
-              usuarioId,
-            },
+            data: { saldoActual: r2(anterior + monto) },
           });
 
           movido.push({ sedeId: central.sedeId, metodo, monto, bancoId: banco.id, nombreBanco: banco.nombreBanco });

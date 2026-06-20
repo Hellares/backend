@@ -46,11 +46,8 @@ describe('CajaService.migrarDigitalHistorico', () => {
       }),
     );
     expect(tx.empresaBanco.update).toHaveBeenCalledWith({ where: { id: 'bcp' }, data: { saldoActual: 1200 } });
-    expect(tx.ajusteBanco.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ tipo: 'INGRESO', monto: 200, saldoAnterior: 1000, saldoNuevo: 1200 }),
-      }),
-    );
+    // NO crea AjusteBanco: el registro es el MovimientoCaja "[MIGRACIÓN]" (evita doble conteo).
+    expect(tx.ajusteBanco.create).not.toHaveBeenCalled();
     expect(res.totalMovido).toBe(200);
     expect(res.movido).toHaveLength(1);
     expect(res.omitido).toHaveLength(0);
