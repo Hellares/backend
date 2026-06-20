@@ -109,6 +109,100 @@ export class CuentasPorPagarService {
   }
 
   /**
+   * Detalle de una cuenta por pagar: cabecera de la compra + líneas (qué se
+   * compró) + historial de pagos con fecha/hora. Para la vista de detalle del
+   * app al tocar la card.
+   */
+  async getDetalle(empresaId: string, compraId: string) {
+    const compra = await this.prisma.compra.findFirst({
+      where: { id: compraId, empresaId },
+      include: {
+        detalles: { orderBy: { orden: 'asc' } },
+        pagos: { orderBy: { fechaPago: 'asc' } },
+        proveedor: {
+          include: { bancos: { where: { esPrincipal: true }, take: 1 } },
+        },
+        sede: true,
+      },
+    });
+
+    if (!compra) throw new NotFoundException('Compra no encontrada');
+
+    const totalCompra = Number(compra.total);
+    const totalPagado = compra.pagos.reduce((s, p) => s + Number(p.monto), 0);
+    const saldoPendiente = Math.round((totalCompra - totalPagado) * 100) / 100;
+    const now = new Date();
+    const estaVencida = compra.fechaVencimientoPago
+      ? compra.fechaVencimientoPago < now
+      : false;
+    const estaPagada = saldoPendiente <= 0;
+    const diasVencimiento = compra.fechaVencimientoPago
+      ? Math.ceil(
+          (compra.fechaVencimientoPago.getTime() - now.getTime()) /
+            (1000 * 60 * 60 * 24),
+        )
+      : null;
+
+    const bancoPrincipal = compra.proveedor?.bancos?.[0] ?? null;
+
+    return {
+      compraId: compra.id,
+      codigo: compra.codigo,
+      nombreProveedor: compra.nombreProveedor,
+      documentoProveedor: compra.documentoProveedor,
+      proveedorTelefono: compra.proveedor?.telefono,
+      proveedorEmail: compra.proveedor?.email,
+      sedeNombre: compra.sede?.nombre,
+      moneda: compra.moneda,
+      tipoDocumentoProveedor: compra.tipoDocumentoProveedor,
+      serieDocumentoProveedor: compra.serieDocumentoProveedor,
+      numeroDocumentoProveedor: compra.numeroDocumentoProveedor,
+      observaciones: compra.observaciones,
+      subtotal: Number(compra.subtotal),
+      impuestos: Number(compra.impuestos),
+      descuento: Number(compra.descuento),
+      totalCompra,
+      totalPagado: Math.round(totalPagado * 100) / 100,
+      saldoPendiente,
+      terminosPago: compra.terminosPago,
+      diasCredito: compra.diasCredito,
+      fechaCompra: compra.fechaRecepcion,
+      fechaVencimiento: compra.fechaVencimientoPago,
+      diasVencimiento,
+      estado: estaPagada ? 'PAGADA' : estaVencida ? 'VENCIDA' : 'PENDIENTE',
+      bancoPrincipal: bancoPrincipal
+        ? {
+            nombreBanco: bancoPrincipal.nombreBanco,
+            tipoCuenta: bancoPrincipal.tipoCuenta,
+            numeroCuenta: bancoPrincipal.numeroCuenta,
+            cci: bancoPrincipal.cci,
+          }
+        : null,
+      detalles: compra.detalles.map((d) => ({
+        id: d.id,
+        descripcion: d.descripcion,
+        cantidad: d.cantidad,
+        precioUnitario: Number(d.precioUnitario),
+        subtotal: Number(d.subtotal),
+        total: Number(d.total),
+        usaUnidadCompra: d.usaUnidadCompra,
+        cantidadOriginal:
+          d.cantidadOriginal != null ? Number(d.cantidadOriginal) : null,
+        unidadOriginalSimbolo: d.unidadOriginalSimbolo,
+      })),
+      pagos: compra.pagos.map((p) => ({
+        id: p.id,
+        metodoPago: p.metodoPago,
+        monto: Number(p.monto),
+        referencia: p.referencia,
+        bancoDestino: p.bancoDestino,
+        cuentaDestino: p.cuentaDestino,
+        fechaPago: p.fechaPago,
+      })),
+    };
+  }
+
+  /**
    * Resumen de cuentas por pagar
    */
   async getResumen(empresaId: string) {

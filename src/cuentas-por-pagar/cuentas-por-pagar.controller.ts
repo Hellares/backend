@@ -45,6 +45,17 @@ export class CuentasPorPagarController {
     return this.service.getResumen(empresaId);
   }
 
+  @Get(':compraId/detalle')
+  @RequiresPermission(Permission.VIEW_COMPRAS)
+  @ApiOperation({ summary: 'Detalle de una cuenta por pagar (ítems + historial de pagos)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async detalle(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('compraId') compraId: string,
+  ) {
+    return this.service.getDetalle(empresaId, compraId);
+  }
+
   @Post(':compraId/pago')
   @RequiresPermission(Permission.MANAGE_COMPRAS)
   @ApiOperation({ summary: 'Registrar pago a proveedor' })
