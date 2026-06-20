@@ -220,7 +220,7 @@ export class EmpresaBancoService {
     const hasta = fechaHasta ? new Date(fechaHasta) : now;
     const r2 = (n: number) => Math.round(n * 100) / 100;
 
-    const [recaud, pagosCompra, pagosGasto, ajustes] = await Promise.all([
+    const [recaud, pagosCompra, pagosGasto, ajustes, recaudadoTotal] = await Promise.all([
       // Ingresos: cobros digitales que entraron al banco (barrido + migración).
       this.prisma.movimientoCaja.findMany({
         where: {
@@ -247,7 +247,20 @@ export class EmpresaBancoService {
         where: { empresaId, bancoId: id, creadoEn: { gte: desde, lte: hasta } },
         select: { tipo: true, monto: true, motivo: true, origen: true, creadoEn: true },
       }),
+      // Desglose ACUMULADO (todo el tiempo) de lo recaudado por método en este
+      // banco — "cuánto se tiene de Yape, Plin, Transferencia, etc.".
+      this.prisma.$queryRaw<{ metodoPago: string; total: number }[]>`
+        SELECT "metodoPago", SUM("monto")::float8 AS total
+        FROM "MovimientoCaja"
+        WHERE "empresaId" = ${empresaId} AND tipo = 'EGRESO' AND anulado = false
+          AND (metadata->>'bancoId') = ${id}
+        GROUP BY 1`,
     ]);
+
+    const recaudadoPorMetodo: Record<string, number> = {};
+    for (const r of recaudadoTotal) {
+      recaudadoPorMetodo[r.metodoPago] = r2(Number(r.total));
+    }
 
     const movimientos = [
       ...recaud.map((m) => ({
@@ -306,6 +319,7 @@ export class EmpresaBancoService {
         neto: r2(totalIngresos - totalEgresos),
         cantidad: movimientos.length,
       },
+      recaudadoPorMetodo,
       movimientos,
     };
   }

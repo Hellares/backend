@@ -22,6 +22,7 @@ describe('EmpresaBancoService.getEstadoCuenta', () => {
       pagoCompra: { findMany: jest.fn().mockResolvedValue([]) },
       pagoGastoRecurrente: { findMany: jest.fn().mockResolvedValue([]) },
       ajusteBanco: { findMany: jest.fn().mockResolvedValue([]) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
     };
     service = new EmpresaBancoService(prisma);
   });
@@ -39,8 +40,13 @@ describe('EmpresaBancoService.getEstadoCuenta', () => {
     prisma.ajusteBanco.findMany.mockResolvedValue([
       { tipo: 'INGRESO', monto: 10, motivo: 'Interés', origen: 'AJUSTE_MANUAL', creadoEn: new Date('2026-06-13') },
     ]);
+    prisma.$queryRaw.mockResolvedValue([
+      { metodoPago: 'YAPE', total: 53536.6 },
+      { metodoPago: 'TARJETA', total: 2380 },
+    ]);
 
     const res = await service.getEstadoCuenta(EMPRESA, BANCO);
+    expect(res.recaudadoPorMetodo).toEqual({ YAPE: 53536.6, TARJETA: 2380 });
 
     expect(res.cuenta).toMatchObject({ id: BANCO, saldoActual: 1000 });
     // 4 movimientos, ordenados por fecha desc → ajuste(13), pago compra(12), gasto(11), recaud(10)
