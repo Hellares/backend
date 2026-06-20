@@ -15,8 +15,10 @@ model EmpresaBanco {
   esPrincipal  Boolean    @default(false)
   isActive     Boolean    @default(true)
 
-  // Saldo (actualización manual o por conciliación)
-  saldoActual Decimal? @db.Decimal(12, 2)
+  // Saldo. Default 0 (NUNCA null): un `increment`/`decrement` de Prisma sobre
+  // null se pierde (null + n = null), lo que hacía perder cobros del barrido
+  // cuando la cuenta recién creada tenía saldo null.
+  saldoActual Decimal? @default(0) @db.Decimal(12, 2)
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
