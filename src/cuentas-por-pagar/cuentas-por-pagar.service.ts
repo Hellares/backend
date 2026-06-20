@@ -132,6 +132,7 @@ export class CuentasPorPagarService {
 
       return {
         compraId: c.id,
+        proveedorId: c.proveedorId,
         codigo: c.codigo,
         nombreProveedor: c.nombreProveedor,
         documentoProveedor: c.documentoProveedor,
@@ -261,6 +262,69 @@ export class CuentasPorPagarService {
         fechaPago: p.fechaPago,
       })),
     };
+  }
+
+  /**
+   * Deuda agrupada por proveedor: una fila por proveedor con saldo pendiente,
+   * con su total adeudado, lo vencido y el conteo de compras. Ordenado por
+   * deuda descendente. Para la vista "Por proveedor" de CxP.
+   */
+  async getPorProveedor(empresaId: string) {
+    const cuentas = await this.listar(empresaId);
+
+    const map = new Map<
+      string,
+      {
+        proveedorId: string;
+        nombreProveedor: string;
+        documentoProveedor: string | null;
+        totalDeuda: number;
+        totalVencido: number;
+        cantidadCompras: number;
+        cantidadVencidas: number;
+        proximoVencimiento: Date | null;
+      }
+    >();
+
+    for (const c of cuentas) {
+      if (c.estado === 'PAGADA') continue; // solo proveedores con saldo
+      const key = c.proveedorId;
+      if (!map.has(key)) {
+        map.set(key, {
+          proveedorId: key,
+          nombreProveedor: c.nombreProveedor,
+          documentoProveedor: c.documentoProveedor,
+          totalDeuda: 0,
+          totalVencido: 0,
+          cantidadCompras: 0,
+          cantidadVencidas: 0,
+          proximoVencimiento: null,
+        });
+      }
+      const d = map.get(key)!;
+      d.totalDeuda += c.saldoPendiente;
+      d.cantidadCompras++;
+      if (c.estado === 'VENCIDA') {
+        d.totalVencido += c.saldoPendiente;
+        d.cantidadVencidas++;
+      }
+      // El vencimiento más próximo (pendiente, no vencido).
+      if (
+        c.fechaVencimiento &&
+        c.estado === 'PENDIENTE' &&
+        (!d.proximoVencimiento || c.fechaVencimiento < d.proximoVencimiento)
+      ) {
+        d.proximoVencimiento = c.fechaVencimiento;
+      }
+    }
+
+    return Array.from(map.values())
+      .map((d) => ({
+        ...d,
+        totalDeuda: Math.round(d.totalDeuda * 100) / 100,
+        totalVencido: Math.round(d.totalVencido * 100) / 100,
+      }))
+      .sort((a, b) => b.totalDeuda - a.totalDeuda);
   }
 
   /**

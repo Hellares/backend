@@ -55,6 +55,14 @@ export class CuentasPorPagarController {
     return this.service.getResumen(empresaId);
   }
 
+  @Get('por-proveedor')
+  @RequiresPermission(Permission.VIEW_COMPRAS)
+  @ApiOperation({ summary: 'Deuda agrupada por proveedor' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async porProveedor(@Headers('x-tenant-id') empresaId: string) {
+    return this.service.getPorProveedor(empresaId);
+  }
+
   @Get(':compraId/detalle')
   @RequiresPermission(Permission.VIEW_COMPRAS)
   @ApiOperation({ summary: 'Detalle de una cuenta por pagar (ítems + historial de pagos)' })
