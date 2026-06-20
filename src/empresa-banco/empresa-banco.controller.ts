@@ -114,9 +114,22 @@ export class EmpresaBancoController {
     return this.service.getAjustes(empresaId, id);
   }
 
+  @Get(':id/estado-cuenta')
+  @RequiresPermission(Permission.VIEW_REPORTS)
+  @ApiOperation({ summary: 'Estado de cuenta real del banco (recaudación, pagos y ajustes del período)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getEstadoCuenta(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Query('fechaDesde') fechaDesde?: string,
+    @Query('fechaHasta') fechaHasta?: string,
+  ) {
+    return this.service.getEstadoCuenta(empresaId, id, fechaDesde, fechaHasta);
+  }
+
   @Get(':id/conciliacion')
   @RequiresPermission(Permission.VIEW_REPORTS)
-  @ApiOperation({ summary: 'Conciliación bancaria' })
+  @ApiOperation({ summary: 'Conciliación bancaria (legacy)' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async getConciliacion(
     @Headers('x-tenant-id') empresaId: string,

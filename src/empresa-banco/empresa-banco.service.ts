@@ -204,6 +204,112 @@ export class EmpresaBancoService {
     });
   }
 
+  /**
+   * Estado de cuenta REAL de un banco (conciliación por banco): los movimientos
+   * que tocaron ESTA cuenta en el período — recaudación que entró (cobros
+   * digitales del cierre/migración), pagos que salieron (proveedores y gastos)
+   * y ajustes/conciliaciones — con su saldo del sistema. El usuario concilia
+   * comparando `saldoActual` con su extracto (acción conciliar()).
+   */
+  async getEstadoCuenta(empresaId: string, id: string, fechaDesde?: string, fechaHasta?: string) {
+    const cuenta = await this.prisma.empresaBanco.findFirst({ where: { id, empresaId } });
+    if (!cuenta) throw new NotFoundException('Cuenta no encontrada');
+
+    const now = new Date();
+    const desde = fechaDesde ? new Date(fechaDesde) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const hasta = fechaHasta ? new Date(fechaHasta) : now;
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+
+    const [recaud, pagosCompra, pagosGasto, ajustes] = await Promise.all([
+      // Ingresos: cobros digitales que entraron al banco (barrido + migración).
+      this.prisma.movimientoCaja.findMany({
+        where: {
+          empresaId,
+          anulado: false,
+          tipo: 'EGRESO',
+          fechaMovimiento: { gte: desde, lte: hasta },
+          metadata: { path: ['bancoId'], equals: id },
+        },
+        select: { metodoPago: true, monto: true, fechaMovimiento: true },
+      }),
+      // Egresos: pagos a proveedor desde este banco.
+      this.prisma.pagoCompra.findMany({
+        where: { bancoId: id, fechaPago: { gte: desde, lte: hasta } },
+        select: { monto: true, fechaPago: true, compra: { select: { codigo: true, nombreProveedor: true } } },
+      }),
+      // Egresos: pagos de gastos recurrentes desde este banco.
+      this.prisma.pagoGastoRecurrente.findMany({
+        where: { bancoId: id, anulado: false, fechaPago: { gte: desde, lte: hasta } },
+        select: { montoReal: true, fechaPago: true, gastoRecurrente: { select: { nombre: true } } },
+      }),
+      // Ajustes/conciliaciones del período.
+      this.prisma.ajusteBanco.findMany({
+        where: { empresaId, bancoId: id, creadoEn: { gte: desde, lte: hasta } },
+        select: { tipo: true, monto: true, motivo: true, origen: true, creadoEn: true },
+      }),
+    ]);
+
+    const movimientos = [
+      ...recaud.map((m) => ({
+        fecha: m.fechaMovimiento,
+        tipo: 'INGRESO',
+        concepto: `Recaudación ${m.metodoPago}`,
+        detalle: null as string | null,
+        metodoPago: m.metodoPago,
+        monto: r2(Number(m.monto)),
+        origen: 'RECAUDACION',
+      })),
+      ...pagosCompra.map((p) => ({
+        fecha: p.fechaPago,
+        tipo: 'EGRESO',
+        concepto: 'Pago proveedor',
+        detalle: `${p.compra?.nombreProveedor ?? ''}${p.compra?.codigo ? ` (${p.compra.codigo})` : ''}`.trim(),
+        metodoPago: null as string | null,
+        monto: r2(Number(p.monto)),
+        origen: 'PAGO_PROVEEDOR',
+      })),
+      ...pagosGasto.map((p) => ({
+        fecha: p.fechaPago,
+        tipo: 'EGRESO',
+        concepto: 'Pago gasto',
+        detalle: p.gastoRecurrente?.nombre ?? null,
+        metodoPago: null as string | null,
+        monto: r2(Number(p.montoReal)),
+        origen: 'PAGO_GASTO',
+      })),
+      ...ajustes.map((a) => ({
+        fecha: a.creadoEn,
+        tipo: a.tipo as string,
+        concepto: a.origen === 'CONCILIACION' ? 'Conciliación' : 'Ajuste',
+        detalle: a.motivo,
+        metodoPago: null as string | null,
+        monto: r2(Number(a.monto)),
+        origen: a.origen as string,
+      })),
+    ].sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
+
+    const totalIngresos = r2(movimientos.filter((m) => m.tipo === 'INGRESO').reduce((s, m) => s + m.monto, 0));
+    const totalEgresos = r2(movimientos.filter((m) => m.tipo === 'EGRESO').reduce((s, m) => s + m.monto, 0));
+
+    return {
+      cuenta: {
+        id: cuenta.id,
+        nombreBanco: cuenta.nombreBanco,
+        numeroCuenta: cuenta.numeroCuenta,
+        moneda: cuenta.moneda ?? 'PEN',
+        saldoActual: cuenta.saldoActual != null ? Number(cuenta.saldoActual) : 0,
+      },
+      periodo: { desde, hasta },
+      resumen: {
+        totalIngresos,
+        totalEgresos,
+        neto: r2(totalIngresos - totalEgresos),
+        cantidad: movimientos.length,
+      },
+      movimientos,
+    };
+  }
+
   /** Historial de ajustes/conciliaciones de una cuenta. */
   async getAjustes(empresaId: string, id: string) {
     const cuenta = await this.prisma.empresaBanco.findFirst({
