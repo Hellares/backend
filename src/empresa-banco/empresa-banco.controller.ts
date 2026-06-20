@@ -8,12 +8,14 @@ import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { EmpresaBancoService } from './empresa-banco.service';
 import {
   CrearEmpresaBancoDto,
   ActualizarEmpresaBancoDto,
   ActualizarSaldoDto,
 } from './dto/crear-empresa-banco.dto';
+import { AjusteBancoDto } from './dto/ajuste-banco.dto';
 
 @ApiTags('Cuentas Bancarias Empresa')
 @Controller('empresa-banco')
@@ -77,14 +79,39 @@ export class EmpresaBancoController {
 
   @Patch(':id/saldo')
   @RequiresPermission(Permission.MANAGE_SETTINGS)
-  @ApiOperation({ summary: 'Actualizar saldo de cuenta' })
+  @ApiOperation({ summary: 'Conciliar saldo: fija el saldo real del extracto y asienta el delta' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async actualizarSaldo(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
+    @CurrentUser('id') usuarioId: string,
     @Body() body: ActualizarSaldoDto,
   ) {
-    return this.service.actualizarSaldo(empresaId, id, body.saldo);
+    return this.service.conciliar(empresaId, id, usuarioId, body.saldo);
+  }
+
+  @Post(':id/ajuste')
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
+  @ApiOperation({ summary: 'Ajuste manual del saldo (+/-) con motivo' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async ajustar(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() body: AjusteBancoDto,
+  ) {
+    return this.service.ajustar(empresaId, id, usuarioId, body);
+  }
+
+  @Get(':id/ajustes')
+  @RequiresPermission(Permission.VIEW_REPORTS)
+  @ApiOperation({ summary: 'Historial de ajustes/conciliaciones de la cuenta' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getAjustes(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.getAjustes(empresaId, id);
   }
 
   @Get(':id/conciliacion')

@@ -25,9 +25,38 @@ model EmpresaBanco {
   pagosGastoRecurrente PagoGastoRecurrente[]
   pagosCompra          PagoCompra[]
   cuentasRecaudacion   CuentaRecaudacion[]
+  ajustes              AjusteBanco[]
 
   @@index([empresaId])
   @@index([empresaId, isActive])
+}
+
+/// De dónde nace un ajuste manual sobre el saldo de un banco.
+enum OrigenAjusteBanco {
+  CONCILIACION // El usuario fijó el saldo real del extracto → se asienta el delta.
+  AJUSTE_MANUAL // Comisión, interés, corrección, etc.
+}
+
+/// Historial de ajustes manuales/conciliaciones del saldo de una cuenta
+/// bancaria. El saldo lo mueve el sistema (cobros +, pagos −); cualquier
+/// edición manual queda registrada acá con motivo y saldo antes/después.
+model AjusteBanco {
+  id            String             @id @default(cuid())
+  empresaId     String
+  bancoId       String
+  tipo          TipoMovimientoCaja // INGRESO (suma) | EGRESO (resta)
+  monto         Decimal            @db.Decimal(12, 2)
+  motivo        String
+  origen        OrigenAjusteBanco
+  saldoAnterior Decimal            @db.Decimal(12, 2)
+  saldoNuevo    Decimal            @db.Decimal(12, 2)
+  usuarioId     String?
+  creadoEn      DateTime           @default(now())
+
+  banco EmpresaBanco @relation(fields: [bancoId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, bancoId])
+  @@index([bancoId, creadoEn(sort: Desc)])
 }
 
 /// Cuenta bancaria donde se recauda cada método de pago digital. Al cerrar
