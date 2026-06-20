@@ -13,6 +13,7 @@ import {
   CategoriaMovimientoCaja,
   MetodoPagoVenta,
   TipoArqueoCaja,
+  OrigenAjusteBanco,
   Prisma,
 } from '@prisma/client';
 import { AbrirCajaDto } from './dto/abrir-caja.dto';
@@ -2428,6 +2429,115 @@ export class CajaService {
       bancos: bancosOut,
       bancosPorMoneda,
     };
+  }
+
+  /**
+   * Migra el DIGITAL HISTÓRICO acumulado en la(s) Caja(s) Central(es) hacia
+   * las cuentas bancarias, según el mapeo de recaudación vigente. Para cada
+   * método con saldo digital > 0 y cuenta de recaudación activa en PEN:
+   *   - EGRESO AJUSTE_TESORERIA en la central (deja el bucket digital en 0),
+   *   - incrementa EmpresaBanco.saldoActual,
+   *   - registra un AjusteBanco (auditable).
+   * Idempotente: tras migrar, el saldo digital queda en 0 y re-ejecutar no hace
+   * nada. Lo que no tiene mapeo (o banco inactivo/no-PEN) se omite (queda en
+   * tesorería). El EFECTIVO nunca se toca (es la bóveda).
+   */
+  async migrarDigitalHistorico(empresaId: string, usuarioId: string | null) {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+
+    return this.prisma.$transaction(async (tx) => {
+      const centrales = await tx.caja.findMany({
+        where: { empresaId, esCajaCentral: true },
+        select: { id: true, sedeId: true, codigo: true },
+      });
+      const recaud = await tx.cuentaRecaudacion.findMany({
+        where: { empresaId },
+        include: { banco: { select: { id: true, isActive: true, moneda: true, nombreBanco: true } } },
+      });
+      const mapa = new Map(recaud.map((r) => [r.metodoPago, r.banco]));
+
+      const movido: any[] = [];
+      const omitido: any[] = [];
+      let totalMovido = 0;
+
+      for (const central of centrales) {
+        const totales = await tx.movimientoCaja.groupBy({
+          by: ['metodoPago', 'tipo'],
+          where: { cajaId: central.id, anulado: false },
+          _sum: { monto: true },
+        });
+        const saldoPorMetodo: Record<string, number> = {};
+        for (const row of totales) {
+          if (row.metodoPago === MetodoPagoVenta.EFECTIVO) continue; // efectivo = bóveda
+          const m = Number(row._sum.monto ?? 0);
+          saldoPorMetodo[row.metodoPago] =
+            (saldoPorMetodo[row.metodoPago] ?? 0) +
+            (row.tipo === TipoMovimientoCaja.INGRESO ? m : -m);
+        }
+
+        for (const [metodo, saldoRaw] of Object.entries(saldoPorMetodo)) {
+          const monto = r2(saldoRaw);
+          if (monto <= 0) continue;
+
+          const banco = mapa.get(metodo as MetodoPagoVenta);
+          if (!banco || !banco.isActive || (banco.moneda ?? 'PEN') !== 'PEN') {
+            omitido.push({
+              sedeId: central.sedeId,
+              metodo,
+              monto,
+              razon: !banco ? 'sin cuenta de recaudación' : 'banco inactivo o no-PEN',
+            });
+            continue;
+          }
+
+          // 1) EGRESO en la central: saca el digital de la bóveda.
+          await tx.movimientoCaja.create({
+            data: {
+              cajaId: central.id,
+              empresaId,
+              tipo: TipoMovimientoCaja.EGRESO,
+              categoria: CategoriaMovimientoCaja.AJUSTE_TESORERIA,
+              metodoPago: metodo as MetodoPagoVenta,
+              monto,
+              descripcion: `[MIGRACIÓN] Digital histórico ${metodo} → ${banco.nombreBanco}`,
+              esManual: true,
+              registradoPorId: usuarioId ?? undefined,
+              metadata: { migracionDigital: true, bancoId: banco.id },
+            },
+          });
+
+          // 2) Incrementa el banco + registra el ajuste auditable.
+          const cuenta = await tx.empresaBanco.findUnique({
+            where: { id: banco.id },
+            select: { saldoActual: true },
+          });
+          const anterior = cuenta?.saldoActual != null ? Number(cuenta.saldoActual) : 0;
+          const nuevo = r2(anterior + monto);
+          await tx.empresaBanco.update({
+            where: { id: banco.id },
+            data: { saldoActual: nuevo },
+          });
+          await tx.ajusteBanco.create({
+            data: {
+              empresaId,
+              bancoId: banco.id,
+              tipo: TipoMovimientoCaja.INGRESO,
+              monto,
+              motivo: `Migración digital histórico (${metodo})`,
+              origen: OrigenAjusteBanco.AJUSTE_MANUAL,
+              saldoAnterior: anterior,
+              saldoNuevo: nuevo,
+              usuarioId,
+            },
+          });
+
+          movido.push({ sedeId: central.sedeId, metodo, monto, bancoId: banco.id, nombreBanco: banco.nombreBanco });
+          totalMovido += monto;
+        }
+      }
+
+      return { movido, omitido, totalMovido: r2(totalMovido) };
+    });
   }
 
   /**

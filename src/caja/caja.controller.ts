@@ -221,6 +221,20 @@ export class CajaController {
     return this.cajaService.getTesoreriaConsolidado(empresaId);
   }
 
+  @Post('tesoreria/migrar-digital-historico')
+  @RequiresPermission(Permission.MANAGE_CAJA)
+  @ApiOperation({
+    summary:
+      'Mueve el digital histórico de tesorería a los bancos según el mapeo de recaudación. Idempotente.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async migrarDigitalHistorico(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') usuarioId: string,
+  ) {
+    return this.cajaService.migrarDigitalHistorico(empresaId, usuarioId);
+  }
+
   @Get('tesoreria/:sedeId')
   @RequiresPermission(Permission.VIEW_CAJA)
   @ApiOperation({
