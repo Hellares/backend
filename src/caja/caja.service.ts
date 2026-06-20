@@ -20,6 +20,7 @@ import { CerrarCajaDto } from './dto/cerrar-caja.dto';
 import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
 import { CrearArqueoDto } from './dto/crear-arqueo.dto';
 import { AjusteTesoreriaDto } from './dto/ajuste-tesoreria.dto';
+import { destinoBarrido } from './caja-barrido.util';
 
 /**
  * Mapeo categoria → tipo natural. Una categoría representa un evento de negocio
@@ -893,11 +894,25 @@ export class CajaService {
         tx,
       );
 
+      // Mapeo método→cuenta de recaudación: el digital configurado cae en su
+      // banco (incrementa saldoActual); efectivo y lo no mapeado, en la bóveda.
+      const recaudacion = await tx.cuentaRecaudacion.findMany({
+        where: { empresaId },
+        include: { banco: { select: { id: true, isActive: true, moneda: true } } },
+      });
+      const mapaBanco = new Map(recaudacion.map((r) => [r.metodoPago, r.banco]));
+
       for (const metodo of metodosPago) {
         const conteoFisico =
           dto.conteos.find((c) => c.metodoPago === metodo)?.conteoFisico ?? 0;
         if (conteoFisico <= 0) continue;
 
+        const banco = mapaBanco.get(metodo);
+        const destino = destinoBarrido(metodo, banco);
+        const aBanco = destino === 'BANCO';
+
+        // EGRESO en la caja operativa: el dinero declarado sale del cajón
+        // (independiente de si va a banco o a la bóveda).
         const egreso = await tx.movimientoCaja.create({
           data: {
             cajaId,
@@ -906,40 +921,49 @@ export class CajaService {
             categoria: CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
             metodoPago: metodo,
             monto: conteoFisico,
-            descripcion: `[BARRIDO -> TESORERIA] Depósito de cierre ${caja.codigo}`,
+            descripcion: aBanco
+              ? `[BARRIDO -> BANCO] Depósito de cierre ${caja.codigo}`
+              : `[BARRIDO -> TESORERIA] Depósito de cierre ${caja.codigo}`,
             esManual: false,
             registradoPorId: usuarioId,
-            metadata: {
-              cajaEspejoId: central.id,
-              cierreId: cierre.id,
-              barrido: true,
-            },
+            metadata: aBanco
+              ? { destino: 'BANCO', bancoId: banco!.id, cierreId: cierre.id, barrido: true }
+              : { cajaEspejoId: central.id, cierreId: cierre.id, barrido: true },
           },
         });
 
-        await tx.movimientoCaja.create({
-          data: {
-            cajaId: central.id,
-            empresaId,
-            tipo: TipoMovimientoCaja.INGRESO,
-            categoria: CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
-            metodoPago: metodo,
-            monto: conteoFisico,
-            descripcion: `[BARRIDO <- ${caja.codigo}] Recepción de cierre`,
-            esManual: false,
-            registradoPorId: usuarioId,
-            metadata: {
-              cajaEspejoId: cajaId,
-              cajaOrigenCodigo: caja.codigo,
-              cajaOrigenUsuarioNombre: caja.usuario?.persona
-                ? `${caja.usuario.persona.nombres ?? ''} ${caja.usuario.persona.apellidos ?? ''}`.trim()
-                : null,
-              movimientoEspejoId: egreso.id,
-              cierreId: cierre.id,
-              barrido: true,
+        if (aBanco) {
+          // Digital → incrementa el saldo de la cuenta de recaudación.
+          await tx.empresaBanco.update({
+            where: { id: banco!.id },
+            data: { saldoActual: { increment: conteoFisico } },
+          });
+        } else {
+          // Efectivo / sin mapeo → INGRESO en la Caja Central (bóveda).
+          await tx.movimientoCaja.create({
+            data: {
+              cajaId: central.id,
+              empresaId,
+              tipo: TipoMovimientoCaja.INGRESO,
+              categoria: CategoriaMovimientoCaja.DEPOSITO_TESORERIA,
+              metodoPago: metodo,
+              monto: conteoFisico,
+              descripcion: `[BARRIDO <- ${caja.codigo}] Recepción de cierre`,
+              esManual: false,
+              registradoPorId: usuarioId,
+              metadata: {
+                cajaEspejoId: cajaId,
+                cajaOrigenCodigo: caja.codigo,
+                cajaOrigenUsuarioNombre: caja.usuario?.persona
+                  ? `${caja.usuario.persona.nombres ?? ''} ${caja.usuario.persona.apellidos ?? ''}`.trim()
+                  : null,
+                movimientoEspejoId: egreso.id,
+                cierreId: cierre.id,
+                barrido: true,
+              },
             },
-          },
-        });
+          });
+        }
       }
 
       return { caja: cajaActualizada, cierre };
