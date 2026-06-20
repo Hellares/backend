@@ -31,6 +31,70 @@ export class ClienteEmpresaService {
   }
 
   /**
+   * Registra/vincula un PROVEEDOR como cliente (mismo tercero: le compramos Y
+   * le vendemos), para la cuenta corriente unificada. Idempotente:
+   *  - si el proveedor ya está vinculado a un cliente → lo devuelve;
+   *  - si ya existe un cliente con el mismo RUC → lo vincula (no duplica);
+   *  - si no → crea uno copiando los datos del proveedor.
+   */
+  async vincularDesdeProveedor(
+    empresaId: string,
+    proveedorId: string,
+    usuarioId: string,
+  ) {
+    const prov = await this.prisma.proveedor.findFirst({
+      where: { id: proveedorId, empresaId },
+    });
+    if (!prov) throw new NotFoundException('Proveedor no encontrado');
+
+    const yaVinculado = await this.prisma.clienteEmpresa.findFirst({
+      where: { empresaId, proveedorId },
+    });
+    if (yaVinculado) return { clienteEmpresa: yaVinculado, accion: 'YA_VINCULADO' };
+
+    // Mismo RUC ya cargado como cliente → vincular (la unique [empresaId,
+    // numeroDocumento] impide duplicar).
+    const existente = await this.prisma.clienteEmpresa.findFirst({
+      where: { empresaId, numeroDocumento: prov.numeroDocumento },
+    });
+    if (existente) {
+      const actualizado = await this.prisma.clienteEmpresa.update({
+        where: { id: existente.id },
+        data: { proveedorId, deletedAt: null, isActive: true, actualizadoPor: usuarioId },
+      });
+      this.notificarCambio(empresaId, actualizado.id);
+      return { clienteEmpresa: actualizado, accion: 'VINCULADO_EXISTENTE' };
+    }
+
+    const { codigoClienteEmpresa: codigo } =
+      await this.configuracionCodigosService.generarCodigoClienteEmpresa(empresaId);
+    const creado = await this.prisma.clienteEmpresa.create({
+      data: {
+        empresaId,
+        codigo,
+        razonSocial: prov.nombre,
+        nombreComercial: prov.nombreComercial,
+        tipoDocumento: prov.tipoDocumento,
+        numeroDocumento: prov.numeroDocumento,
+        email: prov.email,
+        telefono: prov.telefono,
+        telefonoAlternativo: prov.telefonoAlternativo,
+        sitioWeb: prov.sitioWeb,
+        direccion: prov.direccion,
+        ciudad: prov.ciudad,
+        provincia: prov.provincia,
+        departamento: prov.departamento,
+        pais: prov.pais || 'PE',
+        notas: prov.notas,
+        proveedorId,
+        creadoPor: usuarioId,
+      },
+    });
+    this.notificarCambio(empresaId, creado.id);
+    return { clienteEmpresa: creado, accion: 'CREADO' };
+  }
+
+  /**
    * Busca o crea un ClienteEmpresa por RUC usando consulta SUNAT.
    *
    * Flujo:

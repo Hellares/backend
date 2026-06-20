@@ -20,6 +20,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { ProveedorService } from './proveedor.service';
+import { ClienteEmpresaService } from '../cliente-empresa/cliente-empresa.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -32,7 +33,26 @@ import { CreateProveedorDto, UpdateProveedorDto, EvaluarProveedorDto } from './d
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class ProveedorController {
-  constructor(private readonly proveedorService: ProveedorService) {}
+  constructor(
+    private readonly proveedorService: ProveedorService,
+    private readonly clienteEmpresaService: ClienteEmpresaService,
+  ) {}
+
+  /**
+   * Registra/vincula este proveedor como cliente (mismo tercero: le compramos
+   * Y le vendemos). Idempotente. Devuelve { clienteEmpresa, accion }.
+   */
+  @Post(':id/registrar-como-cliente')
+  @RequiresPermission(Permission.MANAGE_PROVEEDORES)
+  @ApiOperation({ summary: 'Registrar/vincular el proveedor como cliente (cuenta corriente)' })
+  @ApiParam({ name: 'empresaId', type: 'string' })
+  async registrarComoCliente(
+    @Param('empresaId') empresaId: string,
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.clienteEmpresaService.vincularDesdeProveedor(empresaId, id, user.sub);
+  }
 
   /**
    * Crear nuevo proveedor

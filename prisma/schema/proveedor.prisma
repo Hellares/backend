@@ -93,6 +93,9 @@ model Proveedor {
   lotes                   Lote[]
   devoluciones            Devolucion[]
   gastosRecurrentes       GastoRecurrente[]
+  // Si este proveedor también es cliente (le compramos Y le vendemos), acá se
+  // vincula su ficha de cliente para ver la cuenta corriente unificada.
+  clienteEmpresa          ClienteEmpresa?
 
   @@unique([empresaId, codigo])
   @@unique([empresaId, numeroDocumento])

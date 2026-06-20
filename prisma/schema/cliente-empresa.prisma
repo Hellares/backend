@@ -52,6 +52,11 @@ model ClienteEmpresa {
   empresaVinculadaRef Empresa?             @relation("EmpresaVinculadaClientes", fields: [empresaVinculadaId], references: [id])
   vinculaciones       VinculacionEmpresa[]
 
+  // Si este cliente es el MISMO tercero que un proveedor (le compramos y le
+  // vendemos): vínculo 1-a-1 para la cuenta corriente unificada.
+  proveedorId String?    @unique
+  proveedor   Proveedor? @relation(fields: [proveedorId], references: [id])
+
   // Relaciones
   empresa         Empresa                  @relation(fields: [empresaId], references: [id])
   contactos       ClienteEmpresaContacto[]

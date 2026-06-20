@@ -216,6 +216,11 @@ export class ProveedorService {
             },
           },
         },
+        // Ficha de cliente vinculada (si este proveedor también es cliente):
+        // el front la usa para mostrar "Estado de cuenta" vs "Registrar como cliente".
+        clienteEmpresa: {
+          select: { id: true, codigo: true, razonSocial: true },
+        },
       },
     });
 
