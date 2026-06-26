@@ -1851,12 +1851,19 @@ export class CompraService {
       }
       usaUnidadCompra = true;
       cantidadOriginal = dto.cantidad;
-      factorAplicado = info.factor;
+      // Override puntual del empaque para ESTA compra (ej. el saco vino con
+      // 40 en vez de 50) sin tocar la config del producto. Si no viene, se
+      // usa el factor configurado. Se snapshotea el factor realmente usado.
+      const factor =
+        dto.factorCompra && dto.factorCompra > 0
+          ? dto.factorCompra
+          : info.factor;
+      factorAplicado = factor;
       unidadOriginalSimbolo = info.simboloUnidadCompra;
       // Cantidad en unidad atómica (Int). Round defensivo por float.
-      cantidad = Math.round(dto.cantidad * info.factor);
+      cantidad = Math.round(dto.cantidad * factor);
       // Precio por unidad atómica (Decimal 14,4 → 4 decimales).
-      precioUnitario = +(dto.precioUnitario / info.factor).toFixed(4);
+      precioUnitario = +(dto.precioUnitario / factor).toFixed(4);
     }
 
     // Cálculo de IGV según convención de la compra.

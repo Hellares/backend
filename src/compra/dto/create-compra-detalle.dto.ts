@@ -6,6 +6,7 @@ import {
   Min,
   IsNotEmpty,
   IsBoolean,
+  IsPositive,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -73,6 +74,17 @@ export class CreateCompraDetalleDto {
   @IsBoolean()
   @Type(() => Boolean)
   usaUnidadCompra?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Override puntual del factor de compra para ESTA línea (ej. el saco vino con 40 unidades en vez de las 50 configuradas). Solo aplica si usaUnidadCompra=true. NO modifica la configuración del producto; el valor usado se snapshotea en CompraDetalle.factorAplicado. Si se omite, se usa el factorCompra actual del producto.',
+    example: 40,
+  })
+  @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  @Type(() => Number)
+  factorCompra?: number;
 
   @ApiPropertyOptional({
     description:
