@@ -4,6 +4,8 @@ import { AppLoggerService } from '../common/logger/logger.service';
 import { NubefactProvider } from '../sunat/providers/nubefact.provider';
 import { GreNubefactMapper } from '../sunat/providers/gre-nubefact.mapper';
 import { FacturacionService } from '../sunat/facturacion.service';
+import { FacturacionProviderFactory } from '../sunat/providers/facturacion-provider.factory';
+import { EnvioResult } from '../sunat/facturacion-provider.interface';
 import { CreateGuiaRemisionDto } from './dto/create-guia-remision.dto';
 import { QueryGuiasRemisionDto } from './dto/query-guias-remision.dto';
 import { Prisma } from '@prisma/client';
@@ -35,6 +37,7 @@ export class GuiaRemisionService {
     private readonly prisma: PrismaService,
     private readonly nubefactProvider: NubefactProvider,
     private readonly facturacionService: FacturacionService,
+    private readonly providerFactory: FacturacionProviderFactory,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -259,6 +262,42 @@ export class GuiaRemisionService {
       throw new BadRequestException('Se alcanzó el máximo de intentos de envío');
     }
 
+    // Obtener config de facturación
+    const config = await this.facturacionService.getConfigFacturacionEfectiva(empresaId, guia.sedeId);
+    if (!config.facturacionActiva) {
+      throw new BadRequestException('Facturación electrónica no está activa');
+    }
+    if (!config.proveedorRuta || !config.proveedorToken) {
+      throw new BadRequestException('Credenciales del proveedor de facturación no configuradas');
+    }
+
+    const provider = this.providerFactory.get(config.proveedorActivo);
+
+    // ── Proveedor con soporte GRE nativo (Syncrofact): es el emisor y numera ──
+    if (typeof provider.enviarGuiaRemision === 'function') {
+      if (!guia.serie) {
+        (guia as any).serie = await this.resolverSerieGuia(guia.sedeId!, guia.tipo);
+      }
+      let result: EnvioResult;
+      try {
+        result = await provider.enviarGuiaRemision(guia, config);
+      } catch (error: any) {
+        await this.prisma.guiaRemision.update({
+          where: { id: guiaId },
+          data: {
+            estado: 'ENVIADO',
+            sunatStatus: 'ERROR_COMUNICACION',
+            errorProveedor: error?.message || 'Error de comunicación',
+            intentosEnvio: { increment: 1 },
+            ultimoIntentoEnvio: new Date(),
+          },
+        });
+        throw new BadRequestException(error?.message || 'Error de comunicación con proveedor');
+      }
+      return this.persistirResultadoProveedor(guiaId, result, { incrementarIntento: true });
+    }
+
+    // ── Nubefact (legacy): Syncronize asigna la numeración ──
     // Asignar correlativo real si aún no tiene (borrador o rechazado sin correlativo)
     if (guia.correlativo === 0) {
       const { serie, correlativo, codigoGenerado } = await this.obtenerCorrelativo(
@@ -274,15 +313,6 @@ export class GuiaRemisionService {
       (guia as any).serie = serie;
       (guia as any).correlativo = correlativo;
       (guia as any).codigoGenerado = codigoGenerado;
-    }
-
-    // Obtener config de facturación
-    const config = await this.facturacionService.getConfigFacturacionEfectiva(empresaId, guia.sedeId);
-    if (!config.facturacionActiva) {
-      throw new BadRequestException('Facturación electrónica no está activa');
-    }
-    if (!config.proveedorRuta || !config.proveedorToken) {
-      throw new BadRequestException('Credenciales del proveedor de facturación no configuradas');
     }
 
     // Paso 1: generar_guia
@@ -382,29 +412,45 @@ export class GuiaRemisionService {
     if (!guia) throw new NotFoundException('Guía de remisión no encontrada');
 
     const config = await this.facturacionService.getConfigFacturacionEfectiva(empresaId, guia.sedeId);
-    const body = GreNubefactMapper.toConsultaRequest(guia, config.entorno);
+    const provider = this.providerFactory.get(config.proveedorActivo);
 
-    const response = await this.callNubefactApi<NubefactGreResponse>(
-      config.proveedorRuta,
-      config.proveedorToken,
-      body,
-    );
-
-    if (response.aceptada_por_sunat === true || response.enlace) {
-      const mapped = GreNubefactMapper.fromGreResponse(response);
-      await this.prisma.guiaRemision.update({
-        where: { id: guiaId },
-        data: {
-          estado: 'ACEPTADO',
-          sunatStatus: 'ACEPTADO',
-          ...mapped,
-          errorProveedor: null,
-        },
-      });
-      return { status: 'ACEPTADO', ...mapped };
+    // ── Proveedor con soporte GRE nativo (Syncrofact) ──
+    if (typeof provider.consultarGuiaRemision === 'function') {
+      try {
+        const result = await provider.consultarGuiaRemision(guia, config);
+        return this.persistirResultadoProveedor(guiaId, result, { incrementarIntento: false });
+      } catch (error: any) {
+        throw new BadRequestException(error?.message || 'Error al consultar la guía');
+      }
     }
 
-    return { status: 'PROCESANDO', message: 'SUNAT aún no ha respondido' };
+    // ── Nubefact (legacy) — envuelto para no propagar un 500 ──
+    try {
+      const body = GreNubefactMapper.toConsultaRequest(guia, config.entorno);
+      const response = await this.callNubefactApi<NubefactGreResponse>(
+        config.proveedorRuta,
+        config.proveedorToken,
+        body,
+      );
+
+      if (response.aceptada_por_sunat === true || response.enlace) {
+        const mapped = GreNubefactMapper.fromGreResponse(response);
+        await this.prisma.guiaRemision.update({
+          where: { id: guiaId },
+          data: {
+            estado: 'ACEPTADO',
+            sunatStatus: 'ACEPTADO',
+            ...mapped,
+            errorProveedor: null,
+          },
+        });
+        return { status: 'ACEPTADO', ...mapped };
+      }
+
+      return { status: 'PROCESANDO', message: 'SUNAT aún no ha respondido' };
+    } catch (error: any) {
+      throw new BadRequestException(error?.message || 'Error al consultar la guía');
+    }
   }
 
   // ── Enviar y consultar (2 pasos en uno) ──
@@ -756,6 +802,86 @@ export class GuiaRemisionService {
     }
 
     return null;
+  }
+
+  /**
+   * Persiste el resultado genérico de un proveedor GRE nativo (Syncrofact) en
+   * la GuiaRemision. Extrae numero_completo del rawResponse cuando viene, mapea
+   * estado y URLs, y devuelve un payload uniforme para el controller.
+   */
+  private async persistirResultadoProveedor(
+    guiaId: string,
+    result: EnvioResult,
+    opts: { incrementarIntento?: boolean } = {},
+  ) {
+    const raw: any = result.rawResponse;
+    const numeroCompleto: string | undefined = raw?.data?.numero_completo;
+
+    const data: any = {
+      sunatHash: result.hash ?? undefined,
+      sunatXmlUrl: result.xmlUrl ?? undefined,
+      sunatPdfUrl: result.pdfUrl ?? undefined,
+      sunatCdrUrl: result.cdrUrl ?? undefined,
+      cadenaQR: result.cadenaQR ?? undefined,
+      enlaceProveedor: result.enlace ?? undefined,
+    };
+
+    // Syncrofact es el emisor: tomamos la numeración oficial que devuelve
+    if (numeroCompleto && numeroCompleto.includes('-')) {
+      const [serie, corr] = numeroCompleto.split('-');
+      data.serie = serie;
+      data.correlativo = parseInt(corr, 10) || 0;
+      data.codigoGenerado = numeroCompleto;
+    }
+
+    if (opts.incrementarIntento) {
+      data.intentosEnvio = { increment: 1 };
+      data.ultimoIntentoEnvio = new Date();
+    }
+
+    let status: string;
+    if (result.aceptado) {
+      data.estado = 'ACEPTADO';
+      data.sunatStatus = 'ACEPTADO';
+      data.errorProveedor = null;
+      status = 'ACEPTADO';
+    } else if (result.procesando) {
+      data.estado = 'ENVIADO';
+      data.sunatStatus = 'PROCESANDO';
+      data.errorProveedor = null;
+      status = 'PROCESANDO';
+    } else {
+      data.estado = 'RECHAZADO';
+      data.sunatStatus = 'RECHAZADO';
+      data.errorProveedor = result.error || 'Rechazado por SUNAT';
+      status = 'RECHAZADO';
+    }
+
+    await this.prisma.guiaRemision.update({ where: { id: guiaId }, data });
+
+    if (status === 'ACEPTADO') {
+      return { status, numeroCompleto, pdfUrl: result.pdfUrl, enlace: result.enlace };
+    }
+    if (status === 'PROCESANDO') {
+      return { status, message: 'Guía enviada a SUNAT. Consulte el estado en unos segundos.' };
+    }
+    return { status, error: result.error };
+  }
+
+  /**
+   * Resuelve la serie de guía de la sede SIN incrementar el contador local
+   * (cuando el proveedor es el emisor y asigna el correlativo oficial).
+   */
+  private async resolverSerieGuia(sedeId: string, tipo: string): Promise<string> {
+    const sede = await this.prisma.sede.findUnique({
+      where: { id: sedeId },
+      select: { serieGuiaRemision: true },
+    });
+    let serie = sede?.serieGuiaRemision || 'T001';
+    if (tipo === 'TRANSPORTISTA' && serie.startsWith('T')) {
+      serie = serie.replace(/^T/, 'V');
+    }
+    return serie;
   }
 
   private async obtenerCorrelativo(empresaId: string, sedeId: string, tipo: string) {

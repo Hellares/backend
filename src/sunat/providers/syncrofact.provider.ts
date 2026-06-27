@@ -11,6 +11,7 @@ import {
   ResumenDiarioResult,
 } from '../facturacion-provider.interface';
 import { SyncrofactMapper } from './syncrofact.mapper';
+import { SyncrofactGreMapper } from './syncrofact-gre.mapper';
 import {
   SYNCROFACT_TIMEOUT_MS,
   SYNCROFACT_ENDPOINTS,
@@ -71,6 +72,38 @@ export class SyncrofactProvider implements FacturacionProvider {
     }
 
     return this.consultarPorId(resource, syncrofactId, config);
+  }
+
+  // ── Guía de Remisión Electrónica ──
+
+  /**
+   * Envía una GRE a Syncrofact (`POST /v1/dispatch-guides`). Syncrofact crea
+   * la guía, le asigna numeración oficial y la despacha a SUNAT. El
+   * numero_completo y el id quedan en rawResponse para persistir/consultar.
+   */
+  async enviarGuiaRemision(guia: any, config: any): Promise<EnvioResult> {
+    const body = SyncrofactGreMapper.toDispatchGuideRequest(guia, config);
+    const url = this.buildUrl(config.proveedorRuta, SYNCROFACT_ENDPOINTS.GUIA_REMISION);
+    const response = await this.callApi<SyncrofactCreateResponse>(url, config.proveedorToken, body);
+    return this.mapCreateResponse(response);
+  }
+
+  /**
+   * Consulta el estado SUNAT de una GRE por su referencia_interna (= id de la
+   * guía en Syncronize). Reusa el endpoint de integración (soporta tipo 09).
+   */
+  async consultarGuiaRemision(guia: any, config: any): Promise<EnvioResult> {
+    const url = this.buildUrl(
+      config.proveedorRuta,
+      `/v1/integracion/documentos?referencia_interna=${encodeURIComponent(guia.id)}&tipo_documento=09`,
+    );
+    const result = await this.callApiGet<any>(url, config.proveedorToken);
+
+    if (result?.data?.encontrado && result.data.id) {
+      return this.consultarPorId('dispatch-guides', result.data.id, config);
+    }
+    // Aún no visible en Syncrofact → se asume en procesamiento (no es rechazo)
+    return { aceptado: false, procesando: true, rawResponse: result };
   }
 
   /**

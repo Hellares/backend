@@ -24,6 +24,6 @@ import { ResumenDiarioController } from './resumen-diario.controller';
     ComunicacionBajaService,
     ResumenDiarioService,
   ],
-  exports: [FacturacionService, ComunicacionBajaService, ResumenDiarioService],
+  exports: [FacturacionService, ComunicacionBajaService, ResumenDiarioService, FacturacionProviderFactory],
 })
 export class SunatModule {}

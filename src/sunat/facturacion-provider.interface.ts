@@ -54,6 +54,17 @@ export interface FacturacionProvider {
   /** Consultar estado de un comprobante enviado */
   consultar(comprobante: any, config: any): Promise<EnvioResult>;
 
+  /**
+   * Opcional: enviar una Guía de Remisión Electrónica (GRE) al proveedor.
+   * El proveedor es el emisor: asigna la numeración oficial y devuelve el
+   * numero_completo en `rawResponse.data`. Solo algunos proveedores lo
+   * implementan (Syncrofact sí; Nubefact se maneja por su ruta legacy).
+   */
+  enviarGuiaRemision?(guia: any, config: any): Promise<EnvioResult>;
+
+  /** Opcional: consultar el estado SUNAT de una GRE por su referencia interna. */
+  consultarGuiaRemision?(guia: any, config: any): Promise<EnvioResult>;
+
   /** Anular comprobante (comunicación de baja) */
   anular(comprobante: any, motivo: string, config: any): Promise<EnvioResult>;
 
