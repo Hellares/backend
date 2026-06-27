@@ -1615,15 +1615,20 @@ export class VentaService {
           });
         }
 
-        // 5b. Generar cuotas si es venta a crédito con cuotas
+        // 5b. Generar cuotas si es venta a crédito con cuotas.
+        // Las cuotas se generan sobre el TOTAL del documento (SUNAT exige que
+        // sumen el total). El adelanto en efectivo (montoPagadoInmediato) se
+        // aplica a las primeras cuotas → el saldo financiado = total − adelanto.
         if (esCredito && dto.numeroCuotas && dto.numeroCuotas > 0 && montoCredito > 0) {
           const porcentajeInteres = dto.porcentajeInteres ?? 0;
           const cuotasData = this.generarCuotas(
             venta.id,
-            montoCredito,
+            totalACobrarHoy,
             dto.numeroCuotas,
             dto.plazoCredito ?? 30,
             porcentajeInteres,
+            new Date(),
+            montoPagadoInmediato,
           );
           await tx.cuotaVenta.createMany({ data: cuotasData });
 
@@ -4306,6 +4311,7 @@ export class VentaService {
     plazoDias: number,
     porcentajeInteres: number = 0,
     fechaBase: Date = new Date(),
+    adelantoInicial: number = 0,
   ) {
     const montoInteresTotal = round2(montoCredito * (porcentajeInteres / 100));
     const totalConInteres = montoCredito + montoInteresTotal;
@@ -4318,7 +4324,7 @@ export class VentaService {
     const interesPorCuota = numeroCuotas > 0 ? Math.floor((montoInteresTotal / numeroCuotas) * 100) / 100 : 0;
     const restoInteres = round2(montoInteresTotal - interesPorCuota * numeroCuotas);
 
-    return Array.from({ length: numeroCuotas }, (_, i) => {
+    const cuotas = Array.from({ length: numeroCuotas }, (_, i) => {
       const numero = i + 1;
       const esUltima = numero === numeroCuotas;
       const monto = esUltima ? montoCuota + resto : montoCuota;
@@ -4340,9 +4346,25 @@ export class VentaService {
         montoPagadoMora: 0,
         saldoPendiente: monto,
         fechaVencimiento,
-        estado: 'PENDIENTE' as const,
+        estado: 'PENDIENTE' as 'PENDIENTE' | 'PAGADA_PARCIAL' | 'PAGADA',
       };
     });
+
+    // Las cuotas suman el TOTAL del documento (requisito SUNAT). Si hubo un
+    // adelanto en efectivo, se aplica a las primeras cuotas en orden (cuota
+    // inicial pagada) → el saldo real financiado = total − adelanto.
+    let restante = round2(adelantoInicial);
+    for (const c of cuotas) {
+      if (restante <= 0.005) break;
+      const aplica = Math.min(restante, c.saldoPendiente);
+      c.montoPagado = round2(c.montoPagado + aplica);
+      c.montoPagadoPrincipal = round2(c.montoPagadoPrincipal + aplica);
+      c.saldoPendiente = round2(c.saldoPendiente - aplica);
+      c.estado = c.saldoPendiente <= 0.005 ? 'PAGADA' : 'PAGADA_PARCIAL';
+      restante = round2(restante - aplica);
+    }
+
+    return cuotas;
   }
 
   /**
