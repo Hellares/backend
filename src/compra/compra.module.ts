@@ -4,6 +4,7 @@ import { LoggerModule } from '../common/logger/logger.module';
 import { AuthModule } from '../auth/auth.module';
 import { CajaModule } from '../caja/caja.module';
 import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuracion-codigos.module';
+import { NotificacionModule } from '../notificacion/notificacion.module';
 import { OrdenCompraController } from './orden-compra/orden-compra.controller';
 import { OrdenCompraService } from './orden-compra/orden-compra.service';
 import { CompraController } from './compra/compra.controller';
@@ -21,6 +22,7 @@ import { CompraAnalyticsExportService } from './analytics/compra-analytics-expor
     AuthModule,
     CajaModule,
     ConfiguracionCodigosModule,
+    NotificacionModule,
   ],
   controllers: [
     OrdenCompraController,

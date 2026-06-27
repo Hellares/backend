@@ -29,6 +29,7 @@ import {
 } from '@prisma/client';
 import { CajaService } from '../../caja/caja.service';
 import { aplicarPagoCompra, revertirPagoCompra } from '../../cuentas-por-pagar/aplicar-pago-compra.util';
+import { RealtimeInvalidationService } from '../../notificacion/realtime-invalidation.service';
 
 @Injectable()
 export class CompraService {
@@ -40,6 +41,7 @@ export class CompraService {
     private readonly configuracionCodigos: ConfiguracionCodigosService,
     private readonly ordenCompraService: OrdenCompraService,
     private readonly cajaService: CajaService,
+    private readonly realtime: RealtimeInvalidationService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -351,6 +353,10 @@ export class CompraService {
   ) {
     this.logger.info('Confirmando compra', { id, empresaId });
 
+    // Productos cuyo stock/precio cambió → para empujar invalidación realtime
+    // (STOCK_CAMBIADO / PRECIO_CAMBIADO) a VR/web DESPUÉS del commit.
+    const afectados = new Map<string, { precioCambiado: boolean }>();
+
     const result = await this.prisma.$transaction(async (tx) => {
       // 1. Validar compra
       const compra = await tx.compra.findFirst({
@@ -501,6 +507,17 @@ export class CompraService {
               : {}),
           },
         });
+
+        // Registrar el producto como afectado (stock siempre; precio si cambió)
+        // para empujar la invalidación realtime tras el commit.
+        if (detalle.productoId) {
+          const precioCambiado =
+            aplicarNuevoPrecio && nuevoPrecioVenta !== precioVentaAnterior;
+          const prev = afectados.get(detalle.productoId);
+          afectados.set(detalle.productoId, {
+            precioCambiado: (prev?.precioCambiado ?? false) || precioCambiado,
+          });
+        }
 
         // c.1 Registrar cambio de precio venta en historial (solo si cambió).
         if (
@@ -663,6 +680,23 @@ export class CompraService {
 
     // Invalidar cache de productos después de incrementar stock
     await this.invalidateProductCache(empresaId);
+
+    // Empujar invalidación realtime a VR/web por cada producto afectado
+    // (stock siempre; precio venta si cambió). Fire-and-forget.
+    for (const [productoId, info] of afectados) {
+      this.realtime.notifyStockCambiado({
+        empresaId,
+        productoId,
+        sedeId: result.sedeId,
+      });
+      if (info.precioCambiado) {
+        this.realtime.notifyPrecioCambiado({
+          empresaId,
+          productoId,
+          sedeId: result.sedeId,
+        });
+      }
+    }
 
     return result;
   }
