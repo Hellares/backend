@@ -274,7 +274,7 @@ export class AdelantoService {
         data: {
           estado: EstadoAdelanto.PAGADO_ADELANTO,
           pagadoPorId: usuarioId,
-          metodoPago: dto.metodoPago,
+          metodoPago: egreso.metodoPago,
           fuentePago: egreso.fuente,
           bancoId: egreso.bancoId,
           movimientoCajaId: egreso.movimientoCajaId,

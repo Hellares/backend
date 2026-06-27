@@ -29,6 +29,10 @@ export interface AplicarEgresoResult {
   fuente: FuenteEgreso;
   bancoId: string | null;
   movimientoCajaId: string | null;
+  /** Método con el que quedó registrado el egreso. TESORERIA siempre lo
+   * registra como EFECTIVO (la bóveda/caja central guarda efectivo), para que
+   * el egreso reduzca la bóveda visible y no quede en el bucket digital. */
+  metodoPago: MetodoPagoVenta;
 }
 
 /**
@@ -68,6 +72,13 @@ export async function aplicarEgresoConFuente(
       `Un pago en ${moneda} debe salir de una cuenta bancaria`,
     );
   }
+
+  // TESORERIA = bóveda (Caja Central) → siempre efectivo: el egreso debe
+  // reducir el saldo efectivo visible, no caer en el bucket digital histórico.
+  const metodoMovimiento =
+    fuente === FuenteEgreso.TESORERIA
+      ? MetodoPagoVenta.EFECTIVO
+      : input.metodoPago;
 
   let movimientoCajaId: string | null = null;
   let bancoId: string | null = null;
@@ -111,7 +122,7 @@ export async function aplicarEgresoConFuente(
       {
         tipo: TipoMovimientoCaja.EGRESO,
         categoria: input.categoria,
-        metodoPago: input.metodoPago,
+        metodoPago: metodoMovimiento,
         monto: input.monto,
         descripcion: input.descripcion,
         adelantoPagoId: input.adelantoPagoId,
@@ -134,7 +145,7 @@ export async function aplicarEgresoConFuente(
       {
         tipo: TipoMovimientoCaja.EGRESO,
         categoria: input.categoria,
-        metodoPago: input.metodoPago,
+        metodoPago: metodoMovimiento,
         monto: input.monto,
         descripcion: `[TESORERÍA] ${input.descripcion}`,
         adelantoPagoId: input.adelantoPagoId,
@@ -146,7 +157,7 @@ export async function aplicarEgresoConFuente(
     movimientoCajaId = mov?.id ?? null;
   }
 
-  return { fuente, bancoId, movimientoCajaId };
+  return { fuente, bancoId, movimientoCajaId, metodoPago: metodoMovimiento };
 }
 
 export interface EgresoARevertir {
