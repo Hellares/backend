@@ -528,6 +528,8 @@ export class IncidenciaService {
       [TipoIncidencia.LICENCIA_PATERNIDAD]: EstadoAsistencia.LICENCIA,
       [TipoIncidencia.LICENCIA_MATERNIDAD]: EstadoAsistencia.LICENCIA,
       [TipoIncidencia.PERMISO]: EstadoAsistencia.JUSTIFICADO,
+      [TipoIncidencia.PERMISO_PERSONAL]: EstadoAsistencia.JUSTIFICADO,
+      [TipoIncidencia.SALIDA_EMERGENCIA]: EstadoAsistencia.JUSTIFICADO,
       [TipoIncidencia.OTRO]: EstadoAsistencia.JUSTIFICADO,
     };
 
