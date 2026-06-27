@@ -183,41 +183,49 @@ export class PlanillaCalculoService {
           porcentaje: Prisma.Decimal | null;
         }[] = [];
 
-        // INGRESO: Salario básico proporcional
-        const salarioProporcional = salarioBase.div(30).mul(diasTrabajados);
+        // INGRESO: Salario básico (sueldo mensual COMPLETO). Las inasistencias
+        // se descuentan aparte en "Faltas" (treintavos) — NO se prorratea el
+        // sueldo por días presentes, eso descontaría las faltas dos veces.
         detalles.push({
           tipo: TipoDetalleBoleta.INGRESO,
           concepto: ConceptoBoleta.SALARIO_BASICO,
-          descripcion: `Salario básico (${diasTrabajados} días)`,
-          monto: new Prisma.Decimal(salarioProporcional.toFixed(2)),
+          descripcion: `Salario básico (${diasTrabajados}/30 días trabajados)`,
+          monto: dec2(salarioBase),
           porcentaje: null,
         });
 
         // INGRESO: Horas extra
+        let montoHorasExtra = new Prisma.Decimal(0);
         if (horasExtraNum > 0) {
           const tarifaHoraBase = salarioBase.div(240);
           const factorExtra = 1 + horasExtraPorcentaje / 100;
-          const montoHorasExtra = tarifaHoraBase
-            .mul(horasExtraNum)
-            .mul(factorExtra);
-
+          montoHorasExtra = tarifaHoraBase.mul(horasExtraNum).mul(factorExtra);
           detalles.push({
             tipo: TipoDetalleBoleta.INGRESO,
             concepto: ConceptoBoleta.HORAS_EXTRA,
             descripcion: `Horas extra (${horasExtraNum}h al ${horasExtraPorcentaje}% adicional)`,
-            monto: new Prisma.Decimal(montoHorasExtra.toFixed(2)),
+            monto: dec2(montoHorasExtra),
             porcentaje: new Prisma.Decimal(horasExtraPorcentaje),
           });
         }
 
-        // Base AFECTA a pensión/EsSalud = remuneración (salario + horas extra),
-        // ANTES de la gratificación (que es inafecta a pensión).
-        let baseAfecta = new Prisma.Decimal(0);
-        for (const d of detalles) {
-          if (d.tipo === TipoDetalleBoleta.INGRESO) {
-            baseAfecta = baseAfecta.add(d.monto);
-          }
+        // DESCUENTO: Faltas (treintavos del sueldo por cada día no trabajado).
+        let montoFaltas = new Prisma.Decimal(0);
+        if (diasFalta > 0) {
+          montoFaltas = salarioBase.div(30).mul(diasFalta);
+          detalles.push({
+            tipo: TipoDetalleBoleta.DESCUENTO,
+            concepto: ConceptoBoleta.FALTAS,
+            descripcion: `Descuento por faltas (${diasFalta} días)`,
+            monto: dec2(montoFaltas),
+            porcentaje: null,
+          });
         }
+
+        // Base AFECTA a pensión/EsSalud = remuneración GANADA (sueldo + horas
+        // extra − faltas); la gratificación es inafecta. Nunca negativa.
+        let baseAfecta = salarioBase.add(montoHorasExtra).sub(montoFaltas);
+        if (baseAfecta.lt(0)) baseAfecta = new Prisma.Decimal(0);
 
         // INGRESO: Gratificación (julio/diciembre), proporcional a los meses
         // trabajados del semestre + bonificación extraordinaria (Ley 30334).
@@ -262,18 +270,6 @@ export class PlanillaCalculoService {
           if (d.tipo === TipoDetalleBoleta.INGRESO) {
             totalIngresos = totalIngresos.add(d.monto);
           }
-        }
-
-        // DESCUENTO: Faltas
-        if (diasFalta > 0) {
-          const descuentoFaltas = salarioBase.div(30).mul(diasFalta);
-          detalles.push({
-            tipo: TipoDetalleBoleta.DESCUENTO,
-            concepto: ConceptoBoleta.FALTAS,
-            descripcion: `Descuento por faltas (${diasFalta} días)`,
-            monto: new Prisma.Decimal(descuentoFaltas.toFixed(2)),
-            porcentaje: null,
-          });
         }
 
         // DESCUENTO: pensión (ONP o AFP) sobre la remuneración AFECTA.
