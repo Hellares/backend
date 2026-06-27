@@ -4,7 +4,13 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { TipoMovimientoCaja, OrigenAjusteBanco } from '@prisma/client';
+import {
+  TipoMovimientoCaja,
+  OrigenAjusteBanco,
+  FuenteEgreso,
+  EstadoAdelanto,
+  EstadoBoletaPago,
+} from '@prisma/client';
 
 @Injectable()
 export class EmpresaBancoService {
@@ -224,7 +230,27 @@ export class EmpresaBancoService {
       : now;
     const r2 = (n: number) => Math.round(n * 100) / 100;
 
-    const [recaud, pagosCompra, pagosGasto, ajustes, recaudadoTotal] = await Promise.all([
+    const empleadoNombreSelect = {
+      empleado: {
+        select: {
+          usuario: {
+            select: {
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+        },
+      },
+    };
+
+    const [
+      recaud,
+      pagosCompra,
+      pagosGasto,
+      ajustes,
+      pagosAdelanto,
+      pagosBoleta,
+      recaudadoTotal,
+    ] = await Promise.all([
       // Ingresos: cobros digitales que entraron al banco (barrido + migración).
       this.prisma.movimientoCaja.findMany({
         where: {
@@ -251,6 +277,33 @@ export class EmpresaBancoService {
         where: { empresaId, bancoId: id, creadoEn: { gte: desde, lte: hasta } },
         select: { tipo: true, monto: true, motivo: true, origen: true, creadoEn: true },
       }),
+      // Egresos: adelantos de sueldo pagados desde este banco (RRHH).
+      this.prisma.adelantoPago.findMany({
+        where: {
+          empresaId,
+          bancoId: id,
+          fuentePago: FuenteEgreso.BANCO,
+          estado: EstadoAdelanto.PAGADO_ADELANTO,
+          actualizadoEn: { gte: desde, lte: hasta },
+        },
+        select: { monto: true, actualizadoEn: true, ...empleadoNombreSelect },
+      }),
+      // Egresos: boletas de planilla pagadas desde este banco (RRHH).
+      this.prisma.boletaPago.findMany({
+        where: {
+          empresaId,
+          bancoId: id,
+          fuentePago: FuenteEgreso.BANCO,
+          estado: EstadoBoletaPago.PAGADA_BOLETA,
+          fechaPago: { gte: desde, lte: hasta },
+        },
+        select: {
+          totalNeto: true,
+          fechaPago: true,
+          periodo: { select: { periodo: true } },
+          ...empleadoNombreSelect,
+        },
+      }),
       // Desglose ACUMULADO (todo el tiempo) de lo recaudado por método en este
       // banco — "cuánto se tiene de Yape, Plin, Transferencia, etc.".
       this.prisma.$queryRaw<{ metodoPago: string; total: number }[]>`
@@ -265,6 +318,12 @@ export class EmpresaBancoService {
     for (const r of recaudadoTotal) {
       recaudadoPorMetodo[r.metodoPago] = r2(Number(r.total));
     }
+
+    const nombreEmp = (x: any): string | null => {
+      const p = x?.empleado?.usuario?.persona;
+      const n = p ? `${p.nombres ?? ''} ${p.apellidos ?? ''}`.trim() : '';
+      return n.length > 0 ? n : null;
+    };
 
     const movimientos = [
       ...recaud.map((m) => ({
@@ -293,6 +352,26 @@ export class EmpresaBancoService {
         metodoPago: null as string | null,
         monto: r2(Number(p.montoReal)),
         origen: 'PAGO_GASTO',
+      })),
+      ...pagosAdelanto.map((p) => ({
+        fecha: p.actualizadoEn,
+        tipo: 'EGRESO',
+        concepto: 'Adelanto sueldo',
+        detalle: nombreEmp(p),
+        metodoPago: null as string | null,
+        monto: r2(Number(p.monto)),
+        origen: 'ADELANTO_EMPLEADO',
+      })),
+      ...pagosBoleta.map((p) => ({
+        fecha: p.fechaPago as Date,
+        tipo: 'EGRESO',
+        concepto: 'Pago planilla',
+        detalle:
+          [nombreEmp(p), p.periodo?.periodo].filter(Boolean).join(' · ') ||
+          null,
+        metodoPago: null as string | null,
+        monto: r2(Number(p.totalNeto)),
+        origen: 'PAGO_PLANILLA',
       })),
       ...ajustes.map((a) => ({
         fecha: a.creadoEn,
