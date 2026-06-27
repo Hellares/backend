@@ -84,6 +84,7 @@ export class EmpleadoService {
           fechaIngreso: new Date(dto.fechaIngreso),
           tipoContrato: dto.tipoContrato,
           salarioBase: dto.salarioBase,
+          regimenPension: dto.regimenPension,
           moneda: dto.moneda ?? 'PEN',
           banco: dto.banco,
           numeroCuenta: dto.numeroCuenta,
@@ -304,6 +305,8 @@ export class EmpleadoService {
     if (dto.fechaIngreso !== undefined) data.fechaIngreso = new Date(dto.fechaIngreso);
     if (dto.tipoContrato !== undefined) data.tipoContrato = dto.tipoContrato;
     if (dto.salarioBase !== undefined) data.salarioBase = dto.salarioBase;
+    if (dto.regimenPension !== undefined)
+      data.regimenPension = dto.regimenPension;
     if (dto.moneda !== undefined) data.moneda = dto.moneda;
     if (dto.banco !== undefined) data.banco = dto.banco;
     if (dto.numeroCuenta !== undefined) data.numeroCuenta = dto.numeroCuenta;

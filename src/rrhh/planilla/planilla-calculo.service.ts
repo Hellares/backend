@@ -7,6 +7,7 @@ import {
   EstadoAdelanto,
   TipoDetalleBoleta,
   ConceptoBoleta,
+  RegimenPension,
   Prisma,
 } from '@prisma/client';
 
@@ -47,6 +48,18 @@ export class PlanillaCalculoService {
 
     const horasExtraPorcentaje = config.horasExtraPorcentaje;
     const essaludPorcentaje = config.essaludPorcentaje;
+    const onpPorcentaje = config.onpPorcentaje;
+    const afpAportePorcentaje = config.afpAportePorcentaje;
+    const afpComisionPorcentaje = config.afpComisionPorcentaje;
+    const afpPrimaPorcentaje = config.afpPrimaPorcentaje;
+
+    // Gratificación: se paga en julio (mes 7, por el semestre ene-jun) y en
+    // diciembre (mes 12, por el semestre jul-dic).
+    const mesPeriodo = periodo.fechaInicio.getUTCMonth() + 1;
+    const anioPeriodo = periodo.fechaInicio.getUTCFullYear();
+    const esMesGratificacion = mesPeriodo === 7 || mesPeriodo === 12;
+
+    const dec2 = (d: Prisma.Decimal) => new Prisma.Decimal(d.toFixed(2));
 
     // 3. Obtener empleados activos
     const whereEmpleado: Prisma.EmpleadoWhereInput = {
@@ -197,6 +210,52 @@ export class PlanillaCalculoService {
           });
         }
 
+        // Base AFECTA a pensión/EsSalud = remuneración (salario + horas extra),
+        // ANTES de la gratificación (que es inafecta a pensión).
+        let baseAfecta = new Prisma.Decimal(0);
+        for (const d of detalles) {
+          if (d.tipo === TipoDetalleBoleta.INGRESO) {
+            baseAfecta = baseAfecta.add(d.monto);
+          }
+        }
+
+        // INGRESO: Gratificación (julio/diciembre), proporcional a los meses
+        // trabajados del semestre + bonificación extraordinaria (Ley 30334).
+        if (esMesGratificacion) {
+          const semStartMonth = mesPeriodo === 7 ? 0 : 6; // 0-indexed
+          const semEndMonth = mesPeriodo === 7 ? 5 : 11;
+          const ingreso = empleado.fechaIngreso;
+          const ingresoIdx =
+            ingreso.getUTCFullYear() * 12 + ingreso.getUTCMonth();
+          const startIdx = Math.max(
+            ingresoIdx,
+            anioPeriodo * 12 + semStartMonth,
+          );
+          const endIdx = anioPeriodo * 12 + semEndMonth;
+          const mesesComputables =
+            startIdx > endIdx ? 0 : Math.min(6, endIdx - startIdx + 1);
+          if (mesesComputables > 0) {
+            const gratificacion = salarioBase.mul(mesesComputables).div(6);
+            detalles.push({
+              tipo: TipoDetalleBoleta.INGRESO,
+              concepto: ConceptoBoleta.GRATIFICACION,
+              descripcion: `Gratificación (${mesesComputables}/6 meses)`,
+              monto: dec2(gratificacion),
+              porcentaje: null,
+            });
+            // Bonificación extraordinaria: el 9% de EsSalud de la gratificación
+            // se le entrega al trabajador (inafecta a pensión).
+            const bonif = gratificacion.mul(essaludPorcentaje).div(100);
+            detalles.push({
+              tipo: TipoDetalleBoleta.INGRESO,
+              concepto: ConceptoBoleta.BONIFICACION,
+              descripcion: `Bonificación extraordinaria (${essaludPorcentaje}% s/grati)`,
+              monto: dec2(bonif),
+              porcentaje: new Prisma.Decimal(essaludPorcentaje),
+            });
+          }
+        }
+
         // Calcular total ingresos
         let totalIngresos = new Prisma.Decimal(0);
         for (const d of detalles) {
@@ -217,14 +276,52 @@ export class PlanillaCalculoService {
           });
         }
 
-        // DESCUENTO: Adelantos pendientes
+        // DESCUENTO: pensión (ONP o AFP) sobre la remuneración AFECTA.
+        if (empleado.regimenPension === RegimenPension.ONP && baseAfecta.gt(0)) {
+          detalles.push({
+            tipo: TipoDetalleBoleta.DESCUENTO,
+            concepto: ConceptoBoleta.ONP,
+            descripcion: `ONP (${onpPorcentaje}%)`,
+            monto: dec2(baseAfecta.mul(onpPorcentaje).div(100)),
+            porcentaje: new Prisma.Decimal(onpPorcentaje),
+          });
+        } else if (
+          empleado.regimenPension === RegimenPension.AFP &&
+          baseAfecta.gt(0)
+        ) {
+          detalles.push(
+            {
+              tipo: TipoDetalleBoleta.DESCUENTO,
+              concepto: ConceptoBoleta.AFP,
+              descripcion: `AFP aporte obligatorio (${afpAportePorcentaje}%)`,
+              monto: dec2(baseAfecta.mul(afpAportePorcentaje).div(100)),
+              porcentaje: new Prisma.Decimal(afpAportePorcentaje),
+            },
+            {
+              tipo: TipoDetalleBoleta.DESCUENTO,
+              concepto: ConceptoBoleta.AFP,
+              descripcion: `AFP comisión (${afpComisionPorcentaje}%)`,
+              monto: dec2(baseAfecta.mul(afpComisionPorcentaje).div(100)),
+              porcentaje: new Prisma.Decimal(afpComisionPorcentaje),
+            },
+            {
+              tipo: TipoDetalleBoleta.DESCUENTO,
+              concepto: ConceptoBoleta.AFP,
+              descripcion: `AFP prima de seguro (${afpPrimaPorcentaje}%)`,
+              monto: dec2(baseAfecta.mul(afpPrimaPorcentaje).div(100)),
+              porcentaje: new Prisma.Decimal(afpPrimaPorcentaje),
+            },
+          );
+        }
+
+        // DESCUENTO: Adelantos de sueldo ya PAGADOS al empleado y aún no
+        // descontados (los APROBADOS pero no pagados NO se descuentan: el
+        // trabajador todavía no recibió ese dinero).
         const adelantosPendientes = await tx.adelantoPago.findMany({
           where: {
             empleadoId: empleado.id,
             empresaId,
-            estado: {
-              in: [EstadoAdelanto.APROBADO_ADELANTO, EstadoAdelanto.PAGADO_ADELANTO],
-            },
+            estado: EstadoAdelanto.PAGADO_ADELANTO,
             descontadoEnBoletaId: null,
           },
         });
@@ -254,13 +351,14 @@ export class PlanillaCalculoService {
           }
         }
 
-        // APORTE EMPLEADOR: EsSalud
-        const montoEssalud = totalIngresos.mul(essaludPorcentaje).div(100);
+        // APORTE EMPLEADOR: EsSalud sobre la remuneración AFECTA (no sobre la
+        // gratificación: a esa le corresponde la bonificación extraordinaria).
+        const montoEssalud = baseAfecta.mul(essaludPorcentaje).div(100);
         detalles.push({
           tipo: TipoDetalleBoleta.APORTE_EMPLEADOR,
           concepto: ConceptoBoleta.ESSALUD_EMPLEADOR,
           descripcion: `EsSalud empleador (${essaludPorcentaje}%)`,
-          monto: new Prisma.Decimal(montoEssalud.toFixed(2)),
+          monto: dec2(montoEssalud),
           porcentaje: new Prisma.Decimal(essaludPorcentaje),
         });
 

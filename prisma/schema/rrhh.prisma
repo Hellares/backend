@@ -89,6 +89,13 @@ enum TipoDetalleBoleta {
   APORTE_EMPLEADOR
 }
 
+// Régimen pensionario del empleado (define el descuento por pensión en planilla).
+enum RegimenPension {
+  NINGUNO // sin descuento de pensión (ej. recibo por honorarios)
+  ONP // Oficina de Normalización Previsional (descuento % fijo)
+  AFP // Administradora de Fondos de Pensiones (aporte + comisión + prima)
+}
+
 enum ConceptoBoleta {
   SALARIO_BASICO
   HORAS_EXTRA
@@ -201,6 +208,7 @@ model Empleado {
   fechaCese          DateTime?
   tipoContrato       TipoContrato   @default(PLANILLA)
   salarioBase        Decimal        @db.Decimal(10, 2)
+  regimenPension     RegimenPension @default(NINGUNO) // Define el descuento de pensión en planilla
   moneda             String         @default("PEN")
   banco              String?
   numeroCuenta       String?

@@ -9,7 +9,7 @@ import {
   Min,
   MaxLength,
 } from 'class-validator';
-import { TipoContrato } from '@prisma/client';
+import { TipoContrato, RegimenPension } from '@prisma/client';
 
 export class CreateEmpleadoDto {
   @ApiProperty({
@@ -70,6 +70,16 @@ export class CreateEmpleadoDto {
   @IsNumber({}, { message: 'El salario base debe ser un número' })
   @Min(0, { message: 'El salario base no puede ser negativo' })
   salarioBase: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Régimen pensionario (define el descuento de pensión en planilla)',
+    enum: RegimenPension,
+    default: RegimenPension.NINGUNO,
+  })
+  @IsOptional()
+  @IsEnum(RegimenPension, { message: 'Régimen pensionario inválido' })
+  regimenPension?: RegimenPension;
 
   @ApiPropertyOptional({
     description: 'Moneda del salario',

@@ -599,6 +599,11 @@ model ConfiguracionEmpresa {
   dominicalPorcentaje  Float  @default(100.0) // % adicional por trabajo dominical
   feriadoPorcentaje    Float  @default(100.0) // % adicional por trabajo en feriado
   essaludPorcentaje    Float  @default(9.0) // % aporte EsSalud empleador
+  // Pensiones (descuento al empleado según su régimen)
+  onpPorcentaje         Float @default(13.0) // % descuento ONP
+  afpAportePorcentaje   Float @default(10.0) // % aporte obligatorio AFP
+  afpComisionPorcentaje Float @default(1.6) // % comisión AFP sobre flujo
+  afpPrimaPorcentaje    Float @default(1.35) // % prima de seguro AFP
   periodoPlanillaTipo  String @default("MENSUAL") // MENSUAL o QUINCENAL
 
   // Configuración de mora para cuotas vencidas
