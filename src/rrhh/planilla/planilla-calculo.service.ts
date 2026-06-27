@@ -252,15 +252,18 @@ export class PlanillaCalculoService {
               porcentaje: null,
             });
             // Bonificación extraordinaria: el 9% de EsSalud de la gratificación
-            // se le entrega al trabajador (inafecta a pensión).
-            const bonif = gratificacion.mul(essaludPorcentaje).div(100);
-            detalles.push({
-              tipo: TipoDetalleBoleta.INGRESO,
-              concepto: ConceptoBoleta.BONIFICACION,
-              descripcion: `Bonificación extraordinaria (${essaludPorcentaje}% s/grati)`,
-              monto: dec2(bonif),
-              porcentaje: new Prisma.Decimal(essaludPorcentaje),
-            });
+            // se le entrega al trabajador (inafecta a pensión). Solo si aporta
+            // EsSalud (deriva de ese aporte).
+            if (empleado.aportaEssalud) {
+              const bonif = gratificacion.mul(essaludPorcentaje).div(100);
+              detalles.push({
+                tipo: TipoDetalleBoleta.INGRESO,
+                concepto: ConceptoBoleta.BONIFICACION,
+                descripcion: `Bonificación extraordinaria (${essaludPorcentaje}% s/grati)`,
+                monto: dec2(bonif),
+                porcentaje: new Prisma.Decimal(essaludPorcentaje),
+              });
+            }
           }
         }
 
@@ -349,14 +352,17 @@ export class PlanillaCalculoService {
 
         // APORTE EMPLEADOR: EsSalud sobre la remuneración AFECTA (no sobre la
         // gratificación: a esa le corresponde la bonificación extraordinaria).
-        const montoEssalud = baseAfecta.mul(essaludPorcentaje).div(100);
-        detalles.push({
-          tipo: TipoDetalleBoleta.APORTE_EMPLEADOR,
-          concepto: ConceptoBoleta.ESSALUD_EMPLEADOR,
-          descripcion: `EsSalud empleador (${essaludPorcentaje}%)`,
-          monto: dec2(montoEssalud),
-          porcentaje: new Prisma.Decimal(essaludPorcentaje),
-        });
+        // Solo si el empleado aporta EsSalud (locador/honorarios → no).
+        if (empleado.aportaEssalud) {
+          const montoEssalud = baseAfecta.mul(essaludPorcentaje).div(100);
+          detalles.push({
+            tipo: TipoDetalleBoleta.APORTE_EMPLEADOR,
+            concepto: ConceptoBoleta.ESSALUD_EMPLEADOR,
+            descripcion: `EsSalud empleador (${essaludPorcentaje}%)`,
+            monto: dec2(montoEssalud),
+            porcentaje: new Prisma.Decimal(essaludPorcentaje),
+          });
+        }
 
         // Calcular total aportaciones
         let totalAportaciones = new Prisma.Decimal(0);

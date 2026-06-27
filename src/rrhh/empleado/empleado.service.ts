@@ -85,6 +85,7 @@ export class EmpleadoService {
           tipoContrato: dto.tipoContrato,
           salarioBase: dto.salarioBase,
           regimenPension: dto.regimenPension,
+          aportaEssalud: dto.aportaEssalud,
           moneda: dto.moneda ?? 'PEN',
           banco: dto.banco,
           numeroCuenta: dto.numeroCuenta,
@@ -307,6 +308,8 @@ export class EmpleadoService {
     if (dto.salarioBase !== undefined) data.salarioBase = dto.salarioBase;
     if (dto.regimenPension !== undefined)
       data.regimenPension = dto.regimenPension;
+    if (dto.aportaEssalud !== undefined)
+      data.aportaEssalud = dto.aportaEssalud;
     if (dto.moneda !== undefined) data.moneda = dto.moneda;
     if (dto.banco !== undefined) data.banco = dto.banco;
     if (dto.numeroCuenta !== undefined) data.numeroCuenta = dto.numeroCuenta;

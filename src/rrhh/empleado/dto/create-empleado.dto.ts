@@ -6,6 +6,7 @@ import {
   IsDateString,
   IsEnum,
   IsNumber,
+  IsBoolean,
   Min,
   MaxLength,
 } from 'class-validator';
@@ -80,6 +81,14 @@ export class CreateEmpleadoDto {
   @IsOptional()
   @IsEnum(RegimenPension, { message: 'Régimen pensionario inválido' })
   regimenPension?: RegimenPension;
+
+  @ApiPropertyOptional({
+    description: 'Si la empresa aporta EsSalud (9%) por este empleado',
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  aportaEssalud?: boolean;
 
   @ApiPropertyOptional({
     description: 'Moneda del salario',

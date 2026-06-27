@@ -209,6 +209,7 @@ model Empleado {
   tipoContrato       TipoContrato   @default(PLANILLA)
   salarioBase        Decimal        @db.Decimal(10, 2)
   regimenPension     RegimenPension @default(NINGUNO) // Define el descuento de pensión en planilla
+  aportaEssalud      Boolean        @default(true) // Si la empresa aporta EsSalud (9%) por este empleado
   moneda             String         @default("PEN")
   banco              String?
   numeroCuenta       String?
