@@ -527,8 +527,10 @@ export class IncidenciaService {
       [TipoIncidencia.DESCANSO_MEDICO]: EstadoAsistencia.LICENCIA,
       [TipoIncidencia.LICENCIA_PATERNIDAD]: EstadoAsistencia.LICENCIA,
       [TipoIncidencia.LICENCIA_MATERNIDAD]: EstadoAsistencia.LICENCIA,
-      [TipoIncidencia.PERMISO]: EstadoAsistencia.JUSTIFICADO,
-      [TipoIncidencia.PERMISO_PERSONAL]: EstadoAsistencia.JUSTIFICADO,
+      [TipoIncidencia.PERMISO]: EstadoAsistencia.JUSTIFICADO, // con goce
+      // Permiso personal = SIN goce → se descuenta (queda autorizado vía la
+      // incidencia aprobada, pero la asistencia se marca como falta).
+      [TipoIncidencia.PERMISO_PERSONAL]: EstadoAsistencia.FALTA,
       [TipoIncidencia.SALIDA_EMERGENCIA]: EstadoAsistencia.JUSTIFICADO,
       [TipoIncidencia.OTRO]: EstadoAsistencia.JUSTIFICADO,
     };
