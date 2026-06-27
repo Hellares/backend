@@ -93,17 +93,33 @@ export class SyncrofactProvider implements FacturacionProvider {
    * guía en Syncronize). Reusa el endpoint de integración (soporta tipo 09).
    */
   async consultarGuiaRemision(guia: any, config: any): Promise<EnvioResult> {
-    const url = this.buildUrl(
+    const lookupUrl = this.buildUrl(
       config.proveedorRuta,
       `/v1/integracion/documentos?referencia_interna=${encodeURIComponent(guia.id)}&tipo_documento=09`,
     );
-    const result = await this.callApiGet<any>(url, config.proveedorToken);
+    const found = await this.callApiGet<any>(lookupUrl, config.proveedorToken);
 
-    if (result?.data?.encontrado && result.data.id) {
-      return this.consultarPorId('dispatch-guides', result.data.id, config);
+    if (!found?.data?.encontrado || !found.data.id) {
+      // Aún no visible en Syncrofact → se asume en procesamiento (no es rechazo)
+      return { aceptado: false, procesando: true, rawResponse: found };
     }
-    // Aún no visible en Syncrofact → se asume en procesamiento (no es rechazo)
-    return { aceptado: false, procesando: true, rawResponse: result };
+
+    const id = found.data.id;
+
+    // La GRE en SUNAT es asíncrona por ticket: disparar check-status para empujar
+    // PROCESANDO → ACEPTADO/RECHAZADO. Puede no aplicar si aún está EN_COLA (sin
+    // ticket) o si ya es terminal; en cualquier caso leemos el estado vigente luego.
+    try {
+      await this.callApi(
+        this.buildUrl(config.proveedorRuta, `/v1/dispatch-guides/${id}/check-status`),
+        config.proveedorToken,
+        {},
+      );
+    } catch {
+      // ignorar: se lee el estado actual a continuación
+    }
+
+    return this.consultarPorId('dispatch-guides', id, config);
   }
 
   /**
