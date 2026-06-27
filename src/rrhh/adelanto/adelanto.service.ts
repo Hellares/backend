@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CajaService } from '../../caja/caja.service';
-import { aplicarEgresoConFuente } from '../../caja/aplicar-egreso-fuente.util';
+import {
+  aplicarEgresoConFuente,
+  revertirEgresoConFuente,
+} from '../../caja/aplicar-egreso-fuente.util';
 import {
   EstadoAdelanto,
   CategoriaMovimientoCaja,
@@ -298,5 +301,64 @@ export class AdelantoService {
     });
 
     return result;
+  }
+
+  /**
+   * Anula el PAGO de un adelanto ya pagado: devuelve el dinero a su fuente
+   * (Tesorería/Caja → anula el movimiento; Banco → repone el saldo) y vuelve
+   * el adelanto a APROBADO para que se pueda re-pagar o cancelar.
+   */
+  async anularPago(
+    empresaId: string,
+    id: string,
+    usuarioId: string,
+    motivo?: string,
+  ) {
+    const adelanto = await this.prisma.adelantoPago.findFirst({
+      where: { id, empresaId },
+    });
+
+    if (!adelanto) {
+      throw new NotFoundException('Adelanto no encontrado');
+    }
+
+    if (adelanto.estado !== EstadoAdelanto.PAGADO_ADELANTO) {
+      throw new BadRequestException(
+        'Solo se puede anular el pago de un adelanto en estado PAGADO',
+      );
+    }
+
+    if (adelanto.descontadoEnBoletaId) {
+      throw new BadRequestException(
+        'No se puede anular: el adelanto ya fue descontado en una boleta',
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // a. Revertir el egreso → devuelve el dinero a su fuente original.
+      await revertirEgresoConFuente(
+        tx,
+        {
+          monto: adelanto.monto,
+          fuente: adelanto.fuentePago,
+          bancoId: adelanto.bancoId,
+          movimientoCajaId: adelanto.movimientoCajaId,
+        },
+        usuarioId,
+        motivo || 'Anulación de pago de adelanto',
+      );
+
+      // b. Volver a APROBADO + limpiar el snapshot de pago.
+      return tx.adelantoPago.update({
+        where: { id },
+        data: {
+          estado: EstadoAdelanto.APROBADO_ADELANTO,
+          pagadoPorId: null,
+          fuentePago: null,
+          bancoId: null,
+          movimientoCajaId: null,
+        },
+      });
+    });
   }
 }

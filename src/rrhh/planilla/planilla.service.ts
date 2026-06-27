@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CajaService } from '../../caja/caja.service';
-import { aplicarEgresoConFuente } from '../../caja/aplicar-egreso-fuente.util';
+import {
+  aplicarEgresoConFuente,
+  revertirEgresoConFuente,
+} from '../../caja/aplicar-egreso-fuente.util';
 import {
   EstadoPeriodoPlanilla,
   EstadoBoletaPago,
@@ -302,6 +305,69 @@ export class PlanillaService {
     });
 
     return result;
+  }
+
+  /**
+   * Anula el PAGO de una boleta ya pagada: devuelve el dinero a su fuente
+   * (Tesorería/Caja → anula el movimiento; Banco → repone el saldo) y vuelve
+   * la boleta a PENDIENTE (y el periodo a APROBADA si estaba PAGADA).
+   */
+  async anularPagoBoleta(
+    empresaId: string,
+    boletaId: string,
+    usuarioId: string,
+    motivo?: string,
+  ) {
+    const boleta = await this.prisma.boletaPago.findFirst({
+      where: { id: boletaId, empresaId },
+      include: { periodo: true },
+    });
+
+    if (!boleta) {
+      throw new NotFoundException('Boleta de pago no encontrada');
+    }
+
+    if (boleta.estado !== EstadoBoletaPago.PAGADA_BOLETA) {
+      throw new BadRequestException('La boleta no está en estado PAGADA');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // a. Revertir el egreso → devuelve el dinero a su fuente original.
+      await revertirEgresoConFuente(
+        tx,
+        {
+          monto: boleta.totalNeto,
+          fuente: boleta.fuentePago,
+          bancoId: boleta.bancoId,
+          movimientoCajaId: boleta.movimientoCajaId,
+        },
+        usuarioId,
+        motivo || 'Anulación de pago de boleta',
+      );
+
+      // b. Volver la boleta a PENDIENTE + limpiar el snapshot de pago.
+      const boletaActualizada = await tx.boletaPago.update({
+        where: { id: boletaId },
+        data: {
+          estado: EstadoBoletaPago.PENDIENTE_BOLETA,
+          fechaPago: null,
+          pagadoPorId: null,
+          fuentePago: null,
+          bancoId: null,
+          movimientoCajaId: null,
+        },
+      });
+
+      // c. Si el periodo estaba PAGADO, vuelve a APROBADA (hay boleta pendiente).
+      if (boleta.periodo.estado === EstadoPeriodoPlanilla.PAGADA) {
+        await tx.periodoPlanilla.update({
+          where: { id: boleta.periodoId },
+          data: { estado: EstadoPeriodoPlanilla.APROBADA },
+        });
+      }
+
+      return boletaActualizada;
+    });
   }
 
   // =============================================================

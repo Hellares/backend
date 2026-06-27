@@ -126,6 +126,10 @@ export class PlanillaCalculoService {
       let periodoTotalNeto = new Prisma.Decimal(0);
       let periodoTotalAportaciones = new Prisma.Decimal(0);
 
+      // Empleados sin NINGÚN registro de asistencia en el periodo → cobran el
+      // mes completo por defecto; se avisa para que no sea por error.
+      const advertencias: string[] = [];
+
       // Calcular para cada empleado
       for (const empleado of empleados) {
         const salarioBase = new Prisma.Decimal(empleado.salarioBase.toString());
@@ -141,6 +145,16 @@ export class PlanillaCalculoService {
             },
           },
         });
+
+        if (asistencias.length === 0) {
+          const per = empleado.usuario?.persona;
+          const nombre = per
+            ? `${per.nombres} ${per.apellidos}`.trim()
+            : empleado.codigo;
+          advertencias.push(
+            `${nombre}: sin registros de asistencia (pagado mes completo)`,
+          );
+        }
 
         // b. Contar días
         let diasPresente = 0;
@@ -461,7 +475,7 @@ export class PlanillaCalculoService {
         },
       });
 
-      return periodoActualizado;
+      return { ...periodoActualizado, advertencias };
     });
 
     return result;

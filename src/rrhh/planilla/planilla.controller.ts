@@ -188,4 +188,25 @@ export class PlanillaController {
   ) {
     return this.planillaService.pagarBoleta(empresaId, id, dto, usuarioId);
   }
+
+  @Post('boletas/:id/anular-pago')
+  @RequiresPermission(Permission.MANAGE_PLANILLA)
+  @ApiOperation({ summary: 'Anular el pago de una boleta (devuelve el dinero)' })
+  @ApiResponse({ status: 200, description: 'Pago anulado exitosamente' })
+  @ApiResponse({ status: 400, description: 'Estado inválido para anular' })
+  @ApiResponse({ status: 404, description: 'Boleta no encontrada' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async anularPagoBoleta(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Body('motivo') motivo: string,
+    @CurrentUser('id') usuarioId: string,
+  ) {
+    return this.planillaService.anularPagoBoleta(
+      empresaId,
+      id,
+      usuarioId,
+      motivo,
+    );
+  }
 }
