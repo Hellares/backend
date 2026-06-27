@@ -7,10 +7,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CajaService } from '../../caja/caja.service';
+import { aplicarEgresoConFuente } from '../../caja/aplicar-egreso-fuente.util';
 import {
   EstadoPeriodoPlanilla,
   EstadoBoletaPago,
-  TipoMovimientoCaja,
   CategoriaMovimientoCaja,
   Prisma,
 } from '@prisma/client';
@@ -252,30 +252,24 @@ export class PlanillaService {
     const nombres = boleta.empleado.usuario.persona?.nombres ?? '';
     const apellidos = boleta.empleado.usuario.persona?.apellidos ?? '';
 
-    // 2. Transacción: registrar movimiento + actualizar boleta
+    // 2. Transacción: rutear egreso según fuente + actualizar boleta
     const result = await this.prisma.$transaction(async (tx) => {
-      // a. Registrar movimiento en caja
-      await this.cajaService.registrarMovimientoSiHayCaja(
+      // a. Rutear el egreso a TESORERIA / CAJA / BANCO (nunca deja la caja en
+      //    negativo: el digital sale del banco, no del cubo del método).
+      const egreso = await aplicarEgresoConFuente(tx, this.cajaService, {
         empresaId,
-        boleta.empleado.sedeId,
+        sedeId: boleta.empleado.sedeId,
         usuarioId,
-        {
-          tipo: TipoMovimientoCaja.EGRESO,
-          categoria: CategoriaMovimientoCaja.PAGO_PLANILLA,
-          metodoPago: dto.metodoPago,
-          monto: Number(boleta.totalNeto),
-          descripcion: `Pago planilla ${boleta.periodo.periodo} - ${nombres} ${apellidos}`,
-          boletaPagoId: boleta.id,
-          metadata: {
-            empleadoId: boleta.empleadoId,
-            empleadoNombre: `${nombres} ${apellidos}`,
-            periodo: boleta.periodo.periodo,
-          },
-        },
-        tx,
-      );
+        metodoPago: dto.metodoPago,
+        monto: Number(boleta.totalNeto),
+        fuente: dto.fuente,
+        bancoId: dto.bancoId,
+        categoria: CategoriaMovimientoCaja.PAGO_PLANILLA,
+        descripcion: `Pago planilla ${boleta.periodo.periodo} - ${nombres} ${apellidos}`,
+        boletaPagoId: boleta.id,
+      });
 
-      // b. Actualizar boleta
+      // b. Actualizar boleta (snapshot de fuente + banco + movimiento)
       const boletaActualizada = await tx.boletaPago.update({
         where: { id: boletaId },
         data: {
@@ -283,6 +277,9 @@ export class PlanillaService {
           fechaPago: new Date(),
           pagadoPorId: usuarioId,
           metodoPago: dto.metodoPago,
+          fuentePago: egreso.fuente,
+          bancoId: egreso.bancoId,
+          movimientoCajaId: egreso.movimientoCajaId,
         },
       });
 
@@ -360,28 +357,22 @@ export class PlanillaService {
         const nombres = boleta.empleado.usuario.persona?.nombres ?? '';
         const apellidos = boleta.empleado.usuario.persona?.apellidos ?? '';
 
-        // Registrar movimiento en caja
-        await this.cajaService.registrarMovimientoSiHayCaja(
+        // Rutear el egreso a TESORERIA / CAJA / BANCO (misma fuente para todas
+        // las boletas del periodo).
+        const egreso = await aplicarEgresoConFuente(tx, this.cajaService, {
           empresaId,
-          boleta.empleado.sedeId,
+          sedeId: boleta.empleado.sedeId,
           usuarioId,
-          {
-            tipo: TipoMovimientoCaja.EGRESO,
-            categoria: CategoriaMovimientoCaja.PAGO_PLANILLA,
-            metodoPago: dto.metodoPago,
-            monto: Number(boleta.totalNeto),
-            descripcion: `Pago planilla ${periodo.periodo} - ${nombres} ${apellidos}`,
-            boletaPagoId: boleta.id,
-            metadata: {
-              empleadoId: boleta.empleadoId,
-              empleadoNombre: `${nombres} ${apellidos}`,
-              periodo: periodo.periodo,
-            },
-          },
-          tx,
-        );
+          metodoPago: dto.metodoPago,
+          monto: Number(boleta.totalNeto),
+          fuente: dto.fuente,
+          bancoId: dto.bancoId,
+          categoria: CategoriaMovimientoCaja.PAGO_PLANILLA,
+          descripcion: `Pago planilla ${periodo.periodo} - ${nombres} ${apellidos}`,
+          boletaPagoId: boleta.id,
+        });
 
-        // Actualizar boleta
+        // Actualizar boleta (snapshot de fuente + banco + movimiento)
         await tx.boletaPago.update({
           where: { id: boleta.id },
           data: {
@@ -389,6 +380,9 @@ export class PlanillaService {
             fechaPago: new Date(),
             pagadoPorId: usuarioId,
             metodoPago: dto.metodoPago,
+            fuentePago: egreso.fuente,
+            bancoId: egreso.bancoId,
+            movimientoCajaId: egreso.movimientoCajaId,
           },
         });
 

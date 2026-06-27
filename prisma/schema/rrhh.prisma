@@ -2,6 +2,14 @@
 // MODULO DE RECURSOS HUMANOS (RRHH)
 // =========================================
 
+// Fuente del egreso al pagar (adelanto / boleta de planilla). Mismo criterio
+// de ruteo que FuentePagoCompra (CxP), genérico para egresos de RRHH.
+enum FuenteEgreso {
+  TESORERIA // Caja Central de la sede → MovimientoCaja EGRESO
+  CAJA // Caja operativa abierta del usuario → MovimientoCaja EGRESO
+  BANCO // Cuenta bancaria de la empresa → decrementa EmpresaBanco.saldoActual
+}
+
 enum DiaSemana {
   LUNES
   MARTES
@@ -347,6 +355,8 @@ model BoletaPago {
   estado            EstadoBoletaPago @default(PENDIENTE_BOLETA)
   fechaPago         DateTime?
   metodoPago        MetodoPagoVenta?
+  fuentePago        FuenteEgreso? // De dónde salió el dinero (TESORERIA/CAJA/BANCO)
+  bancoId           String? // FK EmpresaBanco (set si fuentePago=BANCO)
   movimientoCajaId  String?
   pagadoPorId       String?
   observaciones     String?
@@ -399,6 +409,8 @@ model AdelantoPago {
   aprobadoPorId        String?
   fechaAprobacion      DateTime?
   metodoPago           MetodoPagoVenta?
+  fuentePago           FuenteEgreso? // De dónde salió el dinero (TESORERIA/CAJA/BANCO)
+  bancoId              String? // FK EmpresaBanco (set si fuentePago=BANCO)
   movimientoCajaId     String?
   pagadoPorId          String?
   descontadoEnBoletaId String?

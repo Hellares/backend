@@ -238,6 +238,149 @@ describe('CompraService.calcularDetalle — edge / errores', () => {
   });
 });
 
+describe('CompraService.calcularDetalle — override de factor (empaque variable)', () => {
+  it('override 40 sobre config 50: 2 Saco × S/8 → 80 u × S/0.20', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'Maíz',
+        productoId: 'maiz',
+        usaUnidadCompra: true,
+        cantidad: 2,
+        precioUnitario: 8,
+        factorCompra: 40, // el saco vino con 40, no las 50 configuradas
+      },
+      0,
+      mapDe({ maiz: { factor: 50, simbolo: 'Saco' } }),
+      true,
+    );
+    expect(r.cantidad).toBe(80); // 2 × 40
+    expect(r.precioUnitario).toBe(0.2); // 8 / 40
+    expect(r.factorAplicado).toBe(40); // snapshot del override (no la config)
+    expect(r.cantidadOriginal).toBe(2);
+    expect(r.unidadOriginalSimbolo).toBe('Saco');
+    expect(r.total).toBe(16); // 80 × 0.20
+  });
+
+  it('sin override usa el factor de la config (50)', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'Maíz',
+        productoId: 'maiz',
+        usaUnidadCompra: true,
+        cantidad: 2,
+        precioUnitario: 10,
+      },
+      0,
+      mapDe({ maiz: { factor: 50, simbolo: 'Saco' } }),
+      true,
+    );
+    expect(r.cantidad).toBe(100); // 2 × 50
+    expect(r.precioUnitario).toBe(0.2); // 10 / 50
+    expect(r.factorAplicado).toBe(50);
+  });
+
+  it('override 0 / inválido → cae al factor de config', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'Maíz',
+        productoId: 'maiz',
+        usaUnidadCompra: true,
+        cantidad: 1,
+        precioUnitario: 10,
+        factorCompra: 0,
+      },
+      0,
+      mapDe({ maiz: { factor: 50, simbolo: 'Saco' } }),
+      true,
+    );
+    expect(r.factorAplicado).toBe(50);
+    expect(r.cantidad).toBe(50);
+  });
+
+  it('override se ignora si la línea está en unidad base (sin usaUnidadCompra)', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'Maíz',
+        productoId: 'maiz',
+        cantidad: 5,
+        precioUnitario: 2,
+        factorCompra: 40,
+      },
+      0,
+      mapDe({ maiz: { factor: 50, simbolo: 'Saco' } }),
+      true,
+    );
+    expect(r.usaUnidadCompra).toBe(false);
+    expect(r.cantidad).toBe(5); // sin conversión
+    expect(r.precioUnitario).toBe(2);
+    expect(r.factorAplicado).toBeNull();
+  });
+});
+
+describe('CompraService.calcularDetalle — variantes', () => {
+  it('variante en unidad base: conserva varianteId + productoId, sin conversión', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'Polo Talla M',
+        productoId: 'polo',
+        varianteId: 'polo-m',
+        cantidad: 12,
+        precioUnitario: 15,
+      },
+      0,
+      undefined,
+      true,
+    );
+    expect(r.varianteId).toBe('polo-m');
+    expect(r.productoId).toBe('polo');
+    expect(r.usaUnidadCompra).toBe(false);
+    expect(r.cantidad).toBe(12);
+    expect(r.precioUnitario).toBe(15);
+  });
+
+  it('variante por paquete: convierte por el factor del producto y conserva varianteId', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'Gaseosa 500ml Cola',
+        productoId: 'gaseosa',
+        varianteId: 'gaseosa-cola',
+        usaUnidadCompra: true,
+        cantidad: 3,
+        precioUnitario: 24,
+      },
+      0,
+      mapDe({ gaseosa: { factor: 12, simbolo: 'Caja' } }),
+      true,
+    );
+    expect(r.varianteId).toBe('gaseosa-cola');
+    expect(r.cantidad).toBe(36); // 3 × 12
+    expect(r.precioUnitario).toBe(2); // 24 / 12
+    expect(r.factorAplicado).toBe(12);
+    expect(r.unidadOriginalSimbolo).toBe('Caja');
+  });
+
+  it('variante por paquete con override de empaque (9 en vez de 12)', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'Gaseosa 500ml Cola',
+        productoId: 'gaseosa',
+        varianteId: 'gaseosa-cola',
+        usaUnidadCompra: true,
+        cantidad: 2,
+        precioUnitario: 18,
+        factorCompra: 9,
+      },
+      0,
+      mapDe({ gaseosa: { factor: 12, simbolo: 'Caja' } }),
+      true,
+    );
+    expect(r.cantidad).toBe(18); // 2 × 9
+    expect(r.precioUnitario).toBe(2); // 18 / 9
+    expect(r.factorAplicado).toBe(9);
+    expect(r.varianteId).toBe('gaseosa-cola');
+  });
+});
+
 describe('CompraService.calcularNuevoCostoPromedio — costo promedio ponderado', () => {
   it('sin stock previo: el nuevo costo es el de la compra', () => {
     expect(CompraService.calcularNuevoCostoPromedio(0, 0, 100, 5)).toBe(5);

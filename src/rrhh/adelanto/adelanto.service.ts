@@ -7,9 +7,9 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CajaService } from '../../caja/caja.service';
+import { aplicarEgresoConFuente } from '../../caja/aplicar-egreso-fuente.util';
 import {
   EstadoAdelanto,
-  TipoMovimientoCaja,
   CategoriaMovimientoCaja,
   Prisma,
 } from '@prisma/client';
@@ -250,36 +250,34 @@ export class AdelantoService {
     const nombres = adelanto.empleado.usuario.persona?.nombres ?? '';
     const apellidos = adelanto.empleado.usuario.persona?.apellidos ?? '';
 
-    // 2. Transacción: registrar movimiento + actualizar adelanto
+    // 2. Transacción: rutear egreso según fuente + actualizar adelanto
     const result = await this.prisma.$transaction(async (tx) => {
-      // a. Registrar movimiento en caja
-      await this.cajaService.registrarMovimientoSiHayCaja(
+      // a. Rutear el egreso a TESORERIA / CAJA / BANCO (no más "se descuenta
+      //    en la caja con un método que no tiene saldo"). El monto sale del
+      //    lugar correcto y nunca deja la caja en negativo.
+      const egreso = await aplicarEgresoConFuente(tx, this.cajaService, {
         empresaId,
-        adelanto.empleado.sedeId,
+        sedeId: adelanto.empleado.sedeId,
         usuarioId,
-        {
-          tipo: TipoMovimientoCaja.EGRESO,
-          categoria: CategoriaMovimientoCaja.ADELANTO_EMPLEADO,
-          metodoPago: dto.metodoPago,
-          monto: Number(adelanto.monto),
-          descripcion: `Adelanto de sueldo - ${nombres} ${apellidos}`,
-          adelantoPagoId: adelanto.id,
-          metadata: {
-            empleadoId: adelanto.empleadoId,
-            empleadoNombre: `${nombres} ${apellidos}`,
-            motivo: adelanto.motivo,
-          },
-        },
-        tx,
-      );
+        metodoPago: dto.metodoPago,
+        monto: Number(adelanto.monto),
+        fuente: dto.fuente,
+        bancoId: dto.bancoId,
+        categoria: CategoriaMovimientoCaja.ADELANTO_EMPLEADO,
+        descripcion: `Adelanto de sueldo - ${nombres} ${apellidos}`,
+        adelantoPagoId: adelanto.id,
+      });
 
-      // b. Actualizar adelanto
+      // b. Actualizar adelanto (snapshot de fuente + banco + movimiento)
       const adelantoActualizado = await tx.adelantoPago.update({
         where: { id },
         data: {
           estado: EstadoAdelanto.PAGADO_ADELANTO,
           pagadoPorId: usuarioId,
           metodoPago: dto.metodoPago,
+          fuentePago: egreso.fuente,
+          bancoId: egreso.bancoId,
+          movimientoCajaId: egreso.movimientoCajaId,
         },
         include: {
           empleado: {
