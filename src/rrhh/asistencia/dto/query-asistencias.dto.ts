@@ -28,6 +28,14 @@ export class QueryAsistenciasDto {
   sedeId?: string;
 
   @ApiPropertyOptional({
+    description: 'Filtrar por un día exacto (atajo de fechaDesde=fechaHasta)',
+    example: '2026-03-15',
+  })
+  @IsOptional()
+  @IsDateString({}, { message: 'fecha debe ser una fecha válida (ISO 8601)' })
+  fecha?: string;
+
+  @ApiPropertyOptional({
     description: 'Fecha desde (inclusive)',
     example: '2026-03-01',
   })

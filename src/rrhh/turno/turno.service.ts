@@ -16,6 +16,25 @@ export class TurnoService {
   /**
    * Crear un nuevo turno
    */
+  /**
+   * Horas efectivas de un turno = (horaFin \u2212 horaInicio) \u2212 almuerzo, en horas.
+   * Soporta turno nocturno (horaFin < horaInicio \u2192 cruza medianoche).
+   */
+  private calcularHorasEfectivas(
+    horaInicio: string,
+    horaFin: string,
+    almuerzoMin: number,
+  ): number {
+    const aMin = (h: string) => {
+      const [hh, mm] = h.split(':').map((n) => parseInt(n, 10));
+      return hh * 60 + mm;
+    };
+    let diff = aMin(horaFin) - aMin(horaInicio);
+    if (diff < 0) diff += 24 * 60; // cruza medianoche
+    const efectivas = (diff - (almuerzoMin ?? 0)) / 60;
+    return Math.max(0, Math.round(efectivas * 100) / 100);
+  }
+
   async create(empresaId: string, dto: CreateTurnoDto) {
     // Validar nombre \u00fanico dentro de la empresa
     const existe = await this.prisma.turno.findUnique({
@@ -48,7 +67,13 @@ export class TurnoService {
         horaInicio: dto.horaInicio,
         horaFin: dto.horaFin,
         duracionAlmuerzoMin: dto.duracionAlmuerzoMin ?? 60,
-        horasEfectivas: dto.horasEfectivas,
+        horasEfectivas:
+          dto.horasEfectivas ??
+          this.calcularHorasEfectivas(
+            dto.horaInicio,
+            dto.horaFin,
+            dto.duracionAlmuerzoMin ?? 60,
+          ),
         color: dto.color,
         isDefault: dto.isDefault ?? false,
       },
@@ -135,6 +160,22 @@ export class TurnoService {
       });
     }
 
+    // Recalcular horas efectivas si cambian los horarios y no se envió un
+    // valor explícito.
+    const horariosCambiaron =
+      dto.horaInicio !== undefined ||
+      dto.horaFin !== undefined ||
+      dto.duracionAlmuerzoMin !== undefined;
+    const horasEfectivas =
+      dto.horasEfectivas ??
+      (horariosCambiaron
+        ? this.calcularHorasEfectivas(
+            dto.horaInicio ?? turno.horaInicio,
+            dto.horaFin ?? turno.horaFin,
+            dto.duracionAlmuerzoMin ?? turno.duracionAlmuerzoMin,
+          )
+        : undefined);
+
     const turnoActualizado = await this.prisma.turno.update({
       where: { id },
       data: {
@@ -142,7 +183,7 @@ export class TurnoService {
         horaInicio: dto.horaInicio,
         horaFin: dto.horaFin,
         duracionAlmuerzoMin: dto.duracionAlmuerzoMin,
-        horasEfectivas: dto.horasEfectivas,
+        horasEfectivas,
         color: dto.color,
         isDefault: dto.isDefault,
         isActive: dto.isActive,

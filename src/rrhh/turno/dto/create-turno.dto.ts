@@ -40,10 +40,16 @@ export class CreateTurnoDto {
   @Min(0)
   duracionAlmuerzoMin?: number;
 
-  @ApiProperty({ description: 'Horas efectivas de trabajo', example: 8 })
+  @ApiProperty({
+    description:
+      'Horas efectivas de trabajo. Si se omite, se calcula de horaInicio/horaFin − almuerzo.',
+    example: 8,
+    required: false,
+  })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  horasEfectivas: number;
+  horasEfectivas?: number;
 
   @ApiProperty({
     description: 'Color para identificar el turno',

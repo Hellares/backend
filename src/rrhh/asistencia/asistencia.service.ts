@@ -214,12 +214,17 @@ export class AsistenciaService {
     const {
       empleadoId,
       sedeId,
+      fecha,
       fechaDesde,
       fechaHasta,
       estado,
       page = 1,
       limit = 50,
     } = query;
+
+    // `fecha` es un atajo para filtrar un día exacto.
+    const desdeStr = fechaDesde ?? fecha;
+    const hastaStr = fechaHasta ?? fecha;
 
     const where: Prisma.AsistenciaWhereInput = {
       empresaId,
@@ -237,15 +242,15 @@ export class AsistenciaService {
       where.estado = estado;
     }
 
-    if (fechaDesde || fechaHasta) {
+    if (desdeStr || hastaStr) {
       where.fecha = {};
-      if (fechaDesde) {
-        const desde = new Date(fechaDesde);
+      if (desdeStr) {
+        const desde = new Date(desdeStr);
         desde.setUTCHours(0, 0, 0, 0);
         where.fecha.gte = desde;
       }
-      if (fechaHasta) {
-        const hasta = new Date(fechaHasta);
+      if (hastaStr) {
+        const hasta = new Date(hastaStr);
         hasta.setUTCHours(23, 59, 59, 999);
         where.fecha.lte = hasta;
       }
