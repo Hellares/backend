@@ -61,7 +61,9 @@ export class HorarioService {
    */
   async findAll(empresaId: string) {
     return this.prisma.horarioPlantilla.findMany({
-      where: { empresaId },
+      // Solo activos: remove() hace soft-delete (isActive=false), los
+      // eliminados no deben seguir apareciendo en la lista.
+      where: { empresaId, isActive: true },
       include: {
         dias: {
           include: { turno: true },

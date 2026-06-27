@@ -88,9 +88,9 @@ export class TurnoService {
   async findAll(empresaId: string, query: QueryTurnosDto) {
     const where: Prisma.TurnoWhereInput = { empresaId };
 
-    if (query.isActive !== undefined) {
-      where.isActive = query.isActive;
-    }
+    // Por defecto solo activos (remove = soft-delete). El caller puede pedir
+    // inactivos pasando isActive=false explícito.
+    where.isActive = query.isActive ?? true;
 
     if (query.search) {
       where.nombre = {
