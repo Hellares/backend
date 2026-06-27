@@ -37,6 +37,8 @@ export interface EnvioResult {
   cadenaQR?: string | null;
   enlace?: string | null;
   error?: string | null;
+  /** Código de error de SUNAT (ej. "2335", "0103") cuando hay rechazo. Null si es error de validación del proveedor (sin código SUNAT). */
+  errorCode?: string | null;
   rawResponse?: any;
 }
 

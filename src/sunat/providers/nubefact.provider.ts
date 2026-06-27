@@ -69,6 +69,7 @@ export class NubefactProvider implements FacturacionProvider {
     return {
       aceptado: false,
       error: errorMsg || 'Rechazado por SUNAT',
+      errorCode: response.sunat_responsecode ?? null,
       rawResponse: response,
     };
   }

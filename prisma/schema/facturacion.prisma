@@ -135,6 +135,9 @@ model ComprobanteElectronico {
   enlaceProveedor     String?
   enviadoAProveedor   Boolean                   @default(false)
   errorProveedor      String?
+  // Código de error de SUNAT (ej. "2335", "0103") cuando hay rechazo. Null si es
+  // error de validación del proveedor (sin código SUNAT) o si fue aceptado.
+  sunatCodigo         String?
   intentosEnvio       Int                       @default(0)
   ultimoIntentoEnvio  DateTime?
   estado              EstadoComprobante         @default(BORRADOR)

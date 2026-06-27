@@ -432,6 +432,7 @@ export class FacturacionService {
           sunatHash: true,
           enviadoAProveedor: true,
           errorProveedor: true,
+          sunatCodigo: true,
           intentosEnvio: true,
           enlaceProveedor: true,
           sunatPdfUrl: true,
@@ -593,6 +594,9 @@ export class FacturacionService {
             enviadoAProveedor: true,
             sunatStatus: 'ACEPTADO',
             estado: 'ACEPTADO',
+            // Limpiar error/código de un rechazo previo (reenvío exitoso)
+            errorProveedor: null,
+            sunatCodigo: null,
             intentosEnvio: { increment: 1 },
             ultimoIntentoEnvio: new Date(),
           },
@@ -639,6 +643,7 @@ export class FacturacionService {
             estado: 'RECHAZADO',
             enviadoAProveedor: true,
             errorProveedor: result.error || 'Rechazado por SUNAT',
+            sunatCodigo: result.errorCode ?? null,
             cdrResponse: result.rawResponse ?? null,
             intentosEnvio: { increment: 1 },
             ultimoIntentoEnvio: new Date(),
@@ -677,7 +682,7 @@ export class FacturacionService {
       select: {
         id: true, sunatStatus: true, estado: true, sunatHash: true,
         sunatXmlUrl: true, sunatPdfUrl: true, cadenaQR: true,
-        errorProveedor: true, intentosEnvio: true,
+        errorProveedor: true, sunatCodigo: true, intentosEnvio: true,
       },
     });
   }
@@ -718,6 +723,20 @@ export class FacturacionService {
           enlaceProveedor: result.enlace ?? undefined,
           sunatStatus: 'ACEPTADO',
           estado: 'ACEPTADO',
+          errorProveedor: null,
+          sunatCodigo: null,
+        },
+      });
+    } else if (!result.procesando && result.error) {
+      // Rechazo confirmado al consultar: persistir el mensaje + código SUNAT
+      // para que el monitor muestre el error exacto.
+      await this.prisma.comprobanteElectronico.update({
+        where: { id: comprobanteId },
+        data: {
+          sunatStatus: 'RECHAZADO',
+          estado: 'RECHAZADO',
+          errorProveedor: result.error,
+          sunatCodigo: result.errorCode ?? null,
         },
       });
     }

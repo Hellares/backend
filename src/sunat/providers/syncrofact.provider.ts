@@ -486,6 +486,7 @@ export class SyncrofactProvider implements FacturacionProvider {
       return {
         aceptado: false,
         error: data.respuesta_sunat?.descripcion || 'Rechazado por SUNAT',
+        errorCode: data.respuesta_sunat?.codigo ?? null,
         ...base,
       };
     }
@@ -494,6 +495,7 @@ export class SyncrofactProvider implements FacturacionProvider {
       return {
         aceptado: false,
         error: data.respuesta_sunat?.descripcion || response.message || 'Error en el procesamiento',
+        errorCode: data.respuesta_sunat?.codigo ?? null,
         ...base,
       };
     }
