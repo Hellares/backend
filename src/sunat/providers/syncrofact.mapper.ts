@@ -226,11 +226,29 @@ export class SyncrofactMapper {
 
   private static buildCuotas(comprobante: ComprobanteData): SyncrofactCuota[] {
     const moneda = comprobante.moneda || 'PEN';
-    return (comprobante.venta!.cuotas || []).map((c) => ({
-      moneda,
-      monto: this.round2(Number(c.monto)),
-      fecha_pago: this.formatFecha(c.fechaVencimiento),
-    }));
+    const cuotas: SyncrofactCuota[] = (comprobante.venta!.cuotas || []).map(
+      (c) => ({
+        moneda,
+        monto: this.round2(Number(c.monto)),
+        fecha_pago: this.formatFecha(c.fechaVencimiento),
+      }),
+    );
+
+    // SUNAT exige que la suma de las cuotas sea IGUAL al total del documento.
+    // Si hubo una cuota inicial / adelanto (efectivo pagado hoy), las cuotas
+    // internas financian solo el saldo → se antepone la inicial como cuota
+    // pagada en la fecha de emisión para que sumen el total.
+    const sumCuotas = this.round2(cuotas.reduce((s, c) => s + c.monto, 0));
+    const total = this.round2(Number(comprobante.total));
+    const inicial = this.round2(total - sumCuotas);
+    if (inicial > 0.009) {
+      cuotas.unshift({
+        moneda,
+        monto: inicial,
+        fecha_pago: this.formatFecha(comprobante.fechaEmision),
+      });
+    }
+    return cuotas;
   }
 
   /**

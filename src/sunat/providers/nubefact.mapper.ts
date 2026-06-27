@@ -255,12 +255,28 @@ export class NubefactMapper {
       return { condiciones_de_pago: 'Contado', venta_al_credito: [] as any[] };
     }
 
+    // SUNAT exige que la suma de las cuotas sea IGUAL al total del documento.
+    // Si hubo una cuota inicial / adelanto (las cuotas internas financian solo
+    // el saldo), se antepone la inicial como cuota pagada en la fecha de
+    // emisión para que las cuotas sumen el total. Renumeradas 1..N.
+    const internas = venta.cuotas.map((c) => ({
+      fecha: c.fechaVencimiento as Date,
+      importe: this.round2(Number(c.monto)),
+    }));
+    const sumCuotas = this.round2(internas.reduce((s, c) => s + c.importe, 0));
+    const total = this.round2(Number(comprobante.total || 0));
+    const inicial = this.round2(total - sumCuotas);
+    const todas =
+      inicial > 0.009
+        ? [{ fecha: comprobante.fechaEmision as Date, importe: inicial }, ...internas]
+        : internas;
+
     return {
       condiciones_de_pago: 'Credito',
-      venta_al_credito: venta.cuotas.map((c) => ({
-        cuota: c.numero,
-        fecha_de_pago: this.formatFecha(c.fechaVencimiento),
-        importe: this.round2(Number(c.monto)),
+      venta_al_credito: todas.map((c, i) => ({
+        cuota: i + 1,
+        fecha_de_pago: this.formatFecha(c.fecha),
+        importe: c.importe,
       })),
     };
   }
