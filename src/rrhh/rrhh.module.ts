@@ -17,6 +17,7 @@ import { DashboardRrhhService } from './dashboard/dashboard-rrhh.service';
 import { PlanillaController } from './planilla/planilla.controller';
 import { PlanillaService } from './planilla/planilla.service';
 import { PlanillaCalculoService } from './planilla/planilla-calculo.service';
+import { PlanillaTasksService } from './planilla/planilla-tasks.service';
 import { AdelantoController } from './adelanto/adelanto.controller';
 import { AdelantoService } from './adelanto/adelanto.service';
 
@@ -45,6 +46,7 @@ import { AdelantoService } from './adelanto/adelanto.service';
     DashboardRrhhService,
     PlanillaService,
     PlanillaCalculoService,
+    PlanillaTasksService,
     AdelantoService,
   ],
   exports: [EmpleadoService],

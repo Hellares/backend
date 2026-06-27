@@ -201,6 +201,22 @@ export class PlanillaService {
       );
     }
 
+    // No se puede cerrar un mes si hay una planilla anterior sin pagar
+    // (se deben cerrar los meses en orden).
+    const anteriorSinPagar = await this.prisma.periodoPlanilla.findFirst({
+      where: {
+        empresaId,
+        periodo: { lt: periodo.periodo },
+        estado: { not: EstadoPeriodoPlanilla.PAGADA },
+      },
+      orderBy: { periodo: 'asc' },
+    });
+    if (anteriorSinPagar) {
+      throw new BadRequestException(
+        `No puedes aprobar ${periodo.periodo}: la planilla de ${anteriorSinPagar.periodo} aún no está pagada. Cierra los meses en orden.`,
+      );
+    }
+
     return this.prisma.periodoPlanilla.update({
       where: { id },
       data: {

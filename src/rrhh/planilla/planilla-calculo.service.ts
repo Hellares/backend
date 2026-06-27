@@ -130,6 +130,22 @@ export class PlanillaCalculoService {
       // mes completo por defecto; se avisa para que no sea por error.
       const advertencias: string[] = [];
 
+      // Aviso si hay una planilla de un mes anterior sin pagar: los adelantos
+      // pendientes (sin filtro de fecha) podrían descontarse en el mes equivocado.
+      const anteriorSinPagar = await tx.periodoPlanilla.findFirst({
+        where: {
+          empresaId,
+          periodo: { lt: periodo.periodo },
+          estado: { not: EstadoPeriodoPlanilla.PAGADA },
+        },
+        orderBy: { periodo: 'asc' },
+      });
+      if (anteriorSinPagar) {
+        advertencias.push(
+          `Hay una planilla anterior (${anteriorSinPagar.periodo}) sin pagar — ciérrala primero para no descontar adelantos en el mes equivocado.`,
+        );
+      }
+
       // Calcular para cada empleado
       for (const empleado of empleados) {
         const salarioBase = new Prisma.Decimal(empleado.salarioBase.toString());
