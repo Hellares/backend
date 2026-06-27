@@ -13,6 +13,9 @@ import {
   CategoriaMovimientoCaja,
   MetodoPagoVenta,
   TipoArqueoCaja,
+  FuenteEgreso,
+  EstadoAdelanto,
+  EstadoBoletaPago,
   Prisma,
 } from '@prisma/client';
 import { AbrirCajaDto } from './dto/abrir-caja.dto';
@@ -2632,12 +2635,40 @@ export class CajaService {
       where.descripcion = { contains: filtros.q, mode: 'insensitive' };
     }
 
-    const [items, total] = await Promise.all([
+    // Rango de fechas (para filtrar también los egresos bancarios de RRHH).
+    const rango =
+      filtros.fechaDesde || filtros.fechaHasta
+        ? {
+            ...(filtros.fechaDesde
+              ? { gte: new Date(filtros.fechaDesde) }
+              : {}),
+            ...(filtros.fechaHasta
+              ? { lte: new Date(filtros.fechaHasta) }
+              : {}),
+          }
+        : undefined;
+
+    const TOPE = 500;
+    const empSel = {
+      empleado: {
+        select: {
+          usuario: {
+            select: {
+              persona: { select: { nombres: true, apellidos: true } },
+            },
+          },
+        },
+      },
+    };
+
+    // Movimientos REALES de la central + egresos BANCARIOS de RRHH (informativos:
+    // no son MovimientoCaja, salieron de un banco; se muestran para que el
+    // egreso sea visible en la lista de tesorería "afecta <Banco>").
+    const [centralMovs, adelantos, boletas, bancos] = await Promise.all([
       this.prisma.movimientoCaja.findMany({
         where,
         orderBy: { fechaMovimiento: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        take: TOPE,
         include: {
           registradoPor: {
             select: {
@@ -2651,8 +2682,113 @@ export class CajaService {
           cotizacion: { select: { id: true, codigo: true, estado: true } },
         },
       }),
-      this.prisma.movimientoCaja.count({ where }),
+      this.prisma.adelantoPago.findMany({
+        where: {
+          empresaId,
+          fuentePago: FuenteEgreso.BANCO,
+          bancoId: { not: null },
+          estado: EstadoAdelanto.PAGADO_ADELANTO,
+          empleado: { sedeId },
+          ...(rango ? { actualizadoEn: rango } : {}),
+        },
+        orderBy: { actualizadoEn: 'desc' },
+        take: TOPE,
+        select: {
+          id: true,
+          monto: true,
+          metodoPago: true,
+          bancoId: true,
+          actualizadoEn: true,
+          ...empSel,
+        },
+      }),
+      this.prisma.boletaPago.findMany({
+        where: {
+          empresaId,
+          fuentePago: FuenteEgreso.BANCO,
+          bancoId: { not: null },
+          estado: EstadoBoletaPago.PAGADA_BOLETA,
+          empleado: { sedeId },
+          ...(rango ? { fechaPago: rango } : {}),
+        },
+        orderBy: { fechaPago: 'desc' },
+        take: TOPE,
+        select: {
+          id: true,
+          totalNeto: true,
+          metodoPago: true,
+          bancoId: true,
+          fechaPago: true,
+          periodo: { select: { periodo: true } },
+          ...empSel,
+        },
+      }),
+      this.prisma.empresaBanco.findMany({
+        where: { empresaId },
+        select: { id: true, nombreBanco: true },
+      }),
     ]);
+
+    const bancoNombre = new Map(bancos.map((b) => [b.id, b.nombreBanco]));
+    const nombreEmp = (x: any): string => {
+      const p = x?.empleado?.usuario?.persona;
+      return p ? `${p.nombres ?? ''} ${p.apellidos ?? ''}`.trim() : '';
+    };
+
+    let bancarios: any[] = [
+      ...adelantos.map((a) => ({
+        id: `adelanto-${a.id}`,
+        cajaId: central.id,
+        tipo: 'EGRESO',
+        categoria: 'ADELANTO_EMPLEADO',
+        metodoPago: a.metodoPago ?? 'EFECTIVO',
+        monto: Number(a.monto),
+        descripcion: `[${bancoNombre.get(a.bancoId!) ?? 'Banco'}] Adelanto de sueldo - ${nombreEmp(a)}`.trim(),
+        fechaMovimiento: a.actualizadoEn,
+        esManual: false,
+        anulado: false,
+        esBancario: true,
+        bancoNombre: bancoNombre.get(a.bancoId!) ?? null,
+      })),
+      ...boletas.map((b) => ({
+        id: `boleta-${b.id}`,
+        cajaId: central.id,
+        tipo: 'EGRESO',
+        categoria: 'PAGO_PLANILLA',
+        metodoPago: b.metodoPago ?? 'EFECTIVO',
+        monto: Number(b.totalNeto),
+        descripcion: `[${bancoNombre.get(b.bancoId!) ?? 'Banco'}] Pago planilla ${b.periodo?.periodo ?? ''} - ${nombreEmp(b)}`.trim(),
+        fechaMovimiento: b.fechaPago,
+        esManual: false,
+        anulado: false,
+        esBancario: true,
+        bancoNombre: bancoNombre.get(b.bancoId!) ?? null,
+      })),
+    ];
+
+    // Aplicar los mismos filtros a los ítems bancarios (son egresos).
+    if (filtros.tipo && filtros.tipo !== 'EGRESO') bancarios = [];
+    if (filtros.categoria) {
+      bancarios = bancarios.filter((i) => i.categoria === filtros.categoria);
+    }
+    if (filtros.metodoPago) {
+      bancarios = bancarios.filter((i) => i.metodoPago === filtros.metodoPago);
+    }
+    if (filtros.q) {
+      const q = filtros.q.toLowerCase();
+      bancarios = bancarios.filter((i) =>
+        i.descripcion.toLowerCase().includes(q),
+      );
+    }
+
+    const todos = [...centralMovs, ...bancarios].sort(
+      (a, b) =>
+        new Date(b.fechaMovimiento).getTime() -
+        new Date(a.fechaMovimiento).getTime(),
+    );
+    const total = todos.length;
+    const start = (page - 1) * pageSize;
+    const items = todos.slice(start, start + pageSize);
 
     return {
       items,
