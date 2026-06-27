@@ -183,14 +183,37 @@ export class PlanillaCalculoService {
           porcentaje: Prisma.Decimal | null;
         }[] = [];
 
-        // INGRESO: Salario básico (sueldo mensual COMPLETO). Las inasistencias
-        // se descuentan aparte en "Faltas" (treintavos) — NO se prorratea el
-        // sueldo por días presentes, eso descontaría las faltas dos veces.
+        // INGRESO: Salario básico. Se paga el sueldo mensual COMPLETO si el
+        // empleado estuvo activo todo el periodo (mes completo = 30/30, aunque
+        // febrero tenga 28). Si ingresó o cesó a mitad de mes, se PRORRATEA por
+        // los días activos (treintavos). Las inasistencias se descuentan aparte
+        // en "Faltas" — NO se prorratea por días presentes (sería doble
+        // descuento de faltas).
+        const dayMs = 86400000;
+        const toUtcDay = (d: Date) =>
+          Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+        const periodoIniDay = toUtcDay(periodo.fechaInicio);
+        const periodoFinDay = toUtcDay(periodo.fechaFin);
+        const ingresoDay = toUtcDay(empleado.fechaIngreso);
+        const ceseDay = empleado.fechaCese ? toUtcDay(empleado.fechaCese) : null;
+        const mesCompleto =
+          ingresoDay <= periodoIniDay &&
+          (ceseDay === null || ceseDay >= periodoFinDay);
+        let diasComputables = 30;
+        if (!mesCompleto) {
+          const ini = Math.max(periodoIniDay, ingresoDay);
+          const fin = Math.min(periodoFinDay, ceseDay ?? periodoFinDay);
+          diasComputables =
+            fin >= ini ? Math.min(30, Math.floor((fin - ini) / dayMs) + 1) : 0;
+        }
+        const salarioProporcional = salarioBase.div(30).mul(diasComputables);
         detalles.push({
           tipo: TipoDetalleBoleta.INGRESO,
           concepto: ConceptoBoleta.SALARIO_BASICO,
-          descripcion: `Salario básico (${diasTrabajados}/30 días trabajados)`,
-          monto: dec2(salarioBase),
+          descripcion: mesCompleto
+            ? 'Salario básico (mes completo)'
+            : `Salario básico (${diasComputables}/30 días — ingreso/cese parcial)`,
+          monto: dec2(salarioProporcional),
           porcentaje: null,
         });
 
@@ -224,7 +247,7 @@ export class PlanillaCalculoService {
 
         // Base AFECTA a pensión/EsSalud = remuneración GANADA (sueldo + horas
         // extra − faltas); la gratificación es inafecta. Nunca negativa.
-        let baseAfecta = salarioBase.add(montoHorasExtra).sub(montoFaltas);
+        let baseAfecta = salarioProporcional.add(montoHorasExtra).sub(montoFaltas);
         if (baseAfecta.lt(0)) baseAfecta = new Prisma.Decimal(0);
 
         // INGRESO: Gratificación (julio/diciembre), proporcional a los meses
