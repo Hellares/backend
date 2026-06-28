@@ -2413,7 +2413,7 @@ export class CajaService {
     }
 
     // Bancos + métodos que recauda cada uno
-    const [bancos, recaud, recaudado] = await Promise.all([
+    const [bancos, recaud, recaudado, recaudadoAbonos] = await Promise.all([
       this.prisma.empresaBanco.findMany({
         where: { empresaId, isActive: true },
         orderBy: [{ esPrincipal: 'desc' }, { nombreBanco: 'asc' }],
@@ -2427,6 +2427,13 @@ export class CajaService {
         WHERE "empresaId" = ${empresaId} AND tipo = 'EGRESO' AND anulado = false
           AND (metadata->>'bancoId') IS NOT NULL
         GROUP BY 1, 2`,
+      // Abonos a crédito (CxC) cobrados directo a un banco: también son
+      // recaudación por método (no pasan por el barrido del cierre).
+      this.prisma.pagoVenta.groupBy({
+        by: ['bancoId', 'metodoPago'],
+        where: { bancoId: { not: null }, anulado: false, venta: { empresaId } },
+        _sum: { monto: true },
+      }),
     ]);
     const metodosPorBanco = new Map<string, string[]>();
     for (const r of recaud) {
@@ -2439,6 +2446,16 @@ export class CajaService {
       const m = recaudadoPorBanco.get(r.bancoId) ?? {};
       m[r.metodoPago] = Math.round(Number(r.total) * 100) / 100;
       recaudadoPorBanco.set(r.bancoId, m);
+    }
+    // Sumar los abonos a crédito cobrados directo a cada banco.
+    for (const r of recaudadoAbonos) {
+      if (!r.bancoId) continue;
+      const m = recaudadoPorBanco.get(r.bancoId) ?? {};
+      m[r.metodoPago] = r2((m[r.metodoPago] ?? 0) + Number(r._sum.monto ?? 0));
+      recaudadoPorBanco.set(r.bancoId, m);
+      const arr = metodosPorBanco.get(r.bancoId) ?? [];
+      if (!arr.includes(r.metodoPago)) arr.push(r.metodoPago);
+      metodosPorBanco.set(r.bancoId, arr);
     }
 
     const bancosOut = bancos.map((b) => ({
@@ -2465,6 +2482,11 @@ export class CajaService {
     for (const r of recaudado) {
       recaudadoPorMetodo[r.metodoPago] = r2(
         (recaudadoPorMetodo[r.metodoPago] ?? 0) + Number(r.total),
+      );
+    }
+    for (const r of recaudadoAbonos) {
+      recaudadoPorMetodo[r.metodoPago] = r2(
+        (recaudadoPorMetodo[r.metodoPago] ?? 0) + Number(r._sum.monto ?? 0),
       );
     }
 

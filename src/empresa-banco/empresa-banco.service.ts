@@ -249,6 +249,7 @@ export class EmpresaBancoService {
       ajustes,
       pagosAdelanto,
       pagosBoleta,
+      pagosVenta,
       recaudadoTotal,
     ] = await Promise.all([
       // Ingresos: cobros digitales que entraron al banco (barrido + migración).
@@ -304,6 +305,20 @@ export class EmpresaBancoService {
           ...empleadoNombreSelect,
         },
       }),
+      // Ingresos: abonos a crédito (CxC) cobrados a este banco.
+      this.prisma.pagoVenta.findMany({
+        where: {
+          bancoId: id,
+          anulado: false,
+          fechaPago: { gte: desde, lte: hasta },
+        },
+        select: {
+          monto: true,
+          metodoPago: true,
+          fechaPago: true,
+          venta: { select: { codigo: true, nombreCliente: true } },
+        },
+      }),
       // Desglose ACUMULADO (todo el tiempo) de lo recaudado por método en este
       // banco — "cuánto se tiene de Yape, Plin, Transferencia, etc.".
       this.prisma.$queryRaw<{ metodoPago: string; total: number }[]>`
@@ -317,6 +332,12 @@ export class EmpresaBancoService {
     const recaudadoPorMetodo: Record<string, number> = {};
     for (const r of recaudadoTotal) {
       recaudadoPorMetodo[r.metodoPago] = r2(Number(r.total));
+    }
+    // Los abonos a crédito cobrados a este banco también son recaudación por método.
+    for (const p of pagosVenta) {
+      recaudadoPorMetodo[p.metodoPago] = r2(
+        (recaudadoPorMetodo[p.metodoPago] ?? 0) + Number(p.monto),
+      );
     }
 
     const nombreEmp = (x: any): string | null => {
@@ -381,6 +402,15 @@ export class EmpresaBancoService {
         metodoPago: null as string | null,
         monto: r2(Number(a.monto)),
         origen: a.origen as string,
+      })),
+      ...pagosVenta.map((p) => ({
+        fecha: p.fechaPago,
+        tipo: 'INGRESO',
+        concepto: 'Abono cliente',
+        detalle: `${p.venta?.nombreCliente ?? ''}${p.venta?.codigo ? ` (${p.venta.codigo})` : ''}`.trim() || null,
+        metodoPago: p.metodoPago as string | null,
+        monto: r2(Number(p.monto)),
+        origen: 'ABONO_CREDITO',
       })),
     ].sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
 
