@@ -17,6 +17,7 @@ import {
 } from '../caja/aplicar-ingreso-fuente.util';
 import {
   imputarEnCuotas,
+  moraVigenteCuota,
   CuotaImputable,
   ConfigMoraImputacion,
 } from './imputar-abono-cuotas.util';
@@ -378,12 +379,37 @@ export class CuentasPorCobrarService {
       const target = venta.totalConInteres
         ? Number(venta.totalConInteres)
         : Number(venta.total);
-      const saldo = round2(target - totalPagado);
 
-      // Guard de sobre-pago (rechaza, como CxP)
+      // Cuotas pendientes + config de mora — se cargan ANTES del guard para que
+      // el tope del abono incluya la MORA vigente (no solo capital+interés).
+      const cuotasDb = await tx.cuotaVenta.findMany({
+        where: { ventaId, estado: { in: ['PENDIENTE', 'PAGADA_PARCIAL', 'VENCIDA'] } },
+        orderBy: { numero: 'asc' },
+      });
+      const configMora =
+        cuotasDb.length > 0 ? await this._configMora(tx, empresaId) : null;
+      const ahora = new Date();
+
+      // Saldo real a cobrar = Σ saldo de cuotas + Σ mora vigente. Sin cuotas,
+      // cae al total de la venta menos lo pagado.
+      let saldo: number;
+      let moraVigente = 0;
+      if (cuotasDb.length > 0) {
+        let saldoCuotas = 0;
+        for (const c of cuotasDb) {
+          saldoCuotas += Number(c.saldoPendiente);
+          moraVigente += moraVigenteCuota(this._toImputable(c), configMora, ahora);
+        }
+        saldo = round2(saldoCuotas + moraVigente);
+      } else {
+        saldo = round2(target - totalPagado);
+      }
+
+      // Guard de sobre-pago (rechaza, como CxP) — el tope incluye la mora vigente.
       if (data.monto > saldo + 0.001) {
         throw new BadRequestException(
-          `El abono (${data.monto.toFixed(2)}) excede el saldo pendiente (${saldo.toFixed(2)}).`,
+          `El abono (${data.monto.toFixed(2)}) excede el saldo pendiente (${saldo.toFixed(2)}` +
+            `${moraVigente > 0 ? `, incl. mora ${moraVigente.toFixed(2)}` : ''}).`,
         );
       }
 
@@ -415,15 +441,11 @@ export class CuentasPorCobrarService {
         },
       });
 
-      // Imputar a cuotas (mora → interés → principal)
-      const cuotasDb = await tx.cuotaVenta.findMany({
-        where: { ventaId, estado: { in: ['PENDIENTE', 'PAGADA_PARCIAL', 'VENCIDA'] } },
-        orderBy: { numero: 'asc' },
-      });
+      // Imputar a cuotas (mora → interés → principal) — reusa cuotasDb/configMora
+      // ya cargados para el guard.
       if (cuotasDb.length > 0) {
-        const configMora = await this._configMora(tx, empresaId);
         const cuotasMem = cuotasDb.map(this._toImputable);
-        const res = imputarEnCuotas(cuotasMem, data.monto, configMora, new Date());
+        const res = imputarEnCuotas(cuotasMem, data.monto, configMora, ahora);
         for (const u of res.updates) {
           await tx.cuotaVenta.update({
             where: { id: u.id },
