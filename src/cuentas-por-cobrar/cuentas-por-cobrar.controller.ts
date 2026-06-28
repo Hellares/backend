@@ -74,6 +74,23 @@ export class CuentasPorCobrarController {
     return this.service.getPorCliente(empresaId);
   }
 
+  @Get('estado-cuenta-cliente')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({
+    summary: 'Estado de cuenta de un cliente (ventas a crédito + abonos + saldo)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async estadoCuentaCliente(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('clienteId') clienteId?: string,
+    @Query('clienteEmpresaId') clienteEmpresaId?: string,
+  ) {
+    return this.service.getEstadoCuentaCliente(empresaId, {
+      clienteId,
+      clienteEmpresaId,
+    });
+  }
+
   @Post(':ventaId/abono')
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({ summary: 'Registrar un abono a una venta a crédito' })

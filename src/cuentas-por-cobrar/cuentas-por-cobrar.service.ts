@@ -598,6 +598,106 @@ export class CuentasPorCobrarService {
     });
   }
 
+  /**
+   * Estado de cuenta de un cliente: sus ventas a crédito + historial de abonos
+   * + saldo total. Acepta `clienteId` (persona) o `clienteEmpresaId` (B2B).
+   */
+  async getEstadoCuentaCliente(
+    empresaId: string,
+    filtro: { clienteId?: string; clienteEmpresaId?: string },
+  ) {
+    if (!filtro.clienteId && !filtro.clienteEmpresaId) {
+      throw new BadRequestException('Indique clienteId o clienteEmpresaId');
+    }
+
+    const cuentas = await this.listar(empresaId, {
+      clienteId: filtro.clienteId,
+      clienteEmpresaId: filtro.clienteEmpresaId,
+    });
+
+    // Identidad del cliente: del snapshot de las ventas; si no hay ventas y es
+    // empresa (B2B), se resuelve de la tabla.
+    let nombre: string | null = cuentas[0]?.nombreCliente ?? null;
+    let documento: string | null = cuentas[0]?.documentoCliente ?? null;
+    if (!nombre && filtro.clienteEmpresaId) {
+      const ce = await this.prisma.clienteEmpresa.findFirst({
+        where: { id: filtro.clienteEmpresaId, empresaId },
+        select: { razonSocial: true, numeroDocumento: true },
+      });
+      nombre = ce?.razonSocial ?? null;
+      documento = ce?.numeroDocumento ?? null;
+    }
+
+    const conSaldo = cuentas.filter((c) => c.saldoPendiente > 0);
+    const saldoPendiente = round2(conSaldo.reduce((s, c) => s + c.saldoPendiente, 0));
+    const totalVendido = round2(cuentas.reduce((s, c) => s + c.totalVenta, 0));
+    const totalAbonado = round2(cuentas.reduce((s, c) => s + c.totalPagado, 0));
+    const totalMora = round2(cuentas.reduce((s, c) => s + (c.totalMora ?? 0), 0));
+
+    // Timeline de abonos (no anulados) del cliente.
+    const abonosRaw = await this.prisma.pagoVenta.findMany({
+      where: {
+        anulado: false,
+        venta: {
+          empresaId,
+          esCredito: true,
+          ...(filtro.clienteId ? { clienteId: filtro.clienteId } : {}),
+          ...(filtro.clienteEmpresaId
+            ? { clienteEmpresaId: filtro.clienteEmpresaId }
+            : {}),
+        },
+      },
+      orderBy: { fechaPago: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        monto: true,
+        metodoPago: true,
+        fuente: true,
+        fechaPago: true,
+        venta: { select: { codigo: true } },
+      },
+    });
+
+    return {
+      cliente: {
+        id: filtro.clienteId ?? filtro.clienteEmpresaId,
+        tipo: filtro.clienteEmpresaId ? 'EMPRESA' : 'PERSONA',
+        nombre,
+        documento,
+      },
+      resumen: {
+        saldoPendiente,
+        totalVendido,
+        totalAbonado,
+        totalMora,
+        cantidadVentas: cuentas.length,
+        ventasConSaldo: conSaldo.length,
+      },
+      ventas: cuentas.map((c) => ({
+        ventaId: c.ventaId,
+        codigo: c.codigo,
+        fechaVenta: c.fechaVenta,
+        total: c.totalVenta,
+        totalPagado: c.totalPagado,
+        saldoPendiente: c.saldoPendiente,
+        estado: c.estado,
+        fechaVencimiento: c.fechaVencimiento,
+        diasVencimiento: c.diasVencimiento,
+        numeroCuotas: c.numeroCuotas,
+        totalMora: c.totalMora,
+      })),
+      abonos: abonosRaw.map((a) => ({
+        id: a.id,
+        monto: Number(a.monto),
+        metodoPago: a.metodoPago,
+        fuente: a.fuente,
+        fechaPago: a.fechaPago,
+        ventaCodigo: a.venta?.codigo ?? null,
+      })),
+    };
+  }
+
   // ── Helpers de abonos ──
 
   private _toImputable = (c: {
