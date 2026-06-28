@@ -857,7 +857,31 @@ export class GuiaRemisionService {
       status = 'RECHAZADO';
     }
 
-    await this.prisma.guiaRemision.update({ where: { id: guiaId }, data });
+    const updated = await this.prisma.guiaRemision.update({
+      where: { id: guiaId },
+      data,
+      select: { sedeId: true },
+    });
+
+    // Syncrofact asigna la numeración oficial de la GRE, pero el contador local
+    // de la sede (ultimoNumeroGuiaRemision) no avanza por su cuenta → la
+    // "Sincronizar series" marcaba drift falso (proveedor siempre 1 adelante,
+    // bucle infinito N→N+1). Al aceptar, espejamos el correlativo del proveedor
+    // en el contador local (solo avanza, nunca retrocede).
+    if (
+      status === 'ACEPTADO' &&
+      typeof data.correlativo === 'number' &&
+      data.correlativo > 0 &&
+      updated.sedeId
+    ) {
+      await this.prisma.sede.updateMany({
+        where: {
+          id: updated.sedeId,
+          ultimoNumeroGuiaRemision: { lt: data.correlativo },
+        },
+        data: { ultimoNumeroGuiaRemision: data.correlativo },
+      });
+    }
 
     if (status === 'ACEPTADO') {
       return { status, numeroCompleto, pdfUrl: result.pdfUrl, enlace: result.enlace };
