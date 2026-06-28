@@ -1,11 +1,35 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import {
+  Prisma,
+  MetodoPagoVenta,
+  FuenteIngreso,
+  CategoriaMovimientoCaja,
+} from '@prisma/client';
+import { CajaService } from '../caja/caja.service';
+import {
+  aplicarIngresoConFuente,
+  revertirIngresoConFuente,
+} from '../caja/aplicar-ingreso-fuente.util';
+import {
+  imputarEnCuotas,
+  CuotaImputable,
+  ConfigMoraImputacion,
+} from './imputar-abono-cuotas.util';
 import { UpdateConfiguracionMoraDto } from './dto/update-configuracion-mora.dto';
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 @Injectable()
 export class CuentasPorCobrarService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cajaService: CajaService,
+  ) {}
 
   /**
    * Listar cuentas por cobrar (ventas a crédito con saldo pendiente)
@@ -288,6 +312,413 @@ export class CuentasPorCobrarService {
       moraMaximaPorcentaje: Number(updated.moraMaximaPorcentaje ?? 30),
       diasGraciaMora: updated.diasGraciaMora ?? 0,
     };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ABONOS (simétrico a CxP: registrar / anular / por-cliente)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Registra un abono a una venta a crédito: valida saldo (rechaza sobre-pago),
+   * rutea el INGRESO a la fuente (Tesorería/Caja/Banco) e imputa a cuotas
+   * (cascada mora → interés → principal). Espejo de CxP.registrarPago.
+   */
+  async registrarAbono(
+    empresaId: string,
+    ventaId: string,
+    data: {
+      monto: number;
+      metodoPago: MetodoPagoVenta;
+      referencia?: string;
+      fuente?: FuenteIngreso;
+      bancoId?: string;
+      banco?: string;
+    },
+    usuarioId: string,
+  ) {
+    if (!(data.monto > 0)) {
+      throw new BadRequestException('El monto del abono debe ser mayor a 0');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Lock pesimista de la venta (evita carreras de saldo)
+      const filas = await tx.$queryRaw<
+        Array<{
+          id: string;
+          estado: string;
+          total: any;
+          totalConInteres: any;
+          moneda: string;
+          esCredito: boolean;
+          sedeId: string | null;
+          codigo: string;
+        }>
+      >`SELECT "id", "estado", "total", "totalConInteres", "moneda", "esCredito", "sedeId", "codigo"
+        FROM "Venta" WHERE "id" = ${ventaId} AND "empresaId" = ${empresaId} FOR UPDATE`;
+      const venta = filas[0];
+      if (!venta) throw new NotFoundException('Venta no encontrada');
+      if (!venta.esCredito) throw new BadRequestException('La venta no es a crédito');
+      if (venta.estado === 'ANULADA') throw new BadRequestException('La venta está anulada');
+      if (venta.estado === 'PAGADA_COMPLETA') {
+        throw new BadRequestException('La venta ya está pagada por completo');
+      }
+      if (venta.estado === 'BORRADOR') {
+        throw new BadRequestException('La venta debe estar confirmada antes de abonar');
+      }
+      if (!venta.sedeId) {
+        throw new BadRequestException('La venta no tiene sede asociada');
+      }
+
+      // Saldo pendiente (excluye pagos anulados)
+      const pagosPrevios = await tx.pagoVenta.findMany({
+        where: { ventaId, anulado: false },
+        select: { monto: true },
+      });
+      const totalPagado = pagosPrevios.reduce((s, p) => s + Number(p.monto), 0);
+      const target = venta.totalConInteres
+        ? Number(venta.totalConInteres)
+        : Number(venta.total);
+      const saldo = round2(target - totalPagado);
+
+      // Guard de sobre-pago (rechaza, como CxP)
+      if (data.monto > saldo + 0.001) {
+        throw new BadRequestException(
+          `El abono (${data.monto.toFixed(2)}) excede el saldo pendiente (${saldo.toFixed(2)}).`,
+        );
+      }
+
+      // Rutear el INGRESO a la fuente (Tesorería/Caja/Banco)
+      const ingreso = await aplicarIngresoConFuente(tx, this.cajaService, {
+        empresaId,
+        sedeId: venta.sedeId,
+        usuarioId,
+        metodoPago: data.metodoPago,
+        monto: data.monto,
+        moneda: venta.moneda || 'PEN',
+        fuente: data.fuente,
+        bancoId: data.bancoId,
+        categoria: CategoriaMovimientoCaja.VENTA,
+        descripcion: `Abono crédito venta ${venta.codigo}`,
+      });
+
+      // Crear el PagoVenta con la fuente ruteada
+      const pago = await tx.pagoVenta.create({
+        data: {
+          ventaId,
+          metodoPago: data.metodoPago,
+          monto: data.monto,
+          referencia: data.referencia ?? null,
+          banco: data.banco ?? null,
+          fuente: ingreso.fuente,
+          bancoId: ingreso.bancoId,
+          movimientoCajaId: ingreso.movimientoCajaId,
+        },
+      });
+
+      // Imputar a cuotas (mora → interés → principal)
+      const cuotasDb = await tx.cuotaVenta.findMany({
+        where: { ventaId, estado: { in: ['PENDIENTE', 'PAGADA_PARCIAL', 'VENCIDA'] } },
+        orderBy: { numero: 'asc' },
+      });
+      if (cuotasDb.length > 0) {
+        const configMora = await this._configMora(tx, empresaId);
+        const cuotasMem = cuotasDb.map(this._toImputable);
+        const res = imputarEnCuotas(cuotasMem, data.monto, configMora, new Date());
+        for (const u of res.updates) {
+          await tx.cuotaVenta.update({
+            where: { id: u.id },
+            data: {
+              montoPagado: u.montoPagado,
+              montoPagadoPrincipal: u.montoPagadoPrincipal,
+              montoPagadoInteres: u.montoPagadoInteres,
+              montoPagadoMora: u.montoPagadoMora,
+              saldoPendiente: u.saldoPendiente,
+              estado: u.estado as any,
+              montoMora: u.montoMora,
+              ...(u.pagada && { diasVencido: 0, fechaCalculoMora: null }),
+            },
+          });
+        }
+        await tx.pagoVenta.update({
+          where: { id: pago.id },
+          data: {
+            cuotaVentaId: res.updates[0]?.id ?? null,
+            montoPrincipal: res.breakdown.principal,
+            montoInteres: res.breakdown.interes,
+            montoMora: res.breakdown.mora,
+          },
+        });
+      }
+
+      // Recomputar estado de la venta
+      const nuevoTotalPagado = round2(totalPagado + data.monto);
+      const nuevoEstado =
+        nuevoTotalPagado >= target ? 'PAGADA_COMPLETA' : 'PAGADA_PARCIAL';
+      await tx.venta.update({
+        where: { id: ventaId },
+        data: {
+          estado: nuevoEstado as any,
+          montoRecibido: nuevoTotalPagado,
+          metodoPago: data.metodoPago,
+        },
+      });
+
+      return {
+        ok: true,
+        pagoId: pago.id,
+        fuente: ingreso.fuente,
+        estado: nuevoEstado,
+        saldoPendiente: round2(target - nuevoTotalPagado),
+      };
+    });
+  }
+
+  /**
+   * Anula un abono individual: revierte el INGRESO (caja/banco) y recomputa las
+   * cuotas desde cero reaplicando los abonos NO anulados. Espejo de CxP.anularPago.
+   */
+  async anularAbono(
+    empresaId: string,
+    pagoId: string,
+    usuarioId: string,
+    motivo?: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const pago = await tx.pagoVenta.findFirst({
+        where: { id: pagoId, venta: { empresaId, esCredito: true } },
+        select: {
+          id: true,
+          ventaId: true,
+          monto: true,
+          fuente: true,
+          bancoId: true,
+          movimientoCajaId: true,
+          anulado: true,
+        },
+      });
+      if (!pago) throw new NotFoundException('Abono no encontrado');
+      if (pago.anulado) throw new BadRequestException('El abono ya está anulado');
+
+      // Lock de la venta
+      await tx.$queryRaw`SELECT "id" FROM "Venta" WHERE "id" = ${pago.ventaId} FOR UPDATE`;
+
+      // Revertir el ingreso (caja: marca movimiento anulado; banco: decrementa saldo)
+      await revertirIngresoConFuente(
+        tx,
+        {
+          monto: pago.monto,
+          fuente: pago.fuente,
+          bancoId: pago.bancoId,
+          movimientoCajaId: pago.movimientoCajaId,
+        },
+        usuarioId,
+        motivo || 'Anulación de abono',
+      );
+
+      // Marcar el abono anulado (soft-delete)
+      await tx.pagoVenta.update({
+        where: { id: pago.id },
+        data: {
+          anulado: true,
+          motivoAnulacion: motivo ?? null,
+          anuladoPorId: usuarioId,
+          fechaAnulacion: new Date(),
+        },
+      });
+
+      // Recomputar cuotas + estado de la venta desde cero
+      await this._recomputarCuotas(tx, empresaId, pago.ventaId);
+
+      return { ok: true, pagoId: pago.id, ventaId: pago.ventaId };
+    });
+  }
+
+  /**
+   * Deuda por cobrar agrupada por cliente (espejo de CxP.getPorProveedor).
+   * Separa la deuda por moneda (no mezcla PEN+USD).
+   */
+  async getPorCliente(empresaId: string) {
+    const cuentas = await this.listar(empresaId);
+    const map = new Map<
+      string,
+      {
+        nombre: string;
+        documento: string | null;
+        deudaPorMoneda: Record<string, number>;
+        cantidad: number;
+        cantidadVencidas: number;
+      }
+    >();
+
+    for (const c of cuentas) {
+      if (c.estado === 'PAGADA' || c.saldoPendiente <= 0) continue;
+      const key = c.documentoCliente || c.nombreCliente || 'SIN_CLIENTE';
+      if (!map.has(key)) {
+        map.set(key, {
+          nombre: c.nombreCliente ?? key,
+          documento: c.documentoCliente ?? null,
+          deudaPorMoneda: {},
+          cantidad: 0,
+          cantidadVencidas: 0,
+        });
+      }
+      const d = map.get(key)!;
+      const mon = c.moneda || 'PEN';
+      d.deudaPorMoneda[mon] = round2((d.deudaPorMoneda[mon] ?? 0) + c.saldoPendiente);
+      d.cantidad++;
+      if (c.estado === 'VENCIDA') d.cantidadVencidas++;
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const ta = Object.values(a.deudaPorMoneda).reduce((s, v) => s + v, 0);
+      const tb = Object.values(b.deudaPorMoneda).reduce((s, v) => s + v, 0);
+      return tb - ta;
+    });
+  }
+
+  // ── Helpers de abonos ──
+
+  private _toImputable = (c: {
+    id: string;
+    monto: Prisma.Decimal;
+    montoPrincipal: Prisma.Decimal;
+    montoInteres: Prisma.Decimal;
+    montoPagadoPrincipal: Prisma.Decimal;
+    montoPagadoInteres: Prisma.Decimal;
+    montoPagadoMora: Prisma.Decimal;
+    fechaVencimiento: Date;
+    estado: string;
+  }): CuotaImputable => ({
+    id: c.id,
+    monto: Number(c.monto),
+    montoPrincipal: Number(c.montoPrincipal ?? 0),
+    montoInteres: Number(c.montoInteres ?? 0),
+    montoPagadoPrincipal: Number(c.montoPagadoPrincipal ?? 0),
+    montoPagadoInteres: Number(c.montoPagadoInteres ?? 0),
+    montoPagadoMora: Number(c.montoPagadoMora ?? 0),
+    fechaVencimiento: c.fechaVencimiento,
+    estado: c.estado,
+  });
+
+  private async _configMora(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+  ): Promise<ConfigMoraImputacion | null> {
+    const cfg = await tx.configuracionEmpresa.findFirst({
+      where: { empresaId },
+      select: {
+        moraHabilitada: true,
+        porcentajeMoraDiario: true,
+        moraMaximaPorcentaje: true,
+        diasGraciaMora: true,
+      },
+    });
+    if (!cfg) return null;
+    return {
+      moraHabilitada: cfg.moraHabilitada,
+      porcentajeMoraDiario: Number(cfg.porcentajeMoraDiario ?? 0.05),
+      moraMaximaPorcentaje: Number(cfg.moraMaximaPorcentaje ?? 30),
+      diasGraciaMora: cfg.diasGraciaMora ?? 0,
+    };
+  }
+
+  /**
+   * Recomputa cuotas + estado de la venta desde cero: resetea las cuotas y
+   * reaplica TODOS los abonos no anulados en orden cronológico. Lo usa anularAbono.
+   */
+  private async _recomputarCuotas(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    ventaId: string,
+  ) {
+    const cuotasDb = await tx.cuotaVenta.findMany({
+      where: { ventaId, estado: { not: 'ANULADA' } },
+      orderBy: { numero: 'asc' },
+    });
+    const configMora = await this._configMora(tx, empresaId);
+    const ahora = new Date();
+
+    // Estado en memoria, reseteado a cero pagos
+    const cuotasMem: CuotaImputable[] = cuotasDb.map((c) => ({
+      id: c.id,
+      monto: Number(c.monto),
+      montoPrincipal: Number(c.montoPrincipal ?? 0),
+      montoInteres: Number(c.montoInteres ?? 0),
+      montoPagadoPrincipal: 0,
+      montoPagadoInteres: 0,
+      montoPagadoMora: 0,
+      fechaVencimiento: c.fechaVencimiento,
+      estado: 'PENDIENTE',
+    }));
+
+    // Reaplicar abonos no anulados en orden cronológico
+    const pagos = await tx.pagoVenta.findMany({
+      where: { ventaId, anulado: false },
+      orderBy: { fechaPago: 'asc' },
+      select: { id: true, monto: true, fechaPago: true },
+    });
+    for (const p of pagos) {
+      const res = imputarEnCuotas(cuotasMem, Number(p.monto), configMora, p.fechaPago);
+      await tx.pagoVenta.update({
+        where: { id: p.id },
+        data: {
+          cuotaVentaId: res.updates[0]?.id ?? null,
+          montoPrincipal: res.breakdown.principal,
+          montoInteres: res.breakdown.interes,
+          montoMora: res.breakdown.mora,
+        },
+      });
+    }
+
+    // Persistir el estado final de cada cuota
+    for (const cm of cuotasMem) {
+      const montoPagado = round2(cm.montoPagadoPrincipal + cm.montoPagadoInteres);
+      const saldo = Math.max(round2(cm.monto - montoPagado), 0);
+      const pagada = cm.estado === 'PAGADA';
+      const estado = pagada
+        ? 'PAGADA'
+        : montoPagado > 0
+          ? 'PAGADA_PARCIAL'
+          : cm.fechaVencimiento < ahora
+            ? 'VENCIDA'
+            : 'PENDIENTE';
+      await tx.cuotaVenta.update({
+        where: { id: cm.id },
+        data: {
+          montoPagado,
+          montoPagadoPrincipal: cm.montoPagadoPrincipal,
+          montoPagadoInteres: cm.montoPagadoInteres,
+          montoPagadoMora: cm.montoPagadoMora,
+          saldoPendiente: saldo,
+          estado: estado as any,
+          // La mora la recalcula el cron; al recomputar la dejamos limpia.
+          montoMora: 0,
+          ...(montoPagado === 0 && { diasVencido: 0, fechaCalculoMora: null }),
+        },
+      });
+    }
+
+    // Recomputar estado + montoRecibido de la venta
+    const totalPagado = round2(
+      pagos.reduce((s, p) => s + Number(p.monto), 0),
+    );
+    const venta = await tx.venta.findUnique({
+      where: { id: ventaId },
+      select: { total: true, totalConInteres: true },
+    });
+    const target = venta?.totalConInteres
+      ? Number(venta.totalConInteres)
+      : Number(venta?.total ?? 0);
+    const estadoVenta =
+      totalPagado > 0 && totalPagado >= target
+        ? 'PAGADA_COMPLETA'
+        : totalPagado > 0
+          ? 'PAGADA_PARCIAL'
+          : 'CONFIRMADA';
+    await tx.venta.update({
+      where: { id: ventaId },
+      data: { estado: estadoVenta as any, montoRecibido: totalPagado },
+    });
   }
 
   private _topDeudores(cuentas: any[]) {

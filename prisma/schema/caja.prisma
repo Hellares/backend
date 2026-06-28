@@ -151,6 +151,7 @@ model MovimientoCaja {
   ordenServicio           OrdenServicio?       @relation("MovimientoCajaOrdenServicio", fields: [ordenServicioId], references: [id])
   pagoGastoRecurrente     PagoGastoRecurrente?
   pagoCompra              PagoCompra?
+  pagoVenta               PagoVenta?
   rendicionesCajaChica    RendicionCajaChica[]
   operacionesAgente       OperacionAgente[]
 

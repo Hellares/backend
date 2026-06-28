@@ -26,6 +26,7 @@ model EmpresaBanco {
   empresa              Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   pagosGastoRecurrente PagoGastoRecurrente[]
   pagosCompra          PagoCompra[]
+  pagosVenta           PagoVenta[]
   cuentasRecaudacion   CuentaRecaudacion[]
   ajustes              AjusteBanco[]
 

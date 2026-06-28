@@ -251,6 +251,14 @@ model VentaDetalle {
 }
 
 /// Registro de pagos de una venta (soporta pagos parciales/múltiples)
+/// De dónde entra el dinero al cobrar un abono de venta (CxC). Espejo de
+/// FuentePagoCompra (CxP) pero para INGRESOS.
+enum FuenteIngreso {
+  TESORERIA // Caja Central de la sede → MovimientoCaja INGRESO
+  CAJA // Caja operativa abierta del usuario → MovimientoCaja INGRESO
+  BANCO // Cuenta bancaria de la empresa → incrementa EmpresaBanco.saldoActual
+}
+
 model PagoVenta {
   id           String          @id @default(cuid())
   ventaId      String
@@ -271,15 +279,33 @@ model PagoVenta {
   montoOriginal  Decimal? @db.Decimal(10, 2) // Monto en moneda original
   tipoCambio     Decimal? @db.Decimal(10, 4) // Tipo de cambio usado
 
+  // Origen del dinero del abono (Tesorería/Caja/Banco). Se setea bancoId si
+  // BANCO y movimientoCajaId si TESORERIA/CAJA, para poder revertir al anular.
+  // Solo lo usan los abonos a crédito vía CxC; los cobros POS quedan null.
+  fuente           FuenteIngreso?
+  bancoId          String? // FK EmpresaBanco (requerido si fuente=BANCO)
+  movimientoCajaId String?        @unique // FK MovimientoCaja (set si TESORERIA/CAJA)
+
+  // Anulación (soft-delete) de un abono individual: revierte el ingreso
+  // (caja: marca el movimiento anulado; banco: devuelve el saldo) + recomputa
+  // las cuotas. Los pagos anulados NO cuentan para el saldo de la venta.
+  anulado         Boolean   @default(false)
+  motivoAnulacion String?
+  anuladoPorId    String?
+  fechaAnulacion  DateTime?
+
   creadoEn DateTime @default(now())
 
   // Relaciones
-  venta      Venta       @relation(fields: [ventaId], references: [id], onDelete: Cascade)
-  cuotaVenta CuotaVenta? @relation(fields: [cuotaVentaId], references: [id])
+  venta          Venta           @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  cuotaVenta     CuotaVenta?     @relation(fields: [cuotaVentaId], references: [id])
+  empresaBanco   EmpresaBanco?   @relation(fields: [bancoId], references: [id])
+  movimientoCaja MovimientoCaja? @relation(fields: [movimientoCajaId], references: [id])
 
   @@index([ventaId])
   @@index([fechaPago])
   @@index([cuotaVentaId])
+  @@index([bancoId])
 }
 
 // =========================================

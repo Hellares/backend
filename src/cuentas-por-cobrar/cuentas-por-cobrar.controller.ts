@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Param,
   Query,
@@ -14,9 +15,11 @@ import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CuentasPorCobrarService } from './cuentas-por-cobrar.service';
 import { QueryCuentasCobrarDto } from './dto/query-cuentas-cobrar.dto';
 import { UpdateConfiguracionMoraDto } from './dto/update-configuracion-mora.dto';
+import { RegistrarAbonoDto } from './dto/registrar-abono.dto';
 
 @ApiTags('Cuentas por Cobrar')
 @Controller('cuentas-por-cobrar')
@@ -61,6 +64,42 @@ export class CuentasPorCobrarController {
     @Body() dto: UpdateConfiguracionMoraDto,
   ) {
     return this.service.updateConfiguracionMora(empresaId, dto);
+  }
+
+  @Get('por-cliente')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Deuda por cobrar agrupada por cliente' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async porCliente(@Headers('x-tenant-id') empresaId: string) {
+    return this.service.getPorCliente(empresaId);
+  }
+
+  @Post(':ventaId/abono')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Registrar un abono a una venta a crédito' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async registrarAbono(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('ventaId') ventaId: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() body: RegistrarAbonoDto,
+  ) {
+    return this.service.registrarAbono(empresaId, ventaId, body, usuarioId);
+  }
+
+  @Post('pagos/:pagoId/anular')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary: 'Anular un abono (revierte el ingreso y recomputa las cuotas)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async anularAbono(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('pagoId') pagoId: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() body: { motivo?: string },
+  ) {
+    return this.service.anularAbono(empresaId, pagoId, usuarioId, body?.motivo);
   }
 
   @Get(':ventaId')
