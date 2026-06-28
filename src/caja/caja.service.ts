@@ -2686,7 +2686,7 @@ export class CajaService {
     // Movimientos REALES de la central + egresos BANCARIOS de RRHH (informativos:
     // no son MovimientoCaja, salieron de un banco; se muestran para que el
     // egreso sea visible en la lista de tesorería "afecta <Banco>").
-    const [centralMovs, adelantos, boletas, bancos] = await Promise.all([
+    const [centralMovs, adelantos, boletas, pagosVentaBanco, bancos] = await Promise.all([
       this.prisma.movimientoCaja.findMany({
         where,
         orderBy: { fechaMovimiento: 'desc' },
@@ -2745,6 +2745,27 @@ export class CajaService {
           ...empSel,
         },
       }),
+      // Ingresos BANCARIOS de CxC: abonos a crédito cobrados a un banco
+      // (informativos: no son MovimientoCaja, entraron a un banco; se muestran
+      // para que el ingreso sea visible en tesorería "afecta <Banco>").
+      this.prisma.pagoVenta.findMany({
+        where: {
+          bancoId: { not: null },
+          anulado: false,
+          venta: { empresaId, sedeId },
+          ...(rango ? { fechaPago: rango } : {}),
+        },
+        orderBy: { fechaPago: 'desc' },
+        take: TOPE,
+        select: {
+          id: true,
+          monto: true,
+          metodoPago: true,
+          bancoId: true,
+          fechaPago: true,
+          venta: { select: { codigo: true, nombreCliente: true } },
+        },
+      }),
       this.prisma.empresaBanco.findMany({
         where: { empresaId },
         select: { id: true, nombreBanco: true },
@@ -2786,10 +2807,24 @@ export class CajaService {
         esBancario: true,
         bancoNombre: bancoNombre.get(b.bancoId!) ?? null,
       })),
+      ...pagosVentaBanco.map((p) => ({
+        id: `abono-${p.id}`,
+        cajaId: central.id,
+        tipo: 'INGRESO',
+        categoria: 'VENTA',
+        metodoPago: p.metodoPago ?? 'EFECTIVO',
+        monto: Number(p.monto),
+        descripcion: `[${bancoNombre.get(p.bancoId!) ?? 'Banco'}] Abono cliente${p.venta?.codigo ? ` - ${p.venta.codigo}` : ''}${p.venta?.nombreCliente ? ` (${p.venta.nombreCliente})` : ''}`.trim(),
+        fechaMovimiento: p.fechaPago,
+        esManual: false,
+        anulado: false,
+        esBancario: true,
+        bancoNombre: bancoNombre.get(p.bancoId!) ?? null,
+      })),
     ];
 
-    // Aplicar los mismos filtros a los ítems bancarios (son egresos).
-    if (filtros.tipo && filtros.tipo !== 'EGRESO') bancarios = [];
+    // Aplicar los mismos filtros a los ítems bancarios (egresos RRHH + abonos).
+    if (filtros.tipo) bancarios = bancarios.filter((i) => i.tipo === filtros.tipo);
     if (filtros.categoria) {
       bancarios = bancarios.filter((i) => i.categoria === filtros.categoria);
     }
