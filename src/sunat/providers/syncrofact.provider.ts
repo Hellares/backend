@@ -483,19 +483,21 @@ export class SyncrofactProvider implements FacturacionProvider {
     }
 
     if (estado === 'RECHAZADO') {
+      const sunat = this.extraerSunatTerminal(data);
       return {
         aceptado: false,
-        error: data.respuesta_sunat?.descripcion || 'Rechazado por SUNAT',
-        errorCode: data.respuesta_sunat?.codigo ?? null,
+        error: sunat.descripcion || 'Rechazado por SUNAT',
+        errorCode: sunat.codigo,
         ...base,
       };
     }
 
     if (estado === 'ERROR') {
+      const sunat = this.extraerSunatTerminal(data);
       return {
         aceptado: false,
-        error: data.respuesta_sunat?.descripcion || response.message || 'Error en el procesamiento',
-        errorCode: data.respuesta_sunat?.codigo ?? null,
+        error: sunat.descripcion || response.message || 'Error en el procesamiento',
+        errorCode: sunat.codigo,
         ...base,
       };
     }
@@ -514,6 +516,22 @@ export class SyncrofactProvider implements FacturacionProvider {
       ...response,
       _syncrofactId: response.data?.id,
     };
+  }
+
+  /**
+   * Extrae código + descripción SUNAT de un documento terminal (RECHAZADO/ERROR).
+   *
+   * La API Laravel devuelve el bloque bajo `data.sunat` (contrato real de
+   * `InvoiceController@show` / `BoletaController@show`); se mantiene `respuesta_sunat`
+   * como fallback (resúmenes/baja u otras ramas). El código puede llegar como
+   * `codigo` o `code`, y la descripción como `descripcion`/`description`/`message`.
+   */
+  private extraerSunatTerminal(data: any): { codigo: string | null; descripcion: string | null } {
+    const bloque = data?.sunat ?? data?.respuesta_sunat ?? {};
+    const codigo = bloque.codigo ?? bloque.code ?? null;
+    const descripcion =
+      bloque.descripcion ?? bloque.description ?? bloque.message ?? null;
+    return { codigo, descripcion };
   }
 
   private extraerSyncrofactId(comprobante: any): number | null {

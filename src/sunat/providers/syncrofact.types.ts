@@ -195,9 +195,27 @@ export interface SyncrofactDocumentData {
   cdr_url?: string;
   codigo_hash?: string;
   cadena_qr?: string;
+  /**
+   * Bloque SUNAT que devuelven `InvoiceController@show` / `BoletaController@show`
+   * para documentos terminales. Es la llave REAL del contrato (`data.sunat`).
+   * Las descripciones pueden venir como `descripcion`/`description`/`message`
+   * según la rama que las haya escrito en BD.
+   */
+  sunat?: {
+    codigo?: string;
+    code?: string;
+    descripcion?: string;
+    description?: string;
+    message?: string;
+    notas?: unknown[];
+  };
+  /** Forma legacy/alterna (resúmenes, baja). Se mantiene como fallback. */
   respuesta_sunat?: {
     codigo?: string;
+    code?: string;
     descripcion?: string;
+    description?: string;
+    message?: string;
   };
 }
 

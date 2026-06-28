@@ -36,6 +36,10 @@ interface SyncrofactWebhookPayload {
     estado_sunat?: string;
     referencia_interna?: string;
     result?: any;
+    /** Código SUNAT del rechazo (4 dígitos) — solo en eventos `*.rejected`. */
+    error_code?: string | null;
+    /** Mensaje SUNAT del rechazo (ya sin el prefijo "codigo - "). */
+    error_message?: string | null;
     [k: string]: any;
   };
 }
@@ -276,11 +280,24 @@ export class WebhooksService {
     }
 
     if (EVENTOS_RECHAZO.has(event)) {
+      // Persistir el código + mensaje SUNAT que viajan en el webhook
+      // (`error_code`/`error_message`) para que el monitor muestre el error exacto.
+      const errorCode = data.error_code ?? null;
+      const errorMessage =
+        (typeof data.error_message === 'string' && data.error_message.trim()) ||
+        'Rechazado por SUNAT';
       await this.prisma.comprobanteElectronico.update({
         where: { id: comprobante.id },
-        data: { sunatStatus: 'RECHAZADO', estado: 'RECHAZADO' },
+        data: {
+          sunatStatus: 'RECHAZADO',
+          estado: 'RECHAZADO',
+          sunatCodigo: errorCode,
+          errorProveedor: errorMessage,
+        },
       });
-      this.logger.info(`Webhook ${event} → comprobante ${comprobante.id} marcado RECHAZADO`);
+      this.logger.info(
+        `Webhook ${event} → comprobante ${comprobante.id} marcado RECHAZADO (SUNAT ${errorCode ?? 's/codigo'}: ${errorMessage})`,
+      );
       return { ok: true, accion: 'actualizado', comprobanteId: comprobante.id };
     }
 
