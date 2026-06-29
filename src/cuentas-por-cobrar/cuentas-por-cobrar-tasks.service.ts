@@ -35,7 +35,8 @@ export class CuentasPorCobrarTasksService {
           fechaVencimientoPago: { lte: en3Dias },
         },
         include: {
-          pagos: { select: { monto: true } },
+          pagos: { where: { anulado: false }, select: { monto: true } },
+          cuotas: { select: { saldoPendiente: true } },
         },
       });
 
@@ -44,7 +45,13 @@ export class CuentasPorCobrarTasksService {
 
       for (const venta of ventasAlerta) {
         const totalPagado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
-        const saldo = Number(venta.total) - totalPagado;
+        // Saldo real: Σ saldo de cuotas si existen (capital+interés, excluye mora
+        // y pagos anulados); si no, total-con-interés − pagado. Usar solo
+        // `total − totalPagado` subvaluaba (ignoraba interés del crédito).
+        const target = Number(venta.totalConInteres ?? venta.total);
+        const saldo = venta.cuotas?.length
+          ? venta.cuotas.reduce((s, c) => s + Number(c.saldoPendiente), 0)
+          : target - totalPagado;
         if (saldo <= 0) continue; // Ya pagada
 
         if (!porEmpresa.has(venta.empresaId)) {

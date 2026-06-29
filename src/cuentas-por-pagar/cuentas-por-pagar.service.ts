@@ -160,7 +160,8 @@ export class CuentasPorPagarService {
           numeroCuenta: bancoPrincipal.numeroCuenta,
           cci: bancoPrincipal.cci,
         } : null,
-        pagos: c.pagos,
+        // monto a Number (Decimal serializa como string) — consistente con getDetalle.
+        pagos: c.pagos.map((p) => ({ ...p, monto: Number(p.monto) })),
         tipoDocumentoProveedor: c.tipoDocumentoProveedor,
         serieDocumentoProveedor: c.serieDocumentoProveedor,
         numeroDocumentoProveedor: c.numeroDocumentoProveedor,
@@ -443,6 +444,10 @@ export class CuentasPorPagarService {
         );
       }
 
+      // Nota: NO se apaga `pagoPendiente` al saldar el total. La compra a crédito
+      // pagada permanece en CxP como historial (estado PAGADA) — la app Flutter
+      // tiene una pestaña "Pagadas" que lo muestra. Las pestañas Pendientes/
+      // Vencidas filtran por estado y la excluyen correctamente.
       return aplicarPagoCompra(tx, this.cajaService, {
         empresaId,
         compraId,
@@ -470,6 +475,17 @@ export class CuentasPorPagarService {
    */
   async anularPago(empresaId: string, pagoId: string, usuarioId: string, motivo?: string) {
     return this.prisma.$transaction(async (tx) => {
+      // Lock pesimista de la fila del pago: serializa anulaciones concurrentes
+      // del mismo pagoId. Sin esto, dos anulaciones simultáneas leen ambas
+      // anulado=false y reembolsan el banco dos veces. El segundo en entrar se
+      // bloquea hasta el commit del primero y re-lee anulado=true (Read Committed
+      // re-fetchea la última versión tras conceder el lock).
+      const locked = await tx.$queryRaw<Array<{ id: string; anulado: boolean }>>`
+        SELECT "id", "anulado" FROM "PagoCompra" WHERE "id" = ${pagoId} FOR UPDATE`;
+      if (locked.length === 0) throw new NotFoundException('Pago no encontrado');
+      if (locked[0].anulado) throw new BadRequestException('Este pago ya fue anulado');
+
+      // Validar tenancy + traer los campos para revertir (ya bajo el lock).
       const pago = await tx.pagoCompra.findFirst({
         where: { id: pagoId, compra: { empresaId } },
         select: {
@@ -482,9 +498,17 @@ export class CuentasPorPagarService {
         },
       });
       if (!pago) throw new NotFoundException('Pago no encontrado');
-      if (pago.anulado) throw new BadRequestException('Este pago ya fue anulado');
 
-      return revertirPagoCompra(tx, pago, usuarioId, motivo?.trim() || 'Anulación de pago');
+      // No se toca `pagoPendiente`: la compra nunca sale de CxP por estar pagada
+      // (ver registrarPago), así que al anular el saldo simplemente vuelve a subir
+      // y reaparece como pendiente/vencida por su estado calculado.
+      return revertirPagoCompra(
+        tx,
+        this.cajaService,
+        pago,
+        usuarioId,
+        motivo?.trim() || 'Anulación de pago',
+      );
     });
   }
 

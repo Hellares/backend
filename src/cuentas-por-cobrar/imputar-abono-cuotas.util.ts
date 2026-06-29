@@ -19,6 +19,9 @@ export interface CuotaImputable {
   montoPagadoPrincipal: number;
   montoPagadoInteres: number;
   montoPagadoMora: number;
+  // Mora histórica almacenada (cargo de cuando la mora estuvo habilitada). Se
+  // respeta cuando la empresa ya NO tiene mora habilitada, igual que VentaService.
+  montoMora: number;
   fechaVencimiento: Date;
   estado: string;
 }
@@ -51,27 +54,34 @@ export interface ImputacionResult {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * Mora vigente de una cuota AL MOMENTO `ahora` (misma fórmula que
- * `VentaService.moraVigente`).
+ * Mora vigente PENDIENTE de una cuota AL MOMENTO `ahora`. Réplica FIEL de
+ * `VentaService.moraVigente` y del cron de mora (`CuentasPorCobrarTasksService`):
+ *   - días vencidos con `Math.floor` (no `ceil`),
+ *   - base = `monto` de la cuota COMPLETA (incluye interés), no solo el principal,
+ *   - NETO de lo ya pagado de mora (`montoPagadoMora`) — sin esto, un abono
+ *     posterior re-cobraría mora ya saldada (doble cobro),
+ *   - si la empresa ya no tiene mora habilitada, respeta el `montoMora` histórico.
  */
 export function moraVigenteCuota(
   cuota: CuotaImputable,
   config: ConfigMoraImputacion | null,
   ahora: Date,
 ): number {
-  if (!config?.moraHabilitada) return 0;
+  if (!config?.moraHabilitada) return Math.max(cuota.montoMora ?? 0, 0);
   if (cuota.estado === 'PAGADA') return 0;
   const diasGracia = config.diasGraciaMora ?? 0;
-  const diasVencidos = Math.ceil(
-    (ahora.getTime() - cuota.fechaVencimiento.getTime()) / (1000 * 60 * 60 * 24),
+  const diasVencidos = Math.floor(
+    (ahora.getTime() - cuota.fechaVencimiento.getTime()) / 86_400_000,
   );
-  if (diasVencidos <= diasGracia) return 0;
-  const diasAplicables = diasVencidos - diasGracia;
+  const diasAplicables = Math.max(diasVencidos - diasGracia, 0);
+  if (diasAplicables <= 0) return 0;
+  const montoCuota = cuota.monto;
   const porcentajeMora = (config.porcentajeMoraDiario ?? 0.05) * diasAplicables;
-  const moraCalculada = cuota.montoPrincipal * (porcentajeMora / 100);
-  const moraMaxima =
-    cuota.montoPrincipal * ((config.moraMaximaPorcentaje ?? 30) / 100);
-  return Math.min(moraCalculada, moraMaxima);
+  const acumulada = Math.min(
+    montoCuota * (porcentajeMora / 100),
+    montoCuota * ((config.moraMaximaPorcentaje ?? 30) / 100),
+  );
+  return Math.max(round2(acumulada - (cuota.montoPagadoMora ?? 0)), 0);
 }
 
 /**

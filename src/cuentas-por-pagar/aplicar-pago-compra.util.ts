@@ -1,5 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
-import { Prisma, MetodoPagoVenta, FuentePagoCompra } from '@prisma/client';
+import {
+  Prisma,
+  MetodoPagoVenta,
+  FuentePagoCompra,
+  EstadoCaja,
+  TipoMovimientoCaja,
+  CategoriaMovimientoCaja,
+} from '@prisma/client';
 import { CajaService } from '../caja/caja.service';
 
 export interface AplicarPagoCompraInput {
@@ -109,7 +116,15 @@ export async function aplicarPagoCompra(
       },
       tx,
     );
-    movimientoCajaId = mov?.id ?? null;
+    // Si no se pudo registrar el movimiento (caja inexistente/cerrada), abortar:
+    // no crear un PagoCompra sin respaldo de caja (reduciría la deuda sin que
+    // salga dinero de ninguna caja).
+    if (!mov) {
+      throw new BadRequestException(
+        'No se pudo registrar el egreso en la caja (caja inexistente o cerrada). El pago no se registró.',
+      );
+    }
+    movimientoCajaId = mov.id;
   } else {
     const central = await cajaService.getOrCreateCajaCentral(input.empresaId, input.sedeId, tx);
     const mov = await cajaService.crearMovimientoAutomatico(
@@ -126,7 +141,13 @@ export async function aplicarPagoCompra(
       },
       tx,
     );
-    movimientoCajaId = mov?.id ?? null;
+    // Igual que en CAJA: sin movimiento de respaldo no se crea el pago.
+    if (!mov) {
+      throw new BadRequestException(
+        'No se pudo registrar el egreso en Tesorería (Caja Central no disponible). El pago no se registró.',
+      );
+    }
+    movimientoCajaId = mov.id;
   }
 
   return tx.pagoCompra.create({
@@ -155,13 +176,21 @@ export interface PagoARevertir {
 
 /**
  * Revierte un PagoCompra (anulación soft-delete) DENTRO de una transacción:
- *  - TESORERIA/CAJA → marca el MovimientoCaja del egreso como anulado.
+ *  - TESORERIA/CAJA:
+ *      · caja origen ABIERTA  → marca el MovimientoCaja del egreso anulado=true
+ *        (el saldo de esa caja vuelve a subir: la plata regresa).
+ *      · caja origen CERRADA  → el cierre firmado es inmutable. Marca el egreso
+ *        original anulado=true SOLO para auditoría y compensa con un INGRESO
+ *        (REVERSO_CAJA_CERRADA, anulado=false) en la Caja Central de la SEDE
+ *        DEL ORIGINAL — la plata vuelve a Tesorería sin tocar el snapshot.
+ *        Mismo patrón que la anulación de ventas (reversarMovimientosDeOrigen).
  *  - BANCO → devuelve el monto a EmpresaBanco.saldoActual (increment).
  *  - marca el PagoCompra como anulado.
  * Usado por "anular pago" (CxP) y por anular una compra paga.
  */
 export async function revertirPagoCompra(
   tx: Prisma.TransactionClient,
+  cajaService: CajaService,
   pago: PagoARevertir,
   usuarioId: string,
   motivo: string,
@@ -172,15 +201,84 @@ export async function revertirPagoCompra(
     (pago.fuente === FuentePagoCompra.TESORERIA || pago.fuente === FuentePagoCompra.CAJA) &&
     pago.movimientoCajaId
   ) {
-    await tx.movimientoCaja.update({
+    const orig = await tx.movimientoCaja.findUnique({
       where: { id: pago.movimientoCajaId },
-      data: {
-        anulado: true,
-        motivoAnulacion: `[PAGO PROVEEDOR] ${motivo}`,
-        anuladoPorId: usuarioId,
-        fechaAnulacion: new Date(),
+      select: {
+        id: true,
+        empresaId: true,
+        metodoPago: true,
+        compraId: true,
+        caja: {
+          select: {
+            id: true,
+            estado: true,
+            sedeId: true,
+            codigo: true,
+            fechaCierre: true,
+          },
+        },
       },
     });
+
+    if (orig && orig.caja.estado !== EstadoCaja.ABIERTA) {
+      // Caja origen CERRADA: cierre snapshot inmutable. Marcar el egreso
+      // original anulado=true solo para auditoría y compensar el reingreso en
+      // la Caja Central de la sede del original.
+      const fechaCierreStr = orig.caja.fechaCierre
+        ? orig.caja.fechaCierre.toISOString().slice(0, 10)
+        : 'desconocida';
+
+      await tx.movimientoCaja.update({
+        where: { id: orig.id },
+        data: {
+          anulado: true,
+          motivoAnulacion: `[PAGO PROVEEDOR] ${motivo} | Caja origen ${orig.caja.codigo} ya cerrada; reingreso compensatorio en Tesorería de la sede`,
+          anuladoPorId: usuarioId,
+          fechaAnulacion: new Date(),
+        },
+      });
+
+      const central = await cajaService.getOrCreateCajaCentral(
+        orig.empresaId,
+        orig.caja.sedeId,
+        tx,
+      );
+
+      await tx.movimientoCaja.create({
+        data: {
+          cajaId: central.id,
+          empresaId: orig.empresaId,
+          tipo: TipoMovimientoCaja.INGRESO,
+          categoria: CategoriaMovimientoCaja.REVERSO_CAJA_CERRADA,
+          metodoPago: orig.metodoPago,
+          monto,
+          descripcion: `[REVERSO ${motivo}] Anulación pago proveedor — ${orig.caja.codigo} cerrada ${fechaCierreStr}; reingreso a Tesorería`,
+          compraId: orig.compraId,
+          esManual: false,
+          registradoPorId: usuarioId,
+          anulado: false,
+          metadata: {
+            movimientoOriginalId: orig.id,
+            cajaOrigenId: orig.caja.id,
+            cajaOrigenCodigo: orig.caja.codigo,
+            fechaCierreOriginal: fechaCierreStr,
+            esReversoCajaCerrada: true,
+          },
+        },
+      });
+    } else {
+      // Caja origen ABIERTA (o sin movimiento cargable): marcar el egreso
+      // anulado=true; el saldo de esa caja se recupera.
+      await tx.movimientoCaja.update({
+        where: { id: pago.movimientoCajaId },
+        data: {
+          anulado: true,
+          motivoAnulacion: `[PAGO PROVEEDOR] ${motivo}`,
+          anuladoPorId: usuarioId,
+          fechaAnulacion: new Date(),
+        },
+      });
+    }
   } else if (pago.fuente === FuentePagoCompra.BANCO && pago.bancoId) {
     await tx.empresaBanco.update({
       where: { id: pago.bancoId },

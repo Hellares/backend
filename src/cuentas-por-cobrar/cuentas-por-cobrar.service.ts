@@ -64,7 +64,10 @@ export class CuentasPorCobrarService {
     const ventas = await this.prisma.venta.findMany({
       where,
       include: {
-        pagos: { select: { id: true, monto: true, metodoPago: true, fechaPago: true } },
+        pagos: {
+          where: { anulado: false },
+          select: { id: true, monto: true, metodoPago: true, fechaPago: true },
+        },
         cuotas: {
           orderBy: { numero: 'asc' },
           select: {
@@ -89,9 +92,17 @@ export class CuentasPorCobrarService {
     const now = new Date();
 
     const cuentas = ventas.map((v) => {
-      const totalVenta = Number(v.total);
+      // El total real adeudado incluye el interés del crédito (totalConInteres).
+      const totalVenta = Number(v.totalConInteres ?? v.total);
       const totalPagado = v.pagos.reduce((sum, p) => sum + Number(p.monto), 0);
-      const saldoPendiente = Math.round((totalVenta - totalPagado) * 100) / 100;
+      // Con cuotas, el saldo es la suma de saldos de cuota (capital+interés, ya
+      // neto de lo imputado y EXCLUYE mora — la mora se reporta en `totalMora`).
+      // Usar `total − totalPagado` subvalúa el saldo cuando hubo abonos a mora.
+      const saldoPendiente = v.cuotas?.length
+        ? Math.round(
+            v.cuotas.reduce((s, c) => s + Number(c.saldoPendiente), 0) * 100,
+          ) / 100
+        : Math.round((totalVenta - totalPagado) * 100) / 100;
       const proximaCuota = v.cuotas?.find((c: any) =>
         c.estado === 'PENDIENTE' || c.estado === 'PAGADA_PARCIAL' || c.estado === 'VENCIDA'
       );
@@ -121,7 +132,8 @@ export class CuentasPorCobrarService {
         fechaVencimiento: fechaVencimientoEfectiva,
         diasVencimiento,
         estado: estaPagada ? 'PAGADA' : estaVencida ? 'VENCIDA' : 'PENDIENTE',
-        pagos: v.pagos,
+        // monto a Number (Decimal serializa como string) — consistente con getDetalle.
+        pagos: v.pagos.map((p) => ({ ...p, monto: Number(p.monto) })),
         numeroCuotas: v.numeroCuotas,
         totalMora: Math.round((v.cuotas?.reduce((sum, c) => sum + Number(c.montoMora ?? 0), 0) ?? 0) * 100) / 100,
         cuotas: v.cuotas?.map(c => ({
@@ -172,8 +184,19 @@ export class CuentasPorCobrarService {
 
     const noPagadas = cuentas.filter((c) => c.estado !== 'PAGADA');
     const totalMora = Math.round(noPagadas.reduce((s, c) => s + (c.totalMora ?? 0), 0) * 100) / 100;
+    // Interés PENDIENTE de cobro = programado − ya imputado. Sumar solo
+    // `montoInteres` sobre-reportaba el interés (contaba el ya cobrado).
     const totalInteres = Math.round(
-      noPagadas.reduce((s, c) => s + (c.cuotas?.reduce((si, cu) => si + (cu.montoInteres ?? 0), 0) ?? 0), 0) * 100,
+      noPagadas.reduce(
+        (s, c) =>
+          s +
+          (c.cuotas?.reduce(
+            (si, cu) =>
+              si + Math.max((cu.montoInteres ?? 0) - (cu.montoPagadoInteres ?? 0), 0),
+            0,
+          ) ?? 0),
+        0,
+      ) * 100,
     ) / 100;
 
     return {
@@ -201,7 +224,7 @@ export class CuentasPorCobrarService {
     const venta = await this.prisma.venta.findFirst({
       where: { id: ventaId, empresaId, esCredito: true },
       include: {
-        pagos: { orderBy: { fechaPago: 'desc' } },
+        pagos: { where: { anulado: false }, orderBy: { fechaPago: 'desc' } },
         cuotas: {
           orderBy: { numero: 'asc' },
           select: {
@@ -230,19 +253,27 @@ export class CuentasPorCobrarService {
       },
     });
 
-    if (!venta) return null;
+    if (!venta) throw new NotFoundException('Cuenta por cobrar no encontrada');
 
     const totalPagado = venta.pagos.reduce((sum, p) => sum + Number(p.monto), 0);
     const totalMora = Math.round(
       (venta.cuotas?.reduce((sum, c) => sum + Number(c.montoMora ?? 0), 0) ?? 0) * 100,
     ) / 100;
+    // Total real adeudado = capital + interés del crédito.
+    const totalAdeudado = Number(venta.totalConInteres ?? venta.total);
+    // Saldo desde cuotas cuando existen (excluye mora); si no, total − pagado.
+    const saldoPendiente = venta.cuotas?.length
+      ? Math.round(
+          venta.cuotas.reduce((s, c) => s + Number(c.saldoPendiente), 0) * 100,
+        ) / 100
+      : Math.round((totalAdeudado - totalPagado) * 100) / 100;
 
     return {
       ...venta,
       total: Number(venta.total),
       subtotal: Number(venta.subtotal),
       totalPagado: Math.round(totalPagado * 100) / 100,
-      saldoPendiente: Math.round((Number(venta.total) - totalPagado) * 100) / 100,
+      saldoPendiente,
       totalMora,
       cuotas: venta.cuotas?.map(c => ({
         ...c,
@@ -445,6 +476,8 @@ export class CuentasPorCobrarService {
 
       // Imputar a cuotas (mora → interés → principal) — reusa cuotasDb/configMora
       // ya cargados para el guard.
+      let todasCuotasPagadas: boolean | null = null;
+      let saldoCapitalRestante: number | null = null;
       if (cuotasDb.length > 0) {
         const cuotasMem = cuotasDb.map(this._toImputable);
         const res = imputarEnCuotas(cuotasMem, data.monto, configMora, ahora);
@@ -472,12 +505,35 @@ export class CuentasPorCobrarService {
             montoMora: res.breakdown.mora,
           },
         });
+        // La venta está completa SOLO si todas las cuotas pendientes quedaron
+        // PAGADAS. No basta con `totalPagado >= target`: parte del abono pudo ir
+        // a mora (que no integra `target`), dejando capital aún pendiente.
+        todasCuotasPagadas = cuotasMem.every((c) => c.estado === 'PAGADA');
+        // Saldo de capital+interés pendiente = Σ (monto − pagadoPrincipal −
+        // pagadoInteres). Excluye mora (que se reporta aparte).
+        saldoCapitalRestante = round2(
+          cuotasMem.reduce(
+            (s, c) =>
+              s +
+              Math.max(
+                c.monto - c.montoPagadoPrincipal - c.montoPagadoInteres,
+                0,
+              ),
+            0,
+          ),
+        );
       }
 
       // Recomputar estado de la venta
       const nuevoTotalPagado = round2(totalPagado + data.monto);
       const nuevoEstado =
-        nuevoTotalPagado >= target ? 'PAGADA_COMPLETA' : 'PAGADA_PARCIAL';
+        todasCuotasPagadas !== null
+          ? todasCuotasPagadas
+            ? 'PAGADA_COMPLETA'
+            : 'PAGADA_PARCIAL'
+          : nuevoTotalPagado >= target
+            ? 'PAGADA_COMPLETA'
+            : 'PAGADA_PARCIAL';
       await tx.venta.update({
         where: { id: ventaId },
         data: {
@@ -492,7 +548,8 @@ export class CuentasPorCobrarService {
         pagoId: pago.id,
         fuente: ingreso.fuente,
         estado: nuevoEstado,
-        saldoPendiente: round2(target - nuevoTotalPagado),
+        saldoPendiente:
+          saldoCapitalRestante ?? Math.max(round2(target - nuevoTotalPagado), 0),
       };
     });
   }
@@ -710,6 +767,7 @@ export class CuentasPorCobrarService {
     montoPagadoPrincipal: Prisma.Decimal;
     montoPagadoInteres: Prisma.Decimal;
     montoPagadoMora: Prisma.Decimal;
+    montoMora: Prisma.Decimal;
     fechaVencimiento: Date;
     estado: string;
   }): CuotaImputable => ({
@@ -720,6 +778,7 @@ export class CuentasPorCobrarService {
     montoPagadoPrincipal: Number(c.montoPagadoPrincipal ?? 0),
     montoPagadoInteres: Number(c.montoPagadoInteres ?? 0),
     montoPagadoMora: Number(c.montoPagadoMora ?? 0),
+    montoMora: Number(c.montoMora ?? 0),
     fechaVencimiento: c.fechaVencimiento,
     estado: c.estado,
   });
@@ -771,6 +830,9 @@ export class CuentasPorCobrarService {
       montoPagadoPrincipal: 0,
       montoPagadoInteres: 0,
       montoPagadoMora: 0,
+      // Recompute resetea la mora a 0; el cron la recalcula. Coherente con el
+      // `montoMora: 0` que persistimos abajo.
+      montoMora: 0,
       fechaVencimiento: c.fechaVencimiento,
       estado: 'PENDIENTE',
     }));
@@ -833,12 +895,23 @@ export class CuentasPorCobrarService {
     const target = venta?.totalConInteres
       ? Number(venta.totalConInteres)
       : Number(venta?.total ?? 0);
+    // El estado se deriva de las cuotas (no de `totalPagado >= target`): parte
+    // de los abonos pudo ir a mora, que no integra `target`. Con cuotas, la
+    // venta está completa SOLO si todas quedaron PAGADAS.
+    const todasCuotasPagadas =
+      cuotasMem.length > 0 && cuotasMem.every((c) => c.estado === 'PAGADA');
     const estadoVenta =
-      totalPagado > 0 && totalPagado >= target
-        ? 'PAGADA_COMPLETA'
-        : totalPagado > 0
-          ? 'PAGADA_PARCIAL'
-          : 'CONFIRMADA';
+      cuotasMem.length > 0
+        ? todasCuotasPagadas
+          ? 'PAGADA_COMPLETA'
+          : totalPagado > 0
+            ? 'PAGADA_PARCIAL'
+            : 'CONFIRMADA'
+        : totalPagado > 0 && totalPagado >= target
+          ? 'PAGADA_COMPLETA'
+          : totalPagado > 0
+            ? 'PAGADA_PARCIAL'
+            : 'CONFIRMADA';
     await tx.venta.update({
       where: { id: ventaId },
       data: { estado: estadoVenta as any, montoRecibido: totalPagado },

@@ -861,7 +861,13 @@ export class CompraService {
         select: { id: true, monto: true, fuente: true, bancoId: true, movimientoCajaId: true },
       });
       for (const pago of pagos) {
-        await revertirPagoCompra(tx, pago, usuarioId, `Compra anulada (${compra.codigo})`);
+        await revertirPagoCompra(
+          tx,
+          this.cajaService,
+          pago,
+          usuarioId,
+          `Compra anulada (${compra.codigo})`,
+        );
       }
 
       // Actualizar estado de OC si aplica

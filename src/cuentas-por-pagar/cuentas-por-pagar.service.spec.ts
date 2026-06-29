@@ -54,6 +54,9 @@ describe('CuentasPorPagarService.registrarPago', () => {
         findMany: jest.fn().mockResolvedValue(pagosPrevios.map((monto) => ({ monto }))),
         create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'pago-1', ...data })),
       },
+      compra: {
+        update: jest.fn().mockResolvedValue({}),
+      },
       caja: {
         findFirst: jest.fn().mockResolvedValue(opts.cajaAbierta ? { id: 'caja-op-1' } : null),
       },
@@ -101,6 +104,14 @@ describe('CuentasPorPagarService.registrarPago', () => {
       }),
     );
     expect(pago).toMatchObject({ id: 'pago-1', monto: 100 });
+  });
+
+  it('una compra saldada NO apaga pagoPendiente (permanece en CxP como historial)', async () => {
+    // Decisión de diseño: la compra a crédito pagada queda en CxP (pestaña
+    // "Pagadas" de la app). No se toca pagoPendiente al saldar.
+    const tx = armarTx(filaCompra({ total: 100 }), []);
+    await pagar(100);
+    expect(tx.compra.update).not.toHaveBeenCalled();
   });
 
   it('lanza NotFoundException si la compra no existe (FOR UPDATE → vacío)', async () => {
@@ -312,12 +323,24 @@ describe('CuentasPorPagarService.anularPago', () => {
 
   beforeEach(() => {
     tx = {
+      // Lock pesimista: SELECT ... FOR UPDATE sobre PagoCompra. Por default el
+      // pago existe y no está anulado.
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'pago-1', anulado: false }]),
       pagoCompra: {
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({ anulado: true }),
       },
+      compra: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        update: jest.fn().mockResolvedValue({}),
+      },
       empresaBanco: { update: jest.fn().mockResolvedValue({}) },
-      movimientoCaja: { update: jest.fn().mockResolvedValue({}) },
+      movimientoCaja: {
+        update: jest.fn().mockResolvedValue({}),
+        create: jest.fn().mockResolvedValue({ id: 'mov-rev' }),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
     };
     prisma = { $transaction: jest.fn().mockImplementation((cb: any) => cb(tx)) };
     service = new CuentasPorPagarService(prisma, {} as any, {} as any);
@@ -335,12 +358,12 @@ describe('CuentasPorPagarService.anularPago', () => {
   });
 
   it('pago inexistente → NotFound', async () => {
-    tx.pagoCompra.findFirst.mockResolvedValue(null);
+    tx.$queryRaw.mockResolvedValue([]);
     await expect(service.anularPago(EMPRESA, 'x', USER)).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('pago ya anulado → BadRequest', async () => {
-    tx.pagoCompra.findFirst.mockResolvedValue({ id: 'pago-1', anulado: true });
+    tx.$queryRaw.mockResolvedValue([{ id: 'pago-1', anulado: true }]);
     await expect(service.anularPago(EMPRESA, 'pago-1', USER)).rejects.toBeInstanceOf(BadRequestException);
   });
 });

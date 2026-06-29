@@ -1,5 +1,6 @@
 import {
   imputarEnCuotas,
+  moraVigenteCuota,
   CuotaImputable,
   ConfigMoraImputacion,
 } from './imputar-abono-cuotas.util';
@@ -20,6 +21,7 @@ function cuota(over: Partial<CuotaImputable> = {}): CuotaImputable {
     montoPagadoPrincipal: 0,
     montoPagadoInteres: 0,
     montoPagadoMora: 0,
+    montoMora: 0,
     fechaVencimiento: new Date('2026-01-01'),
     estado: 'PENDIENTE',
     ...over,
@@ -102,5 +104,56 @@ describe('imputarEnCuotas', () => {
     // tras 2 abonos de 30, pagado 60, saldo 40
     expect(res2.updates[0].saldoPendiente).toBe(40);
     expect(res2.updates[0].montoPagadoPrincipal).toBe(60);
+  });
+
+  it('CxC-4: no re-cobra mora ya pagada (neto de montoPagadoMora)', () => {
+    // cuota 100 vencida 10 días → mora acumulada 0.5. Si ya se pagó 0.3 de mora,
+    // el siguiente abono solo debe imputar 0.2 a mora (no 0.5 de nuevo).
+    const config: ConfigMoraImputacion = { ...SIN_MORA, moraHabilitada: true };
+    const ahoraVencido = new Date('2026-01-11'); // +10 días
+    const c = cuota({ montoPagadoMora: 0.3 });
+    const res = imputarEnCuotas([c], 0.2, config, ahoraVencido);
+    expect(res.breakdown.mora).toBeCloseTo(0.2, 2);
+    expect(res.updates[0].montoPagadoMora).toBeCloseTo(0.5, 2);
+  });
+});
+
+describe('moraVigenteCuota (fórmula canónica = VentaService/cron)', () => {
+  const CON_MORA: ConfigMoraImputacion = {
+    moraHabilitada: true,
+    porcentajeMoraDiario: 0.05,
+    moraMaximaPorcentaje: 30,
+    diasGraciaMora: 0,
+  };
+
+  it('CxC-5: base = monto de la cuota COMPLETA (incl. interés), no solo principal', () => {
+    // monto 120 (100 principal + 20 interés), vencida 10 días, 0.05%/día.
+    // canónica: 0.5% de 120 = 0.6 (la vieja, sobre principal=100, daba 0.5).
+    const c = cuota({ monto: 120, montoPrincipal: 100, montoInteres: 20 });
+    expect(moraVigenteCuota(c, CON_MORA, new Date('2026-01-11'))).toBeCloseTo(0.6, 2);
+  });
+
+  it('CxC-5: días vencidos con floor, no ceil (día fraccional no redondea hacia arriba)', () => {
+    // 10.5 días → floor 10 → 0.5% de 100 = 0.5 (con ceil(10.5)=11 daría 0.55).
+    const c = cuota({ monto: 100, montoPrincipal: 100 });
+    expect(
+      moraVigenteCuota(c, CON_MORA, new Date('2026-01-11T12:00:00Z')),
+    ).toBeCloseTo(0.5, 2);
+  });
+
+  it('CxC-4: resta la mora ya pagada (montoPagadoMora)', () => {
+    const c = cuota({ monto: 100, montoPrincipal: 100, montoPagadoMora: 0.3 });
+    expect(moraVigenteCuota(c, CON_MORA, new Date('2026-01-11'))).toBeCloseTo(0.2, 2);
+  });
+
+  it('mora deshabilitada → respeta el montoMora histórico almacenado', () => {
+    const c = cuota({ montoMora: 5 });
+    expect(moraVigenteCuota(c, SIN_MORA, new Date('2026-12-31'))).toBe(5);
+  });
+
+  it('dentro de días de gracia → 0', () => {
+    const config = { ...CON_MORA, diasGraciaMora: 15 };
+    const c = cuota({ monto: 100, montoPrincipal: 100 });
+    expect(moraVigenteCuota(c, config, new Date('2026-01-11'))).toBe(0);
   });
 });

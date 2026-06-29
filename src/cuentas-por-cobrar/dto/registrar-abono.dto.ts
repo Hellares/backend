@@ -16,7 +16,7 @@ export class RegistrarAbonoDto {
   metodoPago: MetodoPagoVenta;
 
   @ApiProperty()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   monto: number;
 
@@ -44,10 +44,18 @@ export class RegistrarAbonoDto {
 
   @ApiProperty({
     required: false,
-    description: 'FK EmpresaBanco. Requerido si fuente=BANCO.',
+    description:
+      'FK EmpresaBanco. Requerido si fuente=BANCO (explícito o por default: ' +
+      'todo método != EFECTIVO sin fuente cae a BANCO).',
   })
-  @ValidateIf((o) => o.fuente === FuenteIngreso.BANCO)
+  // También se exige cuando el método NO es EFECTIVO y no se mandó fuente, porque
+  // el ruteo de ingreso defaultea a BANCO (que requiere bancoId) — 400 temprano.
+  @ValidateIf(
+    (o) =>
+      o.fuente === FuenteIngreso.BANCO ||
+      (!o.fuente && o.metodoPago !== MetodoPagoVenta.EFECTIVO),
+  )
   @IsString()
-  @IsNotEmpty({ message: 'bancoId es obligatorio cuando fuente=BANCO' })
+  @IsNotEmpty({ message: 'bancoId es obligatorio cuando el abono entra a una cuenta bancaria' })
   bancoId?: string;
 }
