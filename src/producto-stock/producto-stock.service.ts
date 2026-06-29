@@ -365,6 +365,22 @@ export class ProductoStockService {
               nombre: true,
               codigoEmpresa: true,
               sku: true,
+              // Marca y categoría para la tabla de inventario por sede.
+              // El nombre efectivo = nombreLocal ?? nombrePersonalizado ?? maestra.nombre.
+              empresaMarca: {
+                select: {
+                  nombreLocal: true,
+                  nombrePersonalizado: true,
+                  marcaMaestra: { select: { nombre: true } },
+                },
+              },
+              empresaCategoria: {
+                select: {
+                  nombreLocal: true,
+                  nombrePersonalizado: true,
+                  categoriaMaestra: { select: { nombre: true } },
+                },
+              },
               // precio: true, // ❌ DEPRECATED - Precio ahora solo en ProductoStock
             },
           },
@@ -392,7 +408,36 @@ export class ProductoStockService {
       this.prisma.productoStock.count({ where }),
     ]);
 
-    return createPaginatedResponse(stocks, total, page, limit);
+    // Aplanar marca/categoría a `{ nombre }` (el front lee empresaMarca.nombre
+    // / empresaCategoria.nombre). Nombre efectivo: local > personalizado > maestra.
+    const stocksMapped = stocks.map((s) => ({
+      ...s,
+      producto: s.producto
+        ? {
+            ...s.producto,
+            empresaMarca: s.producto.empresaMarca
+              ? {
+                  nombre:
+                    s.producto.empresaMarca.nombreLocal ??
+                    s.producto.empresaMarca.nombrePersonalizado ??
+                    s.producto.empresaMarca.marcaMaestra?.nombre ??
+                    null,
+                }
+              : null,
+            empresaCategoria: s.producto.empresaCategoria
+              ? {
+                  nombre:
+                    s.producto.empresaCategoria.nombreLocal ??
+                    s.producto.empresaCategoria.nombrePersonalizado ??
+                    s.producto.empresaCategoria.categoriaMaestra?.nombre ??
+                    null,
+                }
+              : null,
+          }
+        : null,
+    }));
+
+    return createPaginatedResponse(stocksMapped, total, page, limit);
   }
 
   /**
@@ -2960,7 +3005,27 @@ export class ProductoStockService {
     const stocks = await this.prisma.productoStock.findMany({
       where,
       include: {
-        producto: { select: { nombre: true, codigoEmpresa: true, sku: true } },
+        producto: {
+          select: {
+            nombre: true,
+            codigoEmpresa: true,
+            sku: true,
+            empresaMarca: {
+              select: {
+                nombreLocal: true,
+                nombrePersonalizado: true,
+                marcaMaestra: { select: { nombre: true } },
+              },
+            },
+            empresaCategoria: {
+              select: {
+                nombreLocal: true,
+                nombrePersonalizado: true,
+                categoriaMaestra: { select: { nombre: true } },
+              },
+            },
+          },
+        },
         variante: { select: { nombre: true, sku: true } },
         sede: { select: { nombre: true } },
       },
@@ -2981,6 +3046,8 @@ export class ProductoStockService {
       { header: 'Código', key: 'codigo', width: 14 },
       { header: 'Producto', key: 'nombre', width: 38 },
       { header: 'Variante', key: 'variante', width: 18 },
+      { header: 'Marca', key: 'marca', width: 18 },
+      { header: 'Categoría', key: 'categoria', width: 20 },
       { header: 'Físico', key: 'fisico', width: 10 },
       { header: 'Disponible', key: 'disponible', width: 11 },
       { header: 'Reservado', key: 'reservado', width: 11 },
@@ -3013,6 +3080,16 @@ export class ProductoStockService {
         codigo: s.producto?.codigoEmpresa ?? '',
         nombre: s.producto?.nombre ?? s.variante?.nombre ?? '',
         variante: s.variante?.nombre ?? '',
+        marca:
+          s.producto?.empresaMarca?.nombreLocal ??
+          s.producto?.empresaMarca?.nombrePersonalizado ??
+          s.producto?.empresaMarca?.marcaMaestra?.nombre ??
+          '',
+        categoria:
+          s.producto?.empresaCategoria?.nombreLocal ??
+          s.producto?.empresaCategoria?.nombrePersonalizado ??
+          s.producto?.empresaCategoria?.categoriaMaestra?.nombre ??
+          '',
         fisico: s.stockActual,
         disponible,
         reservado,
