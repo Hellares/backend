@@ -3050,6 +3050,8 @@ export class ProductoStockService {
       { header: 'Categoría', key: 'categoria', width: 20 },
       { header: 'Físico', key: 'fisico', width: 10 },
       { header: 'Disponible', key: 'disponible', width: 11 },
+      { header: 'P. Compra', key: 'precioCompra', width: 12 },
+      { header: 'P. Venta', key: 'precioVenta', width: 12 },
       { header: 'Reservado', key: 'reservado', width: 11 },
       { header: 'Apartado', key: 'apartado', width: 10 },
       { header: 'Dañado', key: 'danado', width: 9 },
@@ -3092,6 +3094,9 @@ export class ProductoStockService {
           '',
         fisico: s.stockActual,
         disponible,
+        // P. Compra = precioCosto (costo promedio ponderado). P. Venta = precio.
+        precioCompra: s.precioCosto != null ? Number(s.precioCosto) : null,
+        precioVenta: s.precio != null ? Number(s.precio) : null,
         reservado,
         apartado,
         danado,
@@ -3102,6 +3107,10 @@ export class ProductoStockService {
         sede: s.sede?.nombre ?? '',
       });
     }
+
+    // Formato moneda para P. Compra (col 8) y P. Venta (col 9).
+    sheet.getColumn(8).numFmt = '#,##0.00';
+    sheet.getColumn(9).numFmt = '#,##0.00';
 
     res.set({
       'Content-Type':
