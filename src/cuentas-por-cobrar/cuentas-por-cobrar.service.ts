@@ -837,14 +837,34 @@ export class CuentasPorCobrarService {
       estado: 'PENDIENTE',
     }));
 
-    // Reaplicar abonos no anulados en orden cronológico
+    // Adelanto NO financiado: en el modelo viejo de crédito con adelanto las
+    // cuotas cubren solo la parte financiada (Σ cuotas < total). El adelanto
+    // (= total − Σ cuotas) se pagó upfront y NO debe imputarse a las cuotas.
+    // En el modelo nuevo (Σ cuotas = total) esto es 0 → sin cambio de conducta.
+    const ventaTotales = await tx.venta.findUnique({
+      where: { id: ventaId },
+      select: { total: true, totalConInteres: true },
+    });
+    const targetVenta = ventaTotales?.totalConInteres
+      ? Number(ventaTotales.totalConInteres)
+      : Number(ventaTotales?.total ?? 0);
+    const sumaCuotas = round2(cuotasMem.reduce((s, c) => s + c.monto, 0));
+    let adelantoRestante = Math.max(round2(targetVenta - sumaCuotas), 0);
+
+    // Reaplicar abonos no anulados en orden cronológico. Los primeros pagos
+    // (cronológicamente, el adelanto inicial) consumen `adelantoRestante` SIN
+    // tocar las cuotas; solo el excedente se imputa.
     const pagos = await tx.pagoVenta.findMany({
       where: { ventaId, anulado: false },
       orderBy: { fechaPago: 'asc' },
       select: { id: true, monto: true, fechaPago: true },
     });
     for (const p of pagos) {
-      const res = imputarEnCuotas(cuotasMem, Number(p.monto), configMora, p.fechaPago);
+      const montoPago = Number(p.monto);
+      const comoAdelanto = Math.min(montoPago, adelantoRestante);
+      adelantoRestante = round2(adelantoRestante - comoAdelanto);
+      const aCuotas = round2(montoPago - comoAdelanto);
+      const res = imputarEnCuotas(cuotasMem, aCuotas, configMora, p.fechaPago);
       await tx.pagoVenta.update({
         where: { id: p.id },
         data: {
@@ -888,13 +908,7 @@ export class CuentasPorCobrarService {
     const totalPagado = round2(
       pagos.reduce((s, p) => s + Number(p.monto), 0),
     );
-    const venta = await tx.venta.findUnique({
-      where: { id: ventaId },
-      select: { total: true, totalConInteres: true },
-    });
-    const target = venta?.totalConInteres
-      ? Number(venta.totalConInteres)
-      : Number(venta?.total ?? 0);
+    const target = targetVenta;
     // El estado se deriva de las cuotas (no de `totalPagado >= target`): parte
     // de los abonos pudo ir a mora, que no integra `target`. Con cuotas, la
     // venta está completa SOLO si todas quedaron PAGADAS.
