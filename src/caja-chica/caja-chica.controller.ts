@@ -42,9 +42,10 @@ export class CajaChicaController {
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async crearCajaChica(
     @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') usuarioId: string,
     @Body() dto: CrearCajaChicaDto,
   ) {
-    return this.cajaChicaService.crearCajaChica(empresaId, dto);
+    return this.cajaChicaService.crearCajaChica(empresaId, dto, usuarioId);
   }
 
   @Get()
@@ -76,9 +77,15 @@ export class CajaChicaController {
   async actualizarEstado(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
+    @CurrentUser('id') usuarioId: string,
     @Body() body: { estado: string },
   ) {
-    return this.cajaChicaService.actualizarEstado(empresaId, id, body.estado as any);
+    return this.cajaChicaService.actualizarEstado(
+      empresaId,
+      id,
+      body.estado as any,
+      usuarioId,
+    );
   }
 
   @Post(':id/gastos')

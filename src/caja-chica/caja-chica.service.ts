@@ -26,26 +26,58 @@ export class CajaChicaService {
 
   // --- CAJA CHICA CRUD ---
 
-  async crearCajaChica(empresaId: string, dto: CrearCajaChicaDto) {
-    return this.prisma.cajaChica.create({
-      data: {
-        empresaId,
-        sedeId: dto.sedeId,
-        nombre: dto.nombre,
-        fondoFijo: dto.fondoFijo,
-        saldoActual: dto.fondoFijo,
-        umbralAlerta: dto.umbralAlerta ?? 0,
-        responsableId: dto.responsableId,
-      },
-      include: {
-        sede: { select: { id: true, nombre: true } },
-        responsable: {
-          select: {
-            id: true,
-            persona: { select: { nombres: true, apellidos: true } },
+  async crearCajaChica(
+    empresaId: string,
+    dto: CrearCajaChicaDto,
+    usuarioId: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const cajaChica = await tx.cajaChica.create({
+        data: {
+          empresaId,
+          sedeId: dto.sedeId,
+          nombre: dto.nombre,
+          fondoFijo: dto.fondoFijo,
+          saldoActual: dto.fondoFijo,
+          umbralAlerta: dto.umbralAlerta ?? 0,
+          responsableId: dto.responsableId,
+        },
+        include: {
+          sede: { select: { id: true, nombre: true } },
+          responsable: {
+            select: {
+              id: true,
+              persona: { select: { nombres: true, apellidos: true } },
+            },
           },
         },
-      },
+      });
+
+      // Fondear: el fondo inicial SALE de la Caja Central (bóveda/Tesorería)
+      // como EGRESO, para que el dinero tenga origen real y quede trazado en
+      // tesorería (el float se devuelve a la bóveda al desactivar la caja chica).
+      if (Number(dto.fondoFijo) > 0) {
+        const central = await this.cajaService.getOrCreateCajaCentral(
+          empresaId,
+          dto.sedeId,
+          tx,
+        );
+        await this.cajaService.crearMovimientoAutomatico(
+          empresaId,
+          central.id,
+          {
+            tipo: TipoMovimientoCaja.EGRESO,
+            categoria: CategoriaMovimientoCaja.REPOSICION_CAJA_CHICA,
+            metodoPago: MetodoPagoVenta.EFECTIVO,
+            monto: Number(dto.fondoFijo),
+            descripcion: `Apertura caja chica: ${dto.nombre} (fondo inicial)`,
+            registradoPorId: usuarioId,
+          },
+          tx,
+        );
+      }
+
+      return cajaChica;
     });
   }
 
@@ -89,15 +121,79 @@ export class CajaChicaService {
     return cajaChica;
   }
 
-  async actualizarEstado(empresaId: string, id: string, estado: EstadoCajaChica) {
-    const cajaChica = await this.prisma.cajaChica.findFirst({
-      where: { id, empresaId },
-    });
-    if (!cajaChica) throw new NotFoundException('Caja chica no encontrada');
+  async actualizarEstado(
+    empresaId: string,
+    id: string,
+    estado: EstadoCajaChica,
+    usuarioId: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const cajaChica = await tx.cajaChica.findFirst({
+        where: { id, empresaId },
+      });
+      if (!cajaChica) throw new NotFoundException('Caja chica no encontrada');
 
-    return this.prisma.cajaChica.update({
-      where: { id },
-      data: { estado },
+      let nuevoSaldo: Prisma.Decimal | number = cajaChica.saldoActual;
+
+      // ACTIVA → INACTIVA: el efectivo restante VUELVE a la bóveda (INGRESO) y
+      // la caja chica queda en 0 (se devolvió físicamente el dinero).
+      if (
+        cajaChica.estado === 'ACTIVA' &&
+        estado === 'INACTIVA' &&
+        Number(cajaChica.saldoActual) > 0
+      ) {
+        const central = await this.cajaService.getOrCreateCajaCentral(
+          empresaId,
+          cajaChica.sedeId,
+          tx,
+        );
+        await this.cajaService.crearMovimientoAutomatico(
+          empresaId,
+          central.id,
+          {
+            tipo: TipoMovimientoCaja.INGRESO,
+            categoria: CategoriaMovimientoCaja.REPOSICION_CAJA_CHICA,
+            metodoPago: MetodoPagoVenta.EFECTIVO,
+            monto: Number(cajaChica.saldoActual),
+            descripcion: `Cierre caja chica: ${cajaChica.nombre} (devolución de saldo)`,
+            registradoPorId: usuarioId,
+          },
+          tx,
+        );
+        nuevoSaldo = 0;
+      }
+
+      // INACTIVA → ACTIVA: re-fondear el fondo fijo desde la bóveda (EGRESO).
+      if (
+        cajaChica.estado === 'INACTIVA' &&
+        estado === 'ACTIVA' &&
+        Number(cajaChica.fondoFijo) > 0
+      ) {
+        const central = await this.cajaService.getOrCreateCajaCentral(
+          empresaId,
+          cajaChica.sedeId,
+          tx,
+        );
+        await this.cajaService.crearMovimientoAutomatico(
+          empresaId,
+          central.id,
+          {
+            tipo: TipoMovimientoCaja.EGRESO,
+            categoria: CategoriaMovimientoCaja.REPOSICION_CAJA_CHICA,
+            metodoPago: MetodoPagoVenta.EFECTIVO,
+            monto: Number(cajaChica.fondoFijo),
+            descripcion: `Reapertura caja chica: ${cajaChica.nombre} (fondo inicial)`,
+            registradoPorId: usuarioId,
+          },
+          tx,
+        );
+        nuevoSaldo = cajaChica.fondoFijo;
+      }
+
+      return tx.cajaChica.update({
+        where: { id },
+        data: { estado, saldoActual: nuevoSaldo },
+      });
     });
   }
 
