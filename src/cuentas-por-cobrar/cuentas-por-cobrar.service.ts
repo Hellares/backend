@@ -106,6 +106,8 @@ export class CuentasPorCobrarService {
       return {
         ventaId: v.id,
         codigo: v.codigo,
+        clienteId: v.clienteId,
+        clienteEmpresaId: v.clienteEmpresaId,
         nombreCliente: v.nombreCliente,
         documentoCliente: v.documentoCliente,
         telefonoCliente: v.telefonoCliente ?? v.cliente?.persona?.telefono,
