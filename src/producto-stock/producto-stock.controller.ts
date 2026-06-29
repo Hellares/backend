@@ -190,6 +190,22 @@ export class ProductoStockController {
     );
   }
 
+  @Get('sede/:sedeId/export')
+  @ApiOperation({
+    summary: 'Exportar inventario de una sede a Excel (.xlsx)',
+    description:
+      'Genera un XLSX con todo el inventario de la sede (respeta el filtro search).',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async exportStockPorSede(
+    @Param('sedeId') sedeId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Res() res: Response,
+    @Query('search') search?: string,
+  ) {
+    await this.stockService.exportStockPorSede(sedeId, empresaId, search, res);
+  }
+
   @Get('producto/:productoId/sede/:sedeId')
   @ApiOperation({
     summary: 'Obtener stock de producto en sede',

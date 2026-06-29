@@ -2930,6 +2930,111 @@ export class ProductoStockService {
    * Exporta verificación a Excel. Mismas filas que verificarPrecios pero
    * sin límite (configurable, default 5000 para no romper memoria).
    */
+  /**
+   * Exporta TODO el inventario de una sede a Excel (.xlsx). Respeta el
+   * filtro de búsqueda (mismo criterio que getStocksPorSede). La columna
+   * "Disponible" usa la misma fórmula que la tabla del app (físico menos
+   * reservado, apartado, dañado y garantía) para que coincida con lo que
+   * ve el cajero en pantalla.
+   */
+  async exportStockPorSede(
+    sedeId: string,
+    empresaId: string,
+    search: string | undefined,
+    res: Response,
+  ) {
+    const where: Prisma.ProductoStockWhereInput = { sedeId, empresaId };
+    const term = search?.trim();
+    if (term) {
+      where.OR = [
+        { producto: { nombre: { contains: term, mode: 'insensitive' } } },
+        { producto: { codigoEmpresa: { contains: term, mode: 'insensitive' } } },
+        { producto: { sku: { contains: term, mode: 'insensitive' } } },
+        { producto: { codigoBarras: { contains: term, mode: 'insensitive' } } },
+        { variante: { nombre: { contains: term, mode: 'insensitive' } } },
+        { variante: { sku: { contains: term, mode: 'insensitive' } } },
+        { variante: { codigoBarras: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
+    const stocks = await this.prisma.productoStock.findMany({
+      where,
+      include: {
+        producto: { select: { nombre: true, codigoEmpresa: true, sku: true } },
+        variante: { select: { nombre: true, sku: true } },
+        sede: { select: { nombre: true } },
+      },
+      take: 20000,
+    });
+
+    stocks.sort((a, b) =>
+      (a.producto?.nombre ?? a.variante?.nombre ?? '').localeCompare(
+        b.producto?.nombre ?? b.variante?.nombre ?? '',
+      ),
+    );
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Syncronize';
+    wb.created = new Date();
+    const sheet = wb.addWorksheet('Inventario');
+    sheet.columns = [
+      { header: 'Código', key: 'codigo', width: 14 },
+      { header: 'Producto', key: 'nombre', width: 38 },
+      { header: 'Variante', key: 'variante', width: 18 },
+      { header: 'Físico', key: 'fisico', width: 10 },
+      { header: 'Disponible', key: 'disponible', width: 11 },
+      { header: 'Reservado', key: 'reservado', width: 11 },
+      { header: 'Apartado', key: 'apartado', width: 10 },
+      { header: 'Dañado', key: 'danado', width: 9 },
+      { header: 'Garantía', key: 'garantia', width: 10 },
+      { header: 'Mínimo', key: 'minimo', width: 9 },
+      { header: 'Máximo', key: 'maximo', width: 9 },
+      { header: 'Ubicación', key: 'ubicacion', width: 16 },
+      { header: 'Sede', key: 'sede', width: 16 },
+    ];
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1565C0' },
+    };
+    headerRow.alignment = { horizontal: 'center' };
+    headerRow.height = 22;
+
+    for (const s of stocks) {
+      const reservado = s.stockReservado ?? 0;
+      const apartado = s.stockReservadoVenta ?? 0;
+      const danado = s.stockDanado ?? 0;
+      const garantia = s.stockEnGarantia ?? 0;
+      const disponible =
+        s.stockActual - reservado - apartado - danado - garantia;
+      sheet.addRow({
+        codigo: s.producto?.codigoEmpresa ?? '',
+        nombre: s.producto?.nombre ?? s.variante?.nombre ?? '',
+        variante: s.variante?.nombre ?? '',
+        fisico: s.stockActual,
+        disponible,
+        reservado,
+        apartado,
+        danado,
+        garantia,
+        minimo: s.stockMinimo ?? null,
+        maximo: s.stockMaximo ?? null,
+        ubicacion: s.ubicacion ?? '',
+        sede: s.sede?.nombre ?? '',
+      });
+    }
+
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=inventario_${new Date().toISOString().slice(0, 10)}.xlsx`,
+    });
+    await wb.xlsx.write(res);
+    res.end();
+  }
+
   async exportVerificacionPrecios(
     empresaId: string,
     dto: VerificarPreciosDto,
