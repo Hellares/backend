@@ -174,7 +174,15 @@ model CierreCaja {
   totalConteoFisico    Decimal @db.Decimal(10, 2)
   diferencia           Decimal @db.Decimal(10, 2)
   detallePorMetodoPago Json
-  observaciones        String?
+
+  /// Desglose de billetes/monedas del EFECTIVO contado al cerrar.
+  /// Shape: { "200": 5, "100": 10, "50": 0, ..., "0.10": 30 }.
+  /// La suma (denominacion * cantidad) debe coincidir con el
+  /// conteoFisico del EFECTIVO (tolerancia de centavos). Opcional:
+  /// null cuando el cajero no usó el contador de billetes.
+  desgloseEfectivo Json?
+
+  observaciones String?
 
   // Auditoria
   creadoEn DateTime @default(now())
