@@ -299,51 +299,50 @@ export class CajaChicaService {
         throw new NotFoundException('Rendición no encontrada o no está pendiente');
       }
 
-      // Crear movimiento EGRESO en caja principal (reposición)
-      // Find an active caja in the same sede
-      const cajaActiva = await tx.caja.findFirst({
-        where: {
-          empresaId,
-          sedeId: rendicion.cajaChica.sedeId,
-          estado: 'ABIERTA',
+      // Reposición desde la Caja Central (bóveda/Tesorería) de la sede, que
+      // SIEMPRE existe (se auto-crea). Antes se buscaba una caja POS abierta
+      // arbitraria y, si no había ninguna, se reponía el saldo SIN registrar el
+      // egreso → hueco contable (efectivo que aparece sin origen). La caja chica
+      // se repone del fondo central, no de una caja de venta cualquiera.
+      const central = await this.cajaService.getOrCreateCajaCentral(
+        empresaId,
+        rendicion.cajaChica.sedeId,
+        tx,
+      );
+
+      const movimiento = await this.cajaService.crearMovimientoAutomatico(
+        empresaId,
+        central.id,
+        {
+          tipo: TipoMovimientoCaja.EGRESO,
+          categoria: CategoriaMovimientoCaja.REPOSICION_CAJA_CHICA,
+          metodoPago: MetodoPagoVenta.EFECTIVO,
+          monto: Number(rendicion.totalGastado),
+          descripcion: `Reposición caja chica: ${rendicion.cajaChica.nombre} - Rendición ${rendicion.codigo}`,
+          registradoPorId: usuarioId,
         },
-      });
+        tx,
+      );
 
-      let movimientoCajaId: string | undefined;
-
-      if (cajaActiva) {
-        const movimiento = await this.cajaService.crearMovimientoAutomatico(
-          empresaId,
-          cajaActiva.id,
-          {
-            tipo: TipoMovimientoCaja.EGRESO,
-            categoria: CategoriaMovimientoCaja.REPOSICION_CAJA_CHICA,
-            metodoPago: MetodoPagoVenta.EFECTIVO,
-            monto: Number(rendicion.totalGastado),
-            descripcion: `Reposición caja chica: ${rendicion.cajaChica.nombre} - Rendición ${rendicion.codigo}`,
-            registradoPorId: usuarioId,
-          },
-          tx,
-        );
-        movimientoCajaId = movimiento.id;
-      }
-
-      // Aprobar rendición
+      // Aprobar rendición (siempre con su movimiento de reposición vinculado)
       const rendicionAprobada = await tx.rendicionCajaChica.update({
         where: { id: rendicionId },
         data: {
           estado: 'APROBADA',
           aprobadoPorId: usuarioId,
           observaciones: observaciones ?? rendicion.observaciones,
-          ...(movimientoCajaId && { movimientoCajaId }),
+          movimientoCajaId: movimiento.id,
         },
       });
 
-      // Reponer saldo de caja chica a fondoFijo
+      // Reponer SOLO lo rendido (incrementa por totalGastado), NO resetear a
+      // fondoFijo: una rendición puede cubrir solo parte de los gastos
+      // pendientes, así que un reset total sobre-repondría los gastos aún no
+      // rendidos.
       await tx.cajaChica.update({
         where: { id: rendicion.cajaChicaId },
         data: {
-          saldoActual: rendicion.cajaChica.fondoFijo,
+          saldoActual: { increment: Number(rendicion.totalGastado) },
         },
       });
 
