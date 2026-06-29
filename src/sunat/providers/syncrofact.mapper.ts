@@ -98,7 +98,11 @@ export class SyncrofactMapper {
     config: ConfigData,
   ): SyncrofactInvoiceRequest {
     const proveedorConfig = this.requireProveedorConfig(config);
-    const esCredito = comprobante.venta?.esCredito === true;
+    // Una venta marcada "a crédito" pero SIN cuotas pendientes (pagada por
+    // adelantado en su totalidad → 0 cuotas) es CONTADO para SUNAT. forma_pago
+    // Credito exige `forma_pago_cuotas` que sumen el saldo; sin cuotas,
+    // Syncrofact/SUNAT rechaza ("Debe especificar las cuotas de pago...").
+    const esCredito = this.esCreditoConCuotas(comprobante.venta);
     const esBoleta = comprobante.tipoComprobante === 'BOLETA';
 
     const body: SyncrofactInvoiceRequest = {
@@ -122,7 +126,7 @@ export class SyncrofactMapper {
       body.tipo_cambio = Number(comprobante.tipoCambio);
     }
 
-    if (esCredito && comprobante.venta?.cuotas?.length) {
+    if (esCredito) {
       body.forma_pago_cuotas = this.buildCuotas(comprobante);
     }
 
@@ -250,9 +254,18 @@ export class SyncrofactMapper {
    * (referencia en YAPE / banco en TRANSFERENCIA). El service aborta ANTES de
    * pegarle a Syncrofact.
    */
+  /**
+   * Una venta es "a crédito" para SUNAT solo si tiene cuotas pendientes. Un
+   * crédito pagado por adelantado en su totalidad (0 cuotas) es CONTADO: no se
+   * manda `forma_pago_cuotas` (rechazo) y SÍ corresponde reportar `medios_pago`.
+   */
+  private static esCreditoConCuotas(venta: ComprobanteData['venta']): boolean {
+    return venta?.esCredito === true && (venta?.cuotas?.length ?? 0) > 0;
+  }
+
   private static buildMediosPago(comprobante: ComprobanteData): SyncrofactMedioPago[] | null {
     const venta = comprobante.venta;
-    if (!venta || venta.esCredito) return null;
+    if (!venta || this.esCreditoConCuotas(venta)) return null;
 
     const moneda = comprobante.moneda || 'PEN';
     const umbral = moneda === 'USD' ? UMBRAL_BANCARIZACION.USD : UMBRAL_BANCARIZACION.PEN;
