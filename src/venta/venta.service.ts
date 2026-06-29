@@ -1208,10 +1208,16 @@ export class VentaService {
           ? dto.pagos.reduce((s, p) => s + p.monto, 0)
           : (dto.montoRecibido ?? 0);
         const montoRecibido = dto.montoRecibido ?? montoPagadoInmediato;
-        const estaPagada = !esCredito && montoRecibido >= totalACobrarHoy;
         const montoCredito = esCredito
           ? round2(totalACobrarHoy - montoPagadoInmediato)
           : 0;
+        // Pagada al crear: contado con monto suficiente, O crédito cuya operación
+        // queda 100% cubierta al momento (adelanto >= total → sin saldo financiado,
+        // 0 cuotas). Ese "crédito" es en realidad un contado → PAGADA_COMPLETA, no
+        // se queda colgado en CONFIRMADA con saldo 0.
+        const estaPagada = esCredito
+          ? montoCredito <= 0
+          : montoRecibido >= totalACobrarHoy;
 
         const montoCambio =
           montoRecibido > totalACobrarHoy

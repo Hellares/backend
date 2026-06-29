@@ -74,6 +74,7 @@ describe('VentaService.crearYCobrar', () => {
     comprobanteElectronico: { create: jest.fn().mockResolvedValue({ id: 'comp-1' }) },
     pagoComprobante: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
     pagoVenta: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    cuotaVenta: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
   });
 
   const dtoBase = (over: any = {}) => ({
@@ -153,6 +154,47 @@ describe('VentaService.crearYCobrar', () => {
     // Pago registrado + caja
     expect(tx.pagoVenta.createMany).toHaveBeenCalledTimes(1);
     expect(cajaService.registrarMovimientoSiHayCaja).toHaveBeenCalled();
+  });
+
+  it('crédito pagado 100% al crear (adelanto = total, 0 cuotas) → PAGADA_COMPLETA, no CONFIRMADA', async () => {
+    // Caso real (VTA-SED-00000650): venta marcada esCredito pero pagada completa
+    // al momento → sin saldo financiado. Debe quedar PAGADA_COMPLETA, no colgada
+    // en CONFIRMADA con saldo 0.
+    await service.crearYCobrar(
+      'emp-1',
+      dtoBase({
+        esCredito: true,
+        montoRecibido: 50,
+        pagos: [{ metodoPago: 'EFECTIVO', monto: 50 }],
+      }) as any,
+      'caj-1',
+    );
+    expect(tx.venta.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          estado: EstadoVenta.PAGADA_COMPLETA,
+          esCredito: true,
+        }),
+      }),
+    );
+  });
+
+  it('crédito con saldo financiado (adelanto < total) → CONFIRMADA', async () => {
+    await service.crearYCobrar(
+      'emp-1',
+      dtoBase({
+        esCredito: true,
+        montoRecibido: 20,
+        pagos: [{ metodoPago: 'EFECTIVO', monto: 20 }],
+        numeroCuotas: 2,
+      }) as any,
+      'caj-1',
+    );
+    expect(tx.venta.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ estado: EstadoVenta.CONFIRMADA }),
+      }),
+    );
   });
 
   it('TICKET: NO emite comprobante electrónico', async () => {
