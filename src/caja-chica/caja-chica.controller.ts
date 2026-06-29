@@ -117,6 +117,22 @@ export class CajaChicaController {
     );
   }
 
+  @Patch('gastos/:gastoId/comprobante')
+  @RequiresPermission(Permission.MANAGE_CAJA)
+  @ApiOperation({ summary: 'Adjuntar/actualizar el comprobante de un gasto' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async adjuntarComprobanteGasto(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('gastoId') gastoId: string,
+    @Body() body: { comprobanteUrl: string },
+  ) {
+    return this.cajaChicaService.adjuntarComprobanteGasto(
+      empresaId,
+      gastoId,
+      body.comprobanteUrl,
+    );
+  }
+
   @Post(':id/rendiciones')
   @RequiresPermission(Permission.MANAGE_CAJA)
   @ApiOperation({ summary: 'Crear rendición de caja chica' })

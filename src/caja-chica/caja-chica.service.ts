@@ -269,6 +269,32 @@ export class CajaChicaService {
     });
   }
 
+  /**
+   * Adjunta (o reemplaza) el comprobante de un gasto YA registrado, sin tener
+   * que recrearlo. La imagen se sube a S3 desde el cliente; aquí solo se guarda
+   * la URL resultante.
+   */
+  async adjuntarComprobanteGasto(
+    empresaId: string,
+    gastoId: string,
+    comprobanteUrl: string,
+  ) {
+    const gasto = await this.prisma.gastoCajaChica.findFirst({
+      where: { id: gastoId, empresaId },
+    });
+    if (!gasto) throw new NotFoundException('Gasto no encontrado');
+
+    return this.prisma.gastoCajaChica.update({
+      where: { id: gastoId },
+      data: { comprobanteUrl },
+      include: {
+        categoriaGasto: {
+          select: { id: true, nombre: true, tipo: true, icono: true, color: true },
+        },
+      },
+    });
+  }
+
   // --- RENDICIONES ---
 
   async crearRendicion(
