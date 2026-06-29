@@ -14,6 +14,7 @@ import { SunatModule } from '../sunat/sunat.module';
 import { ServicioModule } from '../servicio/servicio.module';
 import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
 import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteristica-empresa.module';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 
 @Module({
   imports: [
@@ -29,7 +30,7 @@ import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteri
     CaracteristicaEmpresaModule,
   ],
   controllers: [VentaAnalyticsController, VentaController],
-  providers: [VentaService, VentaAnalyticsService, VentaYapeTasksService],
+  providers: [VentaService, VentaAnalyticsService, VentaYapeTasksService, SedeAccessGuard],
   exports: [VentaService],
 })
 export class VentaModule {}

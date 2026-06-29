@@ -1121,6 +1121,12 @@ export class EmpresaService {
       creadoEn: sede.creadoEn,
       actualizadoEn: sede.actualizadoEn,
       userRole: sede.usuarios.length > 0 ? sede.usuarios[0].rol : undefined,
+      // Multi-sede: el usuario está asignado (UsuarioSedeRol) a esta sede. El
+      // front filtra las "sedes operables" con esto (admin ve todas → ver flag
+      // de rol de empresa).
+      asignada: sede.usuarios.length > 0,
+      puedeAbrirCaja:
+        sede.usuarios.length > 0 ? (sede.usuarios[0].puedeAbrirCaja ?? false) : false,
     }));
 
     this.logger.success('Empresa context retrieved successfully', {

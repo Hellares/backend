@@ -6,3 +6,4 @@ export * from './roles.guard';
 export * from './public.guard';
 export * from './permissions.guard';
 export * from './super-admin.guard';
+export * from './sede-access.guard';

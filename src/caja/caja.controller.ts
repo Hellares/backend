@@ -19,6 +19,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -38,6 +39,7 @@ export class CajaController {
   constructor(private readonly cajaService: CajaService) {}
 
   @Post('abrir')
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.ABRIR_CAJA)
   @ApiOperation({ summary: 'Abrir una nueva caja' })
   @ApiResponse({ status: 201, description: 'Caja abierta exitosamente' })

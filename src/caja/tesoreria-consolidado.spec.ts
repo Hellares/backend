@@ -15,6 +15,8 @@ describe('CajaService.getTesoreriaConsolidado', () => {
       movimientoCaja: { groupBy: jest.fn() },
       empresaBanco: { findMany: jest.fn() },
       cuentaRecaudacion: { findMany: jest.fn() },
+      // Abonos CxC cobrados directo a banco (recaudación por método).
+      pagoVenta: { groupBy: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([]),
     };
     service = new CajaService(prisma, {} as any);

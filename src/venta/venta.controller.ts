@@ -20,6 +20,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
 import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -54,6 +55,7 @@ export class VentaController {
   }
 
   @Post('cobrar')
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({ summary: 'Crear y cobrar venta POS en un solo paso' })
   @ApiResponse({ status: 201, description: 'Venta creada y cobrada exitosamente' })

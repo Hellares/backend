@@ -232,4 +232,19 @@ export class SedeResponseDto {
     required: false,
   })
   userRole?: SedeRole;
+
+  @ApiProperty({
+    description:
+      'El usuario tiene asignación (UsuarioSedeRol) en esta sede. Los admin de empresa ' +
+      'operan todas las sedes; el resto solo las asignadas. Úsalo en el front para ' +
+      'mostrar el selector de "sede activa".',
+    example: true,
+  })
+  asignada: boolean;
+
+  @ApiProperty({
+    description: 'El usuario puede abrir caja en esta sede (override de UsuarioSedeRol).',
+    example: true,
+  })
+  puedeAbrirCaja: boolean;
 }
