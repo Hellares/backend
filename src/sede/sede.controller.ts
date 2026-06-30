@@ -291,6 +291,23 @@ export class SedeController {
   }
 
   /**
+   * Readiness / estado de activación de la sede (checklist de onboarding POS).
+   */
+  @Get(':sedeId/readiness')
+  @ApiOperation({
+    summary: 'Estado de activación de la sede',
+    description:
+      'Conteos para el checklist de onboarding: usuarios asignados, productos ' +
+      'con precio, productos con stock, caja central y si está lista para vender.',
+  })
+  async getReadinessSede(
+    @Param('empresaId') empresaId: string,
+    @Param('sedeId') sedeId: string,
+  ) {
+    return this.sedeService.getReadiness(empresaId, sedeId);
+  }
+
+  /**
    * Remover usuario de sede
    */
   @Delete(':sedeId/usuarios/:usuarioSedeRolId')

@@ -665,6 +665,51 @@ export class SedeService {
     return usuarios;
   }
 
+  /**
+   * Estado de "activación" (readiness) de una sede para operar como POS:
+   * usuarios asignados, productos con precio configurado, productos con stock,
+   * y si tiene caja central. El front lo usa para el checklist de onboarding.
+   */
+  async getReadiness(empresaId: string, sedeId: string) {
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: sedeId, empresaId, deletedAt: null },
+      select: { id: true, nombre: true, esPrincipal: true, tipoSede: true },
+    });
+    if (!sede) throw new NotFoundException('Sede no encontrada');
+
+    const [usuarios, productosConPrecio, productosConStock, totalProductos, cajaCentral] =
+      await Promise.all([
+        this.prisma.usuarioSedeRol.count({
+          where: { sedeId, isActive: true, deletedAt: null },
+        }),
+        this.prisma.productoStock.count({
+          where: { sedeId, precioConfigurado: true },
+        }),
+        this.prisma.productoStock.count({
+          where: { sedeId, stockActual: { gt: 0 } },
+        }),
+        this.prisma.productoStock.count({ where: { sedeId } }),
+        this.prisma.caja.count({ where: { sedeId, esCajaCentral: true } }),
+      ]);
+
+    return {
+      sede: {
+        id: sede.id,
+        nombre: sede.nombre,
+        esPrincipal: sede.esPrincipal,
+        tipoSede: sede.tipoSede,
+      },
+      usuarios,
+      productosConPrecio,
+      productosConStock,
+      totalProductos,
+      cajaCentral: cajaCentral > 0,
+      // Lista para vender: al menos 1 usuario asignado, 1 producto con precio
+      // y 1 con stock. (La caja central se crea sola al abrir la primera caja.)
+      listaParaVender: usuarios > 0 && productosConPrecio > 0 && productosConStock > 0,
+    };
+  }
+
   // ==================== MÉTODOS PRIVADOS ====================
 
   /**
