@@ -672,6 +672,13 @@ export class ProductoService {
       where: {
         empresaId,
         deletedAt: null,
+        // Multi-sede: el delta debe ser consistente con `findAll`, que solo
+        // muestra productos con ProductoStock en la sede pedida. Sin esto, un
+        // producto modificado en OTRA sede (p.ej. DISCO en la Principal) se
+        // colaba en el delta de Chiclayo y aparecía en su VR.
+        ...(query.sedeId
+          ? { stocksPorSede: { some: { sedeId: query.sedeId } } }
+          : {}),
         OR: [
           { actualizadoEn: { gt: since } },
           { stocksPorSede: { some: { actualizadoEn: { gt: since } } } },
