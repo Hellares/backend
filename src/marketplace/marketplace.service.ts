@@ -650,6 +650,8 @@ export class MarketplaceService {
       precio: stock?.precio ? Number(stock.precio) : null,
       precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
       enOferta: ofertaActiva,
+      ofertaInicio: ofertaActiva ? stock?.fechaInicioOferta ?? null : null,
+      ofertaFin: ofertaActiva ? stock?.fechaFinOferta ?? null : null,
       hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
       stockActual: stock?.stockActual ?? 0,
       calificacion,
