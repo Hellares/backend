@@ -576,6 +576,29 @@ export class MarketplaceService {
       videoThumbnailUrl = videoArchivo?.urlThumbnail ?? null;
     }
 
+    // Prueba social honesta (datos reales): promedio de opiniones + total vendido
+    // (ventas no anuladas/borrador). Alimenta las estrellas y el "X vendidos" del
+    // detalle, al estilo Temu pero sin inventar números.
+    const [opinionAgg, vendidosAgg] = await Promise.all([
+      this.prisma.opinionProducto.aggregate({
+        where: { productoId: producto.id },
+        _avg: { calificacion: true },
+        _count: true,
+      }),
+      this.prisma.ventaDetalle.aggregate({
+        where: {
+          productoId: producto.id,
+          venta: { estado: { notIn: ['BORRADOR', 'ANULADA'] } },
+        },
+        _sum: { cantidad: true },
+      }),
+    ]);
+    const totalOpiniones = opinionAgg._count;
+    const calificacion = totalOpiniones > 0
+      ? Math.round((opinionAgg._avg.calificacion ?? 0) * 10) / 10
+      : null;
+    const vendidos = Number(vendidosAgg._sum.cantidad ?? 0);
+
     const stock = producto.stocksPorSede[0];
 
     // Validar oferta vigente
@@ -629,6 +652,9 @@ export class MarketplaceService {
       enOferta: ofertaActiva,
       hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
       stockActual: stock?.stockActual ?? 0,
+      calificacion,
+      totalOpiniones,
+      vendidos,
       videoUrl: producto.videoUrl || null,
       videoThumbnailUrl,
       imagenes: imagenes.map((i) => ({ id: i.id, url: i.url, thumbnail: i.urlThumbnail })),
