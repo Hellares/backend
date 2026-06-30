@@ -529,6 +529,11 @@ export class MarketplaceService {
         },
         stocksPorSede: {
           where: { precioConfigurado: true },
+          // Mismo criterio que la lista (_includeMarketplace): el stock más
+          // barato. Sin esto el detalle agarraba un stock arbitrario (otra sede)
+          // y mostraba un precio distinto al de la card + perdía la oferta.
+          orderBy: { precio: 'asc' },
+          take: 1,
           select: {
             precio: true, precioOferta: true, enOferta: true, stockActual: true,
             fechaInicioOferta: true, fechaFinOferta: true,
