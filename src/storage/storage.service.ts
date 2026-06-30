@@ -820,10 +820,19 @@ export class StorageService {
       folder: this.getFolderPath(empresaId, entidadTipo),
     });
 
-    // Actualizar solo metadata en BD (URL no cambia)
+    // Versionar la URL para bustear caches (CDN + cache de video en device).
+    // El objeto se sobrescribió en la MISMA key física, así que sin un cambio de
+    // URL el edge y el dispositivo seguirían sirviendo la versión cruda (moov al
+    // final). Mantenemos la key; solo agregamos un query `?v=` que el storage
+    // ignora pero que funciona como cache key distinto en CDN y flutter_cache_manager.
+    const version = Date.now().toString(36);
+    const baseUrl = archivoActual.url.split('?')[0];
+    const versionedUrl = `${baseUrl}?v=${version}`;
+
     await this.prisma.archivo.update({
       where: { id: archivoId },
       data: {
+        url: versionedUrl,
         tamanoBytes: processed.processedSize,
         ancho: processed.width,
         alto: processed.height,
@@ -831,9 +840,19 @@ export class StorageService {
       },
     });
 
+    // El marketplace reproduce desde Producto.videoUrl (campo denormalizado), no
+    // desde Archivo.url. Propagamos la URL versionada al producto para que el app
+    // reciba el cache-bust y baje la versión faststart/optimizada.
+    if (entidadTipo === EntidadTipo.PRODUCTO && archivoActual.entidadId) {
+      await this.prisma.producto.updateMany({
+        where: { id: archivoActual.entidadId, empresaId },
+        data: { videoUrl: versionedUrl },
+      });
+    }
+
     const reduction = processed.reduction;
     this.logger.log(
-      `🎬 Video comprimido async: ${filename} | ${reduction} reduccion | misma URL`,
+      `🎬 Video comprimido async: ${filename} | ${reduction} reduccion | url versionada ?v=${version}`,
     );
   }
 
