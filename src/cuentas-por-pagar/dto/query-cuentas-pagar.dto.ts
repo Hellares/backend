@@ -18,6 +18,11 @@ export class QueryCuentasPagarDto {
   @IsString()
   proveedorId?: string;
 
+  @ApiProperty({ required: false, description: 'Filtra por la sede de la compra (multi-sede).' })
+  @IsOptional()
+  @IsString()
+  sedeId?: string;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()

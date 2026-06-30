@@ -385,19 +385,22 @@ export class FacturacionService {
   async listarComprobantes(empresaId: string, filtros: {
     tipo?: string;
     sunatStatus?: string;
+    sedeId?: string;
     fechaDesde?: string;
     fechaHasta?: string;
     busqueda?: string;
     page: number;
     limit: number;
   }) {
-    const { tipo, sunatStatus, fechaDesde, fechaHasta, busqueda, page, limit } = filtros;
+    const { tipo, sunatStatus, sedeId, fechaDesde, fechaHasta, busqueda, page, limit } = filtros;
     const skip = (page - 1) * limit;
 
     const where: any = { empresaId };
 
     if (tipo) where.tipoComprobante = tipo;
     if (sunatStatus) where.sunatStatus = sunatStatus;
+    // Multi-sede: filtra por la sede emisora del comprobante.
+    if (sedeId) where.sedeId = sedeId;
 
     if (fechaDesde || fechaHasta) {
       where.fechaEmision = {};

@@ -87,6 +87,7 @@ export class CuentasPorPagarService {
     filtros?: {
       estado?: 'PENDIENTE' | 'VENCIDA' | 'PAGADA';
       proveedorId?: string;
+      sedeId?: string;
       search?: string;
     },
   ) {
@@ -100,6 +101,8 @@ export class CuentasPorPagarService {
     };
 
     if (filtros?.proveedorId) where.proveedorId = filtros.proveedorId;
+    // Multi-sede: filtra por la sede de la compra.
+    if (filtros?.sedeId) where.sedeId = filtros.sedeId;
     if (filtros?.search) {
       where.OR = [
         { codigo: { contains: filtros.search, mode: 'insensitive' } },
