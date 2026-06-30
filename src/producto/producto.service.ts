@@ -463,6 +463,10 @@ export class ProductoService {
       where: {
         empresaId,
         entidadTipo: 'PRODUCTO',
+        // Solo imágenes: el video del producto también es un Archivo
+        // (entidadTipo PRODUCTO) pero se sirve por `Producto.videoUrl`, no
+        // por la galería. Sin este filtro su thumbnail aparecía como imagen.
+        tipoArchivo: 'IMAGEN',
         entidadId: { in: productosIds },
         isActive: true,
         deletedAt: null,
@@ -735,6 +739,8 @@ export class ProductoService {
         where: {
           empresaId,
           entidadTipo: 'PRODUCTO',
+          // Solo imágenes (el video se sirve por `Producto.videoUrl`).
+          tipoArchivo: 'IMAGEN',
           entidadId: { in: productosIds },
           isActive: true,
           deletedAt: null,
@@ -1636,6 +1642,8 @@ export class ProductoService {
         where: {
           empresaId,
           entidadTipo: 'PRODUCTO',
+          // Solo imágenes (el video se sirve por `Producto.videoUrl`).
+          tipoArchivo: 'IMAGEN',
           entidadId: { in: productosIds },
           isActive: true,
           deletedAt: null,

@@ -969,6 +969,9 @@ export class ProductoCatalogService {
       where: {
         empresaId,
         entidadTipo: 'PRODUCTO',
+        // Solo imágenes: el video del producto también es un Archivo pero se
+        // sirve por `Producto.videoUrl`, no por la galería de imágenes.
+        tipoArchivo: 'IMAGEN',
         entidadId: productoId,
         isActive: true,
         deletedAt: null,
