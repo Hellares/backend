@@ -558,6 +558,24 @@ export class MarketplaceService {
       orderBy: { orden: 'asc' },
     });
 
+    // Poster del video: el thumbnail (webp) generado al subir, para mostrarlo
+    // al instante mientras el video bufferea (mejora la percepción de carga).
+    let videoThumbnailUrl: string | null = null;
+    if (producto.videoUrl) {
+      const videoArchivo = await this.prisma.archivo.findFirst({
+        where: {
+          entidadTipo: 'PRODUCTO',
+          entidadId: producto.id,
+          tipoArchivo: 'VIDEO',
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { urlThumbnail: true },
+        orderBy: { creadoEn: 'desc' },
+      });
+      videoThumbnailUrl = videoArchivo?.urlThumbnail ?? null;
+    }
+
     const stock = producto.stocksPorSede[0];
 
     // Validar oferta vigente
@@ -612,6 +630,7 @@ export class MarketplaceService {
       hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
       stockActual: stock?.stockActual ?? 0,
       videoUrl: producto.videoUrl || null,
+      videoThumbnailUrl,
       imagenes: imagenes.map((i) => ({ id: i.id, url: i.url, thumbnail: i.urlThumbnail })),
       atributos: producto.atributosValores
         .filter((a) => a.atributo.mostrarEnMarketplace)
