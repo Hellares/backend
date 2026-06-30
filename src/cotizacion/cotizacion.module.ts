@@ -9,6 +9,7 @@ import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuraci
 import { ProductoModule } from '../producto/producto.module';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CajaModule } from '../caja/caja.module';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { CajaModule } from '../caja/caja.module';
     CajaModule,
   ],
   controllers: [CotizacionController],
-  providers: [CotizacionService, CotizacionTasksService, PlanLimitsService],
+  providers: [CotizacionService, CotizacionTasksService, PlanLimitsService, SedeAccessGuard],
   exports: [CotizacionService],
 })
 export class CotizacionModule {}

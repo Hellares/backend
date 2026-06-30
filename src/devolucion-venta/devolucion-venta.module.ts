@@ -6,6 +6,7 @@ import { LoggerModule } from '../common/logger/logger.module';
 import { AuthModule } from '../auth/auth.module';
 import { CajaModule } from '../caja/caja.module';
 import { NotificacionModule } from '../notificacion/notificacion.module';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 @Module({
   imports: [
     PrismaModule,
@@ -15,7 +16,7 @@ import { NotificacionModule } from '../notificacion/notificacion.module';
     NotificacionModule,
   ],
   controllers: [DevolucionVentaController],
-  providers: [DevolucionVentaService],
+  providers: [DevolucionVentaService, SedeAccessGuard],
   exports: [DevolucionVentaService],
 })
 export class DevolucionVentaModule {}

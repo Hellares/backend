@@ -26,6 +26,7 @@ import { RecibirTransferenciaConIncidenciasDto } from './dto/recibir-transferenc
 import { ResolverIncidenciaDto } from './dto/resolver-incidencia.dto';
 import { CrearIncidenciaPosteriorDto } from './dto/crear-incidencia-posterior.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { EstadoTransferencia } from '@prisma/client';
@@ -40,6 +41,7 @@ export class TransferenciaStockController {
   ) {}
 
   @Post()
+  @UseGuards(SedeAccessGuard)
   @ApiOperation({
     summary: 'Crear transferencia de stock',
     description:

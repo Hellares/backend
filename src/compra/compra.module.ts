@@ -14,6 +14,7 @@ import { LoteService } from './lote/lote.service';
 import { CompraAnalyticsController } from './analytics/compra-analytics.controller';
 import { CompraAnalyticsService } from './analytics/compra-analytics.service';
 import { CompraAnalyticsExportService } from './analytics/compra-analytics-export.service';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { CompraAnalyticsExportService } from './analytics/compra-analytics-expor
     LoteService,
     CompraAnalyticsService,
     CompraAnalyticsExportService,
+    SedeAccessGuard,
   ],
   exports: [
     OrdenCompraService,

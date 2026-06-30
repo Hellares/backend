@@ -68,6 +68,20 @@ describe('SedeAccessGuard', () => {
     await expect(guard.canActivate(ctx(baseReq()))).resolves.toBe(true);
   });
 
+  it('transferencia: valida la sede ORIGEN (body.sedeOrigenId) cuando no hay sedeId', async () => {
+    prisma.usuarioSedeRol.count.mockResolvedValue(1);
+    prisma.usuarioSedeRol.findFirst.mockResolvedValue(null);
+    const req = baseReq({ body: { sedeOrigenId: 'sede-origen' } });
+    await expect(guard.canActivate(ctx(req))).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(prisma.usuarioSedeRol.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ sedeId: 'sede-origen' }),
+      }),
+    );
+  });
+
   it('toma sedeId de query si no está en body', async () => {
     prisma.usuarioSedeRol.count.mockResolvedValue(1);
     prisma.usuarioSedeRol.findFirst.mockResolvedValue(null);

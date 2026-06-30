@@ -283,6 +283,7 @@ export class CajaController {
   }
 
   @Post('tesoreria/:sedeId/ajuste')
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_CAJA)
   @ApiOperation({
     summary:

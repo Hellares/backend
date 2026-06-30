@@ -18,6 +18,7 @@ import {
   ApiHeader,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { SedeAccessGuard } from '../../auth/guards/sede-access.guard';
 import { TenantAuthGuard } from '../../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { RequiresPermission } from '../../auth/decorators/requires-permission.decorator';
@@ -35,6 +36,7 @@ export class CompraController {
   constructor(private readonly compraService: CompraService) {}
 
   @Post()
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_COMPRAS)
   @ApiOperation({ summary: 'Crear compra standalone (sin OC)' })
   @ApiResponse({ status: 201, description: 'Compra creada exitosamente' })

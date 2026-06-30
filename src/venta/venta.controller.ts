@@ -42,6 +42,7 @@ export class VentaController {
   constructor(private readonly ventaService: VentaService) {}
 
   @Post()
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({ summary: 'Crear venta (BORRADOR)' })
   @ApiResponse({ status: 201, description: 'Venta creada exitosamente' })
@@ -69,6 +70,7 @@ export class VentaController {
   }
 
   @Post('cobrar-yape')
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({
     summary:

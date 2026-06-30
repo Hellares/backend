@@ -31,8 +31,13 @@ export class SedeAccessGuard implements CanActivate {
     const req = context.switchToHttp().getRequest();
     const user = req.user as any;
     const empresaId = req.headers['x-tenant-id'] as string | undefined;
+    // `sedeId` directo o, para transferencias, la sede ORIGEN (es desde donde
+    // el usuario opera/saca stock — debe tener acceso a esa).
     const sedeId: string | undefined =
-      req.body?.sedeId ?? req.query?.sedeId ?? req.params?.sedeId;
+      req.body?.sedeId ??
+      req.body?.sedeOrigenId ??
+      req.query?.sedeId ??
+      req.params?.sedeId;
 
     // No es una operación sede-scoped validable → dejar pasar.
     if (!user || !empresaId || !sedeId) return true;
