@@ -970,7 +970,10 @@ export class EmpresaService {
       },
       include: {
         usuarios: {
-          where: { usuarioId: userId },
+          // Solo asignaciones VIGENTES del usuario: sin esto, una asignación
+          // removida (soft-delete) o inactiva contaba como `asignada=true` y el
+          // usuario "veía" sedes que ya no le corresponden (multi-sede).
+          where: { usuarioId: userId, isActive: true, deletedAt: null },
         },
       },
       orderBy: [
