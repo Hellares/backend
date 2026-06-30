@@ -20,6 +20,7 @@ import {
   ApiHeader,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import {
@@ -48,6 +49,7 @@ export class OrdenServicioController {
   ) {}
 
   @Post()
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Crear una orden de servicio' })
   @ApiHeader({ name: 'x-tenant-id', required: true })

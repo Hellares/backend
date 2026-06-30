@@ -51,6 +51,11 @@ export class QueryOrdenServicioDto {
   @IsEnum(PrioridadServicio)
   prioridad?: PrioridadServicio;
 
+  @ApiPropertyOptional({ description: 'Filtrar por sede (multi-sede)' })
+  @IsOptional()
+  @IsString()
+  sedeId?: string;
+
   @ApiPropertyOptional({ description: 'Filtrar por cliente persona' })
   @IsOptional()
   @IsString()

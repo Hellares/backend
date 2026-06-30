@@ -926,6 +926,8 @@ export class OrdenServicioService {
     }
 
     if (query.estado) where.estado = query.estado;
+    // Multi-sede: filtra por la sede de la OS (estricto).
+    if (query.sedeId) where.sedeId = query.sedeId;
     if (query.tipoServicio) where.tipoServicio = query.tipoServicio;
     if (query.prioridad) where.prioridad = query.prioridad;
     if (query.clienteId) where.clienteId = query.clienteId;
