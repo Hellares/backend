@@ -301,13 +301,20 @@ export class MarketplaceService {
         isActive: true,
         deletedAt: null,
       },
-      select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
+      select: { entidadId: true, url: true, urlThumbnail: true, orden: true, ancho: true, alto: true },
       orderBy: { orden: 'asc' },
     });
-    const imagenMap = new Map<string, string>();
+    // La imagen principal se guarda con su proporción real (ancho/alto) para que
+    // las cards del marketplace puedan escalonarse tipo Temu (masonry).
+    type ImgInfo = { url: string; ancho: number | null; alto: number | null };
+    const imagenMap = new Map<string, ImgInfo>();
     for (const img of imagenes) {
       if (img.entidadId && !imagenMap.has(img.entidadId)) {
-        imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
+        imagenMap.set(img.entidadId, {
+          url: img.urlThumbnail || img.url,
+          ancho: img.ancho ?? null,
+          alto: img.alto ?? null,
+        });
       }
     }
 
@@ -324,13 +331,17 @@ export class MarketplaceService {
           isActive: true,
           deletedAt: null,
         },
-        select: { entidadId: true, url: true, urlThumbnail: true },
+        select: { entidadId: true, url: true, urlThumbnail: true, ancho: true, alto: true },
         orderBy: { orden: 'asc' },
       });
-      const imgPorVariante = new Map<string, string>();
+      const imgPorVariante = new Map<string, ImgInfo>();
       for (const im of varImgs) {
         if (im.entidadId && !imgPorVariante.has(im.entidadId)) {
-          imgPorVariante.set(im.entidadId, im.urlThumbnail || im.url);
+          imgPorVariante.set(im.entidadId, {
+            url: im.urlThumbnail || im.url,
+            ancho: im.ancho ?? null,
+            alto: im.alto ?? null,
+          });
         }
       }
       for (const p of sinImagen) {
@@ -421,7 +432,9 @@ export class MarketplaceService {
         ofertaFin: ofertaActiva ? (stock?.fechaFinOferta ?? null) : null,
         hayStock: allStocks.some((s: any) => (s.stockActual ?? 0) > 0),
         tieneVariantes,
-        imagen: imagenMap.get(p.id) ?? null,
+        imagen: imagenMap.get(p.id)?.url ?? null,
+        imagenAncho: imagenMap.get(p.id)?.ancho ?? null,
+        imagenAlto: imagenMap.get(p.id)?.alto ?? null,
         calificacion: opinionMap.get(p.id)?.promedio ?? null,
         totalOpiniones: opinionMap.get(p.id)?.total ?? 0,
         vendidos: vendidosMap.get(p.id) ?? 0,
