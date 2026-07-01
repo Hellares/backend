@@ -217,6 +217,7 @@ export class MarketplaceService {
       variantes: {
         where: { isActive: true, deletedAt: null },
         select: {
+          id: true,
           stocksPorSede: {
             where: { precioConfigurado: true },
             select: {
@@ -294,6 +295,36 @@ export class MarketplaceService {
     for (const img of imagenes) {
       if (img.entidadId && !imagenMap.has(img.entidadId)) {
         imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
+      }
+    }
+
+    // Fallback: productos SIN imagen base pero con variantes → usar la primera
+    // imagen de una variante (las imágenes viven en las variantes).
+    const sinImagen = productos.filter((p: any) => !imagenMap.has(p.id) && (p.variantes?.length ?? 0) > 0);
+    if (sinImagen.length > 0) {
+      const varIds = sinImagen.flatMap((p: any) => (p.variantes ?? []).map((v: any) => v.id));
+      const varImgs = await this.prisma.archivo.findMany({
+        where: {
+          entidadTipo: 'PRODUCTO_VARIANTE',
+          entidadId: { in: varIds },
+          tipoArchivo: 'IMAGEN',
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { entidadId: true, url: true, urlThumbnail: true },
+        orderBy: { orden: 'asc' },
+      });
+      const imgPorVariante = new Map<string, string>();
+      for (const im of varImgs) {
+        if (im.entidadId && !imgPorVariante.has(im.entidadId)) {
+          imgPorVariante.set(im.entidadId, im.urlThumbnail || im.url);
+        }
+      }
+      for (const p of sinImagen) {
+        for (const v of p.variantes ?? []) {
+          const im = imgPorVariante.get(v.id);
+          if (im) { imagenMap.set(p.id, im); break; }
+        }
       }
     }
 
@@ -633,6 +664,30 @@ export class MarketplaceService {
       orderBy: { orden: 'asc' },
     });
 
+    // Imágenes por variante (los productos con variantes suelen tener las
+    // imágenes en las variantes, no en el producto base).
+    const variantIds = (producto.variantes ?? []).map((v: any) => v.id);
+    const varImgs = variantIds.length
+      ? await this.prisma.archivo.findMany({
+          where: {
+            entidadTipo: 'PRODUCTO_VARIANTE',
+            entidadId: { in: variantIds },
+            tipoArchivo: 'IMAGEN',
+            isActive: true,
+            deletedAt: null,
+          },
+          select: { entidadId: true, url: true, urlThumbnail: true },
+          orderBy: { orden: 'asc' },
+        })
+      : [];
+    const varImgMap = new Map<string, { url: string; thumbnail: string | null }[]>();
+    for (const im of varImgs) {
+      if (!im.entidadId) continue;
+      const arr = varImgMap.get(im.entidadId) ?? [];
+      arr.push({ url: im.url, thumbnail: im.urlThumbnail });
+      varImgMap.set(im.entidadId, arr);
+    }
+
     // Poster del video: el thumbnail (webp) generado al subir, para mostrarlo
     // al instante mientras el video bufferea (mejora la percepción de carga).
     let videoThumbnailUrl: string | null = null;
@@ -689,6 +744,7 @@ export class MarketplaceService {
           nombre: a.atributo?.nombre ?? '',
           valor: a.valor,
         })),
+        imagenes: varImgMap.get(v.id) ?? [],
         precio: s?.precio ? Number(s.precio) : null,
         precioOferta: ofertaV && s?.precioOferta ? Number(s.precioOferta) : null,
         enOferta: ofertaV,
