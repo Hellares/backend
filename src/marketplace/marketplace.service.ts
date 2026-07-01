@@ -810,6 +810,9 @@ export class MarketplaceService {
         imagenes: varImgMap.get(v.id) ?? [],
         niveles: this._mapNiveles(v.preciosNivel),
         sede: s?.sede?.nombre ?? null,
+        sedeDireccion: s?.sede
+          ? [s.sede.direccion, s.sede.distrito, s.sede.provincia].filter(Boolean).join(', ') || null
+          : null,
         precio: s?.precio ? Number(s.precio) : null,
         precioOferta: ofertaV && s?.precioOferta ? Number(s.precioOferta) : null,
         enOferta: ofertaV,
