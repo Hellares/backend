@@ -342,6 +342,37 @@ export class MarketplaceService {
       });
     }
 
+    // Vendidos (prueba social): suma de VentaDetalle no anulada/borrador. Las
+    // ventas de variantes van por varianteId, así que sumamos base + variantes
+    // y se atribuyen al producto padre.
+    const allVariantIds = productos.flatMap((p: any) => (p.variantes ?? []).map((v: any) => v.id));
+    const varToProd = new Map<string, string>();
+    for (const p of productos) {
+      for (const v of p.variantes ?? []) varToProd.set(v.id, p.id);
+    }
+    const [ventasBase, ventasVar] = await Promise.all([
+      this.prisma.ventaDetalle.groupBy({
+        by: ['productoId'],
+        where: { productoId: { in: productoIds }, venta: { estado: { notIn: ['BORRADOR', 'ANULADA'] } } },
+        _sum: { cantidad: true },
+      }),
+      allVariantIds.length
+        ? this.prisma.ventaDetalle.groupBy({
+            by: ['varianteId'],
+            where: { varianteId: { in: allVariantIds }, venta: { estado: { notIn: ['BORRADOR', 'ANULADA'] } } },
+            _sum: { cantidad: true },
+          })
+        : Promise.resolve([] as any[]),
+    ]);
+    const vendidosMap = new Map<string, number>();
+    for (const v of ventasBase) {
+      if (v.productoId) vendidosMap.set(v.productoId, (vendidosMap.get(v.productoId) ?? 0) + Number(v._sum.cantidad ?? 0));
+    }
+    for (const v of ventasVar) {
+      const pid = v.varianteId ? varToProd.get(v.varianteId) : null;
+      if (pid) vendidosMap.set(pid, (vendidosMap.get(pid) ?? 0) + Number(v._sum.cantidad ?? 0));
+    }
+
     return productos.map((p: any) => {
       // Pool de stocks: base + los de todas las variantes (productos con
       // variantes tienen el precio/stock en las variantes). El "desde" y la
@@ -379,6 +410,7 @@ export class MarketplaceService {
         imagen: imagenMap.get(p.id) ?? null,
         calificacion: opinionMap.get(p.id)?.promedio ?? null,
         totalOpiniones: opinionMap.get(p.id)?.total ?? 0,
+        vendidos: vendidosMap.get(p.id) ?? 0,
         distancia,
         coordenadas: coordenadas
           ? { lat: coordenadas.lat, lng: coordenadas.lng ?? coordenadas.lon }
