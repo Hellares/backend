@@ -212,6 +212,22 @@ export class MarketplaceService {
         // _seleccionarStock (oferta-aware). El orderBy es solo un desempate.
         orderBy: { precio: 'asc' },
       },
+      // Productos con variantes: el precio/stock vive en las VARIANTES (stock con
+      // varianteId, no en el base). Traemos sus stocks para calcular el "desde".
+      variantes: {
+        where: { isActive: true, deletedAt: null },
+        select: {
+          stocksPorSede: {
+            where: { precioConfigurado: true },
+            select: {
+              precio: true, precioOferta: true, enOferta: true, stockActual: true,
+              fechaInicioOferta: true, fechaFinOferta: true,
+              sede: { select: { coordenadas: true } },
+            },
+            orderBy: { precio: 'asc' },
+          },
+        },
+      },
     };
   }
 
@@ -296,7 +312,13 @@ export class MarketplaceService {
     }
 
     return productos.map((p: any) => {
-      const stock = this._seleccionarStock(p.stocksPorSede);
+      // Pool de stocks: base + los de todas las variantes (productos con
+      // variantes tienen el precio/stock en las variantes). El "desde" y la
+      // oferta salen del de menor precio efectivo.
+      const variantStocks = (p.variantes ?? []).flatMap((v: any) => v.stocksPorSede ?? []);
+      const allStocks = [...(p.stocksPorSede ?? []), ...variantStocks];
+      const stock = this._seleccionarStock(allStocks);
+      const tieneVariantes = (p.variantes?.length ?? 0) > 0;
       const coordenadas = stock?.sede?.coordenadas as any;
       let distancia: number | null = null;
 
@@ -321,7 +343,8 @@ export class MarketplaceService {
         precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
         enOferta: ofertaActiva,
         ofertaSede: ofertaActiva ? (stock?.sede?.nombre ?? null) : null,
-        hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+        hayStock: allStocks.some((s: any) => (s.stockActual ?? 0) > 0),
+        tieneVariantes,
         imagen: imagenMap.get(p.id) ?? null,
         calificacion: opinionMap.get(p.id)?.promedio ?? null,
         totalOpiniones: opinionMap.get(p.id)?.total ?? 0,
@@ -571,6 +594,27 @@ export class MarketplaceService {
             atributo: { select: { nombre: true, mostrarEnMarketplace: true } },
           },
         },
+        // Variantes activas con sus atributos (para el selector) y su stock/
+        // precio/oferta por sede (cada variante tiene su propio precio y stock).
+        variantes: {
+          where: { isActive: true, deletedAt: null },
+          orderBy: { orden: 'asc' },
+          select: {
+            id: true, nombre: true, sku: true,
+            atributosValores: {
+              select: { valor: true, atributo: { select: { nombre: true } } },
+            },
+            stocksPorSede: {
+              where: { precioConfigurado: true },
+              orderBy: { precio: 'asc' },
+              select: {
+                precio: true, precioOferta: true, enOferta: true, stockActual: true,
+                fechaInicioOferta: true, fechaFinOferta: true,
+                sede: { select: { nombre: true, coordenadas: true, direccion: true, distrito: true, provincia: true } },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -630,9 +674,35 @@ export class MarketplaceService {
       : null;
     const vendidos = Number(vendidosAgg._sum.cantidad ?? 0);
 
-    // Elegir el stock a mostrar: mejor precio efectivo (oferta-aware), igual
-    // que la lista → detalle y card coinciden y se prioriza la oferta.
-    const stock = this._seleccionarStock(producto.stocksPorSede);
+    // Variantes: cada una con su atributos (para el selector) + su precio/
+    // stock/oferta por sede (elegido oferta-aware, igual que el producto base).
+    const variantes = (producto.variantes ?? []).map((v: any) => {
+      const s = this._seleccionarStock(v.stocksPorSede);
+      const ofertaV = this._ofertaVigente(s);
+      return {
+        id: v.id,
+        nombre: v.nombre,
+        // Se incluyen TODOS los atributos de la variante (definen la combinación
+        // Color/Tamaño/…); no se filtran por mostrarEnMarketplace porque son los
+        // que el comprador necesita para elegir.
+        atributos: (v.atributosValores ?? []).map((a: any) => ({
+          nombre: a.atributo?.nombre ?? '',
+          valor: a.valor,
+        })),
+        precio: s?.precio ? Number(s.precio) : null,
+        precioOferta: ofertaV && s?.precioOferta ? Number(s.precioOferta) : null,
+        enOferta: ofertaV,
+        hayStock: s?.stockActual ? s.stockActual > 0 : false,
+        stockActual: s?.stockActual ?? 0,
+        ofertaSede: ofertaV ? (s?.sede?.nombre ?? null) : null,
+        ofertaFin: ofertaV ? (s?.fechaFinOferta ?? null) : null,
+      };
+    });
+
+    // Stock a mostrar en el header: menor precio efectivo entre el base y TODAS
+    // las variantes (el "desde"). Coincide con el criterio de la lista.
+    const variantStocks = (producto.variantes ?? []).flatMap((v: any) => v.stocksPorSede ?? []);
+    const stock = this._seleccionarStock([...(producto.stocksPorSede ?? []), ...variantStocks]);
     const ofertaActiva = this._ofertaVigente(stock);
 
     // Productos relacionados: misma categoría maestra, otras tiendas/productos.
@@ -675,8 +745,11 @@ export class MarketplaceService {
       ofertaSede: ofertaActiva ? (stock?.sede?.nombre ?? null) : null,
       ofertaInicio: ofertaActiva ? stock?.fechaInicioOferta ?? null : null,
       ofertaFin: ofertaActiva ? stock?.fechaFinOferta ?? null : null,
-      hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+      hayStock: [...(producto.stocksPorSede ?? []), ...variantStocks]
+        .some((s: any) => (s.stockActual ?? 0) > 0),
       stockActual: stock?.stockActual ?? 0,
+      tieneVariantes: variantes.length > 0,
+      variantes,
       calificacion,
       totalOpiniones,
       vendidos,
