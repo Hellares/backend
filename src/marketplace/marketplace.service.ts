@@ -206,12 +206,48 @@ export class MarketplaceService {
         select: {
           precio: true, precioOferta: true, enOferta: true, stockActual: true,
           fechaInicioOferta: true, fechaFinOferta: true,
-          sede: { select: { coordenadas: true } },
+          sede: { select: { nombre: true, coordenadas: true } },
         },
-        take: 1,
+        // Traemos TODAS las sedes con precio; la elección la hace
+        // _seleccionarStock (oferta-aware). El orderBy es solo un desempate.
         orderBy: { precio: 'asc' },
       },
     };
+  }
+
+  /** ¿La oferta del stock está vigente (flag + precio + dentro de fechas)? */
+  private _ofertaVigente(stock: any): boolean {
+    if (!stock?.enOferta || !stock?.precioOferta) return false;
+    const ahora = new Date();
+    const inicio = stock.fechaInicioOferta ? new Date(stock.fechaInicioOferta) : null;
+    const fin = stock.fechaFinOferta ? new Date(stock.fechaFinOferta) : null;
+    if (inicio && fin) return ahora >= inicio && ahora <= fin;
+    if (inicio) return ahora >= inicio;
+    if (fin) return ahora <= fin;
+    return true;
+  }
+
+  /** Precio que efectivamente paga el comprador: oferta vigente si la hay, si no el base. */
+  private _precioEfectivo(stock: any): number {
+    const base = Number(stock?.precio ?? Infinity);
+    if (this._ofertaVigente(stock)) {
+      const of = Number(stock.precioOferta);
+      return Number.isFinite(of) ? of : base;
+    }
+    return base;
+  }
+
+  /**
+   * Entre los stocks de las sedes elige el que conviene mostrar en el
+   * marketplace: el de MENOR precio efectivo. Así se prioriza la oferta cuando
+   * es el mejor precio, sin mostrar una "oferta" más cara que otra sede sin
+   * promo (regla honesta). Compartido por listado y detalle → coinciden.
+   */
+  private _seleccionarStock(stocks: any[]): any | undefined {
+    if (!stocks || stocks.length === 0) return undefined;
+    return stocks.reduce((mejor, s) =>
+      this._precioEfectivo(s) < this._precioEfectivo(mejor) ? s : mejor,
+    );
   }
 
   /**
@@ -260,7 +296,7 @@ export class MarketplaceService {
     }
 
     return productos.map((p: any) => {
-      const stock = p.stocksPorSede[0];
+      const stock = this._seleccionarStock(p.stocksPorSede);
       const coordenadas = stock?.sede?.coordenadas as any;
       let distancia: number | null = null;
 
@@ -271,16 +307,7 @@ export class MarketplaceService {
         ) / 10;
       }
 
-      let ofertaActiva = false;
-      if (stock?.enOferta && stock?.precioOferta) {
-        const ahora = new Date();
-        const inicio = stock.fechaInicioOferta ? new Date(stock.fechaInicioOferta) : null;
-        const fin = stock.fechaFinOferta ? new Date(stock.fechaFinOferta) : null;
-        if (inicio && fin) ofertaActiva = ahora >= inicio && ahora <= fin;
-        else if (inicio) ofertaActiva = ahora >= inicio;
-        else if (fin) ofertaActiva = ahora <= fin;
-        else ofertaActiva = true;
-      }
+      const ofertaActiva = this._ofertaVigente(stock);
 
       return {
         id: p.id,
@@ -293,6 +320,7 @@ export class MarketplaceService {
         precio: stock?.precio ? Number(stock.precio) : null,
         precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
         enOferta: ofertaActiva,
+        ofertaSede: ofertaActiva ? (stock?.sede?.nombre ?? null) : null,
         hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
         imagen: imagenMap.get(p.id) ?? null,
         calificacion: opinionMap.get(p.id)?.promedio ?? null,
@@ -529,11 +557,9 @@ export class MarketplaceService {
         },
         stocksPorSede: {
           where: { precioConfigurado: true },
-          // Mismo criterio que la lista (_includeMarketplace): el stock más
-          // barato. Sin esto el detalle agarraba un stock arbitrario (otra sede)
-          // y mostraba un precio distinto al de la card + perdía la oferta.
+          // Todas las sedes con precio; _seleccionarStock elige la de mejor
+          // precio efectivo (oferta-aware), igual que la lista → coinciden.
           orderBy: { precio: 'asc' },
-          take: 1,
           select: {
             precio: true, precioOferta: true, enOferta: true, stockActual: true,
             fechaInicioOferta: true, fechaFinOferta: true,
@@ -604,19 +630,10 @@ export class MarketplaceService {
       : null;
     const vendidos = Number(vendidosAgg._sum.cantidad ?? 0);
 
-    const stock = producto.stocksPorSede[0];
-
-    // Validar oferta vigente
-    let ofertaActiva = false;
-    if (stock?.enOferta && stock?.precioOferta) {
-      const ahora = new Date();
-      const inicio = stock.fechaInicioOferta ? new Date(stock.fechaInicioOferta) : null;
-      const fin = stock.fechaFinOferta ? new Date(stock.fechaFinOferta) : null;
-      if (inicio && fin) ofertaActiva = ahora >= inicio && ahora <= fin;
-      else if (inicio) ofertaActiva = ahora >= inicio;
-      else if (fin) ofertaActiva = ahora <= fin;
-      else ofertaActiva = true;
-    }
+    // Elegir el stock a mostrar: mejor precio efectivo (oferta-aware), igual
+    // que la lista → detalle y card coinciden y se prioriza la oferta.
+    const stock = this._seleccionarStock(producto.stocksPorSede);
+    const ofertaActiva = this._ofertaVigente(stock);
 
     // Productos relacionados: misma categoría maestra, otras tiendas/productos.
     const categoriaMaestraId =
@@ -655,6 +672,7 @@ export class MarketplaceService {
       precio: stock?.precio ? Number(stock.precio) : null,
       precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
       enOferta: ofertaActiva,
+      ofertaSede: ofertaActiva ? (stock?.sede?.nombre ?? null) : null,
       ofertaInicio: ofertaActiva ? stock?.fechaInicioOferta ?? null : null,
       ofertaFin: ofertaActiva ? stock?.fechaFinOferta ?? null : null,
       hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
