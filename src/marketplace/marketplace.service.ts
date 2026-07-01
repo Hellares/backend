@@ -267,6 +267,19 @@ export class MarketplaceService {
     );
   }
 
+  /** Normaliza los precios por nivel (por mayor) para el marketplace. */
+  private _mapNiveles(arr: any[]): any[] {
+    return (arr ?? []).map((n) => ({
+      nombre: n.nombre,
+      cantidadMinima: n.cantidadMinima,
+      cantidadMaxima: n.cantidadMaxima,
+      tipoPrecio: n.tipoPrecio,
+      precio: n.precio != null ? Number(n.precio) : null,
+      porcentajeDesc: n.porcentajeDesc != null ? Number(n.porcentajeDesc) : null,
+      descripcion: n.descripcion ?? null,
+    }));
+  }
+
   /**
    * Hidrata productos crudos (cargados con `_includeMarketplace`) al shape de
    * card del marketplace: imagen principal, rating, oferta vigente y distancia.
@@ -658,6 +671,15 @@ export class MarketplaceService {
             atributo: { select: { nombre: true, mostrarEnMarketplace: true } },
           },
         },
+        // Precios por nivel/volumen (por mayor) del producto base.
+        preciosNivel: {
+          where: { isActive: true },
+          orderBy: { cantidadMinima: 'asc' },
+          select: {
+            nombre: true, cantidadMinima: true, cantidadMaxima: true,
+            tipoPrecio: true, precio: true, porcentajeDesc: true, descripcion: true,
+          },
+        },
         // Variantes activas con sus atributos (para el selector) y su stock/
         // precio/oferta por sede (cada variante tiene su propio precio y stock).
         variantes: {
@@ -675,6 +697,14 @@ export class MarketplaceService {
                 precio: true, precioOferta: true, enOferta: true, stockActual: true,
                 fechaInicioOferta: true, fechaFinOferta: true,
                 sede: { select: { nombre: true, coordenadas: true, direccion: true, distrito: true, provincia: true } },
+              },
+            },
+            preciosNivel: {
+              where: { isActive: true },
+              orderBy: { cantidadMinima: 'asc' },
+              select: {
+                nombre: true, cantidadMinima: true, cantidadMaxima: true,
+                tipoPrecio: true, precio: true, porcentajeDesc: true, descripcion: true,
               },
             },
           },
@@ -778,6 +808,7 @@ export class MarketplaceService {
           valor: a.valor,
         })),
         imagenes: varImgMap.get(v.id) ?? [],
+        niveles: this._mapNiveles(v.preciosNivel),
         precio: s?.precio ? Number(s.precio) : null,
         precioOferta: ofertaV && s?.precioOferta ? Number(s.precioOferta) : null,
         enOferta: ofertaV,
@@ -839,6 +870,7 @@ export class MarketplaceService {
       stockActual: stock?.stockActual ?? 0,
       tieneVariantes: variantes.length > 0,
       variantes,
+      niveles: this._mapNiveles(producto.preciosNivel),
       calificacion,
       totalOpiniones,
       vendidos,
