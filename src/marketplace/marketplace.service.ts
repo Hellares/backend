@@ -405,6 +405,7 @@ export class MarketplaceService {
         precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
         enOferta: ofertaActiva,
         ofertaSede: ofertaActiva ? (stock?.sede?.nombre ?? null) : null,
+        ofertaFin: ofertaActiva ? (stock?.fechaFinOferta ?? null) : null,
         hayStock: allStocks.some((s: any) => (s.stockActual ?? 0) > 0),
         tieneVariantes,
         imagen: imagenMap.get(p.id) ?? null,
