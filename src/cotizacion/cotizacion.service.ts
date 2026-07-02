@@ -194,6 +194,10 @@ export class CotizacionService {
           observaciones: dto.observaciones,
           condiciones: dto.condiciones,
           adelantoMonto: adelantoMonto > 0 ? adelantoMonto : null,
+          adelantoRequerido:
+            dto.adelantoRequerido && dto.adelantoRequerido > 0
+              ? dto.adelantoRequerido
+              : null,
           detalles: {
             create: detallesCalculados.map((d, idx) => {
               const info = reservaInfo[idx];
@@ -953,6 +957,197 @@ export class CotizacionService {
       total: Math.round(totalConIcbper * 100) / 100,
       orden: index,
     };
+  }
+
+  /**
+   * Confirmación AUTOMÁTICA del adelanto de separación vía api-yape (webhook
+   * `payment.confirmed` con reference `cotizacion:<id>`): el cliente del
+   * marketplace aceptó la cotización y yapeó el adelanto requerido.
+   *
+   * Efectos (en transacción): reserva el stock de los detalles (si no estaba
+   * reservado; best-effort — el dinero ya entró, no se bloquea por stock),
+   * registra el INGRESO en la Caja Central de la sede de la cotización
+   * (categoría ADELANTO_COTIZACION) y pasa la cotización a APROBADA con
+   * `adelantoMonto` = lo pagado. Idempotente (adelanto ya registrado → no-op).
+   * Al convertir a venta, el adelanto se aplica como pago previo (flujo
+   * existente); al anular/rechazar se devuelve (flujo existente).
+   */
+  async confirmarAdelantoYapeAutomatico(
+    empresaId: string,
+    cotizacionId: string,
+    datos: { monto: number; metodo: 'YAPE' | 'PLIN'; referencia?: string },
+  ) {
+    const cotizacion = await this.prisma.cotizacion.findFirst({
+      where: { id: cotizacionId, empresaId },
+      include: {
+        detalles: {
+          select: {
+            id: true,
+            productoId: true,
+            varianteId: true,
+            descripcion: true,
+            cantidad: true,
+            reservaEstado: true,
+          },
+        },
+        solicitudOrigen: { select: { solicitanteId: true } },
+      },
+    });
+    if (!cotizacion) return { accion: 'cotizacion-no-encontrada' };
+
+    // Idempotencia: webhook duplicado sobre adelanto ya registrado.
+    if (cotizacion.adelantoMonto && Number(cotizacion.adelantoMonto) > 0) {
+      return { accion: 'adelanto-ya-registrado' };
+    }
+    // Webhook tardío sobre cotización terminal → ignorar.
+    const pagables: EstadoCotizacion[] = [
+      EstadoCotizacion.BORRADOR,
+      EstadoCotizacion.PENDIENTE,
+      EstadoCotizacion.APROBADA,
+    ];
+    if (!pagables.includes(cotizacion.estado)) {
+      return { accion: 'cotizacion-no-pagable' };
+    }
+
+    const monto = Math.min(datos.monto, Number(cotizacion.total));
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1) Reservar stock si no había reserva activa. Best-effort: si no
+      //    alcanza el stock NO se bloquea (el cliente ya pagó) — la empresa
+      //    resuelve al preparar.
+      const sinReserva = cotizacion.detalles.every(
+        (d) => d.reservaEstado !== ReservaCotizacionEstado.ACTIVA,
+      );
+      if (sinReserva) {
+        try {
+          const detallesInfo = cotizacion.detalles.map((d) => ({
+            productoId: d.productoId,
+            varianteId: d.varianteId,
+            descripcion: d.descripcion,
+            cantidad: Number(d.cantidad),
+          }));
+          const reservaInfo = await this._prepararReservaInfo(
+            tx,
+            empresaId,
+            cotizacion.sedeId,
+            detallesInfo,
+          );
+          for (let i = 0; i < cotizacion.detalles.length; i++) {
+            const info = reservaInfo[i];
+            if (!info) continue;
+            await tx.productoStock.update({
+              where: { id: info.productoStockId },
+              data: { stockReservadoCotizacion: { increment: info.cantidad } },
+            });
+            await tx.cotizacionDetalle.update({
+              where: { id: cotizacion.detalles[i].id },
+              data: {
+                productoStockId: info.productoStockId,
+                cantidadReservada: info.cantidad,
+                reservaEstado: ReservaCotizacionEstado.ACTIVA,
+              },
+            });
+          }
+        } catch (e) {
+          this.logger.warn(
+            `Adelanto cotización ${cotizacion.codigo}: stock NO reservado (${e?.message ?? e})`,
+          );
+        }
+      }
+
+      // 2) Ingreso del adelanto a la Caja Central de la sede de la cotización
+      //    (pago digital automático, sin cajero — nunca se pierde).
+      let movimientoCajaId: string | undefined;
+      const admin = await tx.empresaUsuarioRol.findFirst({
+        where: { empresaId, rol: 'EMPRESA_ADMIN', estado: 'ACTIVO' },
+        select: { usuarioId: true },
+      });
+      if (admin) {
+        const central = await this.cajaService.getOrCreateCajaCentral(
+          empresaId,
+          cotizacion.sedeId,
+          tx,
+        );
+        const movimiento = await tx.movimientoCaja.create({
+          data: {
+            cajaId: central.id,
+            empresaId,
+            tipo: TipoMovimientoCaja.INGRESO,
+            categoria: CategoriaMovimientoCaja.ADELANTO_COTIZACION,
+            metodoPago:
+              datos.metodo === 'PLIN'
+                ? MetodoPagoVenta.PLIN
+                : MetodoPagoVenta.YAPE,
+            monto,
+            descripcion: `Adelanto cotización ${cotizacion.codigo} (Yape automático)`,
+            cotizacionId: cotizacion.id,
+            registradoPorId: admin.usuarioId,
+            esManual: false,
+            metadata: { automatico: true, fuente: 'webhook-yape' },
+          },
+        });
+        movimientoCajaId = movimiento.id;
+      } else {
+        this.logger.warn(
+          `Adelanto cotización ${cotizacion.codigo}: sin EMPRESA_ADMIN activo — ingreso a caja NO registrado`,
+        );
+      }
+
+      // 3) Registrar el adelanto y aprobar la cotización (cliente aceptó).
+      await tx.cotizacion.update({
+        where: { id: cotizacion.id },
+        data: {
+          adelantoMonto: monto,
+          ...(movimientoCajaId && { movimientoCajaId }),
+          ...(cotizacion.estado !== EstadoCotizacion.APROBADA && {
+            estado: EstadoCotizacion.APROBADA,
+          }),
+        },
+      });
+    });
+
+    // Notificaciones best-effort.
+    try {
+      const solicitanteId = cotizacion.solicitudOrigen[0]?.solicitanteId;
+      if (solicitanteId) {
+        await this.notificacionService.enviarAUsuario(
+          solicitanteId,
+          'Separación confirmada',
+          `Tu adelanto de S/ ${monto.toFixed(2)} para la cotización ${cotizacion.codigo} fue confirmado. ¡Tus productos quedaron separados!`,
+          {
+            tipo: TipoNotificacion.SISTEMA,
+            empresaId,
+            data: { cotizacionId: cotizacion.id },
+            guardar: true,
+          },
+        );
+      }
+    } catch (_) {}
+    try {
+      const staff = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          empresaId,
+          estado: 'ACTIVO',
+          rol: { in: ['EMPRESA_ADMIN', 'SEDE_ADMIN', 'VENDEDOR'] },
+        },
+        select: { usuarioId: true },
+      });
+      const ids = [...new Set(staff.map((s) => s.usuarioId))];
+      if (ids.length > 0) {
+        await this.notificacionService.enviarAUsuarios(
+          ids,
+          'Cotización separada',
+          `El cliente pagó S/ ${monto.toFixed(2)} de adelanto por la cotización ${cotizacion.codigo} (confirmación automática). Stock apartado.`,
+          {
+            tipo: TipoNotificacion.SISTEMA,
+            empresaId,
+            data: { cotizacionId: cotizacion.id },
+          },
+        );
+      }
+    } catch (_) {}
+
+    return { accion: 'adelanto-registrado', cotizacionId: cotizacion.id };
   }
 
   /**

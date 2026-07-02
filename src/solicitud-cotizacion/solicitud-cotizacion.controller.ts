@@ -69,6 +69,47 @@ export class SolicitudCotizacionClienteController {
   ) {
     return this.service.cancelar(usuarioId, id);
   }
+
+  // ─── Cotización formal (respuesta de la empresa) vista por el cliente ───
+
+  @Get(':id/cotizacion')
+  @ApiOperation({ summary: 'Ver la cotización formal de mi solicitud' })
+  async miCotizacion(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.miCotizacion(usuarioId, id);
+  }
+
+  @Post(':id/cotizacion/aceptar')
+  @ApiOperation({ summary: 'Aceptar la cotización (sin adelanto)' })
+  async aceptarCotizacion(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.aceptarCotizacion(usuarioId, id);
+  }
+
+  @Post(':id/cotizacion/rechazar')
+  @ApiOperation({ summary: 'Rechazar la cotización' })
+  async rechazarCotizacion(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.rechazarCotizacion(usuarioId, id);
+  }
+
+  @Post(':id/cotizacion/cobro-yape')
+  @ApiOperation({
+    summary:
+      'Pagar el adelanto de separación con Yape automático (api-yape). El webhook aprueba y reserva solo.',
+  })
+  async cobroYapeAdelanto(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.cobroYapeAdelanto(usuarioId, id);
+  }
 }
 
 // ─── ENDPOINTS DE LA EMPRESA (con tenant) ───

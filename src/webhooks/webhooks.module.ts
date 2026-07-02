@@ -7,6 +7,7 @@ import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.modu
 import { VentaModule } from '../venta/venta.module';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { PedidoMarketplaceModule } from '../pedido-marketplace/pedido-marketplace.module';
+import { CotizacionModule } from '../cotizacion/cotizacion.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { PedidoMarketplaceModule } from '../pedido-marketplace/pedido-marketplac
     VentaModule,
     NotificacionModule,
     PedidoMarketplaceModule,
+    CotizacionModule,
   ],
   controllers: [WebhooksController],
   providers: [WebhooksService],

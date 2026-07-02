@@ -120,4 +120,14 @@ export class CreateCotizacionDto {
   @IsOptional()
   @IsString()
   cajaId?: string;
+
+  // Adelanto que se le PIDE al cliente del marketplace para SEPARAR los
+  // productos (lo paga con Yape automático al aceptar la cotización; el
+  // webhook lo vuelve `adelantoMonto` + reserva de stock).
+  @ApiPropertyOptional({ description: 'Adelanto requerido para separar (marketplace)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  adelantoRequerido?: number;
 }

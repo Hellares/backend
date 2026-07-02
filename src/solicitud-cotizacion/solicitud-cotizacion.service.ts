@@ -5,7 +5,12 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
+import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
+import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
+import { CotizacionService } from '../cotizacion/cotizacion.service';
 import {
+  CaracteristicaPremium,
+  EstadoCotizacion,
   EstadoSolicitudCotizacion,
   Prisma,
   TipoNotificacion,
@@ -17,7 +22,15 @@ export class SolicitudCotizacionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificacionService: NotificacionService,
+    private readonly integracionYape: IntegracionYapeService,
+    private readonly caracteristicaEmpresa: CaracteristicaEmpresaService,
+    private readonly cotizacionService: CotizacionService,
   ) {}
+
+  /** Reference del charge api-yape del adelanto (el webhook rutea por prefijo). */
+  static referenciaYape(cotizacionId: string) {
+    return `cotizacion:${cotizacionId}`;
+  }
 
   // ─── CLIENTE ───
 
@@ -141,6 +154,231 @@ export class SolicitudCotizacionService {
     });
 
     return { message: 'Solicitud cancelada' };
+  }
+
+  /**
+   * Resuelve la cotización formal de una solicitud verificando que pertenezca
+   * al comprador. Base de los endpoints ver/aceptar/rechazar/pagar adelanto.
+   */
+  private async _cotizacionDelComprador(usuarioId: string, solicitudId: string) {
+    const solicitud = await this.prisma.solicitudCotizacion.findFirst({
+      where: { id: solicitudId, solicitanteId: usuarioId },
+      select: { id: true, codigo: true, cotizacionId: true, empresaId: true },
+    });
+    if (!solicitud) throw new NotFoundException('Solicitud no encontrada');
+    if (!solicitud.cotizacionId) {
+      throw new BadRequestException('Esta solicitud aún no tiene cotización');
+    }
+    const cotizacion = await this.prisma.cotizacion.findUnique({
+      where: { id: solicitud.cotizacionId },
+      include: {
+        detalles: { orderBy: { orden: 'asc' } },
+        sede: { select: { id: true, nombre: true, direccion: true } },
+      },
+    });
+    if (!cotizacion) throw new NotFoundException('Cotización no encontrada');
+    return { solicitud, cotizacion };
+  }
+
+  /**
+   * Cotización formal vista por el COMPRADOR (vía su solicitud): items con
+   * precios, totales, vigencia, adelanto requerido y estado.
+   */
+  async miCotizacion(usuarioId: string, solicitudId: string) {
+    const { solicitud, cotizacion } = await this._cotizacionDelComprador(
+      usuarioId,
+      solicitudId,
+    );
+    return {
+      ...cotizacion,
+      solicitudCodigo: solicitud.codigo,
+      tieneReservaActiva: cotizacion.detalles.some(
+        (d) => d.reservaEstado === 'ACTIVA',
+      ),
+    };
+  }
+
+  /**
+   * El cliente ACEPTA la cotización (sin adelanto): pasa a APROBADA y la
+   * empresa la cobra en tienda/al entregar. Para separar con adelanto está
+   * `cobroYapeAdelanto` (la aprobación ocurre al confirmarse el pago).
+   */
+  async aceptarCotizacion(usuarioId: string, solicitudId: string) {
+    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, solicitudId);
+
+    if (cotizacion.estado === EstadoCotizacion.APROBADA) {
+      return { message: 'La cotización ya estaba aceptada' };
+    }
+    if (cotizacion.estado !== EstadoCotizacion.PENDIENTE) {
+      throw new BadRequestException(
+        'Esta cotización ya no está disponible para aceptar',
+      );
+    }
+
+    await this.prisma.cotizacion.update({
+      where: { id: cotizacion.id },
+      data: { estado: EstadoCotizacion.APROBADA },
+    });
+
+    await this._notificarStaff(
+      cotizacion.empresaId,
+      'Cotización aceptada',
+      `El cliente aceptó la cotización ${cotizacion.codigo} por S/ ${Number(cotizacion.total).toFixed(2)}`,
+      cotizacion.id,
+    );
+
+    return { message: 'Cotización aceptada' };
+  }
+
+  /**
+   * El cliente RECHAZA la cotización: libera reservas si las hubiera.
+   * Solo mientras no haya adelanto pagado (con dinero de por medio la
+   * devolución la gestiona la empresa).
+   */
+  async rechazarCotizacion(usuarioId: string, solicitudId: string) {
+    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, solicitudId);
+
+    const rechazables: EstadoCotizacion[] = [
+      EstadoCotizacion.PENDIENTE,
+      EstadoCotizacion.APROBADA,
+    ];
+    if (!rechazables.includes(cotizacion.estado)) {
+      throw new BadRequestException('Esta cotización ya no se puede rechazar');
+    }
+    if (cotizacion.adelantoMonto && Number(cotizacion.adelantoMonto) > 0) {
+      throw new BadRequestException(
+        'Ya pagaste un adelanto por esta cotización — contacta a la empresa para gestionar la devolución',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.cotizacionService.liberarReservas(
+        tx,
+        cotizacion.id,
+        'LIBERAR',
+        usuarioId,
+      );
+      await tx.cotizacion.update({
+        where: { id: cotizacion.id },
+        data: { estado: EstadoCotizacion.RECHAZADA },
+      });
+    });
+
+    await this._notificarStaff(
+      cotizacion.empresaId,
+      'Cotización rechazada',
+      `El cliente rechazó la cotización ${cotizacion.codigo}`,
+      cotizacion.id,
+    );
+
+    return { message: 'Cotización rechazada' };
+  }
+
+  /**
+   * Inicia el pago del ADELANTO de separación vía api-yape: crea un charge
+   * con reference `cotizacion:<id>` por el `adelantoRequerido`. El webhook
+   * confirma solo (APROBADA + adelanto registrado + stock reservado).
+   * Devuelve { habilitado:false } si la empresa no tiene Yape automático →
+   * la app cae a coordinación manual.
+   */
+  async cobroYapeAdelanto(usuarioId: string, solicitudId: string) {
+    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, solicitudId);
+
+    const pagables: EstadoCotizacion[] = [
+      EstadoCotizacion.PENDIENTE,
+      EstadoCotizacion.APROBADA,
+    ];
+    if (!pagables.includes(cotizacion.estado)) {
+      throw new BadRequestException('Esta cotización ya no está disponible');
+    }
+    if (cotizacion.adelantoMonto && Number(cotizacion.adelantoMonto) > 0) {
+      throw new BadRequestException('El adelanto ya fue pagado');
+    }
+    const adelanto = Number(cotizacion.adelantoRequerido ?? 0);
+    if (adelanto <= 0) {
+      throw new BadRequestException('Esta cotización no requiere adelanto');
+    }
+
+    const total = Number(cotizacion.total);
+
+    // QR estático del comercio.
+    const cfgQr = await this.prisma.configuracionEmpresa.findUnique({
+      where: { empresaId: cotizacion.empresaId },
+      select: { qrYapeUrl: true, qrPlinUrl: true },
+    });
+    const qr = {
+      qrYapeUrl: cfgQr?.qrYapeUrl ?? null,
+      qrPlinUrl: cfgQr?.qrPlinUrl ?? null,
+    };
+
+    // Gates: característica premium + integración habilitada + límite Yape.
+    const yapeHabilitado = await this.caracteristicaEmpresa.estaHabilitada(
+      cotizacion.empresaId,
+      CaracteristicaPremium.YAPE_QR,
+    );
+    if (!yapeHabilitado) {
+      return { habilitado: false as const, total, adelanto, ...qr };
+    }
+    const cfgYape = await this.prisma.integracionYape.findUnique({
+      where: { empresaId: cotizacion.empresaId },
+      select: { habilitado: true, montoMaxPorTransaccion: true, celular: true },
+    });
+    if (!cfgYape?.habilitado || adelanto > Number(cfgYape.montoMaxPorTransaccion)) {
+      return { habilitado: false as const, total, adelanto, ...qr };
+    }
+
+    // Cancel-then-create: reabrir la hoja no acumula charges.
+    const reference = SolicitudCotizacionService.referenciaYape(cotizacion.id);
+    try {
+      await this.integracionYape.cancelarCobro({
+        empresaId: cotizacion.empresaId,
+        ventaId: reference,
+      });
+    } catch (_) {}
+
+    const cobro = await this.integracionYape.crearCobro({
+      empresaId: cotizacion.empresaId,
+      ventaId: reference,
+      monto: adelanto,
+    });
+    if (!cobro) return { habilitado: false as const, total, adelanto, ...qr };
+
+    return {
+      habilitado: true as const,
+      payAmount: cobro.payAmount,
+      chargeId: cobro.chargeId,
+      total,
+      adelanto,
+      celular: cfgYape.celular ?? null,
+      ...qr,
+    };
+  }
+
+  /** Notificación best-effort al staff de la empresa. */
+  private async _notificarStaff(
+    empresaId: string,
+    titulo: string,
+    mensaje: string,
+    cotizacionId: string,
+  ) {
+    try {
+      const staff = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          empresaId,
+          estado: 'ACTIVO',
+          rol: { in: ['EMPRESA_ADMIN', 'SEDE_ADMIN', 'VENDEDOR'] },
+        },
+        select: { usuarioId: true },
+      });
+      const ids = [...new Set(staff.map((s) => s.usuarioId))];
+      if (ids.length > 0) {
+        await this.notificacionService.enviarAUsuarios(ids, titulo, mensaje, {
+          tipo: TipoNotificacion.SISTEMA,
+          empresaId,
+          data: { cotizacionId },
+        });
+      }
+    } catch (_) {}
   }
 
   // ─── EMPRESA ───

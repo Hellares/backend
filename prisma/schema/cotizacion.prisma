@@ -51,6 +51,10 @@ model Cotizacion {
   //   MovimientoCaja(DEVOLUCION_ADELANTO).
   adelantoMonto    Decimal? @db.Decimal(10, 2)
   movimientoCajaId String?  // FK al INGRESO del adelanto (si aplica)
+  // Adelanto que la empresa PIDE para separar (marketplace): el cliente lo
+  // paga con Yape automático al aceptar la cotización → se vuelve
+  // `adelantoMonto` + reserva de stock. Null = no se ofrece separación.
+  adelantoRequerido Decimal? @db.Decimal(10, 2)
 
   // Observaciones
   observaciones String?

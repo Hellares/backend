@@ -7,6 +7,7 @@ import { IntegracionYapeService } from '../integracion-yape/integracion-yape.ser
 import { VentaService } from '../venta/venta.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { PedidoMarketplaceEmpresaService } from '../pedido-marketplace/pedido-marketplace-empresa.service';
+import { CotizacionService } from '../cotizacion/cotizacion.service';
 
 /**
  * Payload estándar de Syncrofact (documentacion/webhooks.md).
@@ -95,6 +96,7 @@ export class WebhooksService {
     private readonly ventaService: VentaService,
     private readonly realtime: RealtimeInvalidationService,
     private readonly pedidoMarketplaceEmpresa: PedidoMarketplaceEmpresaService,
+    private readonly cotizacionService: CotizacionService,
   ) {
     this.logger = loggerService;
     this.logger.setContext('WebhooksService');
@@ -128,6 +130,25 @@ export class WebhooksService {
         reference.slice('pedido:'.length),
         {
           metodo: metodoPedido,
+          referencia:
+            payload?.payment?.operationCode || payload?.payment?.id || undefined,
+        },
+      );
+      return { ok: true, ...res };
+    }
+
+    // Adelantos de SEPARACIÓN (cotización del marketplace) usan prefijo
+    // `cotizacion:` → registra el adelanto, reserva stock y aprueba la
+    // cotización automáticamente.
+    if (reference.startsWith('cotizacion:')) {
+      const metodoCot =
+        payload?.payment?.provider === 'plin' ? ('PLIN' as const) : ('YAPE' as const);
+      const res = await this.cotizacionService.confirmarAdelantoYapeAutomatico(
+        empresaId,
+        reference.slice('cotizacion:'.length),
+        {
+          monto: Number(payload?.charge?.baseAmount ?? 0),
+          metodo: metodoCot,
           referencia:
             payload?.payment?.operationCode || payload?.payment?.id || undefined,
         },

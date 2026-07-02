@@ -17,6 +17,7 @@ describe('WebhooksService.procesarPagoYape', () => {
   let ventaService: any;
   let realtime: any;
   let pedidoEmpresa: any;
+  let cotizacionService: any;
   let service: WebhooksService;
 
   const logger = {
@@ -54,6 +55,11 @@ describe('WebhooksService.procesarPagoYape', () => {
         .fn()
         .mockResolvedValue({ accion: 'pago-validado', pedidoId: 'ped-1' }),
     };
+    cotizacionService = {
+      confirmarAdelantoYapeAutomatico: jest
+        .fn()
+        .mockResolvedValue({ accion: 'adelanto-registrado', cotizacionId: 'cot-1' }),
+    };
     service = new WebhooksService(
       prisma,
       logger as any,
@@ -61,7 +67,24 @@ describe('WebhooksService.procesarPagoYape', () => {
       ventaService,
       realtime,
       pedidoEmpresa,
+      cotizacionService,
     );
+  });
+
+  it('reference con prefijo cotizacion: → registra el adelanto de separación (no toca ventas)', async () => {
+    conPayload(
+      payloadPago({ charge: { reference: 'cotizacion:cot-1', baseAmount: 50 } }),
+    );
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+
+    expect(cotizacionService.confirmarAdelantoYapeAutomatico).toHaveBeenCalledWith(
+      'emp-1',
+      'cot-1',
+      { monto: 50, metodo: 'YAPE', referencia: 'OP-123' },
+    );
+    expect(r).toMatchObject({ ok: true, accion: 'adelanto-registrado' });
+    expect(prisma.venta.findFirst).not.toHaveBeenCalled();
   });
 
   it('reference con prefijo pedido: → rutea al pedido marketplace (no toca ventas)', async () => {
