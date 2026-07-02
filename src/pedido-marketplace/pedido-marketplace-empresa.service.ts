@@ -738,34 +738,42 @@ export class PedidoMarketplaceEmpresaService {
    * Resumen de pedidos para dashboard
    */
   async resumen(empresaId: string) {
-    const [pendientesPago, pagoEnviado, enPreparacion, enviados, totalMes] = await Promise.all([
-      this.prisma.pedidoMarketplace.count({
-        where: { empresaId, estado: EstadoPedidoMarketplace.PENDIENTE_PAGO },
-      }),
-      this.prisma.pedidoMarketplace.count({
-        where: { empresaId, estado: EstadoPedidoMarketplace.PAGO_ENVIADO },
-      }),
-      this.prisma.pedidoMarketplace.count({
-        where: { empresaId, estado: EstadoPedidoMarketplace.EN_PREPARACION },
-      }),
-      this.prisma.pedidoMarketplace.count({
-        where: { empresaId, estado: EstadoPedidoMarketplace.ENVIADO },
-      }),
-      this.prisma.pedidoMarketplace.count({
-        where: {
-          empresaId,
-          creadoEn: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
-        },
-      }),
-    ]);
+    const [pendientesPago, pagoEnviado, pagoValidado, enPreparacion, enviados, totalMes] =
+      await Promise.all([
+        this.prisma.pedidoMarketplace.count({
+          where: { empresaId, estado: EstadoPedidoMarketplace.PENDIENTE_PAGO },
+        }),
+        this.prisma.pedidoMarketplace.count({
+          where: { empresaId, estado: EstadoPedidoMarketplace.PAGO_ENVIADO },
+        }),
+        this.prisma.pedidoMarketplace.count({
+          where: { empresaId, estado: EstadoPedidoMarketplace.PAGO_VALIDADO },
+        }),
+        this.prisma.pedidoMarketplace.count({
+          where: { empresaId, estado: EstadoPedidoMarketplace.EN_PREPARACION },
+        }),
+        this.prisma.pedidoMarketplace.count({
+          where: { empresaId, estado: EstadoPedidoMarketplace.ENVIADO },
+        }),
+        this.prisma.pedidoMarketplace.count({
+          where: {
+            empresaId,
+            creadoEn: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
+          },
+        }),
+      ]);
 
     return {
       pendientesPago,
       pagoEnviado,
+      pagoValidado,
       enPreparacion,
       enviados,
       totalMes,
-      requierenAccion: pagoEnviado,
+      // Requieren acción de la empresa: validar el comprobante (PAGO_ENVIADO)
+      // o preparar el pedido ya pagado (PAGO_VALIDADO — con Yape automático y
+      // contraentrega los pedidos llegan directo a este estado).
+      requierenAccion: pagoEnviado + pagoValidado,
     };
   }
 
