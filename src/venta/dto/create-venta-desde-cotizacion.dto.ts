@@ -6,6 +6,7 @@ import {
   IsEnum,
   IsDateString,
   IsArray,
+  Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -86,6 +87,34 @@ export class CreateVentaDesdeCotizacionDto {
   @ApiPropertyOptional({ description: 'Ajustes de cantidad por detalleId (stock parcial)', example: { 'detalleId1': 10 } })
   @IsOptional()
   ajustarCantidades?: Record<string, number>;
+
+  // ── Descuentos aplicados al COBRAR (cola POS) ──
+
+  @ApiPropertyOptional({
+    description: 'Descuento por línea: {detalleId: monto total de descuento de esa línea}',
+    example: { detalleId1: 5.5 },
+  })
+  @IsOptional()
+  ajustarDescuentos?: Record<string, number>;
+
+  @ApiPropertyOptional({ description: 'Descuento global en monto (se resta del total final)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  descuentoGlobal?: number;
+
+  @ApiPropertyOptional({ description: 'Porcentaje del descuento global (informativo)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  descuentoGlobalPorcentaje?: number;
+
+  @ApiPropertyOptional({ description: 'Usuario que autorizó el descuento' })
+  @IsOptional()
+  @IsString()
+  descuentoAutorizadoPorId?: string;
 
   @ApiPropertyOptional({ description: 'Items adicionales agregados por el cajero' })
   @IsOptional()

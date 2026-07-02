@@ -2240,34 +2240,50 @@ export class VentaService {
           tx,
         );
 
-      // 3b. Filtrar detalles excluidos y ajustar cantidades
+      // 3b. Filtrar detalles excluidos, ajustar cantidades y aplicar
+      //     descuentos por línea del cajero (cola POS).
       const excluirIds = new Set(dto.excluirDetalleIds ?? []);
       const ajustes = dto.ajustarCantidades ?? {};
-      const hayModificaciones = excluirIds.size > 0 || Object.keys(ajustes).length > 0;
+      const ajustesDescuento = dto.ajustarDescuentos ?? {};
+      const hayModificaciones =
+        excluirIds.size > 0 ||
+        Object.keys(ajustes).length > 0 ||
+        Object.keys(ajustesDescuento).length > 0;
 
-      // Filtrar excluidos y aplicar ajustes de cantidad
+      // Filtrar excluidos y aplicar ajustes de cantidad/descuento
       const detallesVenta = cotizacion.detalles
         .filter((d) => !excluirIds.has(d.id))
         .map((d) => {
-          if (ajustes[d.id] !== undefined) {
-            const nuevaCantidad = ajustes[d.id];
-            const precioUnit = Number(d.precioUnitario);
-            const descUnit = Number(d.descuento) / Number(d.cantidad);
-            const nuevoDescuento = descUnit * nuevaCantidad;
-            const nuevoSubtotal = (precioUnit * nuevaCantidad) - nuevoDescuento;
-            const porcentajeIGV = Number(d.porcentajeIGV) / 100;
-            const nuevoIgv = round2(nuevoSubtotal * porcentajeIGV);
-            const nuevoTotal = nuevoSubtotal + nuevoIgv;
-            return {
-              ...d,
-              cantidad: new Prisma.Decimal(nuevaCantidad),
-              descuento: new Prisma.Decimal(nuevoDescuento.toFixed(2)),
-              subtotal: new Prisma.Decimal(nuevoSubtotal.toFixed(2)),
-              igv: new Prisma.Decimal(nuevoIgv.toFixed(2)),
-              total: new Prisma.Decimal(nuevoTotal.toFixed(2)),
-            };
+          const tieneAjusteCant = ajustes[d.id] !== undefined;
+          const tieneAjusteDesc = ajustesDescuento[d.id] !== undefined;
+          if (!tieneAjusteCant && !tieneAjusteDesc) return d;
+
+          const nuevaCantidad = tieneAjusteCant ? ajustes[d.id] : Number(d.cantidad);
+          const precioUnit = Number(d.precioUnitario);
+          // Descuento de la línea: el indicado por el cajero (monto total de
+          // la línea) o el original prorrateado a la nueva cantidad.
+          const descUnit = Number(d.descuento) / Number(d.cantidad);
+          const nuevoDescuento = tieneAjusteDesc
+            ? round2(Math.max(0, ajustesDescuento[d.id]))
+            : descUnit * nuevaCantidad;
+          const brutoLinea = precioUnit * nuevaCantidad;
+          if (nuevoDescuento > brutoLinea) {
+            throw new BadRequestException(
+              `El descuento de "${d.descripcion}" (S/ ${nuevoDescuento.toFixed(2)}) supera el importe de la línea (S/ ${brutoLinea.toFixed(2)})`,
+            );
           }
-          return d;
+          const nuevoSubtotal = brutoLinea - nuevoDescuento;
+          const porcentajeIGV = Number(d.porcentajeIGV) / 100;
+          const nuevoIgv = round2(nuevoSubtotal * porcentajeIGV);
+          const nuevoTotal = nuevoSubtotal + nuevoIgv;
+          return {
+            ...d,
+            cantidad: new Prisma.Decimal(nuevaCantidad),
+            descuento: new Prisma.Decimal(nuevoDescuento.toFixed(2)),
+            subtotal: new Prisma.Decimal(nuevoSubtotal.toFixed(2)),
+            igv: new Prisma.Decimal(nuevoIgv.toFixed(2)),
+            total: new Prisma.Decimal(nuevoTotal.toFixed(2)),
+          };
         });
 
       if (detallesVenta.length === 0) {
@@ -2395,6 +2411,20 @@ export class VentaService {
         totalVenta = Number(cotizacion.total);
       }
 
+      // Descuento GLOBAL del cajero (cola POS): se resta del total final,
+      // mismo criterio que crearYCobrar. La defensa de neto negativo (con
+      // el adelanto de la cotización aplicado) va más abajo.
+      const descuentoGlobalCot = round2(dto.descuentoGlobal || 0);
+      if (descuentoGlobalCot > 0) {
+        if (descuentoGlobalCot >= totalVenta) {
+          throw new BadRequestException(
+            `El descuento global (S/ ${descuentoGlobalCot.toFixed(2)}) no puede igualar o superar el total (S/ ${totalVenta.toFixed(2)})`,
+          );
+        }
+        descuentoVenta = round2(descuentoVenta + descuentoGlobalCot);
+        totalVenta = round2(totalVenta - descuentoGlobalCot);
+      }
+
       // Adelanto previo de la cotización (categoria ADELANTO_COTIZACION).
       // Si existe, se aplica como pago previo de la venta — el cliente
       // solo debe cubrir el saldo restante hoy. NO se duplica en caja:
@@ -2402,6 +2432,13 @@ export class VentaService {
       // día original (que probablemente ya cerró). Acá solo se vincula
       // a la venta nueva y se registra como PagoVenta adicional.
       const adelantoAplicado = Number(cotizacion.adelantoMonto ?? 0);
+      // Defensa: el descuento global no puede dejar el total por debajo del
+      // adelanto ya pagado (la venta saldría "pagada de más").
+      if (descuentoGlobalCot > 0 && adelantoAplicado > totalVenta) {
+        throw new BadRequestException(
+          `El adelanto ya pagado (S/ ${adelantoAplicado.toFixed(2)}) supera el total con descuento (S/ ${totalVenta.toFixed(2)}). Reducí el descuento global.`,
+        );
+      }
       const totalAPagarHoy = Math.max(0, totalVenta - adelantoAplicado);
 
       const montoCambio =
@@ -2445,6 +2482,18 @@ export class VentaService {
           descuento: new Prisma.Decimal(descuentoVenta.toFixed(2)),
           impuestos: new Prisma.Decimal(impuestosVenta.toFixed(2)),
           total: new Prisma.Decimal(totalVenta.toFixed(2)),
+          descuentoGlobal:
+            descuentoGlobalCot > 0
+              ? new Prisma.Decimal(descuentoGlobalCot.toFixed(2))
+              : null,
+          descuentoGlobalPorcentaje:
+            descuentoGlobalCot > 0 ? dto.descuentoGlobalPorcentaje ?? null : null,
+          descuentoAutorizadoPorId:
+            descuentoGlobalCot > 0 ? dto.descuentoAutorizadoPorId ?? null : null,
+          descuentoAutorizadoEn:
+            descuentoGlobalCot > 0 && dto.descuentoAutorizadoPorId
+              ? new Date()
+              : null,
           metodoPago: this.resolverMetodoPagoVenta(dto.pagos, dto.metodoPago),
           montoRecibido: dto.montoRecibido,
           montoCambio,
