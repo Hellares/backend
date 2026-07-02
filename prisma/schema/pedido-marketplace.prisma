@@ -17,6 +17,7 @@ enum MetodoPagoMarketplace {
   YAPE
   PLIN
   TRANSFERENCIA
+  CONTRAENTREGA // Paga al recibir (efectivo/Yape al repartidor). El pedido nace PAGO_VALIDADO.
 }
 
 enum TipoEntregaMarketplace {

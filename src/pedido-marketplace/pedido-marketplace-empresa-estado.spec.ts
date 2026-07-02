@@ -226,6 +226,85 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     expect(prisma.pedidoMarketplace.update).not.toHaveBeenCalled();
   });
 
+  describe('contraentrega', () => {
+    it('ENVIADO con pedido CONTRAENTREGA → venta CONFIRMADA sin pagos (EFECTIVO)', async () => {
+      const pedidoCE = { ...pedidoBase, metodoPago: 'CONTRAENTREGA' };
+      prisma.pedidoMarketplace.findFirst
+        .mockResolvedValueOnce(pedidoCE)
+        .mockResolvedValueOnce({
+          ...pedidoCE,
+          detalles: [{ productoId: 'prod-1', varianteId: null, cantidad: 2 }],
+        });
+
+      await service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'ENVIADO' } as any);
+
+      const venta = prisma.venta.create.mock.calls[0][0].data;
+      expect(venta.estado).toBe('CONFIRMADA');
+      expect(venta.metodoPago).toBe('EFECTIVO');
+      expect(venta.pagos).toBeUndefined();
+    });
+
+    it('registrarCobroContraentrega → salda la venta (PagoVenta EFECTIVO) + ingreso a Caja Central', async () => {
+      prisma.pedidoMarketplace.findFirst.mockResolvedValue({
+        id: PEDIDO,
+        codigo: pedidoBase.codigo,
+        total: 100,
+        metodoPago: 'CONTRAENTREGA',
+        ventaId: 'venta-1',
+      });
+      prisma.venta.findFirst = jest.fn().mockResolvedValue({ id: 'venta-1', estado: 'CONFIRMADA' });
+      prisma.venta.update = jest.fn().mockResolvedValue({});
+
+      await service.registrarCobroContraentrega(EMPRESA, PEDIDO);
+
+      const upd = prisma.venta.update.mock.calls[0][0].data;
+      expect(upd.estado).toBe('PAGADA_COMPLETA');
+      expect(upd.pagos.create).toMatchObject({ metodoPago: 'EFECTIVO', monto: 100 });
+      expect(caja.crearMovimientoAutomatico).toHaveBeenCalledWith(
+        EMPRESA,
+        'caja-central',
+        expect.objectContaining({
+          metodoPago: 'EFECTIVO',
+          categoria: 'PEDIDO_MARKETPLACE',
+          monto: 100,
+          pedidoMarketplaceId: PEDIDO,
+        }),
+        prisma,
+      );
+    });
+
+    it('registrarCobroContraentrega idempotente: venta ya PAGADA_COMPLETA → no duplica', async () => {
+      prisma.pedidoMarketplace.findFirst.mockResolvedValue({
+        id: PEDIDO,
+        codigo: pedidoBase.codigo,
+        total: 100,
+        metodoPago: 'CONTRAENTREGA',
+        ventaId: 'venta-1',
+      });
+      prisma.venta.findFirst = jest.fn().mockResolvedValue({ id: 'venta-1', estado: 'PAGADA_COMPLETA' });
+      prisma.venta.update = jest.fn();
+
+      await service.registrarCobroContraentrega(EMPRESA, PEDIDO);
+
+      expect(prisma.venta.update).not.toHaveBeenCalled();
+      expect(caja.crearMovimientoAutomatico).not.toHaveBeenCalled();
+    });
+
+    it('registrarCobroContraentrega es no-op para pedidos que no son contraentrega', async () => {
+      prisma.pedidoMarketplace.findFirst.mockResolvedValue({
+        id: PEDIDO,
+        codigo: pedidoBase.codigo,
+        total: 100,
+        metodoPago: 'YAPE',
+        ventaId: 'venta-1',
+      });
+
+      await service.registrarCobroContraentrega(EMPRESA, PEDIDO);
+
+      expect(caja.crearMovimientoAutomatico).not.toHaveBeenCalled();
+    });
+  });
+
   describe('confirmarPagoYapeAutomatico (webhook api-yape)', () => {
     it('PENDIENTE_PAGO → PAGO_VALIDADO + ingreso a Caja Central + notifica', async () => {
       prisma.pedidoMarketplace.findFirst.mockResolvedValue({

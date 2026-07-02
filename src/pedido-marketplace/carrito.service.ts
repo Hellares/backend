@@ -548,6 +548,7 @@ export class CarritoService {
         nombre: true,
         envioGratisDesde: true,
         permiteRetiroTienda: true,
+        permiteContraentrega: true,
       },
     });
 
@@ -583,6 +584,10 @@ export class CarritoService {
       retiroTienda: {
         disponible: empresa.permiteRetiroTienda,
         sedes: sedesRetiro,
+      },
+      contraentrega: {
+        disponible: empresa.permiteContraentrega,
+        mensaje: 'Pagas en efectivo o Yape al recibir tu pedido',
       },
     };
   }

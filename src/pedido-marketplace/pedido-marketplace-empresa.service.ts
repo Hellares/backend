@@ -10,6 +10,7 @@ import {
   CanalVenta,
   EstadoPedidoMarketplace,
   EstadoVenta,
+  MetodoPagoMarketplace,
   MetodoPagoVenta,
   Prisma,
   TipoMovimientoStock,
@@ -175,7 +176,13 @@ export class PedidoMarketplaceEmpresaService {
             {
               tipo: 'INGRESO',
               categoria: 'PEDIDO_MARKETPLACE',
-              metodoPago: pedido.metodoPago ?? 'TRANSFERENCIA',
+              // CONTRAENTREGA nunca pasa por aquí (no llega a PAGO_ENVIADO),
+              // pero el tipo lo exige: mapear a EFECTIVO por si acaso.
+              metodoPago:
+                pedido.metodoPago === MetodoPagoMarketplace.CONTRAENTREGA
+                  ? MetodoPagoVenta.EFECTIVO
+                  : ((pedido.metodoPago as unknown as MetodoPagoVenta) ??
+                    MetodoPagoVenta.TRANSFERENCIA),
               monto: Number(pedido.total),
               descripcion: `Pedido marketplace ${pedido.codigo}`,
               pedidoMarketplaceId: pedido.id,
@@ -352,6 +359,100 @@ export class PedidoMarketplaceEmpresaService {
   }
 
   /**
+   * Al ENTREGAR un pedido CONTRAENTREGA el repartidor/tienda cobró el efectivo
+   * → saldar la venta ligada (PagoVenta EFECTIVO + PAGADA_COMPLETA) y registrar
+   * el ingreso en la Caja Central. Idempotente por estado de la venta.
+   * Best-effort: nunca bloquea la entrega.
+   */
+  async registrarCobroContraentrega(empresaId: string, pedidoId: string) {
+    try {
+      const pedido = await this.prisma.pedidoMarketplace.findFirst({
+        where: { id: pedidoId, empresaId },
+        select: {
+          id: true,
+          codigo: true,
+          total: true,
+          metodoPago: true,
+          ventaId: true,
+        },
+      });
+      if (!pedido || pedido.metodoPago !== MetodoPagoMarketplace.CONTRAENTREGA) {
+        return;
+      }
+
+      // Saldar la venta interna creada al ENVIAR (nació CONFIRMADA sin pagos).
+      if (pedido.ventaId) {
+        const venta = await this.prisma.venta.findFirst({
+          where: { id: pedido.ventaId, empresaId },
+          select: { id: true, estado: true },
+        });
+        if (venta?.estado === EstadoVenta.PAGADA_COMPLETA) {
+          return; // cobro ya registrado (idempotencia)
+        }
+        if (venta) {
+          await this.prisma.venta.update({
+            where: { id: venta.id },
+            data: {
+              estado: EstadoVenta.PAGADA_COMPLETA,
+              pagos: {
+                create: {
+                  metodoPago: MetodoPagoVenta.EFECTIVO,
+                  monto: pedido.total,
+                  referencia: pedido.codigo,
+                },
+              },
+            },
+          });
+        }
+      }
+
+      // Ingreso del efectivo a la Caja Central (a nombre de un admin).
+      const [sede, admin] = await Promise.all([
+        this.prisma.sede.findFirst({
+          where: { empresaId, isActive: true },
+          select: { id: true },
+        }),
+        this.prisma.empresaUsuarioRol.findFirst({
+          where: { empresaId, rol: 'EMPRESA_ADMIN', isActive: true },
+          select: { usuarioId: true },
+        }),
+      ]);
+      if (sede && admin) {
+        await this.prisma.$transaction(async (tx) => {
+          const central = await this.cajaService.getOrCreateCajaCentral(
+            empresaId,
+            sede.id,
+            tx,
+          );
+          await this.cajaService.crearMovimientoAutomatico(
+            empresaId,
+            central.id,
+            {
+              tipo: 'INGRESO' as any,
+              categoria: 'PEDIDO_MARKETPLACE' as any,
+              metodoPago: MetodoPagoVenta.EFECTIVO,
+              monto: Number(pedido.total),
+              descripcion: `Pedido marketplace ${pedido.codigo} (contraentrega)`,
+              pedidoMarketplaceId: pedido.id,
+              registradoPorId: admin.usuarioId,
+              metadata: { contraentrega: true },
+            },
+            tx,
+          );
+        });
+      } else {
+        this.logger.warn(
+          `Cobro contraentrega de pedido ${pedido.codigo}: sin sede activa o admin — ingreso a caja NO registrado`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `Error registrando cobro contraentrega del pedido ${pedidoId}: ${e?.message ?? e}`,
+      );
+    }
+  }
+
+  /**
    * Cambiar estado del pedido (EN_PREPARACION, ENVIADO)
    */
   async cambiarEstado(
@@ -489,9 +590,14 @@ export class PedidoMarketplaceEmpresaService {
           );
 
           // YAPE/PLIN/TRANSFERENCIA existen 1:1 en MetodoPagoVenta.
-          const metodoPagoVenta: MetodoPagoVenta =
-            (pedido.metodoPago as unknown as MetodoPagoVenta) ??
-            MetodoPagoVenta.TRANSFERENCIA;
+          // CONTRAENTREGA no: el cobro será EFECTIVO al entregar → la venta
+          // nace CONFIRMADA sin pagos y se salda al pasar a ENTREGADO.
+          const esContraentrega =
+            pedido.metodoPago === MetodoPagoMarketplace.CONTRAENTREGA;
+          const metodoPagoVenta: MetodoPagoVenta = esContraentrega
+            ? MetodoPagoVenta.EFECTIVO
+            : ((pedido.metodoPago as unknown as MetodoPagoVenta) ??
+              MetodoPagoVenta.TRANSFERENCIA);
 
           const r2 = (n: number) => Math.round(n * 100) / 100;
           const venta = await tx.venta.create({
@@ -509,7 +615,9 @@ export class PedidoMarketplaceEmpresaService {
               descuento: pedido.descuento,
               total: pedido.total,
               moneda: pedido.moneda,
-              estado: EstadoVenta.PAGADA_COMPLETA,
+              estado: esContraentrega
+                ? EstadoVenta.CONFIRMADA
+                : EstadoVenta.PAGADA_COMPLETA,
               metodoPago: metodoPagoVenta,
               observaciones: `Pedido marketplace ${pedido.codigo}`,
               detalles: {
@@ -534,13 +642,18 @@ export class PedidoMarketplaceEmpresaService {
                   };
                 }),
               },
-              pagos: {
-                create: {
-                  metodoPago: metodoPagoVenta,
-                  monto: pedido.total,
-                  referencia: pedido.transaccionExternaId ?? pedido.codigo,
-                },
-              },
+              // Contraentrega: sin pago aún — se registra al ENTREGADO.
+              ...(esContraentrega
+                ? {}
+                : {
+                    pagos: {
+                      create: {
+                        metodoPago: metodoPagoVenta,
+                        monto: pedido.total,
+                        referencia: pedido.transaccionExternaId ?? pedido.codigo,
+                      },
+                    },
+                  }),
             },
             select: { id: true },
           });
@@ -589,6 +702,11 @@ export class PedidoMarketplaceEmpresaService {
         where: { id: pedidoId },
         data: updateData,
       });
+    }
+
+    // Contraentrega: al ENTREGAR se cobró el efectivo → saldar venta + caja.
+    if (dto.estado === EstadoPedidoMarketplace.ENTREGADO) {
+      await this.registrarCobroContraentrega(empresaId, pedidoId);
     }
 
     // Notificar al comprador
@@ -660,12 +778,14 @@ export class PedidoMarketplaceEmpresaService {
       select: {
         envioGratisDesde: true,
         permiteRetiroTienda: true,
+        permiteContraentrega: true,
       },
     });
 
     return {
       envioGratisDesde: empresa?.envioGratisDesde ? Number(empresa.envioGratisDesde) : null,
       permiteRetiroTienda: empresa?.permiteRetiroTienda ?? false,
+      permiteContraentrega: empresa?.permiteContraentrega ?? false,
     };
   }
 
@@ -678,6 +798,7 @@ export class PedidoMarketplaceEmpresaService {
       data: {
         ...(dto.envioGratisDesde !== undefined && { envioGratisDesde: dto.envioGratisDesde }),
         ...(dto.permiteRetiroTienda !== undefined && { permiteRetiroTienda: dto.permiteRetiroTienda }),
+        ...(dto.permiteContraentrega !== undefined && { permiteContraentrega: dto.permiteContraentrega }),
       },
     });
 

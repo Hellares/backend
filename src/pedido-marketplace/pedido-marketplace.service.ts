@@ -9,6 +9,7 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { StorageService } from '../storage/storage.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
+import { PedidoMarketplaceEmpresaService } from './pedido-marketplace-empresa.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { CarritoService } from './carrito.service';
 import {
@@ -29,6 +30,7 @@ export class PedidoMarketplaceService {
     private readonly storageService: StorageService,
     private readonly integracionYape: IntegracionYapeService,
     private readonly caracteristicaEmpresa: CaracteristicaEmpresaService,
+    private readonly pedidoEmpresaService: PedidoMarketplaceEmpresaService,
   ) {}
 
   /** Reference del charge api-yape de un pedido (el webhook rutea por prefijo). */
@@ -144,6 +146,23 @@ export class PedidoMarketplaceService {
       }
     }
 
+    // CONTRAENTREGA: opt-in por empresa. Todas las empresas del carrito deben
+    // permitirlo (el método de pago es único para todo el checkout).
+    const esContraentrega =
+      dto.metodoPago === MetodoPagoMarketplace.CONTRAENTREGA;
+    if (esContraentrega) {
+      const empresas = await this.prisma.empresa.findMany({
+        where: { id: { in: carrito.empresas.map((g: any) => g.empresa.id) } },
+        select: { id: true, nombre: true, permiteContraentrega: true },
+      });
+      const sinContraentrega = empresas.filter((e) => !e.permiteContraentrega);
+      if (sinContraentrega.length > 0) {
+        throw new BadRequestException(
+          `${sinContraentrega.map((e) => e.nombre).join(', ')} no acepta pago contraentrega. Elige otro método de pago.`,
+        );
+      }
+    }
+
     // 2. Resolver dirección de envío
     let direccionData: any = {
       direccionEnvio: dto.direccionEnvio ?? null,
@@ -248,7 +267,11 @@ export class PedidoMarketplaceService {
             costoEnvio: 0,
             total: subtotal,
             moneda: 'PEN',
-            estado: EstadoPedidoMarketplace.PENDIENTE_PAGO,
+            // Contraentrega: no hay pago que validar → nace listo para
+            // preparar (y el cron TTL de PENDIENTE_PAGO no lo expira).
+            estado: esContraentrega
+              ? EstadoPedidoMarketplace.PAGO_VALIDADO
+              : EstadoPedidoMarketplace.PENDIENTE_PAGO,
             tipoEntrega,
             ...(sedeRetiroId && { sedeRetiroId }),
             metodoPago: dto.metodoPago,
@@ -483,7 +506,13 @@ export class PedidoMarketplaceService {
       EstadoPedidoMarketplace.PAGO_RECHAZADO,
     ];
 
-    if (!cancelables.includes(pedido.estado)) {
+    // Contraentrega nace PAGO_VALIDADO sin dinero de por medio → el comprador
+    // puede cancelar mientras la empresa no empiece a preparar.
+    const contraentregaSinPreparar =
+      pedido.metodoPago === MetodoPagoMarketplace.CONTRAENTREGA &&
+      pedido.estado === EstadoPedidoMarketplace.PAGO_VALIDADO;
+
+    if (!cancelables.includes(pedido.estado) && !contraentregaSinPreparar) {
       throw new BadRequestException('Este pedido no se puede cancelar en su estado actual');
     }
 
@@ -552,6 +581,13 @@ export class PedidoMarketplaceService {
         entregadoEn: new Date(),
       },
     });
+
+    // Contraentrega: al confirmar la entrega se cobró el efectivo → saldar
+    // venta + registrar ingreso (no-op para los demás métodos).
+    await this.pedidoEmpresaService.registrarCobroContraentrega(
+      pedido.empresaId,
+      pedido.id,
+    );
 
     // Notificar a la empresa
     try {

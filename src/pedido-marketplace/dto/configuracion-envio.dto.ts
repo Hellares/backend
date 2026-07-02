@@ -12,4 +12,9 @@ export class ConfiguracionEnvioDto {
   @IsOptional()
   @IsBoolean()
   permiteRetiroTienda?: boolean;
+
+  @ApiProperty({ description: 'Permitir pago contraentrega (paga al recibir)', required: false })
+  @IsOptional()
+  @IsBoolean()
+  permiteContraentrega?: boolean;
 }

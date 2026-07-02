@@ -39,8 +39,9 @@ model Empresa {
   vistasMarketplace    Int     @default(0)
 
   // Configuración de envío marketplace
-  envioGratisDesde    Decimal? @db.Decimal(10, 2) // Envío gratis si subtotal >= este monto
-  permiteRetiroTienda Boolean  @default(false)
+  envioGratisDesde     Decimal? @db.Decimal(10, 2) // Envío gratis si subtotal >= este monto
+  permiteRetiroTienda  Boolean  @default(false)
+  permiteContraentrega Boolean  @default(false) // Pago al recibir (el pedido nace PAGO_VALIDADO)
 
   // Configuración de caja
   requiereCajaParaVender Boolean @default(false) // Si true, no se pueden procesar ventas sin caja abierta
