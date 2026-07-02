@@ -9,11 +9,13 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import {
   EstadoPedidoMarketplace,
   Prisma,
+  TipoMovimientoStock,
   TipoNotificacion,
 } from '@prisma/client';
 import { ValidarPagoDto, CambiarEstadoPedidoDto } from './dto/empresa-pedido.dto';
 import { ConfiguracionEnvioDto } from './dto/configuracion-envio.dto';
 import { CajaService } from '../caja/caja.service';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 
 @Injectable()
 export class PedidoMarketplaceEmpresaService {
@@ -218,6 +220,7 @@ export class PedidoMarketplaceEmpresaService {
   async cambiarEstado(
     empresaId: string,
     pedidoId: string,
+    usuarioId: string,
     dto: CambiarEstadoPedidoDto,
   ) {
     const pedido = await this.prisma.pedidoMarketplace.findFirst({
@@ -292,6 +295,60 @@ export class PedidoMarketplaceEmpresaService {
             }
           }
         }
+        await tx.pedidoMarketplace.update({
+          where: { id: pedidoId },
+          data: updateData,
+        });
+      });
+    } else if (dto.estado === EstadoPedidoMarketplace.ENVIADO) {
+      // Salida REAL de inventario: hasta aquí el stock solo estaba reservado
+      // (stockReservadoVenta desde el checkout). Al enviar/entregar el producto
+      // sale físicamente → descontar stockActual, liberar la reserva y dejar
+      // kardex (SALIDA_VENTA). ENVIADO solo se alcanza una vez (desde
+      // EN_PREPARACION) y después no hay cancelación → sin doble descuento.
+      const pedidoConDetalles = await this.prisma.pedidoMarketplace.findFirst({
+        where: { id: pedidoId },
+        include: { detalles: true },
+      });
+
+      await this.prisma.$transaction(async (tx) => {
+        for (const detalle of pedidoConDetalles?.detalles ?? []) {
+          // Mismo lookup que usa el checkout al reservar.
+          const stock = await tx.productoStock.findFirst({
+            where: {
+              empresaId,
+              productoId: detalle.varianteId ? null : detalle.productoId,
+              varianteId: detalle.varianteId ?? null,
+            },
+          });
+          // Sin fila de stock (producto eliminado): no bloquear el envío.
+          if (!stock) continue;
+
+          await tx.productoStock.update({
+            where: { id: stock.id },
+            data: {
+              stockActual: { decrement: detalle.cantidad },
+              stockReservadoVenta: {
+                decrement: Math.min(detalle.cantidad, stock.stockReservadoVenta),
+              },
+            },
+          });
+
+          await crearMovimientoStockConValoracion(tx, {
+            productoStockId: stock.id,
+            empresaId,
+            sedeId: stock.sedeId,
+            tipo: TipoMovimientoStock.SALIDA_VENTA,
+            cantidad: -detalle.cantidad,
+            cantidadAnterior: stock.stockActual,
+            cantidadNueva: stock.stockActual - detalle.cantidad,
+            usuarioId,
+            motivo: 'Pedido marketplace enviado',
+            tipoDocumento: 'PEDIDO_MARKETPLACE',
+            numeroDocumento: pedido.codigo,
+          });
+        }
+
         await tx.pedidoMarketplace.update({
           where: { id: pedidoId },
           data: updateData,

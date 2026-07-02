@@ -55,6 +55,28 @@ export class PedidoMarketplaceEmpresaController {
     return this.service.resumen(empresaId);
   }
 
+  // OJO: las rutas estáticas (configuracion-envio) van ANTES de ':id' — Nest
+  // matchea en orden de declaración y ':id' se las tragaba (404 Pedido no
+  // encontrado con id='configuracion-envio').
+  @Get('configuracion-envio')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Obtener configuración de envío de la empresa' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getConfiguracionEnvio(@Headers('x-tenant-id') empresaId: string) {
+    return this.service.getConfiguracionEnvio(empresaId);
+  }
+
+  @Patch('configuracion-envio')
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
+  @ApiOperation({ summary: 'Actualizar configuración de envío' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async updateConfiguracionEnvio(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: ConfiguracionEnvioDto,
+  ) {
+    return this.service.updateConfiguracionEnvio(empresaId, dto);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Detalle de un pedido recibido' })
@@ -86,27 +108,9 @@ export class PedidoMarketplaceEmpresaController {
   async cambiarEstado(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') pedidoId: string,
+    @CurrentUser('id') usuarioId: string,
     @Body() dto: CambiarEstadoPedidoDto,
   ) {
-    return this.service.cambiarEstado(empresaId, pedidoId, dto);
-  }
-
-  @Get('configuracion-envio')
-  @RequiresPermission(Permission.VIEW_VENTAS)
-  @ApiOperation({ summary: 'Obtener configuración de envío de la empresa' })
-  @ApiHeader({ name: 'x-tenant-id', required: true })
-  async getConfiguracionEnvio(@Headers('x-tenant-id') empresaId: string) {
-    return this.service.getConfiguracionEnvio(empresaId);
-  }
-
-  @Patch('configuracion-envio')
-  @RequiresPermission(Permission.MANAGE_SETTINGS)
-  @ApiOperation({ summary: 'Actualizar configuración de envío' })
-  @ApiHeader({ name: 'x-tenant-id', required: true })
-  async updateConfiguracionEnvio(
-    @Headers('x-tenant-id') empresaId: string,
-    @Body() dto: ConfiguracionEnvioDto,
-  ) {
-    return this.service.updateConfiguracionEnvio(empresaId, dto);
+    return this.service.cambiarEstado(empresaId, pedidoId, usuarioId, dto);
   }
 }

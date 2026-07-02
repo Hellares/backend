@@ -22,6 +22,10 @@ describe('EmpresaBancoService.getEstadoCuenta', () => {
       pagoCompra: { findMany: jest.fn().mockResolvedValue([]) },
       pagoGastoRecurrente: { findMany: jest.fn().mockResolvedValue([]) },
       ajusteBanco: { findMany: jest.fn().mockResolvedValue([]) },
+      // Egresos RRHH (adelantos/planilla) e ingresos CxC (abonos) del estado de cuenta.
+      adelantoPago: { findMany: jest.fn().mockResolvedValue([]) },
+      boletaPago: { findMany: jest.fn().mockResolvedValue([]) },
+      pagoVenta: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([]),
     };
     service = new EmpresaBancoService(prisma);
