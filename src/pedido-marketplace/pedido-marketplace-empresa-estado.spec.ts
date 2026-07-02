@@ -12,6 +12,8 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
   const USUARIO = 'user-1';
 
   let prisma: any;
+  let notificacion: any;
+  let caja: any;
   let service: PedidoMarketplaceEmpresaService;
 
   const pedidoBase = {
@@ -56,16 +58,24 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       movimientoStock: { create: jest.fn().mockResolvedValue({}) },
       venta: { create: jest.fn().mockResolvedValue({ id: 'venta-1' }) },
       sede: { findFirst: jest.fn().mockResolvedValue({ id: 'sede-fallback' }) },
+      empresaUsuarioRol: {
+        findFirst: jest.fn().mockResolvedValue({ usuarioId: 'admin-1' }),
+        findMany: jest.fn().mockResolvedValue([{ usuarioId: 'admin-1' }]),
+      },
       $transaction: jest.fn((fn: any) => fn(prisma)),
     };
-    const notificacion = { enviarAUsuario: jest.fn(), enviarAUsuarios: jest.fn() };
+    notificacion = { enviarAUsuario: jest.fn(), enviarAUsuarios: jest.fn() };
+    caja = {
+      getOrCreateCajaCentral: jest.fn().mockResolvedValue({ id: 'caja-central' }),
+      crearMovimientoAutomatico: jest.fn().mockResolvedValue({}),
+    };
     const codigos = {
       generarCodigoVenta: jest.fn().mockResolvedValue({ codigoVenta: 'VTA-SED-100' }),
     };
     service = new PedidoMarketplaceEmpresaService(
       prisma,
       notificacion as any,
-      {} as any,
+      caja as any,
       codigos as any,
     );
   });
@@ -214,5 +224,85 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'EN_PREPARACION' } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.pedidoMarketplace.update).not.toHaveBeenCalled();
+  });
+
+  describe('confirmarPagoYapeAutomatico (webhook api-yape)', () => {
+    it('PENDIENTE_PAGO → PAGO_VALIDADO + ingreso a Caja Central + notifica', async () => {
+      prisma.pedidoMarketplace.findFirst.mockResolvedValue({
+        ...pedidoBase,
+        estado: 'PENDIENTE_PAGO',
+      });
+
+      const r = await service.confirmarPagoYapeAutomatico(EMPRESA, PEDIDO, {
+        metodo: 'YAPE',
+        referencia: 'OP-777',
+      });
+
+      expect(r).toMatchObject({ accion: 'pago-validado', pedidoId: PEDIDO });
+      const upd = prisma.pedidoMarketplace.update.mock.calls[0][0].data;
+      expect(upd.estado).toBe('PAGO_VALIDADO');
+      expect(upd.pagoValidadoEn).toBeInstanceOf(Date);
+      expect(upd.metodoPago).toBe('YAPE');
+      expect(upd.transaccionExternaId).toBe('OP-777');
+
+      // Ingreso SIEMPRE a la Caja Central, ligado al pedido.
+      expect(caja.getOrCreateCajaCentral).toHaveBeenCalledWith(EMPRESA, 'sede-fallback', prisma);
+      expect(caja.crearMovimientoAutomatico).toHaveBeenCalledWith(
+        EMPRESA,
+        'caja-central',
+        expect.objectContaining({
+          tipo: 'INGRESO',
+          categoria: 'PEDIDO_MARKETPLACE',
+          metodoPago: 'YAPE',
+          monto: 100,
+          pedidoMarketplaceId: PEDIDO,
+          registradoPorId: 'admin-1',
+        }),
+        prisma,
+      );
+
+      // Notifica comprador y admins.
+      expect(notificacion.enviarAUsuario).toHaveBeenCalled();
+      expect(notificacion.enviarAUsuarios).toHaveBeenCalled();
+    });
+
+    it('idempotente: pedido ya validado → no toca nada', async () => {
+      prisma.pedidoMarketplace.findFirst.mockResolvedValue({
+        ...pedidoBase,
+        estado: 'PAGO_VALIDADO',
+      });
+
+      const r = await service.confirmarPagoYapeAutomatico(EMPRESA, PEDIDO, { metodo: 'YAPE' });
+
+      expect(r).toMatchObject({ accion: 'ya-validado' });
+      expect(prisma.pedidoMarketplace.update).not.toHaveBeenCalled();
+      expect(caja.crearMovimientoAutomatico).not.toHaveBeenCalled();
+    });
+
+    it('webhook tardío sobre pedido CANCELADO → ignorado', async () => {
+      prisma.pedidoMarketplace.findFirst.mockResolvedValue({
+        ...pedidoBase,
+        estado: 'CANCELADO',
+      });
+
+      const r = await service.confirmarPagoYapeAutomatico(EMPRESA, PEDIDO, { metodo: 'PLIN' });
+
+      expect(r).toMatchObject({ accion: 'pedido-cancelado' });
+      expect(prisma.pedidoMarketplace.update).not.toHaveBeenCalled();
+    });
+
+    it('sin admin activo → valida el pago igual pero no registra en caja (warn)', async () => {
+      prisma.pedidoMarketplace.findFirst.mockResolvedValue({
+        ...pedidoBase,
+        estado: 'PAGO_ENVIADO',
+      });
+      prisma.empresaUsuarioRol.findFirst.mockResolvedValue(null);
+
+      const r = await service.confirmarPagoYapeAutomatico(EMPRESA, PEDIDO, { metodo: 'YAPE' });
+
+      expect(r).toMatchObject({ accion: 'pago-validado' });
+      expect(prisma.pedidoMarketplace.update).toHaveBeenCalled();
+      expect(caja.crearMovimientoAutomatico).not.toHaveBeenCalled();
+    });
   });
 });

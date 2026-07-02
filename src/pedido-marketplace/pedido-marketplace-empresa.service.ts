@@ -220,6 +220,138 @@ export class PedidoMarketplaceEmpresaService {
   }
 
   /**
+   * Confirmación AUTOMÁTICA del pago vía api-yape (webhook payment.confirmed
+   * con reference `pedido:<id>`): valida el pago sin intervención de la
+   * empresa — el pedido salta directo a PAGO_VALIDADO (sin foto ni validación
+   * manual). Idempotente: si el pedido ya avanzó o se canceló, no hace nada.
+   *
+   * El ingreso se registra SIEMPRE en la Caja Central (tesorería) de la
+   * primera sede activa — a diferencia del flujo manual (best-effort en la
+   * caja del validador), aquí no hay usuario con caja abierta.
+   */
+  async confirmarPagoYapeAutomatico(
+    empresaId: string,
+    pedidoId: string,
+    datos: { metodo: 'YAPE' | 'PLIN'; referencia?: string },
+  ) {
+    const pedido = await this.prisma.pedidoMarketplace.findFirst({
+      where: { id: pedidoId, empresaId },
+    });
+    if (!pedido) return { accion: 'pedido-no-encontrado' };
+
+    const pagables: EstadoPedidoMarketplace[] = [
+      EstadoPedidoMarketplace.PENDIENTE_PAGO,
+      EstadoPedidoMarketplace.PAGO_ENVIADO,
+      EstadoPedidoMarketplace.PAGO_RECHAZADO,
+    ];
+    if (!pagables.includes(pedido.estado)) {
+      // Ya validado (webhook duplicado) o cancelado/avanzado (webhook tardío).
+      return {
+        accion:
+          pedido.estado === EstadoPedidoMarketplace.CANCELADO
+            ? 'pedido-cancelado'
+            : 'ya-validado',
+      };
+    }
+
+    await this.prisma.pedidoMarketplace.update({
+      where: { id: pedido.id },
+      data: {
+        estado: EstadoPedidoMarketplace.PAGO_VALIDADO,
+        pagoValidadoEn: new Date(),
+        metodoPago: datos.metodo as any,
+        transaccionExternaId: datos.referencia ?? null,
+      },
+    });
+
+    // Ingreso a Caja Central (nunca se pierde), a nombre de un admin.
+    try {
+      const [sede, admin] = await Promise.all([
+        this.prisma.sede.findFirst({
+          where: { empresaId, isActive: true },
+          select: { id: true },
+        }),
+        this.prisma.empresaUsuarioRol.findFirst({
+          where: { empresaId, rol: 'EMPRESA_ADMIN', isActive: true },
+          select: { usuarioId: true },
+        }),
+      ]);
+      if (sede && admin) {
+        await this.prisma.$transaction(async (tx) => {
+          const central = await this.cajaService.getOrCreateCajaCentral(
+            empresaId,
+            sede.id,
+            tx,
+          );
+          await this.cajaService.crearMovimientoAutomatico(
+            empresaId,
+            central.id,
+            {
+              tipo: 'INGRESO' as any,
+              categoria: 'PEDIDO_MARKETPLACE' as any,
+              metodoPago: datos.metodo as any,
+              monto: Number(pedido.total),
+              descripcion: `Pedido marketplace ${pedido.codigo} (Yape automático)`,
+              pedidoMarketplaceId: pedido.id,
+              registradoPorId: admin.usuarioId,
+              metadata: { automatico: true, fuente: 'webhook-yape' },
+            },
+            tx,
+          );
+        });
+      } else {
+        this.logger.warn(
+          `Pago Yape automático de pedido ${pedido.codigo}: sin sede activa o admin — ingreso a caja NO registrado`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `Error registrando ingreso de pedido ${pedido.codigo}: ${e?.message ?? e}`,
+      );
+    }
+
+    // Notificar comprador + admins de la empresa (best-effort).
+    try {
+      await this.notificacionService.enviarAUsuario(
+        pedido.compradorId,
+        'Pago confirmado',
+        `Tu pago ${datos.metodo} del pedido #${pedido.codigo} fue confirmado automáticamente. Pronto prepararemos tu pedido.`,
+        {
+          tipo: TipoNotificacion.PEDIDO_MARKETPLACE,
+          empresaId,
+          data: { pedidoId: pedido.id },
+          guardar: true,
+        },
+      );
+    } catch (_) {}
+    try {
+      const admins = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          empresaId,
+          rol: { in: ['EMPRESA_ADMIN', 'SEDE_ADMIN', 'VENDEDOR'] },
+          isActive: true,
+        },
+        select: { usuarioId: true },
+      });
+      const adminIds = [...new Set(admins.map((a) => a.usuarioId))];
+      if (adminIds.length > 0) {
+        await this.notificacionService.enviarAUsuarios(
+          adminIds,
+          'Pedido pagado',
+          `El pedido #${pedido.codigo} fue pagado con ${datos.metodo} (confirmación automática por S/ ${Number(pedido.total).toFixed(2)})`,
+          {
+            tipo: TipoNotificacion.PEDIDO_MARKETPLACE,
+            empresaId,
+            data: { pedidoId: pedido.id },
+          },
+        );
+      }
+    } catch (_) {}
+
+    return { accion: 'pago-validado', pedidoId: pedido.id };
+  }
+
+  /**
    * Cambiar estado del pedido (EN_PREPARACION, ENVIADO)
    */
   async cambiarEstado(

@@ -16,6 +16,7 @@ describe('WebhooksService.procesarPagoYape', () => {
   let prisma: any;
   let ventaService: any;
   let realtime: any;
+  let pedidoEmpresa: any;
   let service: WebhooksService;
 
   const logger = {
@@ -48,13 +49,34 @@ describe('WebhooksService.procesarPagoYape', () => {
       procesarPago: jest.fn().mockResolvedValue({ estado: EstadoVenta.PAGADA_COMPLETA }),
     };
     realtime = { notifyVentaPagada: jest.fn() };
+    pedidoEmpresa = {
+      confirmarPagoYapeAutomatico: jest
+        .fn()
+        .mockResolvedValue({ accion: 'pago-validado', pedidoId: 'ped-1' }),
+    };
     service = new WebhooksService(
       prisma,
       logger as any,
       integracionYape,
       ventaService,
       realtime,
+      pedidoEmpresa,
     );
+  });
+
+  it('reference con prefijo pedido: → rutea al pedido marketplace (no toca ventas)', async () => {
+    conPayload(payloadPago({ charge: { reference: 'pedido:ped-1' } }));
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+
+    expect(pedidoEmpresa.confirmarPagoYapeAutomatico).toHaveBeenCalledWith(
+      'emp-1',
+      'ped-1',
+      { metodo: 'YAPE', referencia: 'OP-123' },
+    );
+    expect(r).toMatchObject({ ok: true, accion: 'pago-validado', pedidoId: 'ped-1' });
+    expect(prisma.venta.findFirst).not.toHaveBeenCalled();
+    expect(ventaService.procesarPago).not.toHaveBeenCalled();
   });
 
   it('happy path 100% Yape: cobra el total, mapea YAPE, registra en caja del cajero, notifica', async () => {

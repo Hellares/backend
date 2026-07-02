@@ -7,9 +7,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { StorageService } from '../storage/storage.service';
+import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
+import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { CarritoService } from './carrito.service';
 import {
+  CaracteristicaPremium,
   EstadoPedidoMarketplace,
   MetodoPagoMarketplace,
   TipoNotificacion,
@@ -24,7 +27,94 @@ export class PedidoMarketplaceService {
     private readonly codigosService: ConfiguracionCodigosService,
     private readonly notificacionService: NotificacionService,
     private readonly storageService: StorageService,
+    private readonly integracionYape: IntegracionYapeService,
+    private readonly caracteristicaEmpresa: CaracteristicaEmpresaService,
   ) {}
+
+  /** Reference del charge api-yape de un pedido (el webhook rutea por prefijo). */
+  static referenciaYape(pedidoId: string) {
+    return `pedido:${pedidoId}`;
+  }
+
+  /**
+   * Inicia el cobro Yape/Plin AUTOMÁTICO de un pedido (api-yape): crea un
+   * charge con reference `pedido:<id>` y devuelve el monto exacto (payAmount,
+   * céntimos únicos) + QR del comercio. Cuando el comprador yapea, api-yape
+   * matchea la notificación y el webhook valida el pago SOLO (el pedido pasa a
+   * PAGO_VALIDADO sin foto ni validación manual).
+   *
+   * Devuelve { habilitado:false } si la empresa no tiene la característica
+   * premium YAPE_QR, la integración está apagada, el total excede el límite por
+   * transacción o api-yape no responde → la app cae al flujo manual (foto).
+   */
+  async cobroYapePedido(usuarioId: string, pedidoId: string) {
+    const pedido = await this.prisma.pedidoMarketplace.findFirst({
+      where: { id: pedidoId, compradorId: usuarioId },
+    });
+    if (!pedido) throw new NotFoundException('Pedido no encontrado');
+
+    const pagable =
+      pedido.estado === EstadoPedidoMarketplace.PENDIENTE_PAGO ||
+      pedido.estado === EstadoPedidoMarketplace.PAGO_RECHAZADO;
+    if (!pagable) {
+      throw new BadRequestException('Este pedido no está pendiente de pago');
+    }
+
+    const total = Number(pedido.total);
+
+    // QR estático del comercio: se devuelve también en modo manual (el
+    // comprador puede escanearlo y subir su comprobante).
+    const cfgQr = await this.prisma.configuracionEmpresa.findUnique({
+      where: { empresaId: pedido.empresaId },
+      select: { qrYapeUrl: true, qrPlinUrl: true },
+    });
+    const qr = {
+      qrYapeUrl: cfgQr?.qrYapeUrl ?? null,
+      qrPlinUrl: cfgQr?.qrPlinUrl ?? null,
+    };
+
+    // Gate premium de la EMPRESA del pedido.
+    const yapeHabilitado = await this.caracteristicaEmpresa.estaHabilitada(
+      pedido.empresaId,
+      CaracteristicaPremium.YAPE_QR,
+    );
+    if (!yapeHabilitado) return { habilitado: false as const, total, ...qr };
+
+    // El marketplace cobra en UN solo pago → si el total excede el límite Yape
+    // por transacción de la empresa, no se ofrece el cobro automático.
+    const cfgYape = await this.prisma.integracionYape.findUnique({
+      where: { empresaId: pedido.empresaId },
+      select: { habilitado: true, montoMaxPorTransaccion: true },
+    });
+    if (!cfgYape?.habilitado || total > Number(cfgYape.montoMaxPorTransaccion)) {
+      return { habilitado: false as const, total, ...qr };
+    }
+
+    // Cancel-then-create: si el comprador reabre la hoja no se acumulan charges
+    // pendientes del mismo pedido (cada create genera un payAmount distinto).
+    const reference = PedidoMarketplaceService.referenciaYape(pedido.id);
+    try {
+      await this.integracionYape.cancelarCobro({
+        empresaId: pedido.empresaId,
+        ventaId: reference,
+      });
+    } catch (_) {}
+
+    const cobro = await this.integracionYape.crearCobro({
+      empresaId: pedido.empresaId,
+      ventaId: reference,
+      monto: total,
+    });
+    if (!cobro) return { habilitado: false as const, total, ...qr };
+
+    return {
+      habilitado: true as const,
+      payAmount: cobro.payAmount,
+      chargeId: cobro.chargeId,
+      total,
+      ...qr,
+    };
+  }
 
   /**
    * Checkout: crear pedidos desde el carrito (1 por empresa)
@@ -425,6 +515,16 @@ export class PedidoMarketplaceService {
         data: { estado: EstadoPedidoMarketplace.CANCELADO },
       });
     });
+
+    // Best-effort: liberar el charge Yape pendiente en api-yape (si había).
+    // Si falla no importa: el charge expira solo por TTL y el webhook tardío
+    // encuentra el pedido CANCELADO → se ignora.
+    try {
+      await this.integracionYape.cancelarCobro({
+        empresaId: pedido.empresaId,
+        ventaId: PedidoMarketplaceService.referenciaYape(pedido.id),
+      });
+    } catch (_) {}
 
     return { message: 'Pedido cancelado' };
   }

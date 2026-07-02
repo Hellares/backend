@@ -6,6 +6,7 @@ import { AppLoggerService } from '../common/logger/logger.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { VentaService } from '../venta/venta.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
+import { PedidoMarketplaceEmpresaService } from '../pedido-marketplace/pedido-marketplace-empresa.service';
 
 /**
  * Payload estándar de Syncrofact (documentacion/webhooks.md).
@@ -93,6 +94,7 @@ export class WebhooksService {
     private readonly integracionYape: IntegracionYapeService,
     private readonly ventaService: VentaService,
     private readonly realtime: RealtimeInvalidationService,
+    private readonly pedidoMarketplaceEmpresa: PedidoMarketplaceEmpresaService,
   ) {
     this.logger = loggerService;
     this.logger.setContext('WebhooksService');
@@ -112,8 +114,28 @@ export class WebhooksService {
     if (payload?.event !== 'payment.confirmed') {
       return { ok: true, accion: 'evento-ignorado' };
     }
-    const ventaId: string | undefined = payload?.charge?.reference;
-    if (!ventaId) return { ok: true, accion: 'sin-referencia' };
+    const reference: string | undefined = payload?.charge?.reference;
+    if (!reference) return { ok: true, accion: 'sin-referencia' };
+
+    // Pedidos del MARKETPLACE usan reference con prefijo `pedido:` → el pago
+    // valida el pedido automáticamente (PAGO_VALIDADO sin foto ni validación
+    // manual). La Venta interna se crea recién al ENVIAR, no aquí.
+    if (reference.startsWith('pedido:')) {
+      const metodoPedido =
+        payload?.payment?.provider === 'plin' ? ('PLIN' as const) : ('YAPE' as const);
+      const res = await this.pedidoMarketplaceEmpresa.confirmarPagoYapeAutomatico(
+        empresaId,
+        reference.slice('pedido:'.length),
+        {
+          metodo: metodoPedido,
+          referencia:
+            payload?.payment?.operationCode || payload?.payment?.id || undefined,
+        },
+      );
+      return { ok: true, ...res };
+    }
+
+    const ventaId: string = reference;
 
     const venta = await this.prisma.venta.findFirst({
       where: { id: ventaId, empresaId },

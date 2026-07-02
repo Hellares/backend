@@ -59,6 +59,18 @@ export class PedidoMarketplaceController {
     return this.pedidoService.miPedidoDetalle(usuarioId, pedidoId);
   }
 
+  @Post('mis-pedidos/:id/cobro-yape')
+  @ApiOperation({
+    summary:
+      'Iniciar cobro Yape/Plin automático (api-yape). Devuelve payAmount exacto + QR; el webhook valida el pago solo.',
+  })
+  async cobroYapePedido(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') pedidoId: string,
+  ) {
+    return this.pedidoService.cobroYapePedido(usuarioId, pedidoId);
+  }
+
   @Post('mis-pedidos/:id/comprobante-pago')
   @ApiOperation({ summary: 'Subir comprobante de pago (imagen Yape/Plin)' })
   @ApiConsumes('multipart/form-data')

@@ -5,6 +5,8 @@ import { ConfiguracionCodigosModule } from '../configuracion-codigos/configuraci
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { StorageModule } from '../storage/storage.module';
 import { CajaModule } from '../caja/caja.module';
+import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
+import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteristica-empresa.module';
 import { CarritoController } from './carrito.controller';
 import { CarritoService } from './carrito.service';
 import { PedidoMarketplaceController } from './pedido-marketplace.controller';
@@ -21,6 +23,8 @@ import { PedidoMarketplaceTasksService } from './pedido-marketplace-tasks.servic
     NotificacionModule,
     StorageModule,
     CajaModule,
+    IntegracionYapeModule,
+    CaracteristicaEmpresaModule,
   ],
   controllers: [
     CarritoController,
@@ -33,6 +37,6 @@ import { PedidoMarketplaceTasksService } from './pedido-marketplace-tasks.servic
     PedidoMarketplaceEmpresaService,
     PedidoMarketplaceTasksService,
   ],
-  exports: [CarritoService, PedidoMarketplaceService],
+  exports: [CarritoService, PedidoMarketplaceService, PedidoMarketplaceEmpresaService],
 })
 export class PedidoMarketplaceModule {}
