@@ -208,6 +208,7 @@ export class IntegracionYapeService {
       accountApiKeyMask: this.enmascarar(cfg?.accountApiKey),
       webhookSecretMask: this.enmascarar(cfg?.webhookSecret),
       webhookUrl: this.webhookUrlPara(cfg?.apiBaseUrl),
+      celular: cfg?.celular ?? null,
       actualizadoEn: cfg?.actualizadoEn ?? null,
     };
   }
@@ -251,6 +252,7 @@ export class IntegracionYapeService {
           accountId: dto.accountId!.trim(),
           webhookSecret: whSecret!,
           habilitado: dto.habilitado ?? true,
+          celular: dto.celular?.trim() || null,
         },
       });
     } else {
@@ -262,6 +264,8 @@ export class IntegracionYapeService {
           ...(apiKey && { accountApiKey: apiKey }),
           ...(whSecret && { webhookSecret: whSecret }),
           ...(dto.habilitado !== undefined && { habilitado: dto.habilitado }),
+          // '' = limpiar el número; undefined = conservar.
+          ...(dto.celular !== undefined && { celular: dto.celular.trim() || null }),
         },
       });
     }

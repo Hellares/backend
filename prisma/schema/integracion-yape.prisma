@@ -8,6 +8,9 @@ model IntegracionYape {
   accountId     String   @unique // id de la cuenta en api-yape (mapea el webhook entrante a la empresa, 1:1)
   webhookSecret String // whsec_... : verifica la firma HMAC del webhook entrante
   habilitado    Boolean  @default(true)
+  // Número Yape del comercio (el que recibe los pagos). Se devuelve al comprador
+  // en el cobro del marketplace para "copiar número y abrir Yape" (la UI no lo muestra).
+  celular       String?
   // Límites para PAGOS DIVIDIDOS (Perú). Por transacción = tamaño máximo de cada
   // tramo (dispara el auto-split). Por día = tope diario por método (advertencia
   // — es del cliente, no se enforce). Configurables (los límites cambian).

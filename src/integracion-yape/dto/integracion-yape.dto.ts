@@ -43,6 +43,15 @@ export class UpdateIntegracionYapeDto {
   @IsOptional()
   @IsBoolean()
   habilitado?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Número Yape del comercio (recibe los pagos). El comprador del marketplace lo copia para pagar.',
+    example: '999888777',
+  })
+  @IsOptional()
+  @IsString()
+  celular?: string;
 }
 
 /**
@@ -70,6 +79,9 @@ export class IntegracionYapeResponseDto {
 
   @ApiProperty({ description: 'URL del webhook que debe configurarse en api-yape' })
   webhookUrl: string;
+
+  @ApiProperty({ description: 'Número Yape del comercio', nullable: true })
+  celular: string | null;
 
   @ApiProperty({ nullable: true })
   actualizadoEn: Date | null;

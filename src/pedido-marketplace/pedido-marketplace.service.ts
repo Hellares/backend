@@ -86,7 +86,7 @@ export class PedidoMarketplaceService {
     // por transacción de la empresa, no se ofrece el cobro automático.
     const cfgYape = await this.prisma.integracionYape.findUnique({
       where: { empresaId: pedido.empresaId },
-      select: { habilitado: true, montoMaxPorTransaccion: true },
+      select: { habilitado: true, montoMaxPorTransaccion: true, celular: true },
     });
     if (!cfgYape?.habilitado || total > Number(cfgYape.montoMaxPorTransaccion)) {
       return { habilitado: false as const, total, ...qr };
@@ -114,6 +114,9 @@ export class PedidoMarketplaceService {
       payAmount: cobro.payAmount,
       chargeId: cobro.chargeId,
       total,
+      // Número Yape del comercio: la app lo COPIA al portapapeles (no lo
+      // muestra) para que el comprador pague desde su app Yape.
+      celular: cfgYape.celular ?? null,
       ...qr,
     };
   }
