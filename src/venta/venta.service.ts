@@ -2488,10 +2488,16 @@ export class VentaService {
               : null,
           descuentoGlobalPorcentaje:
             descuentoGlobalCot > 0 ? dto.descuentoGlobalPorcentaje ?? null : null,
+          // El autorizador aplica a CUALQUIER descuento del cajero (global
+          // o por línea), no solo al global.
           descuentoAutorizadoPorId:
-            descuentoGlobalCot > 0 ? dto.descuentoAutorizadoPorId ?? null : null,
+            descuentoGlobalCot > 0 || Object.keys(ajustesDescuento).length > 0
+              ? dto.descuentoAutorizadoPorId ?? null
+              : null,
           descuentoAutorizadoEn:
-            descuentoGlobalCot > 0 && dto.descuentoAutorizadoPorId
+            (descuentoGlobalCot > 0 ||
+              Object.keys(ajustesDescuento).length > 0) &&
+            dto.descuentoAutorizadoPorId
               ? new Date()
               : null,
           metodoPago: this.resolverMetodoPagoVenta(dto.pagos, dto.metodoPago),
