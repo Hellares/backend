@@ -145,6 +145,7 @@ model Venta {
   movimientosCaja             MovimientoCaja[]        @relation("MovimientoCajaVenta")
   comprobante                 ComprobanteElectronico?
   guiasRemision               GuiaRemision[]
+  pedidoMarketplace           PedidoMarketplace?      @relation("VentaPedidoMarketplace")
 
   @@unique([empresaId, codigo])
   // FK indexes

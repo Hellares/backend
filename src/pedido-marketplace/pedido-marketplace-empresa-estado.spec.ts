@@ -20,6 +20,17 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     codigo: 'PEDIDO-20260701-00001',
     compradorId: 'comprador-1',
     estado: 'EN_PREPARACION',
+    nombreComprador: 'Juan Pérez',
+    emailComprador: 'juan@mail.com',
+    telefonoComprador: '999888777',
+    direccionEnvio: 'Av. Siempre Viva 123',
+    subtotal: 100,
+    descuento: 0,
+    total: 100,
+    moneda: 'PEN',
+    metodoPago: 'YAPE',
+    transaccionExternaId: null,
+    sedeRetiroId: null,
   };
 
   const stockRow = {
@@ -43,13 +54,19 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
         update: jest.fn().mockResolvedValue({}),
       },
       movimientoStock: { create: jest.fn().mockResolvedValue({}) },
+      venta: { create: jest.fn().mockResolvedValue({ id: 'venta-1' }) },
+      sede: { findFirst: jest.fn().mockResolvedValue({ id: 'sede-fallback' }) },
       $transaction: jest.fn((fn: any) => fn(prisma)),
     };
     const notificacion = { enviarAUsuario: jest.fn(), enviarAUsuarios: jest.fn() };
+    const codigos = {
+      generarCodigoVenta: jest.fn().mockResolvedValue({ codigoVenta: 'VTA-SED-100' }),
+    };
     service = new PedidoMarketplaceEmpresaService(
       prisma,
       notificacion as any,
       {} as any,
+      codigos as any,
     );
   });
 
@@ -78,7 +95,31 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       },
     });
 
-    // Kardex SALIDA_VENTA valorizado, atribuido al pedido.
+    // Venta interna: canal ONLINE, pagada, en la sede del stock descontado,
+    // precios snapshot del pedido y pago espejo del método del pedido.
+    expect(prisma.venta.create).toHaveBeenCalledTimes(1);
+    const venta = prisma.venta.create.mock.calls[0][0].data;
+    expect(venta).toMatchObject({
+      empresaId: EMPRESA,
+      sedeId: 'sede-1',
+      vendedorId: USUARIO,
+      canalVenta: 'ONLINE',
+      codigo: 'VTA-SED-100',
+      nombreCliente: 'Juan Pérez',
+      estado: 'PAGADA_COMPLETA',
+      metodoPago: 'YAPE',
+      subtotal: 100,
+      total: 100,
+    });
+    expect(venta.detalles.create).toHaveLength(1);
+    expect(venta.detalles.create[0]).toMatchObject({
+      productoId: 'prod-1',
+      cantidad: 2,
+      precioCostoSnapshot: 5,
+    });
+    expect(venta.pagos.create).toMatchObject({ metodoPago: 'YAPE', monto: 100 });
+
+    // Kardex SALIDA_VENTA valorizado, atribuido al pedido Y ligado a la venta.
     expect(prisma.movimientoStock.create).toHaveBeenCalledTimes(1);
     const mov = prisma.movimientoStock.create.mock.calls[0][0].data;
     expect(mov).toMatchObject({
@@ -91,13 +132,15 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       usuarioId: USUARIO,
       tipoDocumento: 'PEDIDO_MARKETPLACE',
       numeroDocumento: pedidoBase.codigo,
+      ventaId: 'venta-1',
     });
 
-    // Estado actualizado con enviadoEn + código de seguimiento.
+    // Estado actualizado con enviadoEn + código de seguimiento + venta ligada.
     const upd = prisma.pedidoMarketplace.update.mock.calls[0][0].data;
     expect(upd.estado).toBe('ENVIADO');
     expect(upd.codigoSeguimiento).toBe('TRK-1');
     expect(upd.enviadoEn).toBeInstanceOf(Date);
+    expect(upd.ventaId).toBe('venta-1');
   });
 
   it('ENVIADO → la liberación de reserva se acota a lo reservado (no negativa)', async () => {
@@ -123,7 +166,7 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     });
   });
 
-  it('ENVIADO sin fila de stock → no bloquea el envío (solo cambia estado)', async () => {
+  it('ENVIADO sin fila de stock → no bloquea el envío; la venta se crea igual (sede fallback)', async () => {
     prisma.productoStock.findFirst.mockResolvedValue(null);
     prisma.pedidoMarketplace.findFirst
       .mockResolvedValueOnce({ ...pedidoBase })
@@ -134,8 +177,12 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
 
     await service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'ENVIADO' } as any);
 
+    // Sin stock: ni descuento ni kardex, pero la venta SÍ se crea (la compra
+    // ocurrió) atribuida a la primera sede activa.
     expect(prisma.productoStock.update).not.toHaveBeenCalled();
     expect(prisma.movimientoStock.create).not.toHaveBeenCalled();
+    expect(prisma.venta.create).toHaveBeenCalledTimes(1);
+    expect(prisma.venta.create.mock.calls[0][0].data.sedeId).toBe('sede-fallback');
     expect(prisma.pedidoMarketplace.update).toHaveBeenCalled();
   });
 

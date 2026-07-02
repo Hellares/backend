@@ -7,7 +7,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import {
+  CanalVenta,
   EstadoPedidoMarketplace,
+  EstadoVenta,
+  MetodoPagoVenta,
   Prisma,
   TipoMovimientoStock,
   TipoNotificacion,
@@ -15,6 +18,7 @@ import {
 import { ValidarPagoDto, CambiarEstadoPedidoDto } from './dto/empresa-pedido.dto';
 import { ConfiguracionEnvioDto } from './dto/configuracion-envio.dto';
 import { CajaService } from '../caja/caja.service';
+import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 
 @Injectable()
@@ -25,6 +29,7 @@ export class PedidoMarketplaceEmpresaService {
     private readonly prisma: PrismaService,
     private readonly notificacionService: NotificacionService,
     private readonly cajaService: CajaService,
+    private readonly codigosService: ConfiguracionCodigosService,
   ) {}
 
   /**
@@ -301,19 +306,26 @@ export class PedidoMarketplaceEmpresaService {
         });
       });
     } else if (dto.estado === EstadoPedidoMarketplace.ENVIADO) {
-      // Salida REAL de inventario: hasta aquí el stock solo estaba reservado
-      // (stockReservadoVenta desde el checkout). Al enviar/entregar el producto
-      // sale físicamente → descontar stockActual, liberar la reserva y dejar
-      // kardex (SALIDA_VENTA). ENVIADO solo se alcanza una vez (desde
-      // EN_PREPARACION) y después no hay cancelación → sin doble descuento.
+      // Al ENVIAR ocurre la materialización del pedido:
+      // 1) Se crea la VENTA interna (canal ONLINE, sin comprobante electrónico,
+      //    precios snapshot del pedido) → el pedido aparece en reportes de
+      //    ventas / kardex / "vendidos". El ingreso a caja NO se duplica: ya se
+      //    registró al validar el pago (categoría PEDIDO_MARKETPLACE).
+      // 2) Salida REAL de inventario: hasta aquí el stock solo estaba reservado
+      //    (stockReservadoVenta desde el checkout) → descontar stockActual,
+      //    liberar la reserva y dejar kardex (SALIDA_VENTA) ligado a la venta.
+      // ENVIADO solo se alcanza una vez (desde EN_PREPARACION) y después no hay
+      // cancelación → sin doble descuento ni necesidad de anular la venta.
       const pedidoConDetalles = await this.prisma.pedidoMarketplace.findFirst({
         where: { id: pedidoId },
         include: { detalles: true },
       });
 
       await this.prisma.$transaction(async (tx) => {
+        // Resolver la fila de stock de cada detalle con el MISMO lookup que usó
+        // el checkout al reservar (así el descuento cae sobre la fila reservada).
+        const lineas: { detalle: any; stock: any | null }[] = [];
         for (const detalle of pedidoConDetalles?.detalles ?? []) {
-          // Mismo lookup que usa el checkout al reservar.
           const stock = await tx.productoStock.findFirst({
             where: {
               empresaId,
@@ -321,6 +333,91 @@ export class PedidoMarketplaceEmpresaService {
               varianteId: detalle.varianteId ?? null,
             },
           });
+          lineas.push({ detalle, stock });
+        }
+
+        // Sede de la venta = la del stock que sale; fallback: sede de retiro o
+        // primera sede activa (mismo criterio que el ingreso a caja).
+        let sedeVentaId: string | null =
+          lineas.find((l) => l.stock)?.stock?.sedeId ?? pedido.sedeRetiroId ?? null;
+        if (!sedeVentaId) {
+          const sede = await tx.sede.findFirst({
+            where: { empresaId, isActive: true },
+            select: { id: true },
+          });
+          sedeVentaId = sede?.id ?? null;
+        }
+
+        // ── Venta interna (solo si hay sede donde atribuirla) ────────────────
+        if (sedeVentaId && lineas.length > 0) {
+          const { codigoVenta } = await this.codigosService.generarCodigoVenta(
+            empresaId,
+            sedeVentaId,
+            tx,
+          );
+
+          // YAPE/PLIN/TRANSFERENCIA existen 1:1 en MetodoPagoVenta.
+          const metodoPagoVenta: MetodoPagoVenta =
+            (pedido.metodoPago as unknown as MetodoPagoVenta) ??
+            MetodoPagoVenta.TRANSFERENCIA;
+
+          const r2 = (n: number) => Math.round(n * 100) / 100;
+          const venta = await tx.venta.create({
+            data: {
+              empresaId,
+              sedeId: sedeVentaId,
+              vendedorId: usuarioId,
+              canalVenta: CanalVenta.ONLINE,
+              codigo: codigoVenta,
+              nombreCliente: pedido.nombreComprador,
+              emailCliente: pedido.emailComprador,
+              telefonoCliente: pedido.telefonoComprador,
+              direccionCliente: pedido.direccionEnvio,
+              subtotal: pedido.subtotal,
+              descuento: pedido.descuento,
+              total: pedido.total,
+              moneda: pedido.moneda,
+              estado: EstadoVenta.PAGADA_COMPLETA,
+              metodoPago: metodoPagoVenta,
+              observaciones: `Pedido marketplace ${pedido.codigo}`,
+              detalles: {
+                create: lineas.map(({ detalle, stock }, i) => {
+                  const precio = Number(detalle.precioUnitario);
+                  const costo = stock?.precioCosto ? Number(stock.precioCosto) : 0;
+                  const sub = Number(detalle.subtotal);
+                  // Precios incluyen IGV → desglose informativo 18%.
+                  const igv = r2(sub - sub / 1.18);
+                  return {
+                    productoId: detalle.productoId,
+                    varianteId: detalle.varianteId,
+                    descripcion: detalle.descripcion,
+                    cantidad: detalle.cantidad,
+                    precioUnitario: detalle.precioUnitario,
+                    precioCostoSnapshot: costo,
+                    margenSnapshot: precio - costo,
+                    igv,
+                    subtotal: detalle.subtotal,
+                    total: detalle.subtotal,
+                    orden: i,
+                  };
+                }),
+              },
+              pagos: {
+                create: {
+                  metodoPago: metodoPagoVenta,
+                  monto: pedido.total,
+                  referencia: pedido.transaccionExternaId ?? pedido.codigo,
+                },
+              },
+            },
+            select: { id: true },
+          });
+
+          updateData.ventaId = venta.id;
+        }
+
+        // ── Salida real de inventario + kardex ligado a la venta ─────────────
+        for (const { detalle, stock } of lineas) {
           // Sin fila de stock (producto eliminado): no bloquear el envío.
           if (!stock) continue;
 
@@ -346,6 +443,7 @@ export class PedidoMarketplaceEmpresaService {
             motivo: 'Pedido marketplace enviado',
             tipoDocumento: 'PEDIDO_MARKETPLACE',
             numeroDocumento: pedido.codigo,
+            ventaId: updateData.ventaId,
           });
         }
 

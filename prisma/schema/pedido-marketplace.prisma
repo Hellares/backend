@@ -86,6 +86,11 @@ model PedidoMarketplace {
   entregadoEn       DateTime?
   codigoSeguimiento String?
 
+  // Venta interna generada al ENVIAR el pedido (canal ONLINE, sin comprobante
+  // electrónico): así el pedido aparece en reportes de ventas/kardex/vendidos.
+  ventaId String? @unique
+  venta   Venta?  @relation("VentaPedidoMarketplace", fields: [ventaId], references: [id], onDelete: SetNull)
+
   notasComprador String?
   notasVendedor  String?
 
