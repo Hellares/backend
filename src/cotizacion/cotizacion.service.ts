@@ -1263,6 +1263,9 @@ export class CotizacionService {
           },
         },
         solicitudOrigen: { select: { solicitanteId: true } },
+        // Para notificar en cotizaciones DIRECTAS (sin solicitud): el
+        // usuario marketplace se resuelve por la Persona del cliente.
+        cliente: { select: { personaId: true } },
       },
     });
     if (!cotizacion) return { accion: 'cotizacion-no-encontrada' };
@@ -1409,7 +1412,16 @@ export class CotizacionService {
 
     // Notificaciones best-effort.
     try {
-      const solicitanteId = cotizacion.solicitudOrigen[0]?.solicitanteId;
+      // Destinatario: el solicitante (flujo de solicitud) o el usuario
+      // marketplace cuya Persona es el cliente (cotización DIRECTA).
+      let solicitanteId = cotizacion.solicitudOrigen[0]?.solicitanteId;
+      if (!solicitanteId && cotizacion.cliente?.personaId) {
+        const usuarioCliente = await this.prisma.usuario.findUnique({
+          where: { personaId: cotizacion.cliente.personaId },
+          select: { id: true },
+        });
+        solicitanteId = usuarioCliente?.id;
+      }
       if (solicitanteId) {
         await this.notificacionService.enviarAUsuario(
           solicitanteId,
