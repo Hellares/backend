@@ -618,6 +618,23 @@ export class CotizacionService {
             persona: { select: { nombres: true, apellidos: true } },
           },
         },
+        // Solicitud del marketplace que originó esta cotización (si existe):
+        // la app muestra el vínculo en el detalle.
+        solicitudOrigen: {
+          select: {
+            id: true,
+            codigo: true,
+            estado: true,
+            creadoEn: true,
+            solicitante: {
+              select: {
+                persona: { select: { nombres: true, apellidos: true } },
+                email: true,
+              },
+            },
+          },
+          take: 1,
+        },
       },
     });
 
