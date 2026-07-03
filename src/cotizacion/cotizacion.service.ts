@@ -640,6 +640,12 @@ export class CotizacionService {
           },
           take: 1,
         },
+        // Venta resultante (cotización CONVERTIDA): el detalle muestra el
+        // resumen REAL de la venta — puede diferir del total cotizado si
+        // se excluyeron items al convertir.
+        venta: {
+          select: { id: true, codigo: true, total: true, estado: true },
+        },
       },
     });
 
