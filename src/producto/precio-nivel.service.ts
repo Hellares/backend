@@ -416,6 +416,13 @@ export class PrecioNivelService {
     vipAplicado?: boolean;
     /** ID de la política VIP que ganó (null si no aplicó/ no ganó). */
     vipPoliticaId?: string | null;
+    /**
+     * Precio PÚBLICO vigente (mínimo entre base, oferta y liquidación
+     * activas): lo que pagaría cualquier cliente SIN nivel/VIP. Referencia
+     * para mostrar el ahorro por precio especial sin contar las ofertas
+     * públicas como "descuento".
+     */
+    precioPublico?: number;
   }> {
     this.logger.info('Calculating price by quantity', {
       productoId,
@@ -597,6 +604,11 @@ export class PrecioNivelService {
       precioCosto,
       vipAplicado: !!ganador.vipPoliticaId,
       vipPoliticaId: ganador.vipPoliticaId ?? null,
+      precioPublico: Math.min(
+        precioBase,
+        precioOferta ?? Number.POSITIVE_INFINITY,
+        precioLiquidacion ?? Number.POSITIVE_INFINITY,
+      ),
     };
   }
 

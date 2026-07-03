@@ -101,15 +101,16 @@ export class CotizacionService {
               `Aplicando precio del backend (nivel: ${calc.nivelAplicado}).`,
           );
         }
+        // Server-authoritative: el precio regular es el precio PÚBLICO
+        // vigente (min de base/oferta/liquidación) — solo las rebajas de
+        // nivel/VIP cuentan como "precio especial". Las ofertas públicas
+        // NO se muestran como descuento de la cotización.
+        const publico = calc.precioPublico ?? calc.precioBase;
         result.push({
           ...d,
           precioUnitario: calc.precioUnitario,
-          // Server-authoritative: el precio regular sale del cálculo (base
-          // antes del nivel/VIP), no de lo que envíe la app.
           precioRegular:
-            calc.precioBase > calc.precioUnitario + 0.0001
-              ? calc.precioBase
-              : undefined,
+            publico > calc.precioUnitario + 0.0001 ? publico : undefined,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
