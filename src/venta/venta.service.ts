@@ -34,6 +34,7 @@ import {
   MetodoPagoVenta,
   MotivoLiquidacion,
   Prisma,
+  ReservaCotizacionEstado,
   Rol,
   TipoCalculoDescuento,
 } from '@prisma/client';
@@ -2300,6 +2301,37 @@ export class VentaService {
         excluirIds.size > 0 ||
         Object.keys(ajustes).length > 0 ||
         Object.keys(ajustesDescuento).length > 0;
+
+      // 2c. Resolver las RESERVAS de stock de la cotización ANTES de
+      // descontar stock: los detalles INCLUIDOS consumen su reserva (pasa
+      // a la venta → CONVERTIDA) y los EXCLUIDOS la liberan (LIBERADA,
+      // vuelve al disponible). Sin esto: (a) la propia reserva bloqueaba
+      // la conversión ("stock insuficiente" contra sí misma, porque el
+      // guard resta stockReservadoCotizacion), y (b) las reservas quedaban
+      // ACTIVAS para siempre tras la venta (stock fantasma).
+      for (const det of cotizacion.detalles) {
+        if (
+          det.reservaEstado !== ReservaCotizacionEstado.ACTIVA ||
+          !det.productoStockId ||
+          !det.cantidadReservada
+        ) {
+          continue;
+        }
+        await tx.productoStock.update({
+          where: { id: det.productoStockId },
+          data: {
+            stockReservadoCotizacion: { decrement: det.cantidadReservada },
+          },
+        });
+        await tx.cotizacionDetalle.update({
+          where: { id: det.id },
+          data: {
+            reservaEstado: excluirIds.has(det.id)
+              ? ReservaCotizacionEstado.LIBERADA
+              : ReservaCotizacionEstado.CONVERTIDA,
+          },
+        });
+      }
 
       // Filtrar excluidos y aplicar ajustes de cantidad/descuento
       const detallesVenta = cotizacion.detalles

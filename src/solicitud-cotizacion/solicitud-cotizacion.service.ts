@@ -175,6 +175,9 @@ export class SolicitudCotizacionService {
       include: {
         detalles: { orderBy: { orden: 'asc' } },
         sede: { select: { id: true, nombre: true, direccion: true } },
+        // Venta resultante (si ya se convirtió): el cliente ve el resumen
+        // REAL de su compra (total y código), no el total cotizado.
+        venta: { select: { id: true, codigo: true, total: true, estado: true } },
       },
     });
     if (!cotizacion) throw new NotFoundException('Cotización no encontrada');
