@@ -110,6 +110,11 @@ model CotizacionDetalle {
   // al cliente el ahorro completo (nivel + descuento manual).
   precioRegular Decimal? @db.Decimal(14, 4)
 
+  // Precio NORMAL de sede antes de la OFERTA/liquidación pública vigente
+  // al cotizar. Solo informativo (chip "En oferta — antes S/X"): la oferta
+  // es precio público y NO cuenta como descuento de la cotización.
+  precioAntesOferta Decimal? @db.Decimal(14, 4)
+
   // Impuesto
   tipoAfectacion String  @default("10") // SUNAT Cat.07: 10=Gravado, 20=Exonerado, 30=Inafecto
   porcentajeIGV  Decimal @default(18.00) @db.Decimal(5, 2)

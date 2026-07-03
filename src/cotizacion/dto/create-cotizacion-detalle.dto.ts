@@ -59,6 +59,16 @@ export class CreateCotizacionDetalleDto {
   @Type(() => Number)
   precioRegular?: number;
 
+  @ApiPropertyOptional({
+    description:
+      'Precio normal de sede antes de la OFERTA pública vigente. Informativo (el backend lo recalcula server-side).',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  precioAntesOferta?: number;
+
   @ApiPropertyOptional({ description: 'Porcentaje de IGV', example: 18 })
   @IsOptional()
   @IsNumber()

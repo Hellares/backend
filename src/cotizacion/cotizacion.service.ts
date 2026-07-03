@@ -104,13 +104,16 @@ export class CotizacionService {
         // Server-authoritative: el precio regular es el precio PÚBLICO
         // vigente (min de base/oferta/liquidación) — solo las rebajas de
         // nivel/VIP cuentan como "precio especial". Las ofertas públicas
-        // NO se muestran como descuento de la cotización.
+        // NO se muestran como descuento de la cotización, pero sí se
+        // persiste el precio de sede pre-oferta como referencia informativa.
         const publico = calc.precioPublico ?? calc.precioBase;
         result.push({
           ...d,
           precioUnitario: calc.precioUnitario,
           precioRegular:
             publico > calc.precioUnitario + 0.0001 ? publico : undefined,
+          precioAntesOferta:
+            calc.precioBase > publico + 0.0001 ? calc.precioBase : undefined,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -730,6 +733,7 @@ export class CotizacionService {
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
               precioRegular: d.precioRegular,
+              precioAntesOferta: d.precioAntesOferta,
               tipoAfectacion: d.tipoAfectacion,
               porcentajeIGV: d.porcentajeIGV,
               igv: d.igv,
@@ -1075,6 +1079,7 @@ export class CotizacionService {
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
               precioRegular: d.precioRegular,
+              precioAntesOferta: d.precioAntesOferta,
               tipoAfectacion: d.tipoAfectacion,
               porcentajeIGV: d.porcentajeIGV,
               igv: d.igv,
@@ -1155,6 +1160,11 @@ export class CotizacionService {
       precioRegular:
         dto.precioRegular != null && dto.precioRegular > precioUnitario
           ? dto.precioRegular
+          : null,
+      // Precio de sede pre-oferta (informativo, no cuenta como descuento).
+      precioAntesOferta:
+        dto.precioAntesOferta != null && dto.precioAntesOferta > precioUnitario
+          ? dto.precioAntesOferta
           : null,
       tipoAfectacion,
       porcentajeIGV,
