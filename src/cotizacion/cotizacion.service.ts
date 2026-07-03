@@ -1201,9 +1201,19 @@ export class CotizacionService {
     });
     if (!cotizacion) return { accion: 'cotizacion-no-encontrada' };
 
-    // Idempotencia: webhook duplicado sobre adelanto ya registrado.
-    if (cotizacion.adelantoMonto && Number(cotizacion.adelantoMonto) > 0) {
-      return { accion: 'adelanto-ya-registrado' };
+    // Idempotencia POR PAGO (los pagos son acumulables — total o parciales):
+    // un webhook duplicado del mismo pago no debe sumar dos veces. Se
+    // detecta por el pagoId guardado en la metadata del MovimientoCaja.
+    if (datos.referencia) {
+      const yaRegistrado = await this.prisma.movimientoCaja.findFirst({
+        where: {
+          cotizacionId,
+          categoria: CategoriaMovimientoCaja.ADELANTO_COTIZACION,
+          metadata: { path: ['pagoId'], equals: datos.referencia },
+        },
+        select: { id: true },
+      });
+      if (yaRegistrado) return { accion: 'pago-ya-registrado' };
     }
     // Webhook tardío sobre cotización terminal → ignorar.
     const pagables: EstadoCotizacion[] = [
@@ -1215,7 +1225,16 @@ export class CotizacionService {
       return { accion: 'cotizacion-no-pagable' };
     }
 
-    const monto = Math.min(datos.monto, Number(cotizacion.total));
+    const total = Number(cotizacion.total);
+    const adelantoPrevio = Number(cotizacion.adelantoMonto ?? 0);
+    const saldoPendiente = Math.max(0, total - adelantoPrevio);
+    if (saldoPendiente <= 0.005) {
+      return { accion: 'cotizacion-ya-pagada' };
+    }
+    // Clamp al saldo: nunca acumular más que el total de la cotización.
+    const monto = Math.min(datos.monto, saldoPendiente);
+    const acumulado = Math.round((adelantoPrevio + monto) * 100) / 100;
+    const pagadaCompleta = acumulado >= total - 0.005;
 
     await this.prisma.$transaction(async (tx) => {
       // 1) Reservar stock si no había reserva activa. Best-effort: si no
@@ -1285,11 +1304,18 @@ export class CotizacionService {
                 ? MetodoPagoVenta.PLIN
                 : MetodoPagoVenta.YAPE,
             monto,
-            descripcion: `Adelanto cotización ${cotizacion.codigo} (Yape automático)`,
+            descripcion: pagadaCompleta
+                ? `Pago cotización ${cotizacion.codigo} (Yape automático — completa el total)`
+                : `Abono cotización ${cotizacion.codigo} (Yape automático)`,
             cotizacionId: cotizacion.id,
             registradoPorId: admin.usuarioId,
             esManual: false,
-            metadata: { automatico: true, fuente: 'webhook-yape' },
+            metadata: {
+              automatico: true,
+              fuente: 'webhook-yape',
+              // pagoId = idempotencia por pago (los abonos son acumulables).
+              ...(datos.referencia && { pagoId: datos.referencia }),
+            },
           },
         });
         movimientoCajaId = movimiento.id;
@@ -1299,12 +1325,15 @@ export class CotizacionService {
         );
       }
 
-      // 3) Registrar el adelanto y aprobar la cotización (cliente aceptó).
+      // 3) ACUMULAR el pago y aprobar la cotización (cliente aceptó).
+      //    `movimientoCajaId` conserva el PRIMER pago (traza del adelanto
+      //    original; los siguientes quedan trazados por cotizacionId).
       await tx.cotizacion.update({
         where: { id: cotizacion.id },
         data: {
-          adelantoMonto: monto,
-          ...(movimientoCajaId && { movimientoCajaId }),
+          adelantoMonto: acumulado,
+          ...(movimientoCajaId &&
+            !cotizacion.movimientoCajaId && { movimientoCajaId }),
           ...(cotizacion.estado !== EstadoCotizacion.APROBADA && {
             estado: EstadoCotizacion.APROBADA,
           }),
@@ -1318,8 +1347,10 @@ export class CotizacionService {
       if (solicitanteId) {
         await this.notificacionService.enviarAUsuario(
           solicitanteId,
-          'Separación confirmada',
-          `Tu adelanto de S/ ${monto.toFixed(2)} para la cotización ${cotizacion.codigo} fue confirmado. ¡Tus productos quedaron separados!`,
+          pagadaCompleta ? '¡Pago completo confirmado!' : 'Abono confirmado',
+          pagadaCompleta
+              ? `Tu pago de S/ ${monto.toFixed(2)} completó el total de la cotización ${cotizacion.codigo}. ¡Tus productos quedaron reservados!`
+              : `Tu abono de S/ ${monto.toFixed(2)} para la cotización ${cotizacion.codigo} fue confirmado. Pagado S/ ${acumulado.toFixed(2)} de S/ ${total.toFixed(2)} — tus productos quedaron separados.`,
           {
             tipo: TipoNotificacion.SISTEMA,
             empresaId,
@@ -1342,8 +1373,10 @@ export class CotizacionService {
       if (ids.length > 0) {
         await this.notificacionService.enviarAUsuarios(
           ids,
-          'Cotización separada',
-          `El cliente pagó S/ ${monto.toFixed(2)} de adelanto por la cotización ${cotizacion.codigo} (confirmación automática). Stock apartado.`,
+          pagadaCompleta ? 'Cotización PAGADA completa' : 'Cotización separada',
+          pagadaCompleta
+              ? `El cliente pagó S/ ${monto.toFixed(2)} y completó el total de la cotización ${cotizacion.codigo} (S/ ${total.toFixed(2)}). Stock apartado — lista para convertir a venta.`
+              : `El cliente abonó S/ ${monto.toFixed(2)} por la cotización ${cotizacion.codigo} (pagado S/ ${acumulado.toFixed(2)} de S/ ${total.toFixed(2)}, confirmación automática). Stock apartado.`,
           {
             tipo: TipoNotificacion.SISTEMA,
             empresaId,
@@ -1353,7 +1386,12 @@ export class CotizacionService {
       }
     } catch (_) {}
 
-    return { accion: 'adelanto-registrado', cotizacionId: cotizacion.id };
+    return {
+      accion: 'pago-registrado',
+      cotizacionId: cotizacion.id,
+      acumulado,
+      pagadaCompleta,
+    };
   }
 
   /**

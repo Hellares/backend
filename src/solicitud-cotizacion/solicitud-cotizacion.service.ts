@@ -275,13 +275,19 @@ export class SolicitudCotizacionService {
   }
 
   /**
-   * Inicia el pago del ADELANTO de separación vía api-yape: crea un charge
-   * con reference `cotizacion:<id>` por el `adelantoRequerido`. El webhook
-   * confirma solo (APROBADA + adelanto registrado + stock reservado).
+   * Inicia un pago de la cotización (TOTAL o PARCIAL) vía api-yape: crea un
+   * charge con reference `cotizacion:<id>` por el monto elegido. Sin `monto`
+   * usa el `adelantoRequerido` de la empresa (o el saldo completo si no
+   * hay). El webhook confirma solo: ACUMULA el pago, reserva el stock
+   * (primer pago) y aprueba la cotización.
    * Devuelve { habilitado:false } si la empresa no tiene Yape automático →
    * la app cae a coordinación manual.
    */
-  async cobroYapeAdelanto(usuarioId: string, solicitudId: string) {
+  async cobroYapeAdelanto(
+    usuarioId: string,
+    solicitudId: string,
+    montoSolicitado?: number,
+  ) {
     const { cotizacion } = await this._cotizacionDelComprador(usuarioId, solicitudId);
 
     const pagables: EstadoCotizacion[] = [
@@ -291,15 +297,34 @@ export class SolicitudCotizacionService {
     if (!pagables.includes(cotizacion.estado)) {
       throw new BadRequestException('Esta cotización ya no está disponible');
     }
-    if (cotizacion.adelantoMonto && Number(cotizacion.adelantoMonto) > 0) {
-      throw new BadRequestException('El adelanto ya fue pagado');
-    }
-    const adelanto = Number(cotizacion.adelantoRequerido ?? 0);
-    if (adelanto <= 0) {
-      throw new BadRequestException('Esta cotización no requiere adelanto');
-    }
 
     const total = Number(cotizacion.total);
+    const adelantoPagado = Number(cotizacion.adelantoMonto ?? 0);
+    const saldo = Math.round((total - adelantoPagado) * 100) / 100;
+    if (saldo <= 0.005) {
+      throw new BadRequestException(
+        'Esta cotización ya está pagada por completo',
+      );
+    }
+
+    // Monto a cobrar: el elegido por el cliente (validado contra el saldo),
+    // o el adelanto requerido por la empresa, o el saldo completo.
+    const adelantoRequerido = Number(cotizacion.adelantoRequerido ?? 0);
+    let adelanto: number;
+    if (montoSolicitado != null && Number(montoSolicitado) > 0) {
+      adelanto = Math.round(Number(montoSolicitado) * 100) / 100;
+      if (adelanto > saldo + 0.005) {
+        throw new BadRequestException(
+          `El monto supera el saldo pendiente (S/ ${saldo.toFixed(2)})`,
+        );
+      }
+      if (adelanto < 1) {
+        throw new BadRequestException('El monto mínimo es S/ 1.00');
+      }
+    } else {
+      adelanto =
+        adelantoRequerido > 0 ? Math.min(adelantoRequerido, saldo) : saldo;
+    }
 
     // QR estático del comercio.
     const cfgQr = await this.prisma.configuracionEmpresa.findUnique({
@@ -317,17 +342,31 @@ export class SolicitudCotizacionService {
       CaracteristicaPremium.YAPE_QR,
     );
     if (!yapeHabilitado) {
-      return { habilitado: false as const, total, adelanto, ...qr };
+      return {
+        habilitado: false as const,
+        total,
+        adelanto,
+        adelantoPagado,
+        saldo,
+        ...qr,
+      };
     }
     const cfgYape = await this.prisma.integracionYape.findUnique({
       where: { empresaId: cotizacion.empresaId },
       select: { habilitado: true, montoMaxPorTransaccion: true, celular: true },
     });
     if (!cfgYape?.habilitado || adelanto > Number(cfgYape.montoMaxPorTransaccion)) {
-      return { habilitado: false as const, total, adelanto, ...qr };
+      return {
+        habilitado: false as const,
+        total,
+        adelanto,
+        adelantoPagado,
+        saldo,
+        ...qr,
+      };
     }
 
-    // Cancel-then-create: reabrir la hoja no acumula charges.
+    // Cancel-then-create: reabrir la hoja no acumula charges pendientes.
     const reference = SolicitudCotizacionService.referenciaYape(cotizacion.id);
     try {
       await this.integracionYape.cancelarCobro({
@@ -341,7 +380,16 @@ export class SolicitudCotizacionService {
       ventaId: reference,
       monto: adelanto,
     });
-    if (!cobro) return { habilitado: false as const, total, adelanto, ...qr };
+    if (!cobro) {
+      return {
+        habilitado: false as const,
+        total,
+        adelanto,
+        adelantoPagado,
+        saldo,
+        ...qr,
+      };
+    }
 
     return {
       habilitado: true as const,
@@ -349,6 +397,8 @@ export class SolicitudCotizacionService {
       chargeId: cobro.chargeId,
       total,
       adelanto,
+      adelantoPagado,
+      saldo,
       celular: cfgYape.celular ?? null,
       ...qr,
     };

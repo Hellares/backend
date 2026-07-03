@@ -102,13 +102,16 @@ export class SolicitudCotizacionClienteController {
   @Post(':id/cotizacion/cobro-yape')
   @ApiOperation({
     summary:
-      'Pagar el adelanto de separación con Yape automático (api-yape). El webhook aprueba y reserva solo.',
+      'Pagar la cotización (total o parcial) con Yape/Plin automático (api-yape). ' +
+      'Sin `monto` usa el adelanto requerido (o el saldo completo). El webhook ' +
+      'acumula el pago, reserva stock y aprueba solo.',
   })
   async cobroYapeAdelanto(
     @CurrentUser('sub') usuarioId: string,
     @Param('id') id: string,
+    @Body('monto') monto?: number,
   ) {
-    return this.service.cobroYapeAdelanto(usuarioId, id);
+    return this.service.cobroYapeAdelanto(usuarioId, id, monto);
   }
 }
 
