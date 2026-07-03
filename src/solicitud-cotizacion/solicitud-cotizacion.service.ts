@@ -10,6 +10,7 @@ import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracter
 import { CotizacionService } from '../cotizacion/cotizacion.service';
 import {
   CaracteristicaPremium,
+  EntidadTipo,
   EstadoCotizacion,
   EstadoSolicitudCotizacion,
   Prisma,
@@ -182,15 +183,72 @@ export class SolicitudCotizacionService {
 
   /**
    * Cotización formal vista por el COMPRADOR (vía su solicitud): items con
-   * precios, totales, vigencia, adelanto requerido y estado.
+   * precios, totales, vigencia, adelanto requerido y estado. Cada detalle
+   * lleva `imagenUrl` (thumbnail del producto o de la variante) para la
+   * tabla de items del cliente.
    */
   async miCotizacion(usuarioId: string, solicitudId: string) {
     const { solicitud, cotizacion } = await this._cotizacionDelComprador(
       usuarioId,
       solicitudId,
     );
+
+    // Imágenes por producto/variante (primera imagen activa, thumbnail).
+    const productoIds = [
+      ...new Set(
+        cotizacion.detalles
+          .filter((d) => !d.varianteId && d.productoId)
+          .map((d) => d.productoId!),
+      ),
+    ];
+    const varianteIds = [
+      ...new Set(
+        cotizacion.detalles.filter((d) => d.varianteId).map((d) => d.varianteId!),
+      ),
+    ];
+    const imagenes = await this.prisma.archivo.findMany({
+      where: {
+        OR: [
+          ...(productoIds.length
+            ? [
+                {
+                  entidadTipo: EntidadTipo.PRODUCTO,
+                  entidadId: { in: productoIds },
+                },
+              ]
+            : []),
+          ...(varianteIds.length
+            ? [
+                {
+                  entidadTipo: EntidadTipo.PRODUCTO_VARIANTE,
+                  entidadId: { in: varianteIds },
+                },
+              ]
+            : []),
+        ],
+        tipoArchivo: 'IMAGEN',
+        isActive: true,
+        deletedAt: null,
+      },
+      select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
+      orderBy: { orden: 'asc' },
+    });
+    const imagenPorEntidad = new Map<string, string>();
+    for (const img of imagenes) {
+      if (img.entidadId && !imagenPorEntidad.has(img.entidadId)) {
+        imagenPorEntidad.set(img.entidadId, img.urlThumbnail || img.url);
+      }
+    }
+
     return {
       ...cotizacion,
+      detalles: cotizacion.detalles.map((d) => ({
+        ...d,
+        imagenUrl:
+          (d.varianteId && imagenPorEntidad.get(d.varianteId)) ||
+          (d.productoId && imagenPorEntidad.get(d.productoId)) ||
+          null,
+      })),
       solicitudCodigo: solicitud.codigo,
       tieneReservaActiva: cotizacion.detalles.some(
         (d) => d.reservaEstado === 'ACTIVA',
