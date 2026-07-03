@@ -478,11 +478,13 @@ export class PrecioNivelService {
     const precioBase = precioBaseDecimal.toNumber();
     const precioCosto = stock.precioCosto ? stock.precioCosto.toNumber() : null;
 
-    // Calcular precio según niveles (si aplica)
+    // Calcular precio según niveles (si aplica).
+    // VARIANTE: sus niveles se guardan con productoId NULL + varianteId, así
+    // que se filtra SOLO por varianteId. Exigir ambos (productoId AND
+    // varianteId) nunca matcheaba y las variantes quedaban sin nivel/VIP.
     const niveles = await this.prisma.precioNivel.findMany({
       where: {
-        ...(productoId && { productoId }),
-        ...(varianteId && { varianteId }),
+        ...(varianteId ? { varianteId } : { productoId }),
         isActive: true,
         cantidadMinima: { lte: cantidad },
         OR: [{ cantidadMaxima: { gte: cantidad } }, { cantidadMaxima: null }],
@@ -619,10 +621,11 @@ export class PrecioNivelService {
       }
       case 'PRECIO_MAYOR_DESDE_UNIDAD': {
         // Todos los niveles activos, sin filtrar por cantidad (desde la unidad 1).
+        // VARIANTE: sus niveles viven con productoId NULL + varianteId → se
+        // filtra SOLO por varianteId (exigir ambos nunca matcheaba).
         const niveles = await this.prisma.precioNivel.findMany({
           where: {
-            ...(productoId && { productoId }),
-            ...(varianteId && { varianteId }),
+            ...(varianteId ? { varianteId } : { productoId }),
             isActive: true,
           },
           orderBy: { cantidadMinima: 'asc' },
