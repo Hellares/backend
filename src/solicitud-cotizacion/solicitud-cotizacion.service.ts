@@ -528,6 +528,18 @@ export class SolicitudCotizacionService {
       },
     });
 
+    // Al responder al cliente, la cotización queda ENVIADA para él: si
+    // sigue en BORRADOR pasa a PENDIENTE — sin esto el cliente la veía
+    // pero no podía aceptarla ni pagarla.
+    await this.prisma.cotizacion.updateMany({
+      where: {
+        id: cotizacionId,
+        empresaId,
+        estado: EstadoCotizacion.BORRADOR,
+      },
+      data: { estado: EstadoCotizacion.PENDIENTE },
+    });
+
     try {
       await this.notificacionService.enviarAUsuario(
         solicitud.solicitanteId,
