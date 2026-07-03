@@ -78,7 +78,7 @@ export class SolicitudCotizacionClienteController {
     @CurrentUser('sub') usuarioId: string,
     @Param('id') id: string,
   ) {
-    return this.service.miCotizacion(usuarioId, id);
+    return this.service.miCotizacion(usuarioId, { solicitudId: id });
   }
 
   @Post(':id/cotizacion/aceptar')
@@ -87,7 +87,7 @@ export class SolicitudCotizacionClienteController {
     @CurrentUser('sub') usuarioId: string,
     @Param('id') id: string,
   ) {
-    return this.service.aceptarCotizacion(usuarioId, id);
+    return this.service.aceptarCotizacion(usuarioId, { solicitudId: id });
   }
 
   @Post(':id/cotizacion/rechazar')
@@ -96,7 +96,7 @@ export class SolicitudCotizacionClienteController {
     @CurrentUser('sub') usuarioId: string,
     @Param('id') id: string,
   ) {
-    return this.service.rechazarCotizacion(usuarioId, id);
+    return this.service.rechazarCotizacion(usuarioId, { solicitudId: id });
   }
 
   @Post(':id/cotizacion/cobro-yape')
@@ -111,7 +111,62 @@ export class SolicitudCotizacionClienteController {
     @Param('id') id: string,
     @Body('monto') monto?: number,
   ) {
-    return this.service.cobroYapeAdelanto(usuarioId, id, monto);
+    return this.service.cobroYapeAdelanto(usuarioId, { solicitudId: id }, monto);
+  }
+}
+
+// ─── COTIZACIONES DEL CLIENTE (marketplace, JWT only) ───
+// Todas las cotizaciones dirigidas al usuario: las de sus solicitudes +
+// las que una empresa le creó DIRECTAMENTE (match por su Persona/DNI).
+
+@ApiTags('Marketplace - Mis Cotizaciones')
+@Controller('marketplace/cotizaciones')
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth()
+export class MarketplaceCotizacionController {
+  constructor(private readonly service: SolicitudCotizacionService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Listar mis cotizaciones (de solicitudes + directas)' })
+  async misCotizaciones(@CurrentUser('sub') usuarioId: string) {
+    return this.service.misCotizaciones(usuarioId);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Detalle de una cotización dirigida a mí' })
+  async detalle(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.miCotizacion(usuarioId, { cotizacionId: id });
+  }
+
+  @Post(':id/aceptar')
+  @ApiOperation({ summary: 'Aceptar la cotización (sin adelanto)' })
+  async aceptar(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.aceptarCotizacion(usuarioId, { cotizacionId: id });
+  }
+
+  @Post(':id/rechazar')
+  @ApiOperation({ summary: 'Rechazar la cotización' })
+  async rechazar(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+  ) {
+    return this.service.rechazarCotizacion(usuarioId, { cotizacionId: id });
+  }
+
+  @Post(':id/cobro-yape')
+  @ApiOperation({ summary: 'Pagar la cotización (total o parcial) con Yape/Plin' })
+  async cobroYape(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') id: string,
+    @Body('monto') monto?: number,
+  ) {
+    return this.service.cobroYapeAdelanto(usuarioId, { cotizacionId: id }, monto);
   }
 }
 

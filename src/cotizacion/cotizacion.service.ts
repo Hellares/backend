@@ -356,6 +356,11 @@ export class CotizacionService {
           sedeId: dto.sedeId,
           clienteId: dto.clienteId,
           vendedorId: dto.vendedorId,
+          // Con cliente REAL asignado (DNI) la cotización nace PENDIENTE:
+          // es una propuesta formal dirigida a alguien y aparece de
+          // inmediato en su cuenta del marketplace (match por Persona).
+          // Sin cliente queda BORRADOR (default) — invisible al público.
+          ...(dto.clienteId ? { estado: EstadoCotizacion.PENDIENTE } : {}),
           codigo: codigoCotizacion,
           nombre: dto.nombre,
           nombreCliente: dto.nombreCliente,
@@ -499,6 +504,41 @@ export class CotizacionService {
         empresaId,
         sedeId: dto.sedeId,
       });
+    }
+
+    // Notificar al CLIENTE del marketplace (best-effort): si el cliente
+    // asignado tiene cuenta (misma Persona, match global por DNI), la
+    // cotización ya es visible en "Mis cotizaciones" — avisarle.
+    if (dto.clienteId) {
+      try {
+        const cliente = await this.prisma.empresaPersona.findUnique({
+          where: { id: dto.clienteId },
+          select: {
+            personaId: true,
+            empresa: { select: { nombre: true } },
+          },
+        });
+        const usuarioCliente = cliente
+          ? await this.prisma.usuario.findUnique({
+              where: { personaId: cliente.personaId },
+              select: { id: true },
+            })
+          : null;
+        if (usuarioCliente) {
+          await this.notificacionService.enviarAUsuario(
+            usuarioCliente.id,
+            'Tienes una nueva cotización',
+            `${cliente!.empresa.nombre} te envió la cotización ${cotizacion.codigo} por S/ ${Number(cotizacion.total).toFixed(2)}`,
+            {
+              tipo: TipoNotificacion.SISTEMA,
+              empresaId,
+              data: { cotizacionId: cotizacion.id, tipo: 'cotizacion-cliente' },
+            },
+          );
+        }
+      } catch (_) {
+        // La notificación nunca debe romper la creación.
+      }
     }
 
     return cotizacion;
@@ -674,9 +714,17 @@ export class CotizacionService {
       throw new NotFoundException('Cotizacion no encontrada');
     }
 
-    if (cotizacion.estado !== EstadoCotizacion.BORRADOR) {
+    // Editables: BORRADOR (siempre) y PENDIENTE sin dinero de por medio
+    // (las cotizaciones con cliente asignado nacen PENDIENTE para ser
+    // visibles en su cuenta del marketplace; la empresa aún puede
+    // corregirlas mientras el cliente no haya pagado un adelanto).
+    const editable =
+      cotizacion.estado === EstadoCotizacion.BORRADOR ||
+      (cotizacion.estado === EstadoCotizacion.PENDIENTE &&
+        Number(cotizacion.adelantoMonto ?? 0) <= 0);
+    if (!editable) {
       throw new BadRequestException(
-        'Solo se pueden editar cotizaciones en estado BORRADOR',
+        'Solo se pueden editar cotizaciones en BORRADOR o PENDIENTES sin adelanto pagado',
       );
     }
 

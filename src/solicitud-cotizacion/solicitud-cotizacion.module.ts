@@ -7,9 +7,9 @@ import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteri
 import { CotizacionModule } from '../cotizacion/cotizacion.module';
 import { SolicitudCotizacionService } from './solicitud-cotizacion.service';
 import { SolicitudCotizacionTasksService } from './solicitud-cotizacion-tasks.service';
-import {
-  SolicitudCotizacionClienteController,
+import {SolicitudCotizacionClienteController,
   SolicitudCotizacionEmpresaController,
+  MarketplaceCotizacionController,
 } from './solicitud-cotizacion.controller';
 
 @Module({
@@ -23,6 +23,7 @@ import {
   ],
   controllers: [
     SolicitudCotizacionClienteController,
+    MarketplaceCotizacionController,
     SolicitudCotizacionEmpresaController,
   ],
   providers: [SolicitudCotizacionService, SolicitudCotizacionTasksService],

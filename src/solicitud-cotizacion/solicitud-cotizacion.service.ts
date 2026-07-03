@@ -161,20 +161,64 @@ export class SolicitudCotizacionService {
    * Resuelve la cotización formal de una solicitud verificando que pertenezca
    * al comprador. Base de los endpoints ver/aceptar/rechazar/pagar adelanto.
    */
-  private async _cotizacionDelComprador(usuarioId: string, solicitudId: string) {
-    const solicitud = await this.prisma.solicitudCotizacion.findFirst({
-      where: { id: solicitudId, solicitanteId: usuarioId },
-      select: { id: true, codigo: true, cotizacionId: true, empresaId: true },
-    });
-    if (!solicitud) throw new NotFoundException('Solicitud no encontrada');
-    if (!solicitud.cotizacionId) {
-      throw new BadRequestException('Esta solicitud aún no tiene cotización');
+  private async _cotizacionDelComprador(
+    usuarioId: string,
+    ref: { solicitudId?: string; cotizacionId?: string },
+  ) {
+    let cotizacionId: string;
+    let solicitud: { id: string; codigo: string } | null = null;
+
+    if (ref.solicitudId) {
+      // Vía SU solicitud del marketplace (flujo original).
+      const sol = await this.prisma.solicitudCotizacion.findFirst({
+        where: { id: ref.solicitudId, solicitanteId: usuarioId },
+        select: { id: true, codigo: true, cotizacionId: true },
+      });
+      if (!sol) throw new NotFoundException('Solicitud no encontrada');
+      if (!sol.cotizacionId) {
+        throw new BadRequestException('Esta solicitud aún no tiene cotización');
+      }
+      cotizacionId = sol.cotizacionId;
+      solicitud = { id: sol.id, codigo: sol.codigo };
+    } else if (ref.cotizacionId) {
+      // Cotización DIRECTA (la empresa la creó asignándole el cliente):
+      // pertenece al usuario si su Persona (match global por DNI) es el
+      // cliente de la cotización, o si nació de una solicitud suya.
+      // BORRADOR nunca es visible para el cliente.
+      const usuario = await this.prisma.usuario.findUnique({
+        where: { id: usuarioId },
+        select: { personaId: true },
+      });
+      if (!usuario) throw new NotFoundException('Usuario no encontrado');
+      const cot = await this.prisma.cotizacion.findFirst({
+        where: {
+          id: ref.cotizacionId,
+          estado: { not: EstadoCotizacion.BORRADOR },
+          OR: [
+            { cliente: { personaId: usuario.personaId } },
+            { solicitudOrigen: { some: { solicitanteId: usuarioId } } },
+          ],
+        },
+        select: {
+          id: true,
+          solicitudOrigen: { select: { id: true, codigo: true }, take: 1 },
+        },
+      });
+      if (!cot) throw new NotFoundException('Cotización no encontrada');
+      cotizacionId = cot.id;
+      solicitud = cot.solicitudOrigen[0] ?? null;
+    } else {
+      throw new BadRequestException('Referencia de cotización inválida');
     }
+
     const cotizacion = await this.prisma.cotizacion.findUnique({
-      where: { id: solicitud.cotizacionId },
+      where: { id: cotizacionId },
       include: {
         detalles: { orderBy: { orden: 'asc' } },
         sede: { select: { id: true, nombre: true, direccion: true } },
+        empresa: {
+          select: { id: true, nombre: true, logo: true, subdominio: true },
+        },
         // Venta resultante (si ya se convirtió): el cliente ve el resumen
         // REAL de su compra (total y código), no el total cotizado.
         venta: { select: { id: true, codigo: true, total: true, estado: true } },
@@ -185,15 +229,66 @@ export class SolicitudCotizacionService {
   }
 
   /**
+   * Lista TODAS las cotizaciones dirigidas al usuario del marketplace:
+   * las que respondieron sus solicitudes + las que una empresa le creó
+   * directamente (match por su Persona/DNI como cliente). BORRADOR queda
+   * fuera (la empresa aún la está armando).
+   */
+  async misCotizaciones(usuarioId: string) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: usuarioId },
+      select: { personaId: true },
+    });
+    if (!usuario) throw new NotFoundException('Usuario no encontrado');
+
+    const cotizaciones = await this.prisma.cotizacion.findMany({
+      where: {
+        estado: { not: EstadoCotizacion.BORRADOR },
+        OR: [
+          { cliente: { personaId: usuario.personaId } },
+          { solicitudOrigen: { some: { solicitanteId: usuarioId } } },
+        ],
+      },
+      select: {
+        id: true,
+        codigo: true,
+        estado: true,
+        moneda: true,
+        total: true,
+        adelantoMonto: true,
+        adelantoRequerido: true,
+        fechaEmision: true,
+        fechaVencimiento: true,
+        creadoEn: true,
+        empresa: {
+          select: { id: true, nombre: true, logo: true, subdominio: true },
+        },
+        venta: { select: { codigo: true, total: true } },
+        solicitudOrigen: { select: { id: true, codigo: true }, take: 1 },
+        _count: { select: { detalles: true } },
+      },
+      orderBy: { creadoEn: 'desc' },
+    });
+
+    return cotizaciones.map((c) => ({
+      ...c,
+      solicitudOrigen: c.solicitudOrigen[0] ?? null,
+    }));
+  }
+
+  /**
    * Cotización formal vista por el COMPRADOR (vía su solicitud): items con
    * precios, totales, vigencia, adelanto requerido y estado. Cada detalle
    * lleva `imagenUrl` (thumbnail del producto o de la variante) para la
    * tabla de items del cliente.
    */
-  async miCotizacion(usuarioId: string, solicitudId: string) {
+  async miCotizacion(
+    usuarioId: string,
+    ref: { solicitudId?: string; cotizacionId?: string },
+  ) {
     const { solicitud, cotizacion } = await this._cotizacionDelComprador(
       usuarioId,
-      solicitudId,
+      ref,
     );
 
     // Imágenes por producto/variante (primera imagen activa, thumbnail).
@@ -252,7 +347,7 @@ export class SolicitudCotizacionService {
           (d.productoId && imagenPorEntidad.get(d.productoId)) ||
           null,
       })),
-      solicitudCodigo: solicitud.codigo,
+      solicitudCodigo: solicitud?.codigo ?? null,
       tieneReservaActiva: cotizacion.detalles.some(
         (d) => d.reservaEstado === 'ACTIVA',
       ),
@@ -264,8 +359,11 @@ export class SolicitudCotizacionService {
    * empresa la cobra en tienda/al entregar. Para separar con adelanto está
    * `cobroYapeAdelanto` (la aprobación ocurre al confirmarse el pago).
    */
-  async aceptarCotizacion(usuarioId: string, solicitudId: string) {
-    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, solicitudId);
+  async aceptarCotizacion(
+    usuarioId: string,
+    ref: { solicitudId?: string; cotizacionId?: string },
+  ) {
+    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, ref);
 
     if (cotizacion.estado === EstadoCotizacion.APROBADA) {
       return { message: 'La cotización ya estaba aceptada' };
@@ -296,8 +394,11 @@ export class SolicitudCotizacionService {
    * Solo mientras no haya adelanto pagado (con dinero de por medio la
    * devolución la gestiona la empresa).
    */
-  async rechazarCotizacion(usuarioId: string, solicitudId: string) {
-    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, solicitudId);
+  async rechazarCotizacion(
+    usuarioId: string,
+    ref: { solicitudId?: string; cotizacionId?: string },
+  ) {
+    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, ref);
 
     const rechazables: EstadoCotizacion[] = [
       EstadoCotizacion.PENDIENTE,
@@ -346,10 +447,10 @@ export class SolicitudCotizacionService {
    */
   async cobroYapeAdelanto(
     usuarioId: string,
-    solicitudId: string,
+    ref: { solicitudId?: string; cotizacionId?: string },
     montoSolicitado?: number,
   ) {
-    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, solicitudId);
+    const { cotizacion } = await this._cotizacionDelComprador(usuarioId, ref);
 
     const pagables: EstadoCotizacion[] = [
       EstadoCotizacion.PENDIENTE,
