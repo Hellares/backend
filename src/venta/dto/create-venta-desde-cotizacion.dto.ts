@@ -61,6 +61,36 @@ export class CreateVentaDesdeCotizacionDto {
   @IsString()
   tipoDocumentoCliente?: string;
 
+  // ── Cliente al COBRAR (override del cliente de la cotización) ──
+  // Caso típico: cotización a CLIENTES VARIOS y al pagar el cliente pide
+  // FACTURA → el cajero resuelve el RUC/DNI y la venta+comprobante salen
+  // a nombre del cliente nuevo. Si no se envían, se usa el de la cotización.
+
+  @ApiPropertyOptional({ description: 'Cliente persona (EmpresaPersona) que reemplaza al de la cotización' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ description: 'Cliente empresa B2B (ClienteEmpresa) que reemplaza al de la cotización' })
+  @IsOptional()
+  @IsString()
+  clienteEmpresaId?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre/razón social del cliente (override)' })
+  @IsOptional()
+  @IsString()
+  nombreCliente?: string;
+
+  @ApiPropertyOptional({ description: 'Documento DNI/RUC del cliente (override)' })
+  @IsOptional()
+  @IsString()
+  documentoCliente?: string;
+
+  @ApiPropertyOptional({ description: 'Dirección del cliente (override)' })
+  @IsOptional()
+  @IsString()
+  direccionCliente?: string;
+
   @ApiPropertyOptional({ description: 'Condicion de pago', example: 'CONTADO' })
   @IsOptional()
   @IsString()

@@ -2232,6 +2232,51 @@ export class VentaService {
         );
       }
 
+      // 2b. Cliente efectivo: el cajero puede cambiar el cliente al cobrar
+      // (ej. cotización a CLIENTES VARIOS que al pagar pide FACTURA con RUC).
+      // Sin override, la venta hereda el cliente de la cotización.
+      const hayClienteOverride =
+        !!dto.clienteId ||
+        !!dto.clienteEmpresaId ||
+        dto.nombreCliente !== undefined ||
+        dto.documentoCliente !== undefined;
+      const clienteVenta = {
+        clienteId: cotizacion.clienteId,
+        clienteEmpresaId: cotizacion.clienteEmpresaId,
+        nombreCliente: cotizacion.nombreCliente,
+        documentoCliente: cotizacion.documentoCliente,
+        direccionCliente: cotizacion.direccionCliente,
+      };
+      if (hayClienteOverride) {
+        if (dto.clienteId) {
+          const cli = await tx.empresaPersona.findFirst({
+            where: { id: dto.clienteId, empresaId },
+            select: { id: true },
+          });
+          if (!cli) {
+            throw new BadRequestException(
+              'El cliente no pertenece a la empresa',
+            );
+          }
+        }
+        if (dto.clienteEmpresaId) {
+          const ce = await tx.clienteEmpresa.findFirst({
+            where: { id: dto.clienteEmpresaId, empresaId },
+            select: { id: true },
+          });
+          if (!ce) {
+            throw new BadRequestException(
+              'El cliente B2B no pertenece a la empresa',
+            );
+          }
+        }
+        clienteVenta.clienteId = dto.clienteId ?? null;
+        clienteVenta.clienteEmpresaId = dto.clienteEmpresaId ?? null;
+        clienteVenta.nombreCliente = dto.nombreCliente ?? null;
+        clienteVenta.documentoCliente = dto.documentoCliente ?? null;
+        clienteVenta.direccionCliente = dto.direccionCliente ?? null;
+      }
+
       // 3. Generar código de venta
       const { codigoVenta } =
         await this.configuracionCodigos.generarCodigoVenta(
@@ -2464,18 +2509,18 @@ export class VentaService {
         data: {
           empresaId,
           sedeId: cotizacion.sedeId,
-          clienteId: cotizacion.clienteId,
-          clienteEmpresaId: cotizacion.clienteEmpresaId,
+          clienteId: clienteVenta.clienteId,
+          clienteEmpresaId: clienteVenta.clienteEmpresaId,
           vendedorId: cotizacion.vendedorId,
           cajeroId: cajeroId || null,
           canalVenta: 'COTIZACION',
           cotizacionId: cotizacion.id,
           codigo: codigoVenta,
-          nombreCliente: cotizacion.nombreCliente,
-          documentoCliente: cotizacion.documentoCliente,
+          nombreCliente: clienteVenta.nombreCliente,
+          documentoCliente: clienteVenta.documentoCliente,
           emailCliente: cotizacion.emailCliente,
           telefonoCliente: cotizacion.telefonoCliente,
-          direccionCliente: cotizacion.direccionCliente,
+          direccionCliente: clienteVenta.direccionCliente,
           moneda: cotizacion.moneda,
           tipoCambio: cotizacion.tipoCambio,
           subtotal: new Prisma.Decimal(subtotalVenta.toFixed(2)),
@@ -2769,6 +2814,18 @@ export class VentaService {
       const tipoComprobante = dto.tipoComprobante || 'BOLETA';
       const esComprobanteElectronico = tipoComprobante === 'BOLETA' || tipoComprobante === 'FACTURA';
 
+      // FACTURA exige RUC válido del cliente efectivo. Solo FACTURA: la
+      // boleta sin documento siempre estuvo permitida en este flujo.
+      if (tipoComprobante === 'FACTURA') {
+        const validacionDoc = validarDocumentoParaComprobante(
+          'FACTURA',
+          clienteVenta.documentoCliente,
+        );
+        if (!validacionDoc.valido) {
+          throw new BadRequestException(validacionDoc.error);
+        }
+      }
+
       let sedeLocked: any = null;
       if (esComprobanteElectronico) {
       // ConfiguracionFacturacion = datos tributarios globales (IGV, credenciales SUNAT)
@@ -2825,16 +2882,16 @@ export class VentaService {
             ventaId: venta.id,
             empresaId,
             sedeId: venta.sedeId,
-            clienteId: cotizacion.clienteId,
-            clienteEmpresaId: cotizacion.clienteEmpresaId,
+            clienteId: clienteVenta.clienteId,
+            clienteEmpresaId: clienteVenta.clienteEmpresaId,
             tipoComprobante: tipoComprobante as any,
             serie,
             correlativo: correlativo.padStart(8, '0'),
             codigoGenerado,
             tipoDocumento: dto.tipoDocumentoCliente || (tipoComprobante === 'FACTURA' ? '6' : '1'),
-            numeroDocumento: cotizacion.documentoCliente,
-            nombreCliente: cotizacion.nombreCliente || 'CLIENTE VARIOS',
-            direccionCliente: cotizacion.direccionCliente,
+            numeroDocumento: clienteVenta.documentoCliente,
+            nombreCliente: clienteVenta.nombreCliente || 'CLIENTE VARIOS',
+            direccionCliente: clienteVenta.direccionCliente,
             emailCliente: cotizacion.emailCliente,
             moneda: cotizacion.moneda || 'PEN',
             gravada: new Prisma.Decimal(tributario.gravada.toFixed(2)),
