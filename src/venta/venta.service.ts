@@ -2182,8 +2182,14 @@ export class VentaService {
       cotizacionId,
     });
 
-    // Cotización = atención presencial → requiere caja abierta del cajero
-    if (cajeroId) {
+    // Cotización = atención presencial → requiere caja abierta del cajero,
+    // PERO solo si hay cobro nuevo en esta conversión. Una cotización ya
+    // pagada por completo (adelantos digitales acumulados, dinero en la
+    // Caja Central/Tesorería) solo emite el comprobante y descuenta el
+    // stock reservado — sin movimientos en la caja del cajero.
+    const hayCobroNuevo =
+      (dto.pagos?.length ?? 0) > 0 || (dto.montoRecibido ?? 0) > 0;
+    if (cajeroId && hayCobroNuevo) {
       const cajaActiva = await this.prisma.caja.findFirst({
         where: { empresaId, usuarioId: cajeroId, estado: 'ABIERTA' },
       });
