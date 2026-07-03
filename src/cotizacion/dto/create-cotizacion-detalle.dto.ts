@@ -49,6 +49,16 @@ export class CreateCotizacionDetalleDto {
   @Type(() => Number)
   descuento?: number;
 
+  @ApiPropertyOptional({
+    description:
+      'Precio unitario REGULAR (antes del nivel por mayor / precio VIP). Solo informativo para mostrar el ahorro al cliente.',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  precioRegular?: number;
+
   @ApiPropertyOptional({ description: 'Porcentaje de IGV', example: 18 })
   @IsOptional()
   @IsNumber()

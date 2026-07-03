@@ -209,6 +209,7 @@ export class CotizacionService {
                 cantidad: d.cantidad,
                 precioUnitario: d.precioUnitario,
                 descuento: d.descuento,
+                precioRegular: d.precioRegular,
                 tipoAfectacion: d.tipoAfectacion,
                 porcentajeIGV: d.porcentajeIGV,
                 igv: d.igv,
@@ -530,6 +531,7 @@ export class CotizacionService {
               cantidad: d.cantidad,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
+              precioRegular: d.precioRegular,
               tipoAfectacion: d.tipoAfectacion,
               porcentajeIGV: d.porcentajeIGV,
               igv: d.igv,
@@ -874,6 +876,7 @@ export class CotizacionService {
               cantidad: d.cantidad,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
+              precioRegular: d.precioRegular,
               tipoAfectacion: d.tipoAfectacion,
               porcentajeIGV: d.porcentajeIGV,
               igv: d.igv,
@@ -949,6 +952,12 @@ export class CotizacionService {
       cantidad,
       precioUnitario,
       descuento,
+      // Precio regular (antes del nivel por mayor / VIP): solo se persiste
+      // si es mayor al precio cobrado — permite mostrar el ahorro completo.
+      precioRegular:
+        dto.precioRegular != null && dto.precioRegular > precioUnitario
+          ? dto.precioRegular
+          : null,
       tipoAfectacion,
       porcentajeIGV,
       igv: Math.round(igv * 100) / 100,
