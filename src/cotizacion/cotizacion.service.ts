@@ -7,7 +7,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { CompatibilidadService } from '../producto/compatibilidad.service';
-import { PrecioNivelService } from '../producto/precio-nivel.service';
+import {
+  PrecioNivelService,
+  VipPrecioContexto,
+} from '../producto/precio-nivel.service';
 import { CreateCotizacionDto } from './dto/create-cotizacion.dto';
 import { UpdateCotizacionDto } from './dto/update-cotizacion.dto';
 import { UpdateEstadoCotizacionDto } from './dto/update-estado-cotizacion.dto';
@@ -50,11 +53,26 @@ export class CotizacionService {
    * Recalcula `precioUnitario` desde el backend usando los niveles de precio
    * configurados (PrecioNivel) para evitar manipulación cliente-side.
    * Mismo patrón que `VentaService.aplicarPreciosBackendNivel`.
+   *
+   * Considera las políticas de precio especial (VIP) del cliente: sin esto,
+   * el recálculo anti-manipulación pisaba el precio VIP que la app envió con
+   * el precio de sede y la cotización salía a precio base.
+   *
+   * Además fija `precioRegular` de forma AUTORITATIVA (server-side): el
+   * precio base antes del nivel/VIP cuando hubo rebaja, null si no.
    */
   private async aplicarPreciosBackendNivel(
     detalles: CreateCotizacionDetalleDto[],
     sedeId: string,
+    empresaId: string,
+    clienteId?: string | null,
   ): Promise<CreateCotizacionDetalleDto[]> {
+    const vipResolver = await this._buildVipResolverCotizacion(
+      empresaId,
+      clienteId ?? null,
+      detalles,
+    );
+
     const result: CreateCotizacionDetalleDto[] = [];
     for (const d of detalles) {
       const productoIdParaNivel = d.productoId ?? null;
@@ -62,12 +80,16 @@ export class CotizacionService {
         result.push(d);
         continue;
       }
+      const vips = vipResolver
+        ? vipResolver(d.productoId ?? null, d.varianteId ?? null)
+        : [];
       try {
         const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
           productoIdParaNivel,
           d.varianteId ?? null,
           sedeId,
           d.cantidad,
+          { vips },
         );
         if (
           d.precioUnitario != null &&
@@ -79,7 +101,16 @@ export class CotizacionService {
               `Aplicando precio del backend (nivel: ${calc.nivelAplicado}).`,
           );
         }
-        result.push({ ...d, precioUnitario: calc.precioUnitario });
+        result.push({
+          ...d,
+          precioUnitario: calc.precioUnitario,
+          // Server-authoritative: el precio regular sale del cálculo (base
+          // antes del nivel/VIP), no de lo que envíe la app.
+          precioRegular:
+            calc.precioBase > calc.precioUnitario + 0.0001
+              ? calc.precioBase
+              : undefined,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(
@@ -90,6 +121,149 @@ export class CotizacionService {
       }
     }
     return result;
+  }
+
+  /**
+   * Resolver de contextos VIP para cotizaciones (versión de
+   * `VentaService._buildResolverVip`): carga las políticas de precio
+   * especial vigentes asignadas al cliente y devuelve una función que,
+   * por línea, entrega los contextos aplicables según su alcance
+   * (todos / productos / categorías). Null si no hay cliente o políticas.
+   */
+  private async _buildVipResolverCotizacion(
+    empresaId: string,
+    clienteId: string | null,
+    detalles: CreateCotizacionDetalleDto[],
+  ): Promise<
+    ((productoId: string | null, varianteId: string | null) => VipPrecioContexto[]) | null
+  > {
+    if (!clienteId) return null;
+
+    const now = new Date();
+    const asignaciones = await this.prisma.clientePoliticaDescuento.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+        clienteId,
+        politica: {
+          isActive: true,
+          deletedAt: null,
+          AND: [
+            { OR: [{ fechaInicio: null }, { fechaInicio: { lte: now } }] },
+            { OR: [{ fechaFin: null }, { fechaFin: { gte: now } }] },
+          ],
+        },
+      },
+      include: {
+        politica: {
+          include: {
+            productosAplicables: {
+              select: { productoId: true, descuentoOverride: true },
+            },
+            categoriasAplicables: {
+              select: { categoriaId: true, descuentoOverride: true },
+            },
+          },
+        },
+      },
+    });
+    if (!asignaciones.length) return null;
+
+    const politicas = asignaciones.map((a) => a.politica);
+
+    // Resolver categorías solo si alguna política usa alcance por categoría.
+    const usaCategorias = politicas.some(
+      (p) => !p.aplicarATodos && p.categoriasAplicables.length > 0,
+    );
+    const categoriaPorProducto = new Map<string, string | null>();
+    const categoriaPorVariante = new Map<string, string | null>();
+    if (usaCategorias) {
+      const productoIds = new Set<string>();
+      const varianteIds = new Set<string>();
+      for (const d of detalles) {
+        if (d.productoId) productoIds.add(d.productoId);
+        if (d.varianteId) varianteIds.add(d.varianteId);
+      }
+      if (productoIds.size) {
+        const prods = await this.prisma.producto.findMany({
+          where: { id: { in: [...productoIds] }, empresaId },
+          select: { id: true, empresaCategoriaId: true },
+        });
+        prods.forEach((p) =>
+          categoriaPorProducto.set(p.id, p.empresaCategoriaId ?? null),
+        );
+      }
+      if (varianteIds.size) {
+        const vars = await this.prisma.productoVariante.findMany({
+          where: { id: { in: [...varianteIds] }, empresaId },
+          select: {
+            id: true,
+            producto: { select: { empresaCategoriaId: true } },
+          },
+        });
+        vars.forEach((v) =>
+          categoriaPorVariante.set(v.id, v.producto?.empresaCategoriaId ?? null),
+        );
+      }
+    }
+
+    return (productoId: string | null, varianteId: string | null) => {
+      const categoria = varianteId
+        ? categoriaPorVariante.get(varianteId) ?? null
+        : productoId
+          ? categoriaPorProducto.get(productoId) ?? null
+          : null;
+
+      const aplicables = politicas.filter((p) => {
+        if (p.aplicarATodos) return true;
+        if (
+          productoId &&
+          p.productosAplicables.some((x) => x.productoId === productoId)
+        ) {
+          return true;
+        }
+        if (
+          categoria &&
+          p.categoriasAplicables.some((x) => x.categoriaId === categoria)
+        ) {
+          return true;
+        }
+        return false;
+      });
+      return aplicables.map((g) => {
+        let valor = Number(g.valorDescuento);
+        const ovProd = productoId
+          ? g.productosAplicables.find(
+              (x) => x.productoId === productoId && x.descuentoOverride != null,
+            )
+          : null;
+        const ovCat =
+          !ovProd && categoria
+            ? g.categoriasAplicables.find(
+                (x) =>
+                  x.categoriaId === categoria && x.descuentoOverride != null,
+              )
+            : null;
+        if (ovProd?.descuentoOverride != null) {
+          valor = Number(ovProd.descuentoOverride);
+        } else if (ovCat?.descuentoOverride != null) {
+          valor = Number(ovCat.descuentoOverride);
+        }
+
+        return {
+          politicaId: g.id,
+          etiqueta: `VIP: ${g.nombre}`,
+          modo: g.tipoCalculo as VipPrecioContexto['modo'],
+          valor,
+          markupSobreCosto:
+            g.markupSobreCosto != null ? Number(g.markupSobreCosto) : 0,
+          estrategiaMayor: g.estrategiaMayor as 'PRIMER_NIVEL' | 'MEJOR_NIVEL',
+          descuentoMaximo:
+            g.descuentoMaximo != null ? Number(g.descuentoMaximo) : null,
+        };
+      });
+    };
   }
 
   /**
@@ -122,10 +296,13 @@ export class CotizacionService {
         );
 
       // Forzar precios del backend (defensa contra manipulación cliente)
-      // y luego calcular totales por línea.
+      // y luego calcular totales por línea. Pasa el cliente para que el
+      // recálculo respete sus políticas de precio VIP.
       const detallesEnforced = await this.aplicarPreciosBackendNivel(
         dto.detalles,
         dto.sedeId,
+        empresaId,
+        dto.clienteId,
       );
       const detallesCalculados = detallesEnforced.map((d, index) =>
         this.calcularDetalle(d, index),
@@ -493,10 +670,13 @@ export class CotizacionService {
           where: { cotizacionId: id },
         });
 
-        // Forzar precios del backend (defensa contra manipulación cliente).
+        // Forzar precios del backend (defensa contra manipulación cliente),
+        // respetando las políticas VIP del cliente de la cotización.
         const detallesEnforced = await this.aplicarPreciosBackendNivel(
           dto.detalles,
           cotizacion.sedeId,
+          empresaId,
+          dto.clienteId ?? cotizacion.clienteId,
         );
         const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
