@@ -391,6 +391,7 @@ export class CotizacionService {
                 precioUnitario: d.precioUnitario,
                 descuento: d.descuento,
                 precioRegular: d.precioRegular,
+                precioAntesOferta: d.precioAntesOferta,
                 tipoAfectacion: d.tipoAfectacion,
                 porcentajeIGV: d.porcentajeIGV,
                 igv: d.igv,
