@@ -1252,29 +1252,14 @@ export class MarketplaceService {
       }),
     };
 
+    // Mismo include + hidratación que el feed principal: así los productos
+    // con VARIANTES muestran precio "desde"/stock/imagen desde sus variantes
+    // (antes este endpoint solo leía el stock del producto base → los
+    // productos con variantes salían sin precio, sin imagen y "sin stock").
     const [productos, total] = await Promise.all([
       this.prisma.producto.findMany({
         where,
-        include: {
-          empresaCategoria: {
-            include: { categoriaMaestra: { select: { id: true, nombre: true } } },
-          },
-          empresaMarca: {
-            include: { marcaMaestra: { select: { id: true, nombre: true } } },
-          },
-          empresa: {
-            select: {
-              id: true, nombre: true, logo: true, subdominio: true,
-              departamento: true, provincia: true, distrito: true, telefono: true,
-            },
-          },
-          stocksPorSede: {
-            where: { precioConfigurado: true },
-            select: { precio: true, precioOferta: true, enOferta: true, stockActual: true },
-            take: 1,
-            orderBy: { precio: 'asc' as const },
-          },
-        },
+        include: this._includeMarketplace,
         orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }],
         skip,
         take: limit,
@@ -1282,71 +1267,7 @@ export class MarketplaceService {
       this.prisma.producto.count({ where }),
     ]);
 
-    // Obtener imágenes
-    const productoIds = productos.map((p) => p.id);
-    const imagenes = productoIds.length > 0
-      ? await this.prisma.archivo.findMany({
-          where: { entidadTipo: 'PRODUCTO', entidadId: { in: productoIds }, tipoArchivo: 'IMAGEN', isActive: true, deletedAt: null },
-          select: { entidadId: true, url: true, urlThumbnail: true, orden: true },
-          orderBy: { orden: 'asc' },
-        })
-      : [];
-
-    const imagenMap = new Map<string, string>();
-    for (const img of imagenes) {
-      if (img.entidadId && !imagenMap.has(img.entidadId)) {
-        imagenMap.set(img.entidadId, img.urlThumbnail || img.url);
-      }
-    }
-
-    // Opiniones
-    const opinionesEmp = productoIds.length > 0
-      ? await this.prisma.opinionProducto.groupBy({
-          by: ['productoId'],
-          where: { productoId: { in: productoIds } },
-          _avg: { calificacion: true },
-          _count: true,
-        })
-      : [];
-
-    const opinionMapEmp = new Map<string, { promedio: number; total: number }>();
-    for (const o of opinionesEmp) {
-      opinionMapEmp.set(o.productoId, {
-        promedio: Math.round((o._avg.calificacion ?? 0) * 10) / 10,
-        total: o._count,
-      });
-    }
-
-    const data = productos.map((p) => {
-      const stock = p.stocksPorSede[0];
-      return {
-        id: p.id,
-        nombre: p.nombre,
-        descripcion: p.descripcion?.substring(0, 120) || null,
-        categoria: p.empresaCategoria?.nombrePersonalizado
-          || p.empresaCategoria?.categoriaMaestra?.nombre || null,
-        marca: p.empresaMarca?.nombrePersonalizado
-          || p.empresaMarca?.marcaMaestra?.nombre || null,
-        precio: stock?.precio ? Number(stock.precio) : null,
-        precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
-        enOferta: stock?.enOferta ?? false,
-        hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
-        imagen: imagenMap.get(p.id) ?? null,
-        calificacion: opinionMapEmp.get(p.id)?.promedio ?? null,
-        totalOpiniones: opinionMapEmp.get(p.id)?.total ?? 0,
-        destacado: p.destacado,
-        creadoEn: p.creadoEn,
-        empresa: {
-          id: p.empresa.id,
-          nombre: p.empresa.nombre,
-          logo: p.empresa.logo,
-          subdominio: p.empresa.subdominio,
-          telefono: p.empresa.telefono,
-          ubicacion: [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
-            .filter(Boolean).join(', '),
-        },
-      };
-    });
+    const data = await this._mapearProductos(productos);
 
     return {
       data,
