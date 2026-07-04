@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, Min, Max } from 'class-validator';
+import { IsInt, IsOptional, IsString, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class QueryLibroContableDto {
@@ -15,4 +15,13 @@ export class QueryLibroContableDto {
   @IsInt()
   @Min(2020)
   anio: number;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'Filtra el libro a UNA sede. Los préstamos (empresa-level) quedan fuera al filtrar.',
+  })
+  @IsOptional()
+  @IsString()
+  sedeId?: string;
 }

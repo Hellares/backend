@@ -25,7 +25,7 @@ export class LibroContableService {
    *   ADELANTOS que luego se convierten en venta NO entran por caja: ya están
    *   (o estarán) contados en su documento.
    */
-  async getLibro(empresaId: string, mes: number, anio: number) {
+  async getLibro(empresaId: string, mes: number, anio: number, sedeId?: string) {
     // Mes calendario PERÚ. `new Date(anio, mes-1, 1)` corría en TZ del server
     // (UTC): el mes arrancaba a las 19:00 Perú del día anterior y cortaba las
     // ventas de la noche del último día.
@@ -35,11 +35,13 @@ export class LibroContableService {
     const fechaFin = new Date(`${anio}-${mm}-${String(ultimoDia).padStart(2, '0')}T23:59:59.999-05:00`);
 
     const [ventas, compras, movimientosCaja, pagosPrestamo, pagosGastoRecurrenteBanco] = await Promise.all([
-      this._getVentas(empresaId, fechaInicio, fechaFin),
-      this._getCompras(empresaId, fechaInicio, fechaFin),
-      this._getMovimientosCaja(empresaId, fechaInicio, fechaFin),
-      this._getPagosPrestamo(empresaId, fechaInicio, fechaFin),
-      this._getPagosGastoRecurrenteBanco(empresaId, fechaInicio, fechaFin),
+      this._getVentas(empresaId, fechaInicio, fechaFin, sedeId),
+      this._getCompras(empresaId, fechaInicio, fechaFin, sedeId),
+      this._getMovimientosCaja(empresaId, fechaInicio, fechaFin, sedeId),
+      // Préstamos son de EMPRESA (sin sede): con sede filtrada quedan fuera
+      // para no atribuirle a una sede deuda de toda la empresa.
+      sedeId ? Promise.resolve([]) : this._getPagosPrestamo(empresaId, fechaInicio, fechaFin),
+      this._getPagosGastoRecurrenteBanco(empresaId, fechaInicio, fechaFin, sedeId),
     ]);
 
     // Unificar en lista de asientos
@@ -88,10 +90,12 @@ export class LibroContableService {
     empresaId: string,
     desde: Date,
     hasta: Date,
+    sedeId?: string,
   ): Promise<AsientoContable[]> {
     const ventas = await this.prisma.venta.findMany({
       where: {
         empresaId,
+        ...(sedeId && { sedeId }),
         fechaVenta: { gte: desde, lte: hasta },
         // BORRADOR fuera: las ventas Yape diferidas nacen BORRADOR y pueden
         // cancelarse sin cobrarse — no son ingresos todavía.
@@ -122,10 +126,12 @@ export class LibroContableService {
     empresaId: string,
     desde: Date,
     hasta: Date,
+    sedeId?: string,
   ): Promise<AsientoContable[]> {
     const compras = await this.prisma.compra.findMany({
       where: {
         empresaId,
+        ...(sedeId && { sedeId }),
         fechaRecepcion: { gte: desde, lte: hasta },
         estado: 'CONFIRMADA',
       },
@@ -188,10 +194,12 @@ export class LibroContableService {
     empresaId: string,
     desde: Date,
     hasta: Date,
+    sedeId?: string,
   ): Promise<AsientoContable[]> {
     const movimientos = await this.prisma.movimientoCaja.findMany({
       where: {
         empresaId,
+        ...(sedeId && { caja: { sedeId } }),
         anulado: false,
         fechaMovimiento: { gte: desde, lte: hasta },
         categoria: {
@@ -276,6 +284,7 @@ export class LibroContableService {
     empresaId: string,
     desde: Date,
     hasta: Date,
+    sedeId?: string,
   ): Promise<AsientoContable[]> {
     const pagos = await this.prisma.pagoGastoRecurrente.findMany({
       where: {
@@ -283,6 +292,9 @@ export class LibroContableService {
         fuente: 'BANCO',
         anulado: false,
         fechaPago: { gte: desde, lte: hasta },
+        // Con sede: solo gastos de esa sede (los globales, sedeId null, son
+        // de la empresa entera y solo aparecen en la vista "Toda la empresa").
+        ...(sedeId && { gastoRecurrente: { sedeId } }),
       },
       include: {
         gastoRecurrente: { select: { nombre: true } },

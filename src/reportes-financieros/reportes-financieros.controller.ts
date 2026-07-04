@@ -52,9 +52,10 @@ export class ReportesFinancierosController {
     @Query('mes', ParseIntPipe) mes: number,
     @Query('anio', ParseIntPipe) anio: number,
     @Res() res: Response,
+    @Query('sedeId') sedeId?: string,
   ) {
     this.validateMesAnio(mes, anio);
-    await this.exportService.exportLibroContable(empresaId, mes, anio, res);
+    await this.exportService.exportLibroContable(empresaId, mes, anio, res, sedeId);
   }
 
   @Get('export/cuentas-cobrar')

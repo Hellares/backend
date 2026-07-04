@@ -41,10 +41,11 @@ export class ReportesFinancierosExportService {
     mes: number,
     anio: number,
     res: Response,
+    sedeId?: string,
   ): Promise<void> {
     this.logger.log(`Exportando libro contable ${mes}/${anio} para empresa ${empresaId}`);
 
-    const libro = await this.libroContableService.getLibro(empresaId, mes, anio);
+    const libro = await this.libroContableService.getLibro(empresaId, mes, anio, sedeId);
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Syncronize';

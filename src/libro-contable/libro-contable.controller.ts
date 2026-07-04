@@ -25,6 +25,6 @@ export class LibroContableController {
     @Headers('x-tenant-id') empresaId: string,
     @Query() query: QueryLibroContableDto,
   ) {
-    return this.service.getLibro(empresaId, query.mes, query.anio);
+    return this.service.getLibro(empresaId, query.mes, query.anio, query.sedeId);
   }
 }
