@@ -20,45 +20,59 @@ export class ResumenFinancieroService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Resumen financiero consolidado de la empresa
+   * Resumen financiero consolidado de la empresa (o de UNA sede si viene
+   * sedeId). Con sede: ventas/compras/CxC/CxP/caja/tesorería/otros/agentes se
+   * filtran; bancos, préstamos y pedidos marketplace son de EMPRESA y quedan
+   * FUERA de los totales (mezclar alcances daría números incoherentes) — el
+   * front los muestra etiquetados "toda la empresa".
    */
-  async getResumen(empresaId: string, periodo?: { fechaDesde?: string; fechaHasta?: string }) {
+  async getResumen(
+    empresaId: string,
+    periodo?: { fechaDesde?: string; fechaHasta?: string; sedeId?: string },
+  ) {
     const fechaDesde = this._parseFecha(periodo?.fechaDesde, false) ?? this._inicioMes();
     const fechaHasta = this._parseFecha(periodo?.fechaHasta, true) ?? new Date();
+    const sedeId = periodo?.sedeId || undefined;
 
     const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, tesoreria, prestamos, otrosMovimientos, gastosRecurrentesBanco, agentes] = await Promise.all([
-      this._resumenVentas(empresaId, fechaDesde, fechaHasta),
-      this._resumenCompras(empresaId, fechaDesde, fechaHasta),
+      this._resumenVentas(empresaId, fechaDesde, fechaHasta, sedeId),
+      this._resumenCompras(empresaId, fechaDesde, fechaHasta, sedeId),
       this._resumenPedidosMarketplace(empresaId, fechaDesde, fechaHasta),
-      this._resumenCuentasCobrar(empresaId),
-      this._resumenCuentasPagar(empresaId),
-      this._resumenCaja(empresaId),
+      this._resumenCuentasCobrar(empresaId, sedeId),
+      this._resumenCuentasPagar(empresaId, sedeId),
+      this._resumenCaja(empresaId, sedeId),
       this._resumenBancos(empresaId),
-      this._resumenTesoreria(empresaId),
+      this._resumenTesoreria(empresaId, sedeId),
       this._resumenPrestamos(empresaId, fechaDesde, fechaHasta),
-      this._resumenOtrosMovimientos(empresaId, fechaDesde, fechaHasta),
-      this._resumenGastosRecurrentesBanco(empresaId, fechaDesde, fechaHasta),
-      this._resumenAgentes(empresaId, fechaDesde, fechaHasta),
+      this._resumenOtrosMovimientos(empresaId, fechaDesde, fechaHasta, sedeId),
+      this._resumenGastosRecurrentesBanco(empresaId, fechaDesde, fechaHasta, sedeId),
+      this._resumenAgentes(empresaId, fechaDesde, fechaHasta, sedeId),
     ]);
 
     // Ver política de coherencia arriba: cada sol se cuenta UNA vez.
     // pedidosMarketplace.totalPorFacturar cubre el dinero ya validado cuyo
     // pedido aún no genera venta interna (al ENVIAR nace la venta con sus
-    // PagoVenta y pasa a contarse por ahí).
-    const totalIngresos = ventas.totalCobrado + pedidosMarketplace.totalPorFacturar + otrosMovimientos.totalOtrosIngresos;
+    // PagoVenta y pasa a contarse por ahí). Con sede seleccionada, pedidos y
+    // préstamos (empresa-level) quedan fuera de los totales.
+    const aportePedidos = sedeId ? 0 : pedidosMarketplace.totalPorFacturar;
+    const aportePrestamos = sedeId ? 0 : prestamos.totalPagadoPeriodo;
+    const totalIngresos = ventas.totalCobrado + aportePedidos + otrosMovimientos.totalOtrosIngresos;
     // Los pagos de gasto recurrente con fuente=CAJA ya están en otrosMovimientos
     // (entran por MovimientoCaja con categoría GASTO_OPERATIVO). Aquí sumamos solo
     // los pagos con fuente=BANCO que NO generan MovimientoCaja.
-    const totalEgresos = compras.totalPagado + prestamos.totalPagadoPeriodo + otrosMovimientos.totalOtrosEgresos + gastosRecurrentesBanco.totalPagosBanco;
+    const totalEgresos = compras.totalPagado + aportePrestamos + otrosMovimientos.totalOtrosEgresos + gastosRecurrentesBanco.totalPagosBanco;
     const flujoNeto = totalIngresos - totalEgresos;
 
-    // Liquidez total: dónde está la plata HOY (no depende del período).
+    // Liquidez: dónde está la plata HOY (no depende del período). Con sede,
+    // los bancos (empresa) no suman: liquidez = efectivo de ESA sede.
     const liquidezTotal = r2(
-      tesoreria.saldoBovedas + tesoreria.efectivoCajasAbiertas + tesoreria.saldoCajaChica + bancos.totalSaldo,
+      tesoreria.saldoBovedas + tesoreria.efectivoCajasAbiertas + tesoreria.saldoCajaChica + (sedeId ? 0 : bancos.totalSaldo),
     );
 
     return {
       periodo: { desde: fechaDesde, hasta: fechaHasta },
+      alcance: sedeId ? 'SEDE' : 'EMPRESA',
+      sedeId: sedeId ?? null,
       resumen: {
         totalIngresos: r2(totalIngresos),
         totalEgresos: r2(totalEgresos),
@@ -72,7 +86,13 @@ export class ResumenFinancieroService {
       cuentasPorPagar: cuentasPagar,
       caja,
       bancos,
-      tesoreria: { ...tesoreria, saldoBancos: bancos.totalSaldo, liquidezTotal },
+      tesoreria: {
+        ...tesoreria,
+        saldoBancos: bancos.totalSaldo,
+        // Con sede seleccionada los bancos no suman a la liquidez (empresa).
+        incluyeBancos: !sedeId,
+        liquidezTotal,
+      },
       prestamos,
       otrosMovimientos,
       gastosRecurrentesBanco,
@@ -80,13 +100,14 @@ export class ResumenFinancieroService {
     };
   }
 
-  private async _resumenVentas(empresaId: string, desde: Date, hasta: Date) {
+  private async _resumenVentas(empresaId: string, desde: Date, hasta: Date, sedeId?: string) {
     // BORRADOR excluido: las ventas Yape diferidas nacen BORRADOR y pueden
     // cancelarse sin cobrarse — no son ventas todavía.
     const [ventas, cobradoAgg] = await Promise.all([
       this.prisma.venta.findMany({
         where: {
           empresaId,
+          ...(sedeId && { sedeId }),
           fechaVenta: { gte: desde, lte: hasta },
           estado: { notIn: ['ANULADA', 'BORRADOR'] },
         },
@@ -103,7 +124,7 @@ export class ResumenFinancieroService {
         where: {
           anulado: false,
           fechaPago: { gte: desde, lte: hasta },
-          venta: { empresaId, estado: { not: 'ANULADA' } },
+          venta: { empresaId, ...(sedeId && { sedeId }), estado: { not: 'ANULADA' } },
         },
       }),
     ]);
@@ -149,11 +170,12 @@ export class ResumenFinancieroService {
     return Math.max(r2(target - pagado), 0);
   }
 
-  private async _resumenCompras(empresaId: string, desde: Date, hasta: Date) {
+  private async _resumenCompras(empresaId: string, desde: Date, hasta: Date, sedeId?: string) {
     const [compras, pagadoAgg] = await Promise.all([
       this.prisma.compra.findMany({
         where: {
           empresaId,
+          ...(sedeId && { sedeId }),
           fechaRecepcion: { gte: desde, lte: hasta },
           estado: 'CONFIRMADA',
         },
@@ -167,7 +189,7 @@ export class ResumenFinancieroService {
         where: {
           anulado: false,
           fechaPago: { gte: desde, lte: hasta },
-          compra: { empresaId, estado: 'CONFIRMADA' },
+          compra: { empresaId, ...(sedeId && { sedeId }), estado: 'CONFIRMADA' },
         },
       }),
     ]);
@@ -219,9 +241,9 @@ export class ResumenFinancieroService {
     };
   }
 
-  private async _resumenCuentasCobrar(empresaId: string) {
+  private async _resumenCuentasCobrar(empresaId: string, sedeId?: string) {
     const ventas = await this.prisma.venta.findMany({
-      where: { empresaId, esCredito: true, estado: { notIn: ['ANULADA', 'BORRADOR'] } },
+      where: { empresaId, ...(sedeId && { sedeId }), esCredito: true, estado: { notIn: ['ANULADA', 'BORRADOR'] } },
       include: {
         pagos: { where: { anulado: false } },
         cuotas: { where: { estado: { not: 'ANULADA' } } },
@@ -260,9 +282,9 @@ export class ResumenFinancieroService {
     };
   }
 
-  private async _resumenCuentasPagar(empresaId: string) {
+  private async _resumenCuentasPagar(empresaId: string, sedeId?: string) {
     const compras = await this.prisma.compra.findMany({
-      where: { empresaId, estado: 'CONFIRMADA', terminosPago: { not: 'CONTADO' } },
+      where: { empresaId, ...(sedeId && { sedeId }), estado: 'CONFIRMADA', terminosPago: { not: 'CONTADO' } },
       include: { pagos: { where: { anulado: false } } },
     });
 
@@ -288,9 +310,9 @@ export class ResumenFinancieroService {
     };
   }
 
-  private async _resumenCaja(empresaId: string) {
+  private async _resumenCaja(empresaId: string, sedeId?: string) {
     const cajasAbiertas = await this.prisma.caja.count({
-      where: { empresaId, estado: 'ABIERTA', esCajaCentral: false },
+      where: { empresaId, ...(sedeId && { sedeId }), estado: 'ABIERTA', esCajaCentral: false },
     });
 
     // Movimientos del día — usa inicio del día hora Perú (no UTC).
@@ -302,6 +324,7 @@ export class ResumenFinancieroService {
       by: ['tipo'],
       where: {
         empresaId,
+        ...(sedeId && { caja: { sedeId } }),
         anulado: false,
         fechaMovimiento: { gte: hoy },
         // Excluir transferencias internas operativa↔central para no
@@ -351,19 +374,19 @@ export class ResumenFinancieroService {
    * efectivo en cajas operativas abiertas y float de cajas chicas activas.
    * Mismo criterio de saldo que getTesoreriaConsolidado (caja.service).
    */
-  private async _resumenTesoreria(empresaId: string) {
+  private async _resumenTesoreria(empresaId: string, sedeId?: string) {
     const [centrales, abiertas, chicasAgg] = await Promise.all([
       this.prisma.caja.findMany({
-        where: { empresaId, esCajaCentral: true },
+        where: { empresaId, ...(sedeId && { sedeId }), esCajaCentral: true },
         select: { id: true },
       }),
       this.prisma.caja.findMany({
-        where: { empresaId, estado: 'ABIERTA', esCajaCentral: false },
+        where: { empresaId, ...(sedeId && { sedeId }), estado: 'ABIERTA', esCajaCentral: false },
         select: { id: true, montoApertura: true },
       }),
       this.prisma.cajaChica.aggregate({
         _sum: { saldoActual: true },
-        where: { empresaId, estado: 'ACTIVA' },
+        where: { empresaId, ...(sedeId && { sedeId }), estado: 'ACTIVA' },
       }),
     ]);
 
@@ -416,7 +439,7 @@ export class ResumenFinancieroService {
   /**
    * Datos diarios para gráfico de ingresos vs egresos
    */
-  async getGraficoDiario(empresaId: string, fechaDesde?: string, fechaHasta?: string) {
+  async getGraficoDiario(empresaId: string, fechaDesde?: string, fechaHasta?: string, sedeId?: string) {
     const desde = this._parseFecha(fechaDesde, false) ?? this._inicioMes();
     const hasta = this._parseFecha(fechaHasta, true) ?? new Date();
 
@@ -424,6 +447,7 @@ export class ResumenFinancieroService {
       this.prisma.movimientoCaja.findMany({
         where: {
           empresaId,
+          ...(sedeId && { caja: { sedeId } }),
           anulado: false,
           fechaMovimiento: { gte: desde, lte: hasta },
           // Excluir transferencias internas (par espejo operativa↔central).
@@ -439,6 +463,7 @@ export class ResumenFinancieroService {
           fuente: 'BANCO',
           anulado: false,
           fechaPago: { gte: desde, lte: hasta },
+          ...(sedeId && { gastoRecurrente: { sedeId } }),
         },
         select: { montoReal: true, fechaPago: true },
       }),
@@ -530,10 +555,11 @@ export class ResumenFinancieroService {
    * cotización (se cuentan cuando se convierten en PagoVenta — política
    * "un sol se cuenta una vez").
    */
-  private async _resumenOtrosMovimientos(empresaId: string, desde: Date, hasta: Date) {
+  private async _resumenOtrosMovimientos(empresaId: string, desde: Date, hasta: Date, sedeId?: string) {
     const movimientos = await this.prisma.movimientoCaja.findMany({
       where: {
         empresaId,
+        ...(sedeId && { caja: { sedeId } }),
         anulado: false,
         fechaMovimiento: { gte: desde, lte: hasta },
         categoria: {
@@ -573,8 +599,9 @@ export class ResumenFinancieroService {
     };
   }
 
-  private async _resumenAgentes(empresaId: string, desde?: Date, hasta?: Date) {
+  private async _resumenAgentes(empresaId: string, desde?: Date, hasta?: Date, sedeId?: string) {
     const where: any = { empresaId, anulado: false };
+    if (sedeId) where.agenteBancario = { sedeId };
     if (desde || hasta) {
       where.fechaOperacion = {};
       if (desde) where.fechaOperacion.gte = desde;
@@ -604,13 +631,16 @@ export class ResumenFinancieroService {
    * que sin este resumen los reportes de egresos del mes se quedarían cortos.
    * Los pagos con fuente=CAJA ya entran vía MovimientoCaja en _resumenOtrosMovimientos.
    */
-  private async _resumenGastosRecurrentesBanco(empresaId: string, desde: Date, hasta: Date) {
+  private async _resumenGastosRecurrentesBanco(empresaId: string, desde: Date, hasta: Date, sedeId?: string) {
     const pagos = await this.prisma.pagoGastoRecurrente.findMany({
       where: {
         empresaId,
         fuente: 'BANCO',
         anulado: false,
         fechaPago: { gte: desde, lte: hasta },
+        // Con sede: solo gastos de ESA sede. Los globales (sedeId null) son de
+        // la empresa entera y solo aparecen en la vista "Todas las sedes".
+        ...(sedeId && { gastoRecurrente: { sedeId } }),
       },
       select: {
         montoReal: true,

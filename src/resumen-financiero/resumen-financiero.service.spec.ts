@@ -206,5 +206,36 @@ describe('ResumenFinancieroService', () => {
       expect(r.resumen.liquidezTotal).toBe(600); // 0 bóveda + 0 cajas + 200 chica + 400 bancos
       expect(r.tesoreria.saldoBancos).toBe(400);
     });
+
+    it('con sedeId: pedidos/préstamos (empresa) fuera de totales y bancos fuera de liquidez', async () => {
+      prisma.pagoVenta.aggregate.mockResolvedValue({ _sum: { monto: 150 } });
+      prisma.pedidoMarketplace.findMany.mockResolvedValue([
+        { estado: 'PAGO_VALIDADO', metodoPago: 'YAPE', total: 100 },
+      ]);
+      prisma.prestamo.findMany.mockResolvedValue([
+        {
+          saldoPendiente: 0,
+          montoOriginal: 1000,
+          totalPagado: 1000,
+          pagos: [{ monto: 300, fechaPago: new Date() }],
+        },
+      ]);
+      prisma.empresaBanco.findMany.mockResolvedValue([
+        { id: 'b1', nombreBanco: 'BCP', moneda: 'PEN', saldoActual: 400, esPrincipal: true },
+      ]);
+      prisma.cajaChica.aggregate.mockResolvedValue({ _sum: { saldoActual: 200 } });
+
+      const r = await service.getResumen('emp-1', { sedeId: 'sede-1' });
+
+      expect(r.alcance).toBe('SEDE');
+      expect(r.resumen.totalIngresos).toBe(150); // sin los 100 del pedido (empresa)
+      expect(r.resumen.totalEgresos).toBe(0); // sin los 300 del préstamo (empresa)
+      expect(r.resumen.liquidezTotal).toBe(200); // solo caja chica de la sede, sin bancos
+      expect(r.tesoreria.incluyeBancos).toBe(false);
+
+      // El filtro de sede llegó a las queries de venta y pagoVenta.
+      expect(prisma.venta.findMany.mock.calls[0][0].where.sedeId).toBe('sede-1');
+      expect(prisma.pagoVenta.aggregate.mock.calls[0][0].where.venta.sedeId).toBe('sede-1');
+    });
   });
 });

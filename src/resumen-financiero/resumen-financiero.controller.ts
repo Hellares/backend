@@ -34,6 +34,6 @@ export class ResumenFinancieroController {
     @Headers('x-tenant-id') empresaId: string,
     @Query() query: QueryResumenFinancieroDto,
   ) {
-    return this.service.getGraficoDiario(empresaId, query.fechaDesde, query.fechaHasta);
+    return this.service.getGraficoDiario(empresaId, query.fechaDesde, query.fechaHasta, query.sedeId);
   }
 }
