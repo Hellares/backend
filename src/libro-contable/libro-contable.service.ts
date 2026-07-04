@@ -16,11 +16,23 @@ export class LibroContableService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Obtiene el libro contable (todos los movimientos financieros) de un mes/anio
+   * Obtiene el libro contable (todos los movimientos financieros) de un mes/anio.
+   *
+   * CRITERIO: DEVENGADO y "un sol se cuenta UNA vez" (misma política que el
+   * resumen financiero):
+   * - Ventas y compras entran por su TOTAL en su fecha (aunque sean a crédito).
+   * - Por eso los PAGOS de esas deudas (PAGO_PROVEEDOR, abonos CxC) y los
+   *   ADELANTOS que luego se convierten en venta NO entran por caja: ya están
+   *   (o estarán) contados en su documento.
    */
   async getLibro(empresaId: string, mes: number, anio: number) {
-    const fechaInicio = new Date(anio, mes - 1, 1);
-    const fechaFin = new Date(anio, mes, 0, 23, 59, 59, 999);
+    // Mes calendario PERÚ. `new Date(anio, mes-1, 1)` corría en TZ del server
+    // (UTC): el mes arrancaba a las 19:00 Perú del día anterior y cortaba las
+    // ventas de la noche del último día.
+    const mm = String(mes).padStart(2, '0');
+    const ultimoDia = new Date(anio, mes, 0).getDate();
+    const fechaInicio = new Date(`${anio}-${mm}-01T00:00:00.000-05:00`);
+    const fechaFin = new Date(`${anio}-${mm}-${String(ultimoDia).padStart(2, '0')}T23:59:59.999-05:00`);
 
     const [ventas, compras, movimientosCaja, pagosPrestamo, pagosGastoRecurrenteBanco] = await Promise.all([
       this._getVentas(empresaId, fechaInicio, fechaFin),
@@ -81,7 +93,9 @@ export class LibroContableService {
       where: {
         empresaId,
         fechaVenta: { gte: desde, lte: hasta },
-        estado: { not: 'ANULADA' },
+        // BORRADOR fuera: las ventas Yape diferidas nacen BORRADOR y pueden
+        // cancelarse sin cobrarse — no son ingresos todavía.
+        estado: { notIn: ['ANULADA', 'BORRADOR'] },
       },
       select: {
         id: true,
@@ -140,21 +154,35 @@ export class LibroContableService {
    * Etiquetas legibles para categorías de movimientos de caja
    */
   private static readonly CATEGORIA_LABELS: Record<string, string> = {
-    DEPOSITO_AGENTE: 'Depósito Agente Bancario',
-    RETIRO_AGENTE: 'Retiro Agente Bancario',
     COMISION_AGENTE: 'Comisión Agente Bancario',
     GASTO_OPERATIVO: 'Gasto Operativo',
-    ADELANTO_SERVICIO: 'Adelanto de Servicio',
     OTRO_INGRESO: 'Otro Ingreso',
     OTRO_EGRESO: 'Otro Egreso',
     DEVOLUCION: 'Devolución',
+    PAGO_PLANILLA: 'Pago de Planilla',
+    ADELANTO_EMPLEADO: 'Adelanto a Empleado',
+    BONIFICACION_EMPLEADO: 'Bonificación a Empleado',
+    REPOSICION_CAJA_CHICA: 'Reposición Caja Chica (gastos rendidos)',
+    AJUSTE_TESORERIA: 'Ajuste de Tesorería',
   };
 
   /**
-   * Obtiene movimientos de caja que NO son VENTA ni COMPRA (esos ya se cuentan
-   * directamente desde sus tablas respectivas para evitar doble conteo).
-   * Incluye: devoluciones, pedidos marketplace, pagos proveedor, gastos operativos,
-   * adelantos de servicio, otros ingresos/egresos, movimientos manuales y agente bancario.
+   * Movimientos de caja que representan un hecho contable PROPIO (no cubierto
+   * por ventas/compras). Exclusiones y su porqué (criterio devengado):
+   * - VENTA / COMPRA: ya entran por sus tablas.
+   * - PAGO_PROVEEDOR: pagar la deuda de una compra ya contada no es gasto nuevo.
+   * - PEDIDO_MARKETPLACE: al ENVIAR el pedido nace su venta interna (contada).
+   * - ADELANTO_SERVICIO / ADELANTO_COTIZACION (+ devolución): se cuentan
+   *   cuando se convierten en venta.
+   * - DEPOSITO/RETIRO_AGENTE: plata de TERCEROS (capital de trabajo del
+   *   agente), no ingreso/gasto de la empresa — la ganancia real es
+   *   COMISION_AGENTE, que sí cuenta. Antes inflaban ingresos Y egresos.
+   * - DEPOSITO/RETIRO_TESORERIA: transferencias internas operativa↔central.
+   * - REVERSO_CAJA_CERRADA: reverso de asientos que ya salieron del libro
+   *   (venta anulada / pago compra no contado) — contarlo doble-restaría.
+   * SÍ cuentan: DEVOLUCION (netea una venta viva), gastos operativos y de
+   * planilla, reposición de caja chica (rastro de sus gastos rendidos),
+   * comisiones de agente, otros ingresos/egresos y ajustes de tesorería.
    */
   private async _getMovimientosCaja(
     empresaId: string,
@@ -166,13 +194,21 @@ export class LibroContableService {
         empresaId,
         anulado: false,
         fechaMovimiento: { gte: desde, lte: hasta },
-        // Excluir VENTA y COMPRA para evitar doble conteo con _getVentas/_getCompras.
-        // Excluir DEPOSITO_TESORERIA y RETIRO_TESORERIA: son transferencias
-        // internas operativa↔central, no movimientos contables reales
-        // (sumarlos doble-contaria, ya que ambos lados del par existen en BD).
-        // AJUSTE_TESORERIA y REVERSO_CAJA_CERRADA SI cuentan (son movs reales).
         categoria: {
-          notIn: ['VENTA', 'COMPRA', 'DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'],
+          notIn: [
+            'VENTA',
+            'COMPRA',
+            'PAGO_PROVEEDOR',
+            'PEDIDO_MARKETPLACE',
+            'ADELANTO_SERVICIO',
+            'ADELANTO_COTIZACION',
+            'DEVOLUCION_ADELANTO_COTIZACION',
+            'DEPOSITO_AGENTE',
+            'RETIRO_AGENTE',
+            'DEPOSITO_TESORERIA',
+            'RETIRO_TESORERIA',
+            'REVERSO_CAJA_CERRADA',
+          ],
         },
       },
       select: {
