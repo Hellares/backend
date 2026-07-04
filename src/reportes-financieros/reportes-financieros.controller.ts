@@ -91,8 +91,17 @@ export class ReportesFinancierosController {
     if (!fechaInicio || !fechaFin) {
       throw new BadRequestException('fechaInicio y fechaFin son requeridos (formato YYYY-MM-DD)');
     }
-    const fi = new Date(fechaInicio);
-    const ff = new Date(fechaFin);
+    // Fechas date-only = día calendario PERÚ completo. Antes `new Date(ymd)`
+    // caía en medianoche UTC y el `setHours` corría en TZ del server (UTC):
+    // las ventas de 19:00-23:59 Perú del último día quedaban FUERA del
+    // reporte y las de la noche anterior al primer día entraban de más.
+    const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+    const fi = DATE_ONLY.test(fechaInicio)
+      ? new Date(`${fechaInicio}T00:00:00.000-05:00`)
+      : new Date(fechaInicio);
+    const ff = DATE_ONLY.test(fechaFin)
+      ? new Date(`${fechaFin}T23:59:59.999-05:00`)
+      : new Date(fechaFin);
     if (isNaN(fi.getTime()) || isNaN(ff.getTime())) {
       throw new BadRequestException('Fechas inválidas');
     }
@@ -102,8 +111,6 @@ export class ReportesFinancierosController {
     if (motivo && !Object.values(MotivoLiquidacion).includes(motivo as MotivoLiquidacion)) {
       throw new BadRequestException(`motivo inválido. Valores válidos: ${Object.values(MotivoLiquidacion).join(', ')}`);
     }
-    // Asegurar día completo
-    ff.setHours(23, 59, 59, 999);
     return { fechaInicio: fi, fechaFin: ff, motivo: motivo as MotivoLiquidacion | undefined };
   }
 

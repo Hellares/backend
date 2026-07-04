@@ -424,7 +424,10 @@ export class ReportesFinancierosExportService {
     const where: Prisma.VentaDetalleWhereInput = {
       venta: {
         empresaId,
-        estado: { not: EstadoVenta.ANULADA },
+        // BORRADOR también fuera: las ventas Yape diferidas nacen BORRADOR y
+        // pueden cancelarse sin cobrarse — contarían pérdidas de ventas que
+        // aún no existen.
+        estado: { notIn: [EstadoVenta.ANULADA, EstadoVenta.BORRADOR] },
         fechaVenta: { gte: filtros.fechaInicio, lte: filtros.fechaFin },
         ...(filtros.sedeId ? { sedeId: filtros.sedeId } : {}),
       },
