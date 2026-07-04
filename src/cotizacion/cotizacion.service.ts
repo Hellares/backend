@@ -374,9 +374,12 @@ export class CotizacionService {
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
+          // Sin fecha explícita → 30 días. Con NULL la cotización no vencía
+          // NUNCA (el cron de expiración filtra fechaVencimiento < now) y se
+          // quedaba eterna en la cola POS.
           fechaVencimiento: dto.fechaVencimiento
             ? new Date(dto.fechaVencimiento)
-            : null,
+            : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
           observaciones: dto.observaciones,
           condiciones: dto.condiciones,
           adelantoMonto: adelantoMonto > 0 ? adelantoMonto : null,
