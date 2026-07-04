@@ -36,24 +36,30 @@ export class CotizacionTasksService {
     this.logger.setContext(CotizacionTasksService.name);
   }
 
+  /**
+   * POLÍTICA DE EXPIRACIÓN (definida con el negocio 2026-07-04):
+   * - AUTO: BORRADOR y PENDIENTE vencidas SIN adelanto — con o sin reserva
+   *   (el stock reservado siempre vuelve al disponible vía liberarReservas).
+   * - MANUAL: APROBADA (compromiso con el cliente) y CUALQUIER cotización
+   *   con adelanto cobrado (hay dinero de por medio; el admin la expira
+   *   desde el detalle con PATCH :id/estado → VENCIDA, que libera stock y
+   *   devuelve el adelanto). La cola POS las marca "vencida" para que no
+   *   queden en el olvido.
+   */
   @Cron(CronExpression.EVERY_HOUR)
   async expirarCotizacionesConReserva() {
     try {
       const ahora = new Date();
 
-      // Buscar cotizaciones cuya `fechaVencimiento` ya pasó, sigan en
-      // estado activo (BORRADOR / PENDIENTE / APROBADA), y tengan al
-      // menos un detalle con reserva ACTIVA.
+      // Vencidas en estado auto-expirable, sin adelanto, con al menos una
+      // reserva ACTIVA (necesitan transacción para devolver el stock).
       const cotizaciones = await this.prisma.cotizacion.findMany({
         where: {
           fechaVencimiento: { lt: ahora },
           estado: {
-            in: [
-              EstadoCotizacion.BORRADOR,
-              EstadoCotizacion.PENDIENTE,
-              EstadoCotizacion.APROBADA,
-            ],
+            in: [EstadoCotizacion.BORRADOR, EstadoCotizacion.PENDIENTE],
           },
+          OR: [{ adelantoMonto: null }, { adelantoMonto: { lte: 0 } }],
           detalles: {
             some: { reservaEstado: ReservaCotizacionEstado.ACTIVA },
           },
@@ -121,40 +127,29 @@ export class CotizacionTasksService {
   }
 
   /**
-   * Segunda pasada: cotizaciones vencidas SIN reserva activa. La primera
-   * pasada solo toca las que tienen stock reservado; sin esta, una
-   * cotización vencida sin reserva se quedaba PENDIENTE/APROBADA para
-   * siempre y ensuciaba la cola POS eternamente (caso real: 1000+ horas).
+   * Segunda pasada: BORRADOR/PENDIENTE vencidas SIN reserva activa y SIN
+   * adelanto → VENCIDA directo (sin stock ni dinero, marcar es gratis).
+   * Sin esta pasada, una vencida sin reserva se quedaba en la cola POS
+   * eternamente (caso real: 1000+ horas).
    *
-   * Solo se auto-expiran las que NO tienen adelanto: sin stock ni dinero de
-   * por medio, marcar VENCIDA es gratis. Las vencidas con adelanto y sin
-   * reserva activa (anomalía: la plata está cobrada pero la reserva ya no
-   * existe) NO se tocan automáticamente — se loggean para revisión manual,
-   * nunca movemos dinero en silencio.
+   * Además loggea lo que queda para gestión MANUAL: APROBADAS vencidas y
+   * cualquier vencida con adelanto (ver política arriba).
    */
   @Cron(CronExpression.EVERY_HOUR)
   async expirarCotizacionesSinReserva() {
     try {
       const ahora = new Date();
 
-      const whereBase: Prisma.CotizacionWhereInput = {
-        fechaVencimiento: { lt: ahora },
-        estado: {
-          in: [
-            EstadoCotizacion.BORRADOR,
-            EstadoCotizacion.PENDIENTE,
-            EstadoCotizacion.APROBADA,
-          ],
-        },
-        detalles: {
-          none: { reservaEstado: ReservaCotizacionEstado.ACTIVA },
-        },
-      };
-
       const r = await this.prisma.cotizacion.updateMany({
         where: {
-          ...whereBase,
+          fechaVencimiento: { lt: ahora },
+          estado: {
+            in: [EstadoCotizacion.BORRADOR, EstadoCotizacion.PENDIENTE],
+          },
           OR: [{ adelantoMonto: null }, { adelantoMonto: { lte: 0 } }],
+          detalles: {
+            none: { reservaEstado: ReservaCotizacionEstado.ACTIVA },
+          },
         },
         data: { estado: EstadoCotizacion.VENCIDA },
       });
@@ -164,13 +159,26 @@ export class CotizacionTasksService {
         );
       }
 
-      // Visibilidad de las anómalas (adelanto cobrado, sin reserva activa).
-      const conAdelanto = await this.prisma.cotizacion.count({
-        where: { ...whereBase, adelantoMonto: { gt: 0 } },
+      // Visibilidad de lo que espera decisión manual (no se auto-expira):
+      // APROBADAS vencidas o vencidas con adelanto cobrado.
+      const manuales: Prisma.CotizacionWhereInput = {
+        fechaVencimiento: { lt: ahora },
+        OR: [
+          { estado: EstadoCotizacion.APROBADA },
+          {
+            estado: {
+              in: [EstadoCotizacion.BORRADOR, EstadoCotizacion.PENDIENTE],
+            },
+            adelantoMonto: { gt: 0 },
+          },
+        ],
+      };
+      const pendientesManual = await this.prisma.cotizacion.count({
+        where: manuales,
       });
-      if (conAdelanto > 0) {
+      if (pendientesManual > 0) {
         this.logger.warn(
-          `[CRON] ${conAdelanto} cotización(es) vencida(s) con ADELANTO y sin reserva activa — requieren revisión manual (no se auto-expiran)`,
+          `[CRON] ${pendientesManual} cotización(es) vencida(s) esperan expiración MANUAL (aprobadas o con adelanto)`,
         );
       }
     } catch (err) {

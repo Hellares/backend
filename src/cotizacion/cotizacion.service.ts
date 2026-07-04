@@ -1726,6 +1726,12 @@ export class CotizacionService {
       tieneReservaActiva: c.detalles.some(
         (d) => d.reservaEstado === ReservaCotizacionEstado.ACTIVA,
       ),
+      // Vencida pero aún en cola (APROBADA o con adelanto: el cron no las
+      // auto-expira, la decisión es manual). El front la marca en rojo.
+      vencida:
+        c.fechaVencimiento != null && c.fechaVencimiento < new Date(),
+      fechaVencimiento: c.fechaVencimiento,
+      adelantoMonto: c.adelantoMonto ? Number(c.adelantoMonto) : 0,
       detalles: c.detalles.map((d) => ({
         id: d.id,
         producto: d.producto?.nombre || d.variante?.nombre || d.descripcion,
