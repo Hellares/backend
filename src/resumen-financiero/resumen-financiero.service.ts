@@ -1,6 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * POLÍTICA DE COHERENCIA del resumen (evitar dobles conteos):
+ * - INGRESOS = cobros REALES del período (PagoVenta no anulado por fechaPago,
+ *   sin importar cuándo se emitió la venta) + pedidos marketplace ya pagados
+ *   que AÚN no tienen venta interna + otros ingresos de caja puros.
+ * - Los adelantos (servicio/cotización) NO se suman al recibirse: se cuentan
+ *   recién cuando se convierten en PagoVenta al cobrar/convertir. Un sol entra
+ *   al resumen UNA sola vez.
+ * - EGRESOS = pagos REALES del período (PagoCompra no anulado) + préstamos +
+ *   gastos de caja (incluye planilla y reposición de caja chica, que es el
+ *   rastro contable de sus gastos rendidos) + gastos recurrentes por banco.
+ */
 @Injectable()
 export class ResumenFinancieroService {
   constructor(private readonly prisma: PrismaService) {}
@@ -9,10 +23,10 @@ export class ResumenFinancieroService {
    * Resumen financiero consolidado de la empresa
    */
   async getResumen(empresaId: string, periodo?: { fechaDesde?: string; fechaHasta?: string }) {
-    const fechaDesde = periodo?.fechaDesde ? new Date(periodo.fechaDesde) : this._inicioMes();
-    const fechaHasta = periodo?.fechaHasta ? new Date(periodo.fechaHasta) : new Date();
+    const fechaDesde = this._parseFecha(periodo?.fechaDesde, false) ?? this._inicioMes();
+    const fechaHasta = this._parseFecha(periodo?.fechaHasta, true) ?? new Date();
 
-    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, prestamos, otrosMovimientos, gastosRecurrentesBanco, agentes] = await Promise.all([
+    const [ventas, compras, pedidosMarketplace, cuentasCobrar, cuentasPagar, caja, bancos, tesoreria, prestamos, otrosMovimientos, gastosRecurrentesBanco, agentes] = await Promise.all([
       this._resumenVentas(empresaId, fechaDesde, fechaHasta),
       this._resumenCompras(empresaId, fechaDesde, fechaHasta),
       this._resumenPedidosMarketplace(empresaId, fechaDesde, fechaHasta),
@@ -20,25 +34,36 @@ export class ResumenFinancieroService {
       this._resumenCuentasPagar(empresaId),
       this._resumenCaja(empresaId),
       this._resumenBancos(empresaId),
-      this._resumenPrestamos(empresaId),
+      this._resumenTesoreria(empresaId),
+      this._resumenPrestamos(empresaId, fechaDesde, fechaHasta),
       this._resumenOtrosMovimientos(empresaId, fechaDesde, fechaHasta),
       this._resumenGastosRecurrentesBanco(empresaId, fechaDesde, fechaHasta),
       this._resumenAgentes(empresaId, fechaDesde, fechaHasta),
     ]);
 
-    const totalIngresos = ventas.totalCobrado + pedidosMarketplace.totalValidado + otrosMovimientos.totalOtrosIngresos;
+    // Ver política de coherencia arriba: cada sol se cuenta UNA vez.
+    // pedidosMarketplace.totalPorFacturar cubre el dinero ya validado cuyo
+    // pedido aún no genera venta interna (al ENVIAR nace la venta con sus
+    // PagoVenta y pasa a contarse por ahí).
+    const totalIngresos = ventas.totalCobrado + pedidosMarketplace.totalPorFacturar + otrosMovimientos.totalOtrosIngresos;
     // Los pagos de gasto recurrente con fuente=CAJA ya están en otrosMovimientos
     // (entran por MovimientoCaja con categoría GASTO_OPERATIVO). Aquí sumamos solo
     // los pagos con fuente=BANCO que NO generan MovimientoCaja.
     const totalEgresos = compras.totalPagado + prestamos.totalPagadoPeriodo + otrosMovimientos.totalOtrosEgresos + gastosRecurrentesBanco.totalPagosBanco;
     const flujoNeto = totalIngresos - totalEgresos;
 
+    // Liquidez total: dónde está la plata HOY (no depende del período).
+    const liquidezTotal = r2(
+      tesoreria.saldoBovedas + tesoreria.efectivoCajasAbiertas + tesoreria.saldoCajaChica + bancos.totalSaldo,
+    );
+
     return {
       periodo: { desde: fechaDesde, hasta: fechaHasta },
       resumen: {
-        totalIngresos: Math.round(totalIngresos * 100) / 100,
-        totalEgresos: Math.round(totalEgresos * 100) / 100,
-        flujoNeto: Math.round(flujoNeto * 100) / 100,
+        totalIngresos: r2(totalIngresos),
+        totalEgresos: r2(totalEgresos),
+        flujoNeto: r2(flujoNeto),
+        liquidezTotal,
       },
       ventas,
       compras,
@@ -47,6 +72,7 @@ export class ResumenFinancieroService {
       cuentasPorPagar: cuentasPagar,
       caja,
       bancos,
+      tesoreria: { ...tesoreria, saldoBancos: bancos.totalSaldo, liquidezTotal },
       prestamos,
       otrosMovimientos,
       gastosRecurrentesBanco,
@@ -55,48 +81,109 @@ export class ResumenFinancieroService {
   }
 
   private async _resumenVentas(empresaId: string, desde: Date, hasta: Date) {
-    const ventas = await this.prisma.venta.findMany({
-      where: {
-        empresaId,
-        fechaVenta: { gte: desde, lte: hasta },
-        estado: { not: 'ANULADA' },
-      },
-      include: { pagos: true },
-    });
+    // BORRADOR excluido: las ventas Yape diferidas nacen BORRADOR y pueden
+    // cancelarse sin cobrarse — no son ventas todavía.
+    const [ventas, cobradoAgg] = await Promise.all([
+      this.prisma.venta.findMany({
+        where: {
+          empresaId,
+          fechaVenta: { gte: desde, lte: hasta },
+          estado: { notIn: ['ANULADA', 'BORRADOR'] },
+        },
+        include: {
+          pagos: { where: { anulado: false } },
+          cuotas: { where: { estado: { not: 'ANULADA' } } },
+        },
+      }),
+      // COBRADO = base caja del período: pagos no anulados RECIBIDOS en el
+      // período, de cualquier venta viva (incluye abonos CxC de ventas
+      // anteriores; excluye pagos futuros de ventas del período).
+      this.prisma.pagoVenta.aggregate({
+        _sum: { monto: true },
+        where: {
+          anulado: false,
+          fechaPago: { gte: desde, lte: hasta },
+          venta: { empresaId, estado: { not: 'ANULADA' } },
+        },
+      }),
+    ]);
 
     const totalVentas = ventas.reduce((s, v) => s + Number(v.total), 0);
-    const totalCobrado = ventas.reduce((s, v) => s + v.pagos.reduce((ps, p) => ps + Number(p.monto), 0), 0);
+    const totalCobrado = Number(cobradoAgg._sum.monto ?? 0);
+
+    // Pendiente de cobro DE LAS VENTAS DEL PERÍODO (mismo criterio canónico
+    // que CxC: saldo desde cuotas si existen; si no, totalConInteres − pagos).
+    let pendienteCobro = 0;
+    for (const v of ventas) {
+      pendienteCobro += this._saldoVenta(v);
+    }
+
     const ventasCredito = ventas.filter((v) => v.esCredito).length;
     const ventasContado = ventas.length - ventasCredito;
 
     return {
       cantidad: ventas.length,
-      totalVentas: Math.round(totalVentas * 100) / 100,
-      totalCobrado: Math.round(totalCobrado * 100) / 100,
-      pendienteCobro: Math.round((totalVentas - totalCobrado) * 100) / 100,
+      totalVentas: r2(totalVentas),
+      totalCobrado: r2(totalCobrado),
+      pendienteCobro: r2(pendienteCobro),
       ventasContado,
       ventasCredito,
     };
   }
 
+  /** Saldo pendiente canónico de una venta (mismo criterio que CxC). */
+  private _saldoVenta(v: {
+    total: any;
+    totalConInteres?: any;
+    pagos: { monto: any }[];
+    cuotas?: { saldoPendiente: any }[];
+  }): number {
+    if (v.cuotas && v.cuotas.length > 0) {
+      return Math.max(
+        r2(v.cuotas.reduce((s, c) => s + Number(c.saldoPendiente), 0)),
+        0,
+      );
+    }
+    const target = Number(v.totalConInteres ?? v.total);
+    const pagado = v.pagos.reduce((s, p) => s + Number(p.monto), 0);
+    return Math.max(r2(target - pagado), 0);
+  }
+
   private async _resumenCompras(empresaId: string, desde: Date, hasta: Date) {
-    const compras = await this.prisma.compra.findMany({
-      where: {
-        empresaId,
-        fechaRecepcion: { gte: desde, lte: hasta },
-        estado: 'CONFIRMADA',
-      },
-      include: { pagos: true },
-    });
+    const [compras, pagadoAgg] = await Promise.all([
+      this.prisma.compra.findMany({
+        where: {
+          empresaId,
+          fechaRecepcion: { gte: desde, lte: hasta },
+          estado: 'CONFIRMADA',
+        },
+        include: { pagos: { where: { anulado: false } } },
+      }),
+      // PAGADO = base caja del período: pagos no anulados HECHOS en el
+      // período, de cualquier compra confirmada (incluye pagos CxP de
+      // compras anteriores).
+      this.prisma.pagoCompra.aggregate({
+        _sum: { monto: true },
+        where: {
+          anulado: false,
+          fechaPago: { gte: desde, lte: hasta },
+          compra: { empresaId, estado: 'CONFIRMADA' },
+        },
+      }),
+    ]);
 
     const totalCompras = compras.reduce((s, c) => s + Number(c.total), 0);
-    const totalPagado = compras.reduce((s, c) => s + c.pagos.reduce((ps, p) => ps + Number(p.monto), 0), 0);
+    const totalPagado = Number(pagadoAgg._sum.monto ?? 0);
+    const pendientePago = compras.reduce((s, c) => {
+      const pagado = c.pagos.reduce((ps, p) => ps + Number(p.monto), 0);
+      return s + Math.max(Number(c.total) - pagado, 0);
+    }, 0);
 
     return {
       cantidad: compras.length,
-      totalCompras: Math.round(totalCompras * 100) / 100,
-      totalPagado: Math.round(totalPagado * 100) / 100,
-      pendientePago: Math.round((totalCompras - totalPagado) * 100) / 100,
+      totalCompras: r2(totalCompras),
+      totalPagado: r2(totalPagado),
+      pendientePago: r2(pendientePago),
     };
   }
 
@@ -112,12 +199,21 @@ export class ResumenFinancieroService {
     const totalPedidos = pedidos.reduce((s, p) => s + Number(p.total), 0);
     const validados = pedidos.filter((p) => ['PAGO_VALIDADO', 'EN_PREPARACION', 'ENVIADO', 'ENTREGADO'].includes(p.estado));
     const totalValidado = validados.reduce((s, p) => s + Number(p.total), 0);
+    // Dinero ya recibido/validado cuyo pedido AÚN no genera venta interna
+    // (la venta nace al ENVIAR; desde ahí el ingreso se cuenta por sus
+    // PagoVenta). Sumar totalValidado completo doble-contaría los enviados.
+    // CONTRAENTREGA no es dinero recibido: se cobra al entregar (la venta
+    // interna registra el pago ahí), así que se excluye de este puente.
+    const totalPorFacturar = pedidos
+      .filter((p) => ['PAGO_VALIDADO', 'EN_PREPARACION'].includes(p.estado) && p.metodoPago !== 'CONTRAENTREGA')
+      .reduce((s, p) => s + Number(p.total), 0);
     const pendientes = pedidos.filter((p) => ['PENDIENTE_PAGO', 'PAGO_ENVIADO'].includes(p.estado));
 
     return {
       cantidad: pedidos.length,
-      totalPedidos: Math.round(totalPedidos * 100) / 100,
-      totalValidado: Math.round(totalValidado * 100) / 100,
+      totalPedidos: r2(totalPedidos),
+      totalValidado: r2(totalValidado),
+      totalPorFacturar: r2(totalPorFacturar),
       pedidosPendientes: pendientes.length,
       pedidosEntregados: pedidos.filter((p) => p.estado === 'ENTREGADO').length,
     };
@@ -125,8 +221,11 @@ export class ResumenFinancieroService {
 
   private async _resumenCuentasCobrar(empresaId: string) {
     const ventas = await this.prisma.venta.findMany({
-      where: { empresaId, esCredito: true, estado: { not: 'ANULADA' } },
-      include: { pagos: true },
+      where: { empresaId, esCredito: true, estado: { notIn: ['ANULADA', 'BORRADOR'] } },
+      include: {
+        pagos: { where: { anulado: false } },
+        cuotas: { where: { estado: { not: 'ANULADA' } } },
+      },
     });
 
     let totalPendiente = 0;
@@ -134,10 +233,20 @@ export class ResumenFinancieroService {
     const now = new Date();
 
     for (const v of ventas) {
-      const pagado = v.pagos.reduce((s, p) => s + Number(p.monto), 0);
-      const saldo = Number(v.total) - pagado;
+      const saldo = this._saldoVenta(v);
       if (saldo <= 0) continue;
-      if (v.fechaVencimientoPago && v.fechaVencimientoPago < now) {
+
+      if (v.cuotas.length > 0) {
+        // Con cuotas el vencimiento es POR CUOTA: solo lo vencido cuenta como
+        // vencido; el resto del saldo sigue siendo deuda corriente.
+        const vencidoCuotas = r2(
+          v.cuotas
+            .filter((c) => c.fechaVencimiento < now && Number(c.saldoPendiente) > 0)
+            .reduce((s, c) => s + Number(c.saldoPendiente), 0),
+        );
+        totalVencido += Math.min(vencidoCuotas, saldo);
+        totalPendiente += Math.max(saldo - vencidoCuotas, 0);
+      } else if (v.fechaVencimientoPago && v.fechaVencimientoPago < now) {
         totalVencido += saldo;
       } else {
         totalPendiente += saldo;
@@ -145,16 +254,16 @@ export class ResumenFinancieroService {
     }
 
     return {
-      totalPendiente: Math.round(totalPendiente * 100) / 100,
-      totalVencido: Math.round(totalVencido * 100) / 100,
-      total: Math.round((totalPendiente + totalVencido) * 100) / 100,
+      totalPendiente: r2(totalPendiente),
+      totalVencido: r2(totalVencido),
+      total: r2(totalPendiente + totalVencido),
     };
   }
 
   private async _resumenCuentasPagar(empresaId: string) {
     const compras = await this.prisma.compra.findMany({
       where: { empresaId, estado: 'CONFIRMADA', terminosPago: { not: 'CONTADO' } },
-      include: { pagos: true },
+      include: { pagos: { where: { anulado: false } } },
     });
 
     let totalPendiente = 0;
@@ -173,9 +282,9 @@ export class ResumenFinancieroService {
     }
 
     return {
-      totalPendiente: Math.round(totalPendiente * 100) / 100,
-      totalVencido: Math.round(totalVencido * 100) / 100,
-      total: Math.round((totalPendiente + totalVencido) * 100) / 100,
+      totalPendiente: r2(totalPendiente),
+      totalVencido: r2(totalVencido),
+      total: r2(totalPendiente + totalVencido),
     };
   }
 
@@ -213,9 +322,9 @@ export class ResumenFinancieroService {
 
     return {
       cajasAbiertas,
-      ingresosHoy: Math.round(ingresosHoy * 100) / 100,
-      egresosHoy: Math.round(egresosHoy * 100) / 100,
-      flujoHoy: Math.round((ingresosHoy - egresosHoy) * 100) / 100,
+      ingresosHoy: r2(ingresosHoy),
+      egresosHoy: r2(egresosHoy),
+      flujoHoy: r2(ingresosHoy - egresosHoy),
     };
   }
 
@@ -229,7 +338,7 @@ export class ResumenFinancieroService {
 
     return {
       cantidadCuentas: cuentas.length,
-      totalSaldo: Math.round(totalSaldo * 100) / 100,
+      totalSaldo: r2(totalSaldo),
       cuentas: cuentas.map((c) => ({
         ...c,
         saldoActual: c.saldoActual ? Number(c.saldoActual) : null,
@@ -238,11 +347,78 @@ export class ResumenFinancieroService {
   }
 
   /**
+   * Tesorería (dónde está el EFECTIVO hoy): bóveda(s) = Caja Central por sede,
+   * efectivo en cajas operativas abiertas y float de cajas chicas activas.
+   * Mismo criterio de saldo que getTesoreriaConsolidado (caja.service).
+   */
+  private async _resumenTesoreria(empresaId: string) {
+    const [centrales, abiertas, chicasAgg] = await Promise.all([
+      this.prisma.caja.findMany({
+        where: { empresaId, esCajaCentral: true },
+        select: { id: true },
+      }),
+      this.prisma.caja.findMany({
+        where: { empresaId, estado: 'ABIERTA', esCajaCentral: false },
+        select: { id: true, montoApertura: true },
+      }),
+      this.prisma.cajaChica.aggregate({
+        _sum: { saldoActual: true },
+        where: { empresaId, estado: 'ACTIVA' },
+      }),
+    ]);
+
+    // Bóvedas: saldo EFECTIVO = Σ movimientos firmados (la central es
+    // perpetua, sin apertura; incluye barridos y retiros de tesorería).
+    let saldoBovedas = 0;
+    if (centrales.length > 0) {
+      const rows = await this.prisma.movimientoCaja.groupBy({
+        by: ['tipo'],
+        where: {
+          cajaId: { in: centrales.map((c) => c.id) },
+          anulado: false,
+          metodoPago: 'EFECTIVO',
+        },
+        _sum: { monto: true },
+      });
+      for (const row of rows) {
+        const monto = Number(row._sum.monto ?? 0);
+        saldoBovedas += row.tipo === 'INGRESO' ? monto : -monto;
+      }
+    }
+
+    // Cajas operativas abiertas: apertura + movimientos EFECTIVO (excluyendo
+    // el par de transferencia con tesorería, que ya representa la apertura).
+    let efectivoCajasAbiertas = abiertas.reduce((s, c) => s + Number(c.montoApertura), 0);
+    if (abiertas.length > 0) {
+      const rows = await this.prisma.movimientoCaja.groupBy({
+        by: ['tipo'],
+        where: {
+          cajaId: { in: abiertas.map((c) => c.id) },
+          anulado: false,
+          metodoPago: 'EFECTIVO',
+          categoria: { notIn: ['DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'] },
+        },
+        _sum: { monto: true },
+      });
+      for (const row of rows) {
+        const monto = Number(row._sum.monto ?? 0);
+        efectivoCajasAbiertas += row.tipo === 'INGRESO' ? monto : -monto;
+      }
+    }
+
+    return {
+      saldoBovedas: r2(saldoBovedas),
+      efectivoCajasAbiertas: r2(efectivoCajasAbiertas),
+      saldoCajaChica: r2(Number(chicasAgg._sum.saldoActual ?? 0)),
+    };
+  }
+
+  /**
    * Datos diarios para gráfico de ingresos vs egresos
    */
   async getGraficoDiario(empresaId: string, fechaDesde?: string, fechaHasta?: string) {
-    const desde = fechaDesde ? new Date(fechaDesde) : this._inicioMes();
-    const hasta = fechaHasta ? new Date(fechaHasta) : new Date();
+    const desde = this._parseFecha(fechaDesde, false) ?? this._inicioMes();
+    const hasta = this._parseFecha(fechaHasta, true) ?? new Date();
 
     const [movimientos, pagosBanco] = await Promise.all([
       this.prisma.movimientoCaja.findMany({
@@ -268,11 +444,12 @@ export class ResumenFinancieroService {
       }),
     ]);
 
-    // Agrupar por día
+    // Agrupar por día CALENDARIO PERÚ (no UTC: un ingreso de las 20:00 Lima
+    // es 01:00 UTC del día siguiente y caía en la barra equivocada).
     const porDia = new Map<string, { fecha: string; ingresos: number; egresos: number }>();
 
     for (const m of movimientos) {
-      const dia = m.fechaMovimiento.toISOString().split('T')[0];
+      const dia = this._ymdPeru(m.fechaMovimiento);
       if (!porDia.has(dia)) {
         porDia.set(dia, { fecha: dia, ingresos: 0, egresos: 0 });
       }
@@ -282,31 +459,33 @@ export class ResumenFinancieroService {
     }
 
     for (const p of pagosBanco) {
-      const dia = p.fechaPago.toISOString().split('T')[0];
+      const dia = this._ymdPeru(p.fechaPago);
       if (!porDia.has(dia)) {
         porDia.set(dia, { fecha: dia, ingresos: 0, egresos: 0 });
       }
       porDia.get(dia)!.egresos += Number(p.montoReal);
     }
 
-    // Llenar días sin movimientos
+    // Llenar días sin movimientos (iterando en días calendario Perú).
     const result: any[] = [];
     const current = new Date(desde);
-    while (current <= hasta) {
-      const dia = current.toISOString().split('T')[0];
+    const diaHasta = this._ymdPeru(hasta);
+    let dia = this._ymdPeru(current);
+    while (dia <= diaHasta) {
       const data = porDia.get(dia) ?? { fecha: dia, ingresos: 0, egresos: 0 };
       result.push({
         fecha: dia,
-        ingresos: Math.round(data.ingresos * 100) / 100,
-        egresos: Math.round(data.egresos * 100) / 100,
+        ingresos: r2(data.ingresos),
+        egresos: r2(data.egresos),
       });
       current.setDate(current.getDate() + 1);
+      dia = this._ymdPeru(current);
     }
 
     return result;
   }
 
-  private async _resumenPrestamos(empresaId: string) {
+  private async _resumenPrestamos(empresaId: string, desde: Date, hasta: Date) {
     const prestamos = await this.prisma.prestamo.findMany({
       where: { empresaId, estado: { in: ['ACTIVO', 'VENCIDO'] } },
       include: { pagos: true },
@@ -316,27 +495,40 @@ export class ResumenFinancieroService {
     const totalOriginal = prestamos.reduce((s, p) => s + Number(p.montoOriginal), 0);
     const totalPagado = prestamos.reduce((s, p) => s + Number(p.totalPagado), 0);
 
-    // Pagos del periodo actual (para reflejar en egresos del mes)
-    const inicioMes = this._inicioMes();
+    // Pagos DEL PERÍODO consultado (antes usaba siempre inicio de mes, y con
+    // un rango custom los egresos por préstamo no calzaban con el período).
     const totalPagadoPeriodo = prestamos.reduce((s, p) => {
       return s + p.pagos
-        .filter((pg) => pg.fechaPago >= inicioMes)
+        .filter((pg) => pg.fechaPago >= desde && pg.fechaPago <= hasta)
         .reduce((ps, pg) => ps + Number(pg.monto), 0);
     }, 0);
 
     return {
       cantidadActivos: prestamos.length,
-      totalDeuda: Math.round(totalDeuda * 100) / 100,
-      totalOriginal: Math.round(totalOriginal * 100) / 100,
-      totalPagado: Math.round(totalPagado * 100) / 100,
-      totalPagadoPeriodo: Math.round(totalPagadoPeriodo * 100) / 100,
+      totalDeuda: r2(totalDeuda),
+      totalOriginal: r2(totalOriginal),
+      totalPagado: r2(totalPagado),
+      totalPagadoPeriodo: r2(totalPagadoPeriodo),
       porcentajePagado: totalOriginal > 0 ? Math.round((totalPagado / totalOriginal) * 100) : 0,
     };
   }
 
   /**
-   * Resumen de movimientos de caja que no son ventas/compras/préstamos
-   * (gastos operativos, otros ingresos, adelantos de servicio, devoluciones, etc.)
+   * Resumen de movimientos de caja que no se cuentan en otras secciones.
+   *
+   * INGRESOS puros: OTRO_INGRESO, COMISION_AGENTE.
+   * EGRESOS reales: GASTO_OPERATIVO, OTRO_EGRESO, DEVOLUCION, PAGO_PLANILLA,
+   * ADELANTO_EMPLEADO, BONIFICACION_EMPLEADO y REPOSICION_CAJA_CHICA (la
+   * reposición desde bóveda es el rastro contable de los gastos rendidos de
+   * caja chica — esos gastos no generan MovimientoCaja propio).
+   * AJUSTE_TESORERIA entra con su signo (corrección real de bóveda).
+   *
+   * FUERA a propósito: VENTA/PEDIDO_MARKETPLACE/COMPRA/PAGO_PROVEEDOR (se
+   * cuentan por PagoVenta/PagoCompra), DEPOSITO/RETIRO_TESORERIA y
+   * DEPOSITO/RETIRO_AGENTE (neutros), REVERSO_CAJA_CERRADA (el pago original
+   * queda anulado, contarlo doble-restaría) y los ADELANTOS de servicio y
+   * cotización (se cuentan cuando se convierten en PagoVenta — política
+   * "un sol se cuenta una vez").
    */
   private async _resumenOtrosMovimientos(empresaId: string, desde: Date, hasta: Date) {
     const movimientos = await this.prisma.movimientoCaja.findMany({
@@ -344,8 +536,20 @@ export class ResumenFinancieroService {
         empresaId,
         anulado: false,
         fechaMovimiento: { gte: desde, lte: hasta },
-        // Solo categorías que NO se cuentan en otras secciones del resumen
-        categoria: { in: ['OTRO_INGRESO', 'GASTO_OPERATIVO', 'ADELANTO_SERVICIO', 'OTRO_EGRESO', 'DEVOLUCION'] },
+        categoria: {
+          in: [
+            'OTRO_INGRESO',
+            'COMISION_AGENTE',
+            'GASTO_OPERATIVO',
+            'OTRO_EGRESO',
+            'DEVOLUCION',
+            'PAGO_PLANILLA',
+            'ADELANTO_EMPLEADO',
+            'BONIFICACION_EMPLEADO',
+            'REPOSICION_CAJA_CHICA',
+            'AJUSTE_TESORERIA',
+          ],
+        },
       },
       select: { tipo: true, categoria: true, monto: true },
     });
@@ -363,8 +567,8 @@ export class ResumenFinancieroService {
     }
 
     return {
-      totalOtrosIngresos: Math.round(totalOtrosIngresos * 100) / 100,
-      totalOtrosEgresos: Math.round(totalOtrosEgresos * 100) / 100,
+      totalOtrosIngresos: r2(totalOtrosIngresos),
+      totalOtrosEgresos: r2(totalOtrosEgresos),
       porCategoria,
     };
   }
@@ -386,11 +590,11 @@ export class ResumenFinancieroService {
     const retiros = operaciones.filter((o) => o.tipo === 'RETIRO');
 
     return {
-      totalDepositos: Math.round(depositos.reduce((s, o) => s + Number(o.monto), 0) * 100) / 100,
-      totalRetiros: Math.round(retiros.reduce((s, o) => s + Number(o.monto), 0) * 100) / 100,
+      totalDepositos: r2(depositos.reduce((s, o) => s + Number(o.monto), 0)),
+      totalRetiros: r2(retiros.reduce((s, o) => s + Number(o.monto), 0)),
       cantidadDepositos: depositos.length,
       cantidadRetiros: retiros.length,
-      comisionesGanadas: Math.round(operaciones.reduce((s, o) => s + Number(o.comision), 0) * 100) / 100,
+      comisionesGanadas: r2(operaciones.reduce((s, o) => s + Number(o.comision), 0)),
     };
   }
 
@@ -430,9 +634,29 @@ export class ResumenFinancieroService {
 
     return {
       cantidad: pagos.length,
-      totalPagosBanco: Math.round(totalPagosBanco * 100) / 100,
+      totalPagosBanco: r2(totalPagosBanco),
       porCategoria,
     };
+  }
+
+  /**
+   * Normaliza una fecha del query. Si viene date-only ('YYYY-MM-DD', lo que
+   * manda el picker del app) se interpreta como día calendario PERÚ completo:
+   * desde = 00:00 Lima, hasta = 23:59:59.999 Lima. Sin esto, 'hasta' caía a
+   * las 00:00 UTC y cortaba el último día entero del rango.
+   */
+  private _parseFecha(s: string | undefined, endOfDay: boolean): Date | null {
+    if (!s) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      return new Date(`${s}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}-05:00`);
+    }
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  /// Fecha 'YYYY-MM-DD' de un instante en zona Perú.
+  private _ymdPeru(d: Date): string {
+    return d.toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
   }
 
   /// Inicio del día ACTUAL en zona Perú (America/Lima, UTC-5) expresado en
