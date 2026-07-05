@@ -4830,7 +4830,7 @@ export class VentaService {
   /**
    * Generar comprobante electrónico (boleta/factura) para una venta tipo TICKET
    */
-  async generarComprobante(ventaId: string, empresaId: string, dto: { tipoComprobante: 'BOLETA' | 'FACTURA'; tipoDocumentoCliente?: string }) {
+  async generarComprobante(ventaId: string, empresaId: string, dto: { tipoComprobante: 'BOLETA' | 'FACTURA'; tipoDocumentoCliente?: string; documentoCliente?: string }) {
     const venta = await this.prisma.venta.findFirst({
       where: { id: ventaId, empresaId },
       include: {
@@ -4840,6 +4840,18 @@ export class VentaService {
 
     if (!venta) throw new NotFoundException('Venta no encontrada');
     if (venta.comprobante) throw new BadRequestException('Esta venta ya tiene un comprobante electrónico generado');
+
+    // Documento capturado AL EMITIR: las ventas online del marketplace llegan
+    // sin DNI/RUC del comprador — el cajero lo ingresa en el diálogo y acá se
+    // persiste en la venta para el comprobante y los reportes.
+    const docNuevo = dto.documentoCliente?.trim();
+    if (docNuevo) {
+      await this.prisma.venta.update({
+        where: { id: venta.id },
+        data: { documentoCliente: docNuevo },
+      });
+      (venta as any).documentoCliente = docNuevo;
+    }
 
     // Validar documento del cliente
     const validacionDoc = validarDocumentoParaComprobante(dto.tipoComprobante, venta.documentoCliente);
@@ -4889,7 +4901,15 @@ export class VentaService {
           serie,
           correlativo: correlativo.padStart(8, '0'),
           codigoGenerado,
-          tipoDocumento: dto.tipoDocumentoCliente || (dto.tipoComprobante === 'FACTURA' ? '6' : '1'),
+          // Tipo doc: explícito del dto → inferido por longitud (11=RUC) →
+          // default por tipo de comprobante.
+          tipoDocumento:
+            dto.tipoDocumentoCliente ||
+            (venta.documentoCliente?.length === 11
+              ? '6'
+              : dto.tipoComprobante === 'FACTURA'
+                ? '6'
+                : '1'),
           numeroDocumento: venta.documentoCliente,
           nombreCliente: venta.nombreCliente,
           direccionCliente: venta.direccionCliente,

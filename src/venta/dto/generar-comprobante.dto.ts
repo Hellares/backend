@@ -10,4 +10,13 @@ export class GenerarComprobanteDto {
   @IsOptional()
   @IsString()
   tipoDocumentoCliente?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'DNI/RUC capturado al momento de emitir (ventas online del marketplace ' +
+      'llegan sin documento del comprador). Se persiste en la venta.',
+  })
+  @IsOptional()
+  @IsString()
+  documentoCliente?: string;
 }
