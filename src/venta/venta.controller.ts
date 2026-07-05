@@ -147,6 +147,12 @@ export class VentaController {
     @Query('fechaHasta') fechaHasta?: string,
     @Query('clienteId') clienteId?: string,
     @Query('search') search?: string,
+    // Paginación por cursor + canal (opcionales). Sin `limit` → array
+    // completo (compat); con `limit` → { data, hasMore, nextCursor,
+    // resumen } donde resumen agrega TODO el set filtrado por estado.
+    @Query('canalVenta') canalVenta?: string,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
   ) {
     return this.ventaService.findAll(empresaId, {
       sedeId,
@@ -157,6 +163,9 @@ export class VentaController {
       search,
       userId,
       userRole,
+      canalVenta,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      cursor,
     });
   }
 

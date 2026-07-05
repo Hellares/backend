@@ -3091,6 +3091,12 @@ export class VentaService {
       search?: string;
       userId?: string;
       userRole?: string;
+      // Paginación por CURSOR + filtro por canal (patrón estándar de listas
+      // transaccionales — ver cotizaciones). Compat: sin `limit` responde el
+      // array completo de siempre (clientes viejos no mandan limit).
+      canalVenta?: string;
+      limit?: number;
+      cursor?: string;
     },
   ) {
     const where: Prisma.VentaWhereInput = { empresaId };
@@ -3107,6 +3113,11 @@ export class VentaService {
     if (filtros?.sedeId) where.sedeId = filtros.sedeId;
     if (filtros?.estado) where.estado = filtros.estado;
     if (filtros?.clienteId) where.clienteId = filtros.clienteId;
+    // Canal server-side: con paginación el filtro client-side dejaría
+    // totales/conteos inconsistentes (solo vería las páginas cargadas).
+    if (filtros?.canalVenta) {
+      where.canalVenta = filtros.canalVenta as Prisma.EnumCanalVentaFilter['equals'];
+    }
 
     if (filtros?.fechaDesde || filtros?.fechaHasta) {
       where.fechaVenta = {};
@@ -3129,20 +3140,65 @@ export class VentaService {
       ];
     }
 
-    const ventas = await this.prisma.venta.findMany({
-      where,
-      include: this.getListInclude(),
-      orderBy: { creadoEn: 'desc' },
-    });
+    const paginado = filtros?.limit != null && filtros.limit > 0;
+    const limit = paginado ? Math.min(filtros!.limit!, 100) : undefined;
+
+    // Con paginación, el RESUMEN agregado se calcula sobre TODO el set
+    // filtrado (no solo la página): el chip del total en el app sumaba
+    // client-side y con páginas parciales quedaría corto. groupBy por
+    // estado permite derivar: total sin ANULADA/BORRADOR, conteos, etc.
+    const resumenPromise = paginado
+      ? this.prisma.venta.groupBy({
+          by: ['estado'],
+          where,
+          _count: { _all: true },
+          _sum: { total: true },
+        })
+      : null;
+
+    const [ventas, resumenRaw] = await Promise.all([
+      this.prisma.venta.findMany({
+        where,
+        include: this.getListInclude(),
+        // Tie-breaker por id: dos ventas con el mismo creadoEn no pueden
+        // bailar entre páginas del cursor.
+        orderBy: [{ creadoEn: 'desc' }, { id: 'desc' }],
+        ...(paginado
+          ? {
+              take: limit! + 1,
+              ...(filtros?.cursor
+                ? { cursor: { id: filtros.cursor }, skip: 1 }
+                : {}),
+            }
+          : {}),
+      }),
+      resumenPromise,
+    ]);
+
+    const hasMore = paginado && ventas.length > limit!;
+    const pagina = hasMore ? ventas.slice(0, limit!) : ventas;
 
     // Aplanar las órdenes de servicio cobradas a `ordenesServicio` y quitar
     // los `detalles` parciales del include liviano (ver getListInclude).
-    return ventas.map(({ detalles, ...v }: any) => ({
+    const data = pagina.map(({ detalles, ...v }: any) => ({
       ...v,
       ordenesServicio: (detalles ?? [])
         .map((d: any) => d.ordenServicio)
         .filter(Boolean),
     }));
+
+    if (!paginado) return data;
+
+    return {
+      data,
+      hasMore,
+      nextCursor: hasMore ? data[data.length - 1].id : null,
+      resumen: (resumenRaw ?? []).map((r) => ({
+        estado: r.estado,
+        cantidad: r._count._all,
+        total: Number(r._sum.total ?? 0),
+      })),
+    };
   }
 
   /**
