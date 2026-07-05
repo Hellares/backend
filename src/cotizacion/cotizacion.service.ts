@@ -561,6 +561,12 @@ export class CotizacionService {
       search?: string;
       userId?: string;
       userRole?: string;
+      // Paginación por CURSOR (patrón estándar para listas transaccionales
+      // que crecen sin techo — ver compras/kardex). Compat: sin `limit` la
+      // respuesta es el array completo de siempre (clientes viejos no
+      // mandan limit y no se enteran del cambio).
+      limit?: number;
+      cursor?: string;
     },
   ) {
     const where: Prisma.CotizacionWhereInput = { empresaId };
@@ -594,6 +600,13 @@ export class CotizacionService {
       ];
     }
 
+    // Paginación por cursor: `limit + 1` para detectar hasMore sin count
+    // extra; el cursor es el id de la última fila de la página anterior
+    // (skip: 1 lo excluye). Sin degradación en páginas profundas — el
+    // cursor salta por índice, a diferencia de offset/skip.
+    const paginado = filtros?.limit != null && filtros.limit > 0;
+    const limit = paginado ? Math.min(filtros!.limit!, 100) : undefined;
+
     const cotizaciones = await this.prisma.cotizacion.findMany({
       where,
       include: {
@@ -613,14 +626,34 @@ export class CotizacionService {
         },
         _count: { select: { detalles: true } },
       },
-      orderBy: { creadoEn: 'desc' },
+      orderBy: [{ creadoEn: 'desc' }, { id: 'desc' }],
+      ...(paginado
+        ? {
+            take: limit! + 1,
+            ...(filtros?.cursor
+              ? { cursor: { id: filtros.cursor }, skip: 1 }
+              : {}),
+          }
+        : {}),
     });
+
+    const hasMore = paginado && cotizaciones.length > limit!;
+    const pagina = hasMore ? cotizaciones.slice(0, limit!) : cotizaciones;
 
     // Calcular `tieneReservaActiva` en una sola query batch (sin N+1).
     // Buscamos qué cotizaciones del set tienen al menos un detalle con
     // `reservaEstado = ACTIVA`. Constante, no escala con N.
-    if (cotizaciones.length === 0) return [];
-    const ids = cotizaciones.map((c) => c.id);
+    const armarRespuesta = (items: typeof pagina) =>
+      paginado
+        ? {
+            data: items,
+            hasMore,
+            nextCursor: hasMore ? items[items.length - 1].id : null,
+          }
+        : items;
+
+    if (pagina.length === 0) return armarRespuesta([]);
+    const ids = pagina.map((c) => c.id);
     const conReserva = await this.prisma.cotizacionDetalle.findMany({
       where: {
         cotizacionId: { in: ids },
@@ -631,10 +664,12 @@ export class CotizacionService {
     });
     const setConReserva = new Set(conReserva.map((d) => d.cotizacionId));
 
-    return cotizaciones.map((c) => ({
-      ...c,
-      tieneReservaActiva: setConReserva.has(c.id),
-    }));
+    return armarRespuesta(
+      pagina.map((c) => ({
+        ...c,
+        tieneReservaActiva: setConReserva.has(c.id),
+      })) as typeof pagina,
+    );
   }
 
   /**

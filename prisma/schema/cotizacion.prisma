@@ -87,9 +87,12 @@ model Cotizacion {
   @@index([fechaEmision])
   @@index([empresaId, estado])
   @@index([empresaId, sedeId, estado])
+  // Cubre la lista paginada por cursor: filtro empresa + orden cronológico.
+  @@index([empresaId, creadoEn(sort: Desc)])
   // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
   @@index([nombreCliente(ops: raw("gin_trgm_ops"))], type: Gin, map: "Cotizacion_nombreCliente_trgm_idx")
   @@index([documentoCliente(ops: raw("gin_trgm_ops"))], type: Gin, map: "Cotizacion_documentoCliente_trgm_idx")
+  @@index([codigo(ops: raw("gin_trgm_ops"))], type: Gin, map: "Cotizacion_codigo_trgm_idx")
 }
 
 model CotizacionDetalle {

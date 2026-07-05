@@ -66,6 +66,11 @@ export class CotizacionController {
     @Query('fechaHasta') fechaHasta?: string,
     @Query('clienteId') clienteId?: string,
     @Query('search') search?: string,
+    // Paginación por cursor (opcional). Sin `limit` → array completo
+    // (compat con clientes viejos); con `limit` → { data, hasMore,
+    // nextCursor }.
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
   ) {
     return this.cotizacionService.findAll(empresaId, {
       sedeId,
@@ -76,6 +81,8 @@ export class CotizacionController {
       search,
       userId,
       userRole,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      cursor,
     });
   }
 
