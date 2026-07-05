@@ -33,6 +33,282 @@ export class ReportesFinancierosExportService {
     this.logger.setContext(ReportesFinancierosExportService.name);
   }
 
+  // =====================================================
+  // REGISTRO DE VENTAS E INGRESOS (formato 14.1 SUNAT)
+  // =====================================================
+
+  /** Código SUNAT del tipo de comprobante (tabla 10). */
+  private static readonly CODIGO_SUNAT: Record<string, string> = {
+    FACTURA: '01',
+    BOLETA: '03',
+    NOTA_CREDITO: '07',
+    NOTA_DEBITO: '08',
+  };
+
+  private static readonly TIPO_DOC_LABEL: Record<string, string> = {
+    '1': 'DNI',
+    '4': 'CE',
+    '6': 'RUC',
+    '7': 'PASAPORTE',
+    '0': 'S/D',
+  };
+
+  /**
+   * Registro de Ventas e Ingresos del mes (base del formato 14.1 del PLE):
+   * lista cronológica de comprobantes FISCALES emitidos (01/03/07/08) con sus
+   * bases imponibles, IGV y totales, más un resumen para el PDT 621.
+   *
+   * Reglas:
+   * - Se listan TODOS los emitidos (incluye anulados/rechazados, marcados) para
+   *   que el contador vea los correlativos completos sin huecos.
+   * - Al RESUMEN solo suman los VÁLIDOS (no anulados, no rechazados/expirados).
+   * - Las NC restan en el total neto; las ND suman.
+   * - Mes calendario PERÚ.
+   */
+  async getRegistroVentas(
+    empresaId: string,
+    mes: number,
+    anio: number,
+    sedeId?: string,
+  ) {
+    const mm = String(mes).padStart(2, '0');
+    const ultimoDia = new Date(anio, mes, 0).getDate();
+    const desde = new Date(`${anio}-${mm}-01T00:00:00.000-05:00`);
+    const hasta = new Date(`${anio}-${mm}-${String(ultimoDia).padStart(2, '0')}T23:59:59.999-05:00`);
+
+    const rows = await this.prisma.comprobanteElectronico.findMany({
+      where: {
+        empresaId,
+        ...(sedeId ? { sedeId } : {}),
+        fechaEmision: { gte: desde, lte: hasta },
+        tipoComprobante: {
+          in: ['FACTURA', 'BOLETA', 'NOTA_CREDITO', 'NOTA_DEBITO'],
+        },
+        estado: { not: 'BORRADOR' },
+      },
+      select: {
+        id: true,
+        fechaEmision: true,
+        tipoComprobante: true,
+        serie: true,
+        correlativo: true,
+        tipoDocumento: true,
+        numeroDocumento: true,
+        nombreCliente: true,
+        moneda: true,
+        tipoCambio: true,
+        gravada: true,
+        exonerada: true,
+        inafecta: true,
+        igv: true,
+        icbper: true,
+        total: true,
+        estado: true,
+        anulado: true,
+        sunatStatus: true,
+        sunatCodigo: true,
+        sede: { select: { nombre: true } },
+        comprobanteOrigen: {
+          select: { tipoComprobante: true, serie: true, correlativo: true },
+        },
+      },
+      orderBy: [{ fechaEmision: 'asc' }, { serie: 'asc' }, { correlativo: 'asc' }],
+    });
+
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const comprobantes = rows.map((c) => {
+      const invalido =
+        c.anulado || ['ANULADO', 'RECHAZADO', 'EXPIRADO'].includes(c.estado);
+      return {
+        id: c.id,
+        fechaEmision: c.fechaEmision,
+        tipoComprobante: c.tipoComprobante,
+        codigoSunat:
+          ReportesFinancierosExportService.CODIGO_SUNAT[c.tipoComprobante] ?? '',
+        numero: `${c.serie}-${c.correlativo}`,
+        tipoDocCliente:
+          ReportesFinancierosExportService.TIPO_DOC_LABEL[c.tipoDocumento ?? ''] ??
+          (c.tipoDocumento ?? 'S/D'),
+        numeroDocumento: c.numeroDocumento ?? '',
+        nombreCliente: c.nombreCliente,
+        moneda: c.moneda,
+        tipoCambio: c.tipoCambio ? Number(c.tipoCambio) : null,
+        gravada: Number(c.gravada),
+        exonerada: Number(c.exonerada),
+        inafecta: Number(c.inafecta),
+        igv: Number(c.igv),
+        icbper: Number(c.icbper),
+        total: Number(c.total),
+        estado: c.estado,
+        sunatStatus: c.sunatStatus,
+        sunatCodigo: c.sunatCodigo,
+        anulado: invalido,
+        sedeNombre: c.sede?.nombre ?? null,
+        referencia: c.comprobanteOrigen
+          ? `${c.comprobanteOrigen.serie}-${c.comprobanteOrigen.correlativo}`
+          : null,
+      };
+    });
+
+    // Resumen: solo válidos. NC resta, ND suma.
+    const validos = comprobantes.filter((c) => !c.anulado);
+    const porTipoMap = new Map<
+      string,
+      { tipo: string; codigoSunat: string; cantidad: number; total: number }
+    >();
+    let gravada = 0, exonerada = 0, inafecta = 0, igv = 0, icbper = 0;
+    let totalVentas = 0, totalNC = 0, totalND = 0;
+
+    for (const c of validos) {
+      const signo = c.tipoComprobante === 'NOTA_CREDITO' ? -1 : 1;
+      gravada += signo * c.gravada;
+      exonerada += signo * c.exonerada;
+      inafecta += signo * c.inafecta;
+      igv += signo * c.igv;
+      icbper += signo * c.icbper;
+      if (c.tipoComprobante === 'NOTA_CREDITO') totalNC += c.total;
+      else if (c.tipoComprobante === 'NOTA_DEBITO') totalND += c.total;
+      else totalVentas += c.total;
+
+      const t = porTipoMap.get(c.tipoComprobante) ?? {
+        tipo: c.tipoComprobante,
+        codigoSunat: c.codigoSunat,
+        cantidad: 0,
+        total: 0,
+      };
+      t.cantidad += 1;
+      t.total = r2(t.total + c.total);
+      porTipoMap.set(c.tipoComprobante, t);
+    }
+
+    return {
+      periodo: { mes, anio },
+      comprobantes,
+      resumen: {
+        cantidadEmitidos: comprobantes.length,
+        cantidadValidos: validos.length,
+        cantidadAnulados: comprobantes.length - validos.length,
+        porTipo: Array.from(porTipoMap.values()),
+        // Bases NETAS (NC restadas) — lo que va al PDT 621.
+        gravada: r2(gravada),
+        exonerada: r2(exonerada),
+        inafecta: r2(inafecta),
+        igv: r2(igv),
+        icbper: r2(icbper),
+        totalVentas: r2(totalVentas),
+        totalNotasCredito: r2(totalNC),
+        totalNotasDebito: r2(totalND),
+        totalNeto: r2(totalVentas + totalND - totalNC),
+      },
+    };
+  }
+
+  /**
+   * Exportar Registro de Ventas a Excel (columnas estilo PLE 14.1).
+   */
+  async exportRegistroVentas(
+    empresaId: string,
+    mes: number,
+    anio: number,
+    res: Response,
+    sedeId?: string,
+  ): Promise<void> {
+    const data = await this.getRegistroVentas(empresaId, mes, anio, sedeId);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Syncronize';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Registro de Ventas');
+    sheet.columns = [
+      { header: 'Fecha Emisión', key: 'fecha', width: 13 },
+      { header: 'Tipo (SUNAT)', key: 'tipo', width: 12 },
+      { header: 'Serie-Número', key: 'numero', width: 16 },
+      { header: 'Tipo Doc.', key: 'tipoDoc', width: 10 },
+      { header: 'N° Documento', key: 'numDoc', width: 14 },
+      { header: 'Cliente', key: 'cliente', width: 34 },
+      { header: 'Gravada', key: 'gravada', width: 12 },
+      { header: 'Exonerada', key: 'exonerada', width: 12 },
+      { header: 'Inafecta', key: 'inafecta', width: 12 },
+      { header: 'IGV', key: 'igv', width: 11 },
+      { header: 'ICBPER', key: 'icbper', width: 10 },
+      { header: 'Total', key: 'total', width: 12 },
+      { header: 'Moneda', key: 'moneda', width: 9 },
+      { header: 'Ref. NC/ND', key: 'ref', width: 15 },
+      { header: 'Estado', key: 'estado', width: 12 },
+      { header: 'SUNAT', key: 'sunat', width: 12 },
+    ];
+    sheet.getRow(1).eachCell((c) => (c.style = HEADER_STYLE));
+    sheet.getRow(1).height = 25;
+
+    for (const c of data.comprobantes) {
+      const row = sheet.addRow({
+        fecha: c.fechaEmision.toISOString().slice(0, 10),
+        tipo: `${c.codigoSunat} ${c.tipoComprobante}`,
+        numero: c.numero,
+        tipoDoc: c.tipoDocCliente,
+        numDoc: c.numeroDocumento,
+        cliente: c.nombreCliente,
+        gravada: c.gravada,
+        exonerada: c.exonerada,
+        inafecta: c.inafecta,
+        igv: c.igv,
+        icbper: c.icbper,
+        total: c.total,
+        moneda: c.moneda,
+        ref: c.referencia ?? '',
+        estado: c.anulado ? 'ANULADO/INVÁLIDO' : c.estado,
+        sunat: c.sunatStatus,
+      });
+      if (c.anulado) {
+        row.eachCell((cell) => {
+          cell.font = { color: { argb: 'FF999999' }, strike: true };
+        });
+      }
+      ['gravada', 'exonerada', 'inafecta', 'igv', 'icbper', 'total'].forEach(
+        (k) => (row.getCell(k).numFmt = '#,##0.00'),
+      );
+    }
+
+    // Sheet 2: Resumen (para el PDT 621)
+    const resumenSheet = workbook.addWorksheet('Resumen');
+    resumenSheet.columns = [
+      { header: 'Concepto', key: 'concepto', width: 34 },
+      { header: 'Valor', key: 'valor', width: 18 },
+    ];
+    resumenSheet.getRow(1).eachCell((c) => (c.style = HEADER_STYLE));
+    resumenSheet.getRow(1).height = 25;
+    const r = data.resumen;
+    resumenSheet.addRows([
+      { concepto: 'Periodo', valor: `${String(mes).padStart(2, '0')}/${anio}` },
+      { concepto: 'Comprobantes emitidos', valor: r.cantidadEmitidos },
+      { concepto: 'Válidos', valor: r.cantidadValidos },
+      { concepto: 'Anulados/Rechazados', valor: r.cantidadAnulados },
+      ...r.porTipo.map((t) => ({
+        concepto: `${t.codigoSunat} ${t.tipo} (${t.cantidad})`,
+        valor: t.total,
+      })),
+      { concepto: 'Base gravada (neta de NC)', valor: r.gravada },
+      { concepto: 'Exonerada (neta)', valor: r.exonerada },
+      { concepto: 'Inafecta (neta)', valor: r.inafecta },
+      { concepto: 'IGV (neto)', valor: r.igv },
+      { concepto: 'ICBPER (neto)', valor: r.icbper },
+      { concepto: 'Total ventas (01+03)', valor: r.totalVentas },
+      { concepto: 'Notas de crédito (07)', valor: r.totalNotasCredito },
+      { concepto: 'Notas de débito (08)', valor: r.totalNotasDebito },
+      { concepto: 'TOTAL NETO', valor: r.totalNeto },
+    ]);
+
+    const mesStr = String(mes).padStart(2, '0');
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=registro_ventas_${anio}_${mesStr}.xlsx`,
+    });
+    await workbook.xlsx.write(res);
+    res.end();
+  }
+
   /**
    * Exportar Libro Contable de un mes/año a Excel
    */

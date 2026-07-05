@@ -43,6 +43,39 @@ export class ReportesFinancierosController {
     }
   }
 
+  @Get('registro-ventas')
+  @RequiresPermission(Permission.VIEW_REPORTS)
+  @ApiOperation({
+    summary: 'Registro de Ventas e Ingresos (base formato 14.1 SUNAT)',
+    description:
+      'Comprobantes fiscales emitidos del mes (01/03/07/08) con bases, IGV y resumen para el PDT 621.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getRegistroVentas(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('mes', ParseIntPipe) mes: number,
+    @Query('anio', ParseIntPipe) anio: number,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    this.validateMesAnio(mes, anio);
+    return this.exportService.getRegistroVentas(empresaId, mes, anio, sedeId);
+  }
+
+  @Get('export/registro-ventas')
+  @RequiresPermission(Permission.VIEW_REPORTS)
+  @ApiOperation({ summary: 'Exportar Registro de Ventas (Excel)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async exportRegistroVentas(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('mes', ParseIntPipe) mes: number,
+    @Query('anio', ParseIntPipe) anio: number,
+    @Res() res: Response,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    this.validateMesAnio(mes, anio);
+    await this.exportService.exportRegistroVentas(empresaId, mes, anio, res, sedeId);
+  }
+
   @Get('export/libro-contable')
   @RequiresPermission(Permission.VIEW_REPORTS)
   @ApiOperation({ summary: 'Exportar libro contable mensual (Excel)' })
