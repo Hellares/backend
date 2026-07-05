@@ -300,16 +300,27 @@ export class ResumenFinancieroService {
 
     let totalPendiente = 0;
     let totalVencido = 0;
+    // Desglose por naturaleza de la deuda: crédito (programada) vs contado
+    // impago (exigible ya) — el front los muestra por separado.
+    let totalCredito = 0;
+    let totalContadoImpago = 0;
+    let cantidadContadoImpago = 0;
     const now = new Date();
 
     for (const c of compras) {
       const pagado = c.pagos.reduce((s, p) => s + Number(p.monto), 0);
       const saldo = Number(c.total) - pagado;
       if (saldo <= 0) continue;
+      const esContado = c.terminosPago === 'CONTADO';
+      if (esContado) {
+        totalContadoImpago += saldo;
+        cantidadContadoImpago += 1;
+      } else {
+        totalCredito += saldo;
+      }
       // CONTADO impaga no tiene fecha de vencimiento: el pago era inmediato,
       // así que cuenta como VENCIDA (que se vea en rojo, no escondida).
-      const esContadoImpaga =
-        c.terminosPago === 'CONTADO' && !c.fechaVencimientoPago;
+      const esContadoImpaga = esContado && !c.fechaVencimientoPago;
       if (esContadoImpaga || (c.fechaVencimientoPago && c.fechaVencimientoPago < now)) {
         totalVencido += saldo;
       } else {
@@ -320,6 +331,9 @@ export class ResumenFinancieroService {
     return {
       totalPendiente: r2(totalPendiente),
       totalVencido: r2(totalVencido),
+      totalCredito: r2(totalCredito),
+      totalContadoImpago: r2(totalContadoImpago),
+      cantidadContadoImpago,
       total: r2(totalPendiente + totalVencido),
     };
   }
