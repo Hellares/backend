@@ -283,8 +283,18 @@ export class ResumenFinancieroService {
   }
 
   private async _resumenCuentasPagar(empresaId: string, sedeId?: string) {
+    // Criterio canónico del módulo CxP: `pagoPendiente = true` — incluye las
+    // compras CONTADO confirmadas SIN pagar (deuda inmediatamente exigible),
+    // que el filtro viejo `terminosPago != CONTADO` dejaba invisibles (caso
+    // real: 3 compras contado impagas por S/292.50 que no aparecían). El OR
+    // con crédito cubre data legacy anterior al flag.
     const compras = await this.prisma.compra.findMany({
-      where: { empresaId, ...(sedeId && { sedeId }), estado: 'CONFIRMADA', terminosPago: { not: 'CONTADO' } },
+      where: {
+        empresaId,
+        ...(sedeId && { sedeId }),
+        estado: 'CONFIRMADA',
+        OR: [{ pagoPendiente: true }, { terminosPago: { not: 'CONTADO' } }],
+      },
       include: { pagos: { where: { anulado: false } } },
     });
 
@@ -296,7 +306,11 @@ export class ResumenFinancieroService {
       const pagado = c.pagos.reduce((s, p) => s + Number(p.monto), 0);
       const saldo = Number(c.total) - pagado;
       if (saldo <= 0) continue;
-      if (c.fechaVencimientoPago && c.fechaVencimientoPago < now) {
+      // CONTADO impaga no tiene fecha de vencimiento: el pago era inmediato,
+      // así que cuenta como VENCIDA (que se vea en rojo, no escondida).
+      const esContadoImpaga =
+        c.terminosPago === 'CONTADO' && !c.fechaVencimientoPago;
+      if (esContadoImpaga || (c.fechaVencimientoPago && c.fechaVencimientoPago < now)) {
         totalVencido += saldo;
       } else {
         totalPendiente += saldo;
