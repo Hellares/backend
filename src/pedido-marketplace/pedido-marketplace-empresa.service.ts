@@ -236,6 +236,42 @@ export class PedidoMarketplaceEmpresaService {
    * primera sede activa — a diferencia del flujo manual (best-effort en la
    * caja del validador), aquí no hay usuario con caja abierta.
    */
+  /**
+   * Sede a la que se atribuye el dinero/venta de un pedido, con el MISMO
+   * criterio en el ingreso del pago y en la venta interna del envío:
+   * 1) sede del stock del primer detalle que tenga stock (de ahí saldrá la
+   *    mercadería), 2) sede de retiro, 3) primera sede activa (orden estable
+   *    por creación — findFirst sin orderBy devolvía una sede arbitraria).
+   */
+  private async resolverSedeParaPedido(
+    empresaId: string,
+    pedidoId: string,
+    sedeRetiroId?: string | null,
+  ): Promise<string | null> {
+    const detalles = await this.prisma.pedidoMarketplaceDetalle.findMany({
+      where: { pedidoId },
+      select: { productoId: true, varianteId: true },
+    });
+    for (const d of detalles) {
+      const stock = await this.prisma.productoStock.findFirst({
+        where: {
+          empresaId,
+          productoId: d.varianteId ? null : d.productoId,
+          varianteId: d.varianteId ?? null,
+        },
+        select: { sedeId: true },
+      });
+      if (stock?.sedeId) return stock.sedeId;
+    }
+    if (sedeRetiroId) return sedeRetiroId;
+    const sede = await this.prisma.sede.findFirst({
+      where: { empresaId, isActive: true },
+      orderBy: { creadoEn: 'asc' },
+      select: { id: true },
+    });
+    return sede?.id ?? null;
+  }
+
   async confirmarPagoYapeAutomatico(
     empresaId: string,
     pedidoId: string,
@@ -272,22 +308,25 @@ export class PedidoMarketplaceEmpresaService {
     });
 
     // Ingreso a Caja Central (nunca se pierde), a nombre de un admin.
+    // SEDE = el MISMO criterio que usará la venta interna al ENVIAR (sede del
+    // stock que saldrá → sede de retiro → primera activa determinista). Antes
+    // se usaba findFirst sin orderBy (sede arbitraria): el ingreso caía en la
+    // bóveda de una sede y el reverso de una anulación salía de la bóveda de
+    // la sede de la venta → descuadre cruzado entre bóvedas (caso real:
+    // PED-00016 ingreso en Chiclayo, venta en Principal).
     try {
-      const [sede, admin] = await Promise.all([
-        this.prisma.sede.findFirst({
-          where: { empresaId, isActive: true },
-          select: { id: true },
-        }),
+      const [sedeIngresoId, admin] = await Promise.all([
+        this.resolverSedeParaPedido(empresaId, pedido.id, pedido.sedeRetiroId),
         this.prisma.empresaUsuarioRol.findFirst({
           where: { empresaId, rol: 'EMPRESA_ADMIN', isActive: true },
           select: { usuarioId: true },
         }),
       ]);
-      if (sede && admin) {
+      if (sedeIngresoId && admin) {
         await this.prisma.$transaction(async (tx) => {
           const central = await this.cajaService.getOrCreateCajaCentral(
             empresaId,
-            sede.id,
+            sedeIngresoId,
             tx,
           );
           await this.cajaService.crearMovimientoAutomatico(
@@ -576,6 +615,10 @@ export class PedidoMarketplaceEmpresaService {
         if (!sedeVentaId) {
           const sede = await tx.sede.findFirst({
             where: { empresaId, isActive: true },
+            // Orden estable: mismo fallback que el ingreso del pago (sin
+            // orderBy, findFirst devolvía una sede arbitraria y el dinero
+            // podía entrar a una bóveda distinta de la de la venta).
+            orderBy: { creadoEn: 'asc' },
             select: { id: true },
           });
           sedeVentaId = sede?.id ?? null;

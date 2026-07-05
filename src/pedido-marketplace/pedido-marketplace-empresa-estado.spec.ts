@@ -58,6 +58,11 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       movimientoStock: { create: jest.fn().mockResolvedValue({}) },
       venta: { create: jest.fn().mockResolvedValue({ id: 'venta-1' }) },
       sede: { findFirst: jest.fn().mockResolvedValue({ id: 'sede-fallback' }) },
+      pedidoMarketplaceDetalle: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ productoId: 'prod-1', varianteId: null }]),
+      },
       empresaUsuarioRol: {
         findFirst: jest.fn().mockResolvedValue({ usuarioId: 'admin-1' }),
         findMany: jest.fn().mockResolvedValue([{ usuarioId: 'admin-1' }]),
@@ -324,8 +329,9 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       expect(upd.metodoPago).toBe('YAPE');
       expect(upd.transaccionExternaId).toBe('OP-777');
 
-      // Ingreso SIEMPRE a la Caja Central, ligado al pedido.
-      expect(caja.getOrCreateCajaCentral).toHaveBeenCalledWith(EMPRESA, 'sede-fallback', prisma);
+      // Ingreso SIEMPRE a la Caja Central, ligado al pedido — a la bóveda de
+      // la SEDE DEL STOCK (mismo criterio que la venta interna del envío).
+      expect(caja.getOrCreateCajaCentral).toHaveBeenCalledWith(EMPRESA, 'sede-1', prisma);
       expect(caja.crearMovimientoAutomatico).toHaveBeenCalledWith(
         EMPRESA,
         'caja-central',
