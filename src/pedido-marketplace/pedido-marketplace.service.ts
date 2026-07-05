@@ -408,7 +408,39 @@ export class PedidoMarketplaceService {
       throw new NotFoundException('Pedido no encontrado');
     }
 
-    return pedido;
+    // ¿La empresa puede cobrar con Yape AUTOMÁTICO este pedido? Mismo gate
+    // que el cobro (feature premium YAPE_QR + integración habilitada +
+    // monto dentro del límite). El app solo muestra el botón "Pagar con
+    // Yape" si esto es true — igual que Venta Rápida; sin api-yape el
+    // comprador ve únicamente el flujo manual (subir captura del pago).
+    let yapeAutomaticoDisponible = false;
+    const estadosPagables: EstadoPedidoMarketplace[] = [
+      EstadoPedidoMarketplace.PENDIENTE_PAGO,
+      EstadoPedidoMarketplace.PAGO_ENVIADO,
+      EstadoPedidoMarketplace.PAGO_RECHAZADO,
+    ];
+    if (estadosPagables.includes(pedido.estado)) {
+      try {
+        const conFeature = await this.caracteristicaEmpresa.estaHabilitada(
+          pedido.empresaId,
+          CaracteristicaPremium.YAPE_QR,
+        );
+        if (conFeature) {
+          const cfg = await this.prisma.integracionYape.findUnique({
+            where: { empresaId: pedido.empresaId },
+            select: { habilitado: true, montoMaxPorTransaccion: true },
+          });
+          yapeAutomaticoDisponible =
+            !!cfg?.habilitado &&
+            Number(pedido.total) <= Number(cfg.montoMaxPorTransaccion);
+        }
+      } catch {
+        // Gate informativo: ante cualquier error se oculta el botón y el
+        // comprador usa el flujo manual (nunca bloquea el detalle).
+      }
+    }
+
+    return { ...pedido, yapeAutomaticoDisponible };
   }
 
   /**
