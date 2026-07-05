@@ -348,34 +348,65 @@ export class ResumenFinancieroService {
     // como "hoy" y arrastraba ventas/movs del cierre del día previo.
     const hoy = this._startOfTodayPeru();
 
-    const movimientosHoy = await this.prisma.movimientoCaja.groupBy({
-      by: ['tipo'],
-      where: {
-        empresaId,
-        ...(sedeId && { caja: { sedeId } }),
-        anulado: false,
-        fechaMovimiento: { gte: hoy },
-        // Excluir transferencias internas operativa↔central para no
-        // doble-contar (el par DEPOSITO_TESORERIA suma ambos lados).
-        categoria: { notIn: ['DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'] },
+    // Desglose CAJAS FÍSICAS (POS) vs TESORERÍA/MARKETPLACE: los cobros de
+    // pedidos marketplace y sus reversos viven en la Caja Central (y el
+    // dinero real en el banco) — NO fluyen por el cajón de un cajero.
+    // Mezclarlos bajo "caja" confundía ("¿por qué caja tiene egresos si no
+    // saqué plata del cajón?").
+    const whereBase = {
+      empresaId,
+      anulado: false,
+      fechaMovimiento: { gte: hoy },
+      // Excluir transferencias internas operativa↔central para no
+      // doble-contar (el par DEPOSITO_TESORERIA suma ambos lados).
+      categoria: {
+        notIn: ['DEPOSITO_TESORERIA', 'RETIRO_TESORERIA'] as any,
       },
-      _sum: { monto: true },
-      _count: true,
-    });
+    };
+    const [movsOperativas, movsCentral] = await Promise.all([
+      this.prisma.movimientoCaja.groupBy({
+        by: ['tipo'],
+        where: {
+          ...whereBase,
+          caja: { esCajaCentral: false, ...(sedeId && { sedeId }) },
+        },
+        _sum: { monto: true },
+      }),
+      this.prisma.movimientoCaja.groupBy({
+        by: ['tipo'],
+        where: {
+          ...whereBase,
+          caja: { esCajaCentral: true, ...(sedeId && { sedeId }) },
+        },
+        _sum: { monto: true },
+      }),
+    ]);
 
-    let ingresosHoy = 0;
-    let egresosHoy = 0;
-
-    for (const m of movimientosHoy) {
-      if (m.tipo === 'INGRESO') ingresosHoy = Number(m._sum.monto ?? 0);
-      if (m.tipo === 'EGRESO') egresosHoy = Number(m._sum.monto ?? 0);
-    }
+    const sumar = (rows: { tipo: string; _sum: { monto: any } }[]) => {
+      let ingresos = 0;
+      let egresos = 0;
+      for (const m of rows) {
+        if (m.tipo === 'INGRESO') ingresos = Number(m._sum.monto ?? 0);
+        if (m.tipo === 'EGRESO') egresos = Number(m._sum.monto ?? 0);
+      }
+      return {
+        ingresos: r2(ingresos),
+        egresos: r2(egresos),
+        flujo: r2(ingresos - egresos),
+      };
+    };
+    const operativas = sumar(movsOperativas as any);
+    const tesoreriaHoy = sumar(movsCentral as any);
 
     return {
       cajasAbiertas,
-      ingresosHoy: r2(ingresosHoy),
-      egresosHoy: r2(egresosHoy),
-      flujoHoy: r2(ingresosHoy - egresosHoy),
+      // Totales (compat): todo el dinero del día, cajas + tesorería.
+      ingresosHoy: r2(operativas.ingresos + tesoreriaHoy.ingresos),
+      egresosHoy: r2(operativas.egresos + tesoreriaHoy.egresos),
+      flujoHoy: r2(operativas.flujo + tesoreriaHoy.flujo),
+      // Desglose para la UI.
+      operativas,
+      tesoreriaHoy,
     };
   }
 
