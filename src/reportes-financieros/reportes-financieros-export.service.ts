@@ -70,11 +70,27 @@ export class ReportesFinancierosExportService {
     mes: number,
     anio: number,
     sedeId?: string,
+    fechaInicio?: string,
+    fechaFin?: string,
   ) {
-    const mm = String(mes).padStart(2, '0');
-    const ultimoDia = new Date(anio, mes, 0).getDate();
-    const desde = new Date(`${anio}-${mm}-01T00:00:00.000-05:00`);
-    const hasta = new Date(`${anio}-${mm}-${String(ultimoDia).padStart(2, '0')}T23:59:59.999-05:00`);
+    // Rango explícito (date-only = día calendario Perú completo) manda sobre
+    // mes/año; sin rango, el mes calendario Perú completo.
+    const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+    let desde: Date;
+    let hasta: Date;
+    if (fechaInicio && fechaFin) {
+      desde = DATE_ONLY.test(fechaInicio)
+        ? new Date(`${fechaInicio}T00:00:00.000-05:00`)
+        : new Date(fechaInicio);
+      hasta = DATE_ONLY.test(fechaFin)
+        ? new Date(`${fechaFin}T23:59:59.999-05:00`)
+        : new Date(fechaFin);
+    } else {
+      const mm = String(mes).padStart(2, '0');
+      const ultimoDia = new Date(anio, mes, 0).getDate();
+      desde = new Date(`${anio}-${mm}-01T00:00:00.000-05:00`);
+      hasta = new Date(`${anio}-${mm}-${String(ultimoDia).padStart(2, '0')}T23:59:59.999-05:00`);
+    }
 
     const rows = await this.prisma.comprobanteElectronico.findMany({
       where: {
@@ -184,7 +200,7 @@ export class ReportesFinancierosExportService {
     }
 
     return {
-      periodo: { mes, anio },
+      periodo: { mes, anio, desde, hasta },
       comprobantes,
       resumen: {
         cantidadEmitidos: comprobantes.length,
@@ -214,8 +230,12 @@ export class ReportesFinancierosExportService {
     anio: number,
     res: Response,
     sedeId?: string,
+    fechaInicio?: string,
+    fechaFin?: string,
   ): Promise<void> {
-    const data = await this.getRegistroVentas(empresaId, mes, anio, sedeId);
+    const data = await this.getRegistroVentas(
+      empresaId, mes, anio, sedeId, fechaInicio, fechaFin,
+    );
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Syncronize';
@@ -284,7 +304,12 @@ export class ReportesFinancierosExportService {
     resumenSheet.getRow(1).height = 25;
     const r = data.resumen;
     resumenSheet.addRows([
-      { concepto: 'Periodo', valor: `${String(mes).padStart(2, '0')}/${anio}` },
+      {
+        concepto: 'Periodo',
+        valor: fechaInicio && fechaFin
+          ? `${fechaInicio} al ${fechaFin}`
+          : `${String(mes).padStart(2, '0')}/${anio}`,
+      },
       { concepto: 'Comprobantes emitidos', valor: r.cantidadEmitidos },
       { concepto: 'Válidos', valor: r.cantidadValidos },
       { concepto: 'Anulados/Rechazados', valor: r.cantidadAnulados },

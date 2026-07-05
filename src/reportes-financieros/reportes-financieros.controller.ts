@@ -56,9 +56,13 @@ export class ReportesFinancierosController {
     @Query('mes', ParseIntPipe) mes: number,
     @Query('anio', ParseIntPipe) anio: number,
     @Query('sedeId') sedeId?: string,
+    @Query('fechaInicio') fechaInicio?: string,
+    @Query('fechaFin') fechaFin?: string,
   ) {
     this.validateMesAnio(mes, anio);
-    return this.exportService.getRegistroVentas(empresaId, mes, anio, sedeId);
+    return this.exportService.getRegistroVentas(
+      empresaId, mes, anio, sedeId, fechaInicio, fechaFin,
+    );
   }
 
   @Get('export/registro-ventas')
@@ -71,9 +75,13 @@ export class ReportesFinancierosController {
     @Query('anio', ParseIntPipe) anio: number,
     @Res() res: Response,
     @Query('sedeId') sedeId?: string,
+    @Query('fechaInicio') fechaInicio?: string,
+    @Query('fechaFin') fechaFin?: string,
   ) {
     this.validateMesAnio(mes, anio);
-    await this.exportService.exportRegistroVentas(empresaId, mes, anio, res, sedeId);
+    await this.exportService.exportRegistroVentas(
+      empresaId, mes, anio, res, sedeId, fechaInicio, fechaFin,
+    );
   }
 
   @Get('export/libro-contable')
