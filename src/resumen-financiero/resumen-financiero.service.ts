@@ -142,6 +142,17 @@ export class ResumenFinancieroService {
     const ventasCredito = ventas.filter((v) => v.esCredito).length;
     const ventasContado = ventas.length - ventasCredito;
 
+    // Desglose por CANAL (POS / ONLINE / COTIZACION): separa lo vendido por
+    // mostrador de lo que llegó por el marketplace.
+    const porCanal: Record<string, { cantidad: number; total: number }> = {};
+    for (const v of ventas) {
+      const canal = (v as any).canalVenta ?? 'POS';
+      const e = porCanal[canal] ?? { cantidad: 0, total: 0 };
+      e.cantidad += 1;
+      e.total = r2(e.total + Number(v.total));
+      porCanal[canal] = e;
+    }
+
     return {
       cantidad: ventas.length,
       totalVentas: r2(totalVentas),
@@ -149,6 +160,7 @@ export class ResumenFinancieroService {
       pendienteCobro: r2(pendienteCobro),
       ventasContado,
       ventasCredito,
+      porCanal,
     };
   }
 
