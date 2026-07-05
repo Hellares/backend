@@ -491,6 +491,18 @@ export class ProductoStockService {
       ];
     }
 
+    // Para ubicar la LÍNEA de venta correspondiente a este stock (precio de
+    // venta real + margen snapshot). OJO gotcha variante: el stock de una
+    // variante tiene productoId=NULL → se filtra por varianteId; el de un
+    // producto simple por productoId + varianteId null.
+    const stockRow = await this.prisma.productoStock.findUnique({
+      where: { id: productoStockId },
+      select: { productoId: true, varianteId: true },
+    });
+    const filtroLineaVenta = stockRow?.varianteId
+      ? { varianteId: stockRow.varianteId }
+      : { productoId: stockRow?.productoId ?? '', varianteId: null };
+
     // Pedimos `limit + 1` para detectar si hay más sin requerir un count
     // separado (más caro). Si volvieron limit+1, recortamos al límite y
     // marcamos hasMore=true. El resumen sí cuenta el total real igual.
@@ -500,16 +512,70 @@ export class ProductoStockService {
       skip: offset,
       take: limit + 1,
       include: {
-        venta: { select: { id: true, codigo: true } },
-        compra: { select: { id: true, codigo: true } },
+        // Enriquecido: vendedor/cliente/canal + la línea de venta de ESTE
+        // producto (precio de venta y margen al momento de vender).
+        venta: {
+          select: {
+            id: true,
+            codigo: true,
+            nombreCliente: true,
+            canalVenta: true,
+            vendedor: {
+              select: {
+                persona: { select: { nombres: true, apellidos: true } },
+              },
+            },
+            detalles: {
+              where: filtroLineaVenta,
+              select: {
+                precioUnitario: true,
+                cantidad: true,
+                total: true,
+                margenSnapshot: true,
+              },
+              take: 1,
+            },
+          },
+        },
+        compra: {
+          select: {
+            id: true,
+            codigo: true,
+            proveedor: { select: { nombre: true } },
+          },
+        },
         transferencia: { select: { id: true, codigo: true } },
         devolucion: { select: { id: true, codigo: true } },
       },
     });
     const hasMore = movimientosRaw.length > limit;
-    const movimientos = hasMore
+    const movimientosPage = hasMore
       ? movimientosRaw.slice(0, limit)
       : movimientosRaw;
+
+    // Usuario responsable de cada movimiento (MovimientoStock no tiene la
+    // relación mapeada en Prisma → lookup batch por página, 1 query).
+    const usuarioIds = [...new Set(movimientosPage.map((m) => m.usuarioId))];
+    const usuarios = await this.prisma.usuario.findMany({
+      where: { id: { in: usuarioIds } },
+      select: {
+        id: true,
+        email: true,
+        persona: { select: { nombres: true, apellidos: true } },
+      },
+    });
+    const nombreUsuario = new Map(
+      usuarios.map((u) => [
+        u.id,
+        u.persona
+          ? `${u.persona.nombres ?? ''} ${u.persona.apellidos ?? ''}`.trim()
+          : (u.email ?? ''),
+      ]),
+    );
+    const movimientos = movimientosPage.map((m) => ({
+      ...m,
+      usuarioNombre: nombreUsuario.get(m.usuarioId) || null,
+    }));
 
     // Resumen agregado por tipo. Usa el MISMO `where` que la lista para
     // que el resumen respete tipo/fechaDesde/fechaHasta — antes era
@@ -1867,6 +1933,10 @@ export class ProductoStockService {
       { header: 'Cant. Nueva', key: 'nueva', width: 15 },
       { header: 'Costo Unit.', key: 'costoUnit', width: 13 },
       { header: 'Valor', key: 'valor', width: 13 },
+      { header: 'P. Venta', key: 'pVenta', width: 12 },
+      { header: 'Cliente / Proveedor', key: 'tercero', width: 28 },
+      { header: 'Canal', key: 'canal', width: 14 },
+      { header: 'Usuario', key: 'usuario', width: 24 },
       { header: 'Motivo', key: 'motivo', width: 30 },
     ];
 
@@ -1877,8 +1947,14 @@ export class ProductoStockService {
       cell.alignment = headerStyle.alignment;
     });
 
+    const CANAL_LABEL: Record<string, string> = {
+      POS: 'Mostrador (POS)',
+      ONLINE: 'Marketplace',
+      COTIZACION: 'Cotización',
+    };
     for (const mov of data.movimientos) {
       const doc = mov.venta?.codigo || mov.compra?.codigo || mov.transferencia?.codigo || mov.devolucion?.codigo || mov.numeroDocumento || '';
+      const lineaVenta = mov.venta?.detalles?.[0];
       sheet.addRow({
         fecha: mov.creadoEn ? new Date(mov.creadoEn).toLocaleString('es-PE') : '',
         tipo: mov.tipo.replace(/_/g, ' '),
@@ -1894,12 +1970,25 @@ export class ProductoStockService {
             : null,
         valor:
           mov.valorMovimiento != null ? Number(mov.valorMovimiento) : null,
+        // Enriquecimiento: precio de venta de la línea, cliente/proveedor,
+        // canal y usuario responsable.
+        pVenta:
+          lineaVenta?.precioUnitario != null
+            ? Number(lineaVenta.precioUnitario)
+            : null,
+        tercero:
+          mov.venta?.nombreCliente || mov.compra?.proveedor?.nombre || '',
+        canal: mov.venta?.canalVenta
+          ? (CANAL_LABEL[mov.venta.canalVenta] ?? mov.venta.canalVenta)
+          : '',
+        usuario: mov.usuarioNombre || '',
         motivo: mov.motivo || '',
       });
     }
     // Format moneda para columnas valor
     sheet.getColumn('costoUnit').numFmt = '#,##0.00';
     sheet.getColumn('valor').numFmt = '#,##0.00';
+    sheet.getColumn('pVenta').numFmt = '#,##0.00';
 
     // Resumen sheet
     const resumenSheet = workbook.addWorksheet('Resumen');
