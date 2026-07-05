@@ -125,6 +125,8 @@ export class ReportesFinancierosExportService {
         tipoComprobante: c.tipoComprobante,
         codigoSunat:
           ReportesFinancierosExportService.CODIGO_SUNAT[c.tipoComprobante] ?? '',
+        serie: c.serie,
+        correlativo: c.correlativo,
         numero: `${c.serie}-${c.correlativo}`,
         tipoDocCliente:
           ReportesFinancierosExportService.TIPO_DOC_LABEL[c.tipoDocumento ?? ''] ??
@@ -223,7 +225,9 @@ export class ReportesFinancierosExportService {
     sheet.columns = [
       { header: 'Fecha Emisión', key: 'fecha', width: 13 },
       { header: 'Tipo (SUNAT)', key: 'tipo', width: 12 },
-      { header: 'Serie-Número', key: 'numero', width: 16 },
+      { header: 'Serie', key: 'serie', width: 8 },
+      { header: 'Número', key: 'numero', width: 12 },
+      { header: 'Estado SUNAT', key: 'sunat', width: 13 },
       { header: 'Tipo Doc.', key: 'tipoDoc', width: 10 },
       { header: 'N° Documento', key: 'numDoc', width: 14 },
       { header: 'Cliente', key: 'cliente', width: 34 },
@@ -236,7 +240,6 @@ export class ReportesFinancierosExportService {
       { header: 'Moneda', key: 'moneda', width: 9 },
       { header: 'Ref. NC/ND', key: 'ref', width: 15 },
       { header: 'Estado', key: 'estado', width: 12 },
-      { header: 'SUNAT', key: 'sunat', width: 12 },
     ];
     sheet.getRow(1).eachCell((c) => (c.style = HEADER_STYLE));
     sheet.getRow(1).height = 25;
@@ -245,7 +248,8 @@ export class ReportesFinancierosExportService {
       const row = sheet.addRow({
         fecha: c.fechaEmision.toISOString().slice(0, 10),
         tipo: `${c.codigoSunat} ${c.tipoComprobante}`,
-        numero: c.numero,
+        serie: c.serie,
+        numero: c.correlativo,
         tipoDoc: c.tipoDocCliente,
         numDoc: c.numeroDocumento,
         cliente: c.nombreCliente,
