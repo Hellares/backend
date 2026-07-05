@@ -643,6 +643,13 @@ export class PedidoMarketplaceEmpresaService {
               MetodoPagoVenta.TRANSFERENCIA);
 
           const r2 = (n: number) => Math.round(n * 100) / 100;
+          // Desglose IGV en la CABECERA con el mismo criterio que POS:
+          // subtotal = base sin IGV, impuestos = IGV, subtotal+impuestos=total.
+          // Antes se copiaba pedido.subtotal (precio CON IGV) e impuestos
+          // quedaba 0 → las ventas online no desglosaban IGV. Los precios del
+          // marketplace incluyen IGV (18%).
+          const totalVenta = Number(pedido.total);
+          const igvVenta = r2(totalVenta - totalVenta / 1.18);
           const venta = await tx.venta.create({
             data: {
               empresaId,
@@ -654,8 +661,9 @@ export class PedidoMarketplaceEmpresaService {
               emailCliente: pedido.emailComprador,
               telefonoCliente: pedido.telefonoComprador,
               direccionCliente: pedido.direccionEnvio,
-              subtotal: pedido.subtotal,
+              subtotal: r2(totalVenta - igvVenta),
               descuento: pedido.descuento,
+              impuestos: igvVenta,
               total: pedido.total,
               moneda: pedido.moneda,
               estado: esContraentrega

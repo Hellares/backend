@@ -123,7 +123,10 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       nombreCliente: 'Juan Pérez',
       estado: 'PAGADA_COMPLETA',
       metodoPago: 'YAPE',
-      subtotal: 100,
+      // Cabecera con desglose IGV (precios marketplace incluyen IGV 18%):
+      // total 100 → base 84.75 + IGV 15.25, mismo criterio que POS.
+      subtotal: 84.75,
+      impuestos: 15.25,
       total: 100,
     });
     expect(venta.detalles.create).toHaveLength(1);
