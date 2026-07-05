@@ -16,6 +16,7 @@ import {
   FuenteEgreso,
   EstadoAdelanto,
   EstadoBoletaPago,
+  OrigenAjusteBanco,
   Prisma,
 } from '@prisma/client';
 import { AbrirCajaDto } from './dto/abrir-caja.dto';
@@ -1811,6 +1812,64 @@ export class CajaService {
         tx,
       );
       for (const p of fallback.pagos) {
+        // Si el dinero de este método DIGITAL fue ruteado al banco de
+        // recaudación (pedidos marketplace: par ingreso→envío a banco al
+        // confirmar el pago), la devolución sale del BANCO: primero se
+        // traen los fondos a la bóveda (INGRESO visible en tesorería) y el
+        // saldo del banco baja con su AjusteBanco (conciliación cuadrada).
+        // Sin esta pierna, la bóveda quedaba en digital NEGATIVO y el
+        // banco inflado. EFECTIVO nunca entra aquí (vive en la bóveda).
+        if (p.metodoPago !== MetodoPagoVenta.EFECTIVO) {
+          const cuenta = await tx.cuentaRecaudacion.findFirst({
+            where: { empresaId, metodoPago: p.metodoPago },
+          });
+          if (cuenta) {
+            await tx.movimientoCaja.create({
+              data: {
+                cajaId: central.id,
+                empresaId,
+                tipo: TipoMovimientoCaja.INGRESO,
+                categoria: CategoriaMovimientoCaja.RETIRO_TESORERIA,
+                metodoPago: p.metodoPago,
+                monto: p.monto,
+                descripcion: `[DEVOLUCION <- BANCO] Fondos para reverso — ${motivo}`,
+                esManual: false,
+                registradoPorId: usuarioIdQuienAnula,
+                anulado: false,
+                metadata: {
+                  bancoId: cuenta.bancoId,
+                  devolucionDesdeBanco: true,
+                  ventaId: criterio.ventaId ?? null,
+                },
+              },
+            });
+            const banco = await tx.empresaBanco.findUnique({
+              where: { id: cuenta.bancoId },
+              select: { saldoActual: true },
+            });
+            const anterior =
+              banco?.saldoActual != null ? Number(banco.saldoActual) : 0;
+            const nuevo = Math.round((anterior - p.monto) * 100) / 100;
+            await tx.empresaBanco.update({
+              where: { id: cuenta.bancoId },
+              data: { saldoActual: nuevo },
+            });
+            await tx.ajusteBanco.create({
+              data: {
+                empresaId,
+                bancoId: cuenta.bancoId,
+                tipo: TipoMovimientoCaja.EGRESO,
+                monto: p.monto,
+                motivo: `Devolución por anulación — ${motivo}`,
+                origen: OrigenAjusteBanco.AJUSTE_MANUAL,
+                saldoAnterior: anterior,
+                saldoNuevo: nuevo,
+                usuarioId: usuarioIdQuienAnula,
+              },
+            });
+          }
+        }
+
         await tx.movimientoCaja.create({
           data: {
             cajaId: central.id,

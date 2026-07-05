@@ -344,6 +344,44 @@ export class PedidoMarketplaceEmpresaService {
             },
             tx,
           );
+
+          // Ruteo DIGITAL → BANCO (mismo patrón que el barrido del cierre):
+          // si la empresa tiene cuenta de recaudación para el método, el
+          // dinero NO se queda como "digital histórico" en la bóveda — se
+          // registra el envío al banco (visible en tesorería como par
+          // ingreso→envío) y se incrementa el saldo del banco, que es donde
+          // vive el Yape de verdad. Sin cuenta configurada, queda en la
+          // bóveda como antes.
+          const cuenta = await tx.cuentaRecaudacion.findFirst({
+            where: { empresaId, metodoPago: datos.metodo as any },
+          });
+          if (cuenta) {
+            await this.cajaService.crearMovimientoAutomatico(
+              empresaId,
+              central.id,
+              {
+                tipo: 'EGRESO' as any,
+                categoria: 'DEPOSITO_TESORERIA' as any,
+                metodoPago: datos.metodo as any,
+                monto: Number(pedido.total),
+                descripcion: `[RECAUDACION -> BANCO] Pedido marketplace ${pedido.codigo}`,
+                pedidoMarketplaceId: pedido.id,
+                registradoPorId: admin.usuarioId,
+                metadata: {
+                  automatico: true,
+                  fuente: 'webhook-yape',
+                  destino: 'BANCO',
+                  bancoId: cuenta.bancoId,
+                  pedidoCodigo: pedido.codigo,
+                },
+              },
+              tx,
+            );
+            await tx.empresaBanco.update({
+              where: { id: cuenta.bancoId },
+              data: { saldoActual: { increment: Number(pedido.total) } },
+            });
+          }
         });
       } else {
         this.logger.warn(
