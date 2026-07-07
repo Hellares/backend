@@ -46,6 +46,8 @@ export class BannerMarketplaceService {
         id: true,
         texto: true,
         colorFondo: true,
+        colorTexto: true,
+        colorBrillo: true,
         lottieFondo: { select: { url: true } },
         empresa: {
           select: {
@@ -63,6 +65,8 @@ export class BannerMarketplaceService {
       id: b.id,
       texto: b.texto,
       colorFondo: b.colorFondo,
+      colorTexto: b.colorTexto,
+      colorBrillo: b.colorBrillo,
       lottieUrl: b.lottieFondo?.url ?? null,
       empresaId: b.empresa.id,
       nombreEmpresa:
@@ -151,12 +155,16 @@ export class BannerMarketplaceService {
         empresaId,
         texto: dto.texto.trim(),
         ...(dto.colorFondo && { colorFondo: dto.colorFondo }),
+        colorTexto: dto.colorTexto ?? null,
+        colorBrillo: dto.colorBrillo ?? null,
         lottieFondoId: dto.lottieFondoId ?? null,
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
       update: {
         texto: dto.texto.trim(),
         ...(dto.colorFondo && { colorFondo: dto.colorFondo }),
+        ...(dto.colorTexto !== undefined && { colorTexto: dto.colorTexto }),
+        ...(dto.colorBrillo !== undefined && { colorBrillo: dto.colorBrillo }),
         ...(dto.lottieFondoId !== undefined && {
           lottieFondoId: dto.lottieFondoId,
         }),

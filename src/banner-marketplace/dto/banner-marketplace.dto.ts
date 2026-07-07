@@ -22,6 +22,18 @@ export class ActualizarBannerDto {
   @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'colorFondo debe ser hex #RRGGBB' })
   colorFondo?: string;
 
+  /** Color del texto; null = contraste automático según el fondo. */
+  @ApiPropertyOptional({ example: '#FFFFFF', nullable: true })
+  @IsOptional()
+  @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'colorTexto debe ser hex #RRGGBB' })
+  colorTexto?: string | null;
+
+  /** Color del brillo que recorre el texto; null = default del app. */
+  @ApiPropertyOptional({ example: '#69F0AE', nullable: true })
+  @IsOptional()
+  @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'colorBrillo debe ser hex #RRGGBB' })
+  colorBrillo?: string | null;
+
   /** id del LottieFondo del catálogo; null = sin fondo animado. */
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()

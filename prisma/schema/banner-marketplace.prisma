@@ -19,6 +19,8 @@ model BannerMarketplace {
   empresaId     String   @unique // 1 banner por empresa
   texto         String // ej. "POR COMPRAS MAYORES A S/25 UNA MICA GRATIS"
   colorFondo    String   @default("#1565C0") // hex elegido por la empresa
+  colorTexto    String? // hex; null = contraste automático según el fondo
+  colorBrillo   String? // hex de la luz que recorre el texto; null = default app
   lottieFondoId String? // fondo animado opcional (del catálogo)
   isActive      Boolean  @default(true)
   creadoEn      DateTime @default(now())
