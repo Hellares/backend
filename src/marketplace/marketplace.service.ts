@@ -199,6 +199,9 @@ export class MarketplaceService {
         select: {
           id: true, nombre: true, logo: true, subdominio: true,
           departamento: true, provincia: true, distrito: true, telefono: true,
+          direccionFiscal: true,
+          // Nombre comercial (marca que ve el cliente) — misma fuente que los tickets.
+          configuracionDocumentos: { select: { nombreComercial: true } },
         },
       },
       stocksPorSede: {
@@ -446,12 +449,15 @@ export class MarketplaceService {
         creadoEn: p.creadoEn,
         empresa: {
           id: p.empresa.id,
-          nombre: p.empresa.nombre,
+          nombre: p.empresa.configuracionDocumentos?.nombreComercial || p.empresa.nombre,
           logo: p.empresa.logo,
           subdominio: p.empresa.subdominio,
           telefono: p.empresa.telefono,
-          ubicacion: [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
-            .filter(Boolean).join(', '),
+          direccion: p.empresa.direccionFiscal ?? null,
+          // La dirección fiscal SUNAT ya incluye "DEP - PROV - DIST"; no concatenar geo encima.
+          ubicacion: p.empresa.direccionFiscal
+            || [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
+              .filter(Boolean).join(', '),
         },
       };
     });
@@ -665,7 +671,8 @@ export class MarketplaceService {
           select: {
             id: true, nombre: true, logo: true, subdominio: true, descripcion: true,
             rubro: true, departamento: true, provincia: true, distrito: true,
-            telefono: true, email: true, web: true,
+            telefono: true, email: true, web: true, direccionFiscal: true,
+            configuracionDocumentos: { select: { nombreComercial: true } },
           },
         },
         stocksPorSede: {
@@ -899,7 +906,7 @@ export class MarketplaceService {
         .map((a) => ({ nombre: a.atributo.nombre, valor: a.valor })),
       empresa: {
         id: producto.empresa.id,
-        nombre: producto.empresa.nombre,
+        nombre: producto.empresa.configuracionDocumentos?.nombreComercial || producto.empresa.nombre,
         logo: producto.empresa.logo,
         subdominio: producto.empresa.subdominio,
         descripcion: producto.empresa.descripcion,
@@ -907,8 +914,10 @@ export class MarketplaceService {
         telefono: producto.empresa.telefono,
         email: producto.empresa.email,
         web: producto.empresa.web,
-        ubicacion: [producto.empresa.distrito, producto.empresa.provincia, producto.empresa.departamento]
-          .filter(Boolean).join(', '),
+        direccion: producto.empresa.direccionFiscal ?? null,
+        ubicacion: producto.empresa.direccionFiscal
+          || [producto.empresa.distrito, producto.empresa.provincia, producto.empresa.departamento]
+            .filter(Boolean).join(', '),
       },
       sede: stock?.sede ? {
         nombre: stock.sede.nombre,
@@ -1051,6 +1060,8 @@ export class MarketplaceService {
           // SEO
           metaTitle: true,
           metaDescription: true,
+          direccionFiscal: true,
+          configuracionDocumentos: { select: { nombreComercial: true } },
           planSuscripcion: {
             select: {
               nombre: true,
@@ -1069,8 +1080,9 @@ export class MarketplaceService {
 
     // Reputación (★ promedio · N opiniones) por empresa para la card.
     const reputacionMap = await this._reputacionPorEmpresa(empresas.map((e) => e.id));
-    const data = empresas.map((e) => ({
+    const data = empresas.map(({ configuracionDocumentos, ...e }) => ({
       ...e,
+      nombre: configuracionDocumentos?.nombreComercial || e.nombre,
       reputacion: reputacionMap.get(e.id) ?? { promedio: 0, totalOpiniones: 0 },
     }));
 
@@ -1132,6 +1144,8 @@ export class MarketplaceService {
         metaTitle: true,
         metaDescription: true,
         keywords: true,
+        direccionFiscal: true,
+        configuracionDocumentos: { select: { nombreComercial: true } },
         fechaFinWebGratuita: true,
         planSuscripcion: {
           select: {
@@ -1216,7 +1230,12 @@ export class MarketplaceService {
       }
     }
 
-    return { ...empresa, reputacion };
+    const { configuracionDocumentos, ...empresaData } = empresa;
+    return {
+      ...empresaData,
+      nombre: configuracionDocumentos?.nombreComercial || empresa.nombre,
+      reputacion,
+    };
   }
 
   /**

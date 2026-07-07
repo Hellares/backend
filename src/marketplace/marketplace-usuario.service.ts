@@ -52,7 +52,8 @@ export class MarketplaceUsuarioService {
               visibleMarketplace: true,
               empresa: {
                 select: { id: true, nombre: true, logo: true, subdominio: true, telefono: true,
-                  departamento: true, provincia: true, distrito: true },
+                  departamento: true, provincia: true, distrito: true, direccionFiscal: true,
+                  configuracionDocumentos: { select: { nombreComercial: true } } },
               },
               stocksPorSede: {
                 where: { precioConfigurado: true },
@@ -99,12 +100,14 @@ export class MarketplaceUsuarioService {
           imagen: imagenMap.get(f.productoId) ?? null,
           empresa: {
             id: f.producto.empresa.id,
-            nombre: f.producto.empresa.nombre,
+            nombre: f.producto.empresa.configuracionDocumentos?.nombreComercial || f.producto.empresa.nombre,
             logo: f.producto.empresa.logo,
             subdominio: f.producto.empresa.subdominio,
             telefono: f.producto.empresa.telefono,
-            ubicacion: [f.producto.empresa.distrito, f.producto.empresa.provincia, f.producto.empresa.departamento]
-              .filter(Boolean).join(', '),
+            direccion: f.producto.empresa.direccionFiscal ?? null,
+            ubicacion: f.producto.empresa.direccionFiscal
+              || [f.producto.empresa.distrito, f.producto.empresa.provincia, f.producto.empresa.departamento]
+                .filter(Boolean).join(', '),
           },
           favoritoDesde: f.creadoEn,
         };
@@ -171,7 +174,8 @@ export class MarketplaceUsuarioService {
             visibleMarketplace: true,
             empresa: {
               select: { id: true, nombre: true, logo: true, subdominio: true, telefono: true,
-                departamento: true, provincia: true, distrito: true },
+                departamento: true, provincia: true, distrito: true, direccionFiscal: true,
+                configuracionDocumentos: { select: { nombreComercial: true } } },
             },
             stocksPorSede: {
               where: { precioConfigurado: true },
@@ -214,12 +218,14 @@ export class MarketplaceUsuarioService {
           imagen: imagenMap.get(v.productoId) ?? null,
           empresa: {
             id: v.producto.empresa.id,
-            nombre: v.producto.empresa.nombre,
+            nombre: v.producto.empresa.configuracionDocumentos?.nombreComercial || v.producto.empresa.nombre,
             logo: v.producto.empresa.logo,
             subdominio: v.producto.empresa.subdominio,
             telefono: v.producto.empresa.telefono,
-            ubicacion: [v.producto.empresa.distrito, v.producto.empresa.provincia, v.producto.empresa.departamento]
-              .filter(Boolean).join(', '),
+            direccion: v.producto.empresa.direccionFiscal ?? null,
+            ubicacion: v.producto.empresa.direccionFiscal
+              || [v.producto.empresa.distrito, v.producto.empresa.provincia, v.producto.empresa.departamento]
+                .filter(Boolean).join(', '),
           },
           vistoEn: v.vistoEn,
         };
