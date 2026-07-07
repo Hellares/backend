@@ -5,6 +5,18 @@ import { PrismaService } from '../prisma/prisma.service';
 export class MarketplaceUsuarioService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Ubicación de card: SIEMPRE la sede principal; fallback a geografía de la empresa. */
+  private _ubicacionSedePrincipal(empresa: {
+    distrito?: string | null; provincia?: string | null; departamento?: string | null;
+    sedes?: { direccion?: string | null; distrito?: string | null; provincia?: string | null; departamento?: string | null }[];
+  }): string {
+    const sede = empresa.sedes?.[0];
+    if (sede) {
+      return [sede.direccion, sede.distrito, sede.provincia].filter(Boolean).join(', ');
+    }
+    return [empresa.distrito, empresa.provincia, empresa.departamento].filter(Boolean).join(', ');
+  }
+
   // ─── Favoritos ───
 
   async toggleFavorito(usuarioId: string, productoId: string) {
@@ -52,8 +64,14 @@ export class MarketplaceUsuarioService {
               visibleMarketplace: true,
               empresa: {
                 select: { id: true, nombre: true, logo: true, subdominio: true, telefono: true,
-                  departamento: true, provincia: true, distrito: true, direccionFiscal: true,
-                  configuracionDocumentos: { select: { nombreComercial: true } } },
+                  departamento: true, provincia: true, distrito: true,
+                  configuracionDocumentos: { select: { nombreComercial: true } },
+                  sedes: {
+                    where: { isActive: true, deletedAt: null },
+                    orderBy: { esPrincipal: 'desc' as const },
+                    take: 1,
+                    select: { direccion: true, distrito: true, provincia: true, departamento: true },
+                  } },
               },
               stocksPorSede: {
                 where: { precioConfigurado: true },
@@ -104,10 +122,8 @@ export class MarketplaceUsuarioService {
             logo: f.producto.empresa.logo,
             subdominio: f.producto.empresa.subdominio,
             telefono: f.producto.empresa.telefono,
-            direccion: f.producto.empresa.direccionFiscal ?? null,
-            ubicacion: f.producto.empresa.direccionFiscal
-              || [f.producto.empresa.distrito, f.producto.empresa.provincia, f.producto.empresa.departamento]
-                .filter(Boolean).join(', '),
+            direccion: f.producto.empresa.sedes?.[0]?.direccion ?? null,
+            ubicacion: this._ubicacionSedePrincipal(f.producto.empresa),
           },
           favoritoDesde: f.creadoEn,
         };
@@ -174,8 +190,14 @@ export class MarketplaceUsuarioService {
             visibleMarketplace: true,
             empresa: {
               select: { id: true, nombre: true, logo: true, subdominio: true, telefono: true,
-                departamento: true, provincia: true, distrito: true, direccionFiscal: true,
-                configuracionDocumentos: { select: { nombreComercial: true } } },
+                departamento: true, provincia: true, distrito: true,
+                configuracionDocumentos: { select: { nombreComercial: true } },
+                sedes: {
+                  where: { isActive: true, deletedAt: null },
+                  orderBy: { esPrincipal: 'desc' as const },
+                  take: 1,
+                  select: { direccion: true, distrito: true, provincia: true, departamento: true },
+                } },
             },
             stocksPorSede: {
               where: { precioConfigurado: true },
@@ -222,10 +244,8 @@ export class MarketplaceUsuarioService {
             logo: v.producto.empresa.logo,
             subdominio: v.producto.empresa.subdominio,
             telefono: v.producto.empresa.telefono,
-            direccion: v.producto.empresa.direccionFiscal ?? null,
-            ubicacion: v.producto.empresa.direccionFiscal
-              || [v.producto.empresa.distrito, v.producto.empresa.provincia, v.producto.empresa.departamento]
-                .filter(Boolean).join(', '),
+            direccion: v.producto.empresa.sedes?.[0]?.direccion ?? null,
+            ubicacion: this._ubicacionSedePrincipal(v.producto.empresa),
           },
           vistoEn: v.vistoEn,
         };

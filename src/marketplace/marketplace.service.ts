@@ -182,6 +182,22 @@ export class MarketplaceService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  /**
+   * Ubicación que ve el cliente en la card: SIEMPRE la de la sede principal
+   * (dirección, distrito, provincia); si la empresa no tiene sedes, cae a la
+   * geografía de la empresa.
+   */
+  private _ubicacionSedePrincipal(empresa: {
+    distrito?: string | null; provincia?: string | null; departamento?: string | null;
+    sedes?: { direccion?: string | null; distrito?: string | null; provincia?: string | null; departamento?: string | null }[];
+  }): string {
+    const sede = empresa.sedes?.[0];
+    if (sede) {
+      return [sede.direccion, sede.distrito, sede.provincia].filter(Boolean).join(', ');
+    }
+    return [empresa.distrito, empresa.provincia, empresa.departamento].filter(Boolean).join(', ');
+  }
+
   /** Include estándar para mapear un producto al shape de card del marketplace. */
   private get _includeMarketplace(): Prisma.ProductoInclude {
     return {
@@ -199,9 +215,15 @@ export class MarketplaceService {
         select: {
           id: true, nombre: true, logo: true, subdominio: true,
           departamento: true, provincia: true, distrito: true, telefono: true,
-          direccionFiscal: true,
           // Nombre comercial (marca que ve el cliente) — misma fuente que los tickets.
           configuracionDocumentos: { select: { nombreComercial: true } },
+          // Dirección de la SEDE PRINCIPAL: es la que se muestra en la card.
+          sedes: {
+            where: { isActive: true, deletedAt: null },
+            orderBy: { esPrincipal: 'desc' as const },
+            take: 1,
+            select: { direccion: true, distrito: true, provincia: true, departamento: true },
+          },
         },
       },
       stocksPorSede: {
@@ -453,11 +475,8 @@ export class MarketplaceService {
           logo: p.empresa.logo,
           subdominio: p.empresa.subdominio,
           telefono: p.empresa.telefono,
-          direccion: p.empresa.direccionFiscal ?? null,
-          // La dirección fiscal SUNAT ya incluye "DEP - PROV - DIST"; no concatenar geo encima.
-          ubicacion: p.empresa.direccionFiscal
-            || [p.empresa.distrito, p.empresa.provincia, p.empresa.departamento]
-              .filter(Boolean).join(', '),
+          direccion: p.empresa.sedes?.[0]?.direccion ?? null,
+          ubicacion: this._ubicacionSedePrincipal(p.empresa),
         },
       };
     });
@@ -671,8 +690,14 @@ export class MarketplaceService {
           select: {
             id: true, nombre: true, logo: true, subdominio: true, descripcion: true,
             rubro: true, departamento: true, provincia: true, distrito: true,
-            telefono: true, email: true, web: true, direccionFiscal: true,
+            telefono: true, email: true, web: true,
             configuracionDocumentos: { select: { nombreComercial: true } },
+            sedes: {
+              where: { isActive: true, deletedAt: null },
+              orderBy: { esPrincipal: 'desc' as const },
+              take: 1,
+              select: { direccion: true, distrito: true, provincia: true, departamento: true },
+            },
           },
         },
         stocksPorSede: {
@@ -914,10 +939,8 @@ export class MarketplaceService {
         telefono: producto.empresa.telefono,
         email: producto.empresa.email,
         web: producto.empresa.web,
-        direccion: producto.empresa.direccionFiscal ?? null,
-        ubicacion: producto.empresa.direccionFiscal
-          || [producto.empresa.distrito, producto.empresa.provincia, producto.empresa.departamento]
-            .filter(Boolean).join(', '),
+        direccion: producto.empresa.sedes?.[0]?.direccion ?? null,
+        ubicacion: this._ubicacionSedePrincipal(producto.empresa),
       },
       sede: stock?.sede ? {
         nombre: stock.sede.nombre,
@@ -1060,7 +1083,6 @@ export class MarketplaceService {
           // SEO
           metaTitle: true,
           metaDescription: true,
-          direccionFiscal: true,
           configuracionDocumentos: { select: { nombreComercial: true } },
           planSuscripcion: {
             select: {
@@ -1144,7 +1166,6 @@ export class MarketplaceService {
         metaTitle: true,
         metaDescription: true,
         keywords: true,
-        direccionFiscal: true,
         configuracionDocumentos: { select: { nombreComercial: true } },
         fechaFinWebGratuita: true,
         planSuscripcion: {
