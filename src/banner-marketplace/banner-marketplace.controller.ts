@@ -22,6 +22,7 @@ import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 import {
   ActualizarBannerDto,
   ActualizarLottieFondoDto,
+  AvisoPlataformaDto,
   CrearLottieFondoDto,
 } from './dto/banner-marketplace.dto';
 
@@ -85,6 +86,39 @@ export class EmpresaBannerController {
     @CurrentUser() user: any,
   ) {
     return this.service.upsertBanner(id, user.sub, dto);
+  }
+}
+
+/** Avisos del dueño de la plataforma en el slider (solo SUPER ADMIN). */
+@ApiTags('Admin')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, SuperAdminGuard)
+@Controller('admin/avisos-marketplace')
+export class AdminAvisoPlataformaController {
+  constructor(private readonly service: BannerMarketplaceService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Listar avisos de plataforma (todos)' })
+  async listar() {
+    return this.service.adminListarAvisos();
+  }
+
+  @Post()
+  @ApiOperation({ summary: 'Crear aviso (festividad / promoción del app)' })
+  async crear(@Body() dto: AvisoPlataformaDto) {
+    return this.service.adminCrearAviso(dto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Editar aviso' })
+  async actualizar(@Param('id') id: string, @Body() dto: AvisoPlataformaDto) {
+    return this.service.adminActualizarAviso(id, dto);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Eliminar aviso' })
+  async eliminar(@Param('id') id: string) {
+    return this.service.adminEliminarAviso(id);
   }
 }
 

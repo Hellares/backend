@@ -9,6 +9,7 @@ import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracter
 import {
   ActualizarBannerDto,
   ActualizarLottieFondoDto,
+  AvisoPlataformaDto,
   CrearLottieFondoDto,
 } from './dto/banner-marketplace.dto';
 
@@ -26,6 +27,28 @@ export class BannerMarketplaceService {
 
   /** Banners visibles al público (slider del home del marketplace). */
   async bannersPublicos() {
+    const now = new Date();
+    // Avisos del dueño de la plataforma vigentes (van PRIMERO, sin shuffle).
+    const avisos = await this.prisma.bannerPlataforma.findMany({
+      where: {
+        isActive: true,
+        OR: [{ vigenciaDesde: null }, { vigenciaDesde: { lte: now } }],
+        AND: [{ OR: [{ vigenciaHasta: null }, { vigenciaHasta: { gt: now } }] }],
+      },
+      orderBy: [{ orden: 'asc' }, { creadoEn: 'asc' }],
+      select: {
+        id: true,
+        titulo: true,
+        texto: true,
+        colorFondo: true,
+        colorTexto: true,
+        colorBrillo: true,
+        logoUrl: true,
+        link: true,
+        lottieFondo: { select: { url: true, config: true } },
+      },
+    });
+
     const banners = await this.prisma.bannerMarketplace.findMany({
       where: {
         isActive: true,
@@ -81,7 +104,24 @@ export class BannerMarketplaceService {
       const j = Math.floor(Math.random() * (i + 1));
       [data[i], data[j]] = [data[j], data[i]];
     }
-    return data;
+
+    // Avisos de plataforma primero, con el mismo shape que los de empresa.
+    const avisosData = avisos.map((a) => ({
+      id: a.id,
+      texto: a.texto,
+      colorFondo: a.colorFondo,
+      colorTexto: a.colorTexto,
+      colorBrillo: a.colorBrillo,
+      lottieUrl: a.lottieFondo?.url ?? null,
+      lottieConfig: a.lottieFondo?.config ?? null,
+      empresaId: null as string | null,
+      nombreEmpresa: a.titulo || 'Syncronize',
+      logo: a.logoUrl,
+      subdominio: null as string | null,
+      link: a.link,
+    }));
+
+    return [...avisosData, ...data];
   }
 
   /** Día calendario actual en zona Lima (UTC-5, sin DST) como Date UTC-00:00. */
@@ -227,6 +267,52 @@ export class BannerMarketplaceService {
         lottieFondo: { select: { id: true, nombre: true, url: true, config: true } },
       },
     });
+  }
+
+  // ===========================================================================
+  // Avisos de plataforma (solo super admin — banners del dueño del app)
+  // ===========================================================================
+
+  async adminListarAvisos() {
+    return this.prisma.bannerPlataforma.findMany({
+      orderBy: [{ orden: 'asc' }, { creadoEn: 'desc' }],
+      include: {
+        lottieFondo: { select: { id: true, nombre: true, url: true, config: true } },
+      },
+    });
+  }
+
+  private _datosAviso(dto: AvisoPlataformaDto) {
+    return {
+      texto: dto.texto.trim(),
+      titulo: dto.titulo?.trim() || null,
+      ...(dto.colorFondo && { colorFondo: dto.colorFondo }),
+      colorTexto: dto.colorTexto ?? null,
+      colorBrillo: dto.colorBrillo ?? null,
+      lottieFondoId: dto.lottieFondoId ?? null,
+      logoUrl: dto.logoUrl?.trim() || null,
+      link: dto.link?.trim() || null,
+      vigenciaDesde: dto.vigenciaDesde ? new Date(dto.vigenciaDesde) : null,
+      vigenciaHasta: dto.vigenciaHasta ? new Date(dto.vigenciaHasta) : null,
+      ...(dto.orden !== undefined && { orden: dto.orden }),
+      ...(dto.isActive !== undefined && { isActive: dto.isActive }),
+    };
+  }
+
+  async adminCrearAviso(dto: AvisoPlataformaDto) {
+    return this.prisma.bannerPlataforma.create({ data: this._datosAviso(dto) });
+  }
+
+  async adminActualizarAviso(id: string, dto: AvisoPlataformaDto) {
+    return this.prisma.bannerPlataforma.update({
+      where: { id },
+      data: this._datosAviso(dto),
+    });
+  }
+
+  async adminEliminarAviso(id: string) {
+    await this.prisma.bannerPlataforma.delete({ where: { id } });
+    return { ok: true };
   }
 
   // ===========================================================================

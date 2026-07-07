@@ -12,7 +12,33 @@ model LottieFondo {
   orden    Int      @default(0)
   creadoEn DateTime @default(now())
 
-  banners BannerMarketplace[]
+  banners           BannerMarketplace[]
+  avisosPlataforma  BannerPlataforma[]
+}
+
+/// Avisos del DUEÑO de la plataforma en el slider del home del marketplace
+/// (festividades, promoción del propio app). Sin gating por empresa; con
+/// vigencia programada (ej. banner de Navidad del 20 al 26 de diciembre).
+model BannerPlataforma {
+  id            String    @id @default(cuid())
+  titulo        String? // línea inferior (rol de "nombre de empresa"); null = "Syncronize"
+  texto         String // el aviso, ej. "¡FELIZ NAVIDAD! ENVÍOS GRATIS TODA LA SEMANA"
+  colorFondo    String    @default("#C62828")
+  colorTexto    String? // null = contraste automático
+  colorBrillo   String? // null = default del app
+  lottieFondoId String? // fondo animado del catálogo
+  logoUrl       String? // icono opcional (null = ícono del app en el card)
+  link          String? // al tocar: ruta interna ("/ofertas") o URL https; null = sin acción
+  vigenciaDesde DateTime? // null = desde ya
+  vigenciaHasta DateTime? // null = sin vencimiento
+  isActive      Boolean   @default(true)
+  orden         Int       @default(0)
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  lottieFondo LottieFondo? @relation(fields: [lottieFondoId], references: [id], onDelete: SetNull)
+
+  @@index([isActive])
 }
 
 /// Banner promocional de empresa en el home del marketplace (slider 60px,

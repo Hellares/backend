@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteristica-empresa.module';
 import { BannerMarketplaceService } from './banner-marketplace.service';
 import {
+  AdminAvisoPlataformaController,
   AdminLottieFondoController,
   EmpresaBannerController,
   MarketplaceBannerPublicController,
@@ -14,6 +15,7 @@ import {
   controllers: [
     MarketplaceBannerPublicController,
     EmpresaBannerController,
+    AdminAvisoPlataformaController,
     AdminLottieFondoController,
   ],
   providers: [BannerMarketplaceService],
