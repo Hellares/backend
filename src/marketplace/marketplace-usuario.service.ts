@@ -11,10 +11,18 @@ export class MarketplaceUsuarioService {
     sedes?: { direccion?: string | null; distrito?: string | null; provincia?: string | null; departamento?: string | null }[];
   }): string {
     const sede = empresa.sedes?.[0];
-    if (sede) {
-      return [sede.direccion, sede.distrito, sede.provincia].filter(Boolean).join(', ');
+    const base = sede
+      ? [sede.direccion, sede.distrito, sede.provincia]
+      : [empresa.distrito, empresa.provincia, empresa.departamento];
+    // La dirección de sede suele incluir ya distrito/provincia en el texto — no repetirlos.
+    const parts: string[] = [];
+    for (const p of base) {
+      if (!p?.trim()) continue;
+      const low = p.trim().toLowerCase();
+      if (parts.some((x) => x.toLowerCase().includes(low))) continue;
+      parts.push(p.trim());
     }
-    return [empresa.distrito, empresa.provincia, empresa.departamento].filter(Boolean).join(', ');
+    return parts.join(', ');
   }
 
   // ─── Favoritos ───
