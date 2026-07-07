@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -41,6 +42,20 @@ export class MarketplaceBannerPublicController {
   @ApiOperation({ summary: 'Catálogo de fondos Lottie activos' })
   async getLottieFondos() {
     return this.service.lottieFondos();
+  }
+
+  @Post('banners/:id/impresion')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Registrar impresión del banner (métricas)' })
+  async registrarImpresion(@Param('id') id: string) {
+    return this.service.registrarEvento(id, 'IMPRESION');
+  }
+
+  @Post('banners/:id/tap')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Registrar tap del banner (métricas)' })
+  async registrarTap(@Param('id') id: string) {
+    return this.service.registrarEvento(id, 'TAP');
   }
 }
 

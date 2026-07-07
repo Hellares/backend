@@ -84,6 +84,56 @@ export class BannerMarketplaceService {
     return data;
   }
 
+  /** Día calendario actual en zona Lima (UTC-5, sin DST) como Date UTC-00:00. */
+  private _hoyLima(): Date {
+    const lima = new Date(Date.now() - 5 * 3600 * 1000);
+    return new Date(Date.UTC(
+      lima.getUTCFullYear(), lima.getUTCMonth(), lima.getUTCDate(),
+    ));
+  }
+
+  /**
+   * Registra una impresión o tap del banner (público, fire-and-forget desde
+   * el app). Nunca lanza: las métricas jamás deben romper el marketplace.
+   */
+  async registrarEvento(bannerId: string, tipo: 'IMPRESION' | 'TAP') {
+    try {
+      const fecha = this._hoyLima();
+      await this.prisma.bannerMetricaDiaria.upsert({
+        where: { bannerId_fecha: { bannerId, fecha } },
+        create: {
+          bannerId,
+          fecha,
+          impresiones: tipo === 'IMPRESION' ? 1 : 0,
+          taps: tipo === 'TAP' ? 1 : 0,
+        },
+        update: tipo === 'IMPRESION'
+          ? { impresiones: { increment: 1 } }
+          : { taps: { increment: 1 } },
+      });
+      return { ok: true };
+    } catch {
+      // bannerId inexistente (FK) o carrera del upsert: se ignora.
+      return { ok: false };
+    }
+  }
+
+  /** Suma de métricas del banner en el mes calendario actual (zona Lima). */
+  private async _metricasMes(bannerId: string) {
+    const hoy = this._hoyLima();
+    const inicioMes = new Date(Date.UTC(
+      hoy.getUTCFullYear(), hoy.getUTCMonth(), 1,
+    ));
+    const agg = await this.prisma.bannerMetricaDiaria.aggregate({
+      where: { bannerId, fecha: { gte: inicioMes } },
+      _sum: { impresiones: true, taps: true },
+    });
+    return {
+      impresiones: agg._sum.impresiones ?? 0,
+      taps: agg._sum.taps ?? 0,
+    };
+  }
+
   /** Catálogo de fondos Lottie activos (selector en la config de la empresa). */
   async lottieFondos() {
     return this.prisma.lottieFondo.findMany({
@@ -127,6 +177,8 @@ export class BannerMarketplaceService {
       nombreEmpresa:
         empresa?.configuracionDocumentos?.nombreComercial || empresa?.nombre || '',
       logo: empresa?.logo ?? null,
+      // Publicidad: rendimiento del mes calendario actual (zona Lima).
+      metricasMes: banner ? await this._metricasMes(banner.id) : null,
     };
   }
 

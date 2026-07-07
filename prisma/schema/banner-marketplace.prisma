@@ -30,8 +30,24 @@ model BannerMarketplace {
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
-  empresa     Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  lottieFondo LottieFondo? @relation(fields: [lottieFondoId], references: [id], onDelete: SetNull)
+  empresa     Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  lottieFondo LottieFondo?          @relation(fields: [lottieFondoId], references: [id], onDelete: SetNull)
+  metricas    BannerMetricaDiaria[]
 
   @@index([isActive])
+}
+
+/// Métricas diarias del banner (impresiones y taps) — la base para vender el
+/// espacio publicitario: "tu banner se mostró X veces y recibió Y taps".
+/// Un row por (banner, día zona Lima); se incrementa vía endpoints públicos.
+model BannerMetricaDiaria {
+  id          String   @id @default(cuid())
+  bannerId    String
+  fecha       DateTime @db.Date // día calendario en zona Lima (UTC-5)
+  impresiones Int      @default(0)
+  taps        Int      @default(0)
+
+  banner BannerMarketplace @relation(fields: [bannerId], references: [id], onDelete: Cascade)
+
+  @@unique([bannerId, fecha])
 }
