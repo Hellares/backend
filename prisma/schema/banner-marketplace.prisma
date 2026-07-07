@@ -3,7 +3,11 @@
 model LottieFondo {
   id       String   @id @default(cuid())
   nombre   String // ej. "Rayito", "Luz", "Confeti"
-  url      String // .json Lottie público (Contabo/CDN)
+  url      String // .json/.lottie público (Contabo/CDN) o asset local del app
+  /// Presentación en el banner: {fit: "cover"|"contain", alignment:
+  /// "centerLeft"|"center"|"centerRight", widthFactor: 0-1, opacity: 0-1}.
+  /// null = cover a pantalla completa. Editable sin APK (PATCH admin).
+  config   Json?
   isActive Boolean  @default(true)
   orden    Int      @default(0)
   creadoEn DateTime @default(now())

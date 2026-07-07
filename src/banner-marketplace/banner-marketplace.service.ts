@@ -3,7 +3,7 @@ import {
   ForbiddenException,
   Injectable,
 } from '@nestjs/common';
-import { CaracteristicaPremium, Rol } from '@prisma/client';
+import { CaracteristicaPremium, Prisma, Rol } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
 import {
@@ -48,7 +48,7 @@ export class BannerMarketplaceService {
         colorFondo: true,
         colorTexto: true,
         colorBrillo: true,
-        lottieFondo: { select: { url: true } },
+        lottieFondo: { select: { url: true, config: true } },
         empresa: {
           select: {
             id: true,
@@ -68,6 +68,7 @@ export class BannerMarketplaceService {
       colorTexto: b.colorTexto,
       colorBrillo: b.colorBrillo,
       lottieUrl: b.lottieFondo?.url ?? null,
+      lottieConfig: b.lottieFondo?.config ?? null,
       empresaId: b.empresa.id,
       nombreEmpresa:
         b.empresa.configuracionDocumentos?.nombreComercial || b.empresa.nombre,
@@ -88,7 +89,7 @@ export class BannerMarketplaceService {
     return this.prisma.lottieFondo.findMany({
       where: { isActive: true },
       orderBy: [{ orden: 'asc' }, { creadoEn: 'asc' }],
-      select: { id: true, nombre: true, url: true },
+      select: { id: true, nombre: true, url: true, config: true },
     });
   }
 
@@ -107,7 +108,7 @@ export class BannerMarketplaceService {
       this.prisma.bannerMarketplace.findUnique({
         where: { empresaId },
         include: {
-          lottieFondo: { select: { id: true, nombre: true, url: true } },
+          lottieFondo: { select: { id: true, nombre: true, url: true, config: true } },
         },
       }),
       this.prisma.empresa.findUnique({
@@ -171,7 +172,7 @@ export class BannerMarketplaceService {
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
       include: {
-        lottieFondo: { select: { id: true, nombre: true, url: true } },
+        lottieFondo: { select: { id: true, nombre: true, url: true, config: true } },
       },
     });
   }
@@ -192,6 +193,9 @@ export class BannerMarketplaceService {
         nombre: dto.nombre.trim(),
         url: dto.url.trim(),
         ...(dto.orden !== undefined && { orden: dto.orden }),
+        ...(dto.config != null && {
+          config: dto.config as Prisma.InputJsonValue,
+        }),
       },
     });
   }
@@ -203,6 +207,12 @@ export class BannerMarketplaceService {
         ...(dto.nombre !== undefined && { nombre: dto.nombre.trim() }),
         ...(dto.url !== undefined && { url: dto.url.trim() }),
         ...(dto.orden !== undefined && { orden: dto.orden }),
+        ...(dto.config !== undefined && {
+          config:
+            dto.config === null
+              ? Prisma.DbNull
+              : (dto.config as Prisma.InputJsonValue),
+        }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
     });

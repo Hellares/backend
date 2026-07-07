@@ -2,6 +2,7 @@ import {
   IsBoolean,
   IsInt,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
@@ -63,6 +64,12 @@ export class CrearLottieFondoDto {
   @IsOptional()
   @IsInt()
   orden?: number;
+
+  /** Presentación: {fit, alignment, widthFactor, opacity}. null = cover full. */
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsObject()
+  config?: Record<string, unknown> | null;
 }
 
 /** Edición de un fondo Lottie del catálogo (solo super admin). */
@@ -84,6 +91,12 @@ export class ActualizarLottieFondoDto {
   @IsOptional()
   @IsInt()
   orden?: number;
+
+  /** Presentación: {fit, alignment, widthFactor, opacity}. null = cover full. */
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsObject()
+  config?: Record<string, unknown> | null;
 
   @ApiPropertyOptional()
   @IsOptional()
