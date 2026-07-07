@@ -70,6 +70,12 @@ export class ConfiguracionDocumentosService {
         ...(dto.textoPiePagina !== undefined && {
           textoPiePagina: dto.textoPiePagina,
         }),
+        ...(dto.textoPieVenta !== undefined && {
+          textoPieVenta: dto.textoPieVenta,
+        }),
+        ...(dto.textoPieServicio !== undefined && {
+          textoPieServicio: dto.textoPieServicio,
+        }),
         ...(dto.mostrarPaginacion !== undefined && {
           mostrarPaginacion: dto.mostrarPaginacion,
         }),

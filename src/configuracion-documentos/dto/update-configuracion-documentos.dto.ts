@@ -59,6 +59,24 @@ export class UpdateConfiguracionDocumentosDto {
   @MaxLength(500)
   textoPiePagina?: string;
 
+  @ApiPropertyOptional({
+    description: 'Pie SOLO para tickets de VENTA (null = usa textoPiePagina)',
+    nullable: true,
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(500)
+  textoPieVenta?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Términos SOLO para SERVICIOS (null = usa textoPiePagina)',
+    nullable: true,
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(500)
+  textoPieServicio?: string | null;
+
   @ApiPropertyOptional({ description: 'Mostrar paginacion en el pie' })
   @IsBoolean()
   @IsOptional()

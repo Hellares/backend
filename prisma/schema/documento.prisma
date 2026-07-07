@@ -32,6 +32,12 @@ model ConfiguracionDocumentos {
 
   // Pie de pagina
   textoPiePagina    String  @default("Gracias por su preferencia")
+  /// Texto del pie SOLO para tickets de VENTA (ej. política de devoluciones);
+  /// null = usa textoPiePagina.
+  textoPieVenta     String?
+  /// Términos al pie SOLO para tickets/documentos de SERVICIO;
+  /// null = usa textoPiePagina.
+  textoPieServicio  String?
   mostrarPaginacion Boolean @default(true)
 
   creadoEn      DateTime @default(now())
