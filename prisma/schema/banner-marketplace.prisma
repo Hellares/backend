@@ -1,0 +1,31 @@
+/// Catálogo de fondos animados (Lottie) para el banner del marketplace.
+/// Los carga la PLATAFORMA (super admin); la empresa solo elige uno.
+model LottieFondo {
+  id       String   @id @default(cuid())
+  nombre   String // ej. "Rayito", "Luz", "Confeti"
+  url      String // .json Lottie público (Contabo/CDN)
+  isActive Boolean  @default(true)
+  orden    Int      @default(0)
+  creadoEn DateTime @default(now())
+
+  banners BannerMarketplace[]
+}
+
+/// Banner promocional de empresa en el home del marketplace (slider 60px,
+/// entre categorías y ofertas). Visible al público SOLO si la empresa tiene
+/// la característica premium BANNER_MARKETPLACE vigente (gate runtime, no FK).
+model BannerMarketplace {
+  id            String   @id @default(cuid())
+  empresaId     String   @unique // 1 banner por empresa
+  texto         String // ej. "POR COMPRAS MAYORES A S/25 UNA MICA GRATIS"
+  colorFondo    String   @default("#1565C0") // hex elegido por la empresa
+  lottieFondoId String? // fondo animado opcional (del catálogo)
+  isActive      Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa     Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  lottieFondo LottieFondo? @relation(fields: [lottieFondoId], references: [id], onDelete: SetNull)
+
+  @@index([isActive])
+}

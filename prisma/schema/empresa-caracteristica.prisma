@@ -26,6 +26,7 @@ model EmpresaCaracteristica {
 
 enum CaracteristicaPremium {
   YAPE_QR // Cobro Yape/Plin validado por api-yape + QR en la hoja de cobro
+  BANNER_MARKETPLACE // Banner promocional en el home del marketplace (slider)
 }
 
 enum OrigenCaracteristica {
