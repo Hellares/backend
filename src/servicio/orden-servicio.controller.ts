@@ -11,6 +11,7 @@ import {
   UseGuards,
   Headers,
   BadRequestException,
+  GoneException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -36,7 +37,6 @@ import { TransitionEstadoDto } from './dto/transition-estado.dto';
 import { QueryOrdenServicioDto } from './dto/query-orden-servicio.dto';
 import { CreateServicioComponenteDto } from './dto/create-servicio-componente.dto';
 import { UpdateServicioComponenteDto } from './dto/update-servicio-componente.dto';
-import { CobrarOrdenDto } from './dto/cobrar-orden.dto';
 
 @ApiTags('Órdenes de Servicio')
 @Controller('ordenes-servicio')
@@ -322,18 +322,18 @@ export class OrdenServicioController {
     return this.servicioComponenteService.remove(empresaId, componenteId);
   }
 
+  /**
+   * RETIRADO (410): el cobro directo generaba comprobante sin registrar caja
+   * ni enviar a SUNAT (y sin comprobante si la orden no tenía sede). El cobro
+   * de órdenes vive en el pipeline de Venta Rápida (detalle.ordenServicioId).
+   */
   @Post(':id/cobrar')
   @RequiresPermission(Permission.MANAGE_ORDERS)
-  @ApiOperation({ summary: 'Cobrar una orden de servicio y generar comprobante' })
-  @ApiHeader({ name: 'x-tenant-id', required: true })
-  @ApiResponse({ status: 200, description: 'Orden cobrada exitosamente' })
-  cobrarOrden(
-    @Headers('x-tenant-id') empresaId: string,
-    @Param('id') id: string,
-    @Body() dto: CobrarOrdenDto,
-    @CurrentUser() user: any,
-  ) {
-    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
-    return this.ordenServicioService.cobrarOrden(empresaId, id, dto, user.id);
+  @ApiOperation({ summary: '[RETIRADO] Cobrar orden — usar Venta Rápida (POS)' })
+  @ApiResponse({ status: 410, description: 'Endpoint retirado' })
+  cobrarOrden() {
+    throw new GoneException(
+      'El cobro directo de órdenes fue retirado. Cobra la orden desde Venta Rápida (POS): registra caja, emite el comprobante y soporta pagos mixtos. Actualiza el app si ves este mensaje.',
+    );
   }
 }
