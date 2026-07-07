@@ -2,9 +2,17 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
-import { CaracteristicaPremium, Prisma, Rol } from '@prisma/client';
+import {
+  CaracteristicaPremium,
+  EstadoSolicitudBanner,
+  OrigenCaracteristica,
+  Prisma,
+  Rol,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../redis/cache.service';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
 import {
   ActualizarBannerDto,
@@ -18,10 +26,19 @@ import {
  * Público SOLO para empresas con la característica BANNER_MARKETPLACE vigente
  * (gate en runtime: si el plan vence, el banner desaparece solo, sin data-fix).
  */
+/// Packs de campaña del banner (días × precio). Fuente única de precios:
+/// el monto de la solicitud SIEMPRE se toma de aquí, nunca del cliente.
+const PACKS_BANNER = [
+  { dias: 1, precio: 5 },
+  { dias: 2, precio: 8 },
+  { dias: 3, precio: 10 },
+] as const;
+
 @Injectable()
 export class BannerMarketplaceService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
     private readonly caracteristicaEmpresa: CaracteristicaEmpresaService,
   ) {}
 
@@ -183,35 +200,93 @@ export class BannerMarketplaceService {
     });
   }
 
+  /** Packs de campaña disponibles + WhatsApp del admin (para coordinar pago). */
+  async bannerPacks() {
+    const config = await this.prisma.configuracionSistema.findFirst({
+      select: { whatsappSoporte: true },
+    });
+    return {
+      packs: PACKS_BANNER,
+      whatsapp: config?.whatsappSoporte ?? null,
+    };
+  }
+
   // ===========================================================================
   // Gestión por la empresa (panel admin de la empresa)
   // ===========================================================================
 
+  /** La empresa solicita mostrar su banner por un pack de días. */
+  async solicitarMostrar(empresaId: string, userId: string, dias: number) {
+    await this.verificarAdmin(empresaId, userId);
+    const pack = PACKS_BANNER.find((p) => p.dias === dias);
+    if (!pack) throw new BadRequestException('Pack de días no válido');
+
+    const banner = await this.prisma.bannerMarketplace.findUnique({
+      where: { empresaId },
+      select: { id: true },
+    });
+    if (!banner) {
+      throw new BadRequestException(
+        'Primero configura y guarda tu banner (texto, colores)',
+      );
+    }
+
+    const pendiente = await this.prisma.solicitudBannerMarketplace.findFirst({
+      where: { empresaId, estado: EstadoSolicitudBanner.PENDIENTE },
+      select: { id: true },
+    });
+    if (pendiente) {
+      throw new BadRequestException(
+        'Ya tienes una solicitud pendiente de aprobación',
+      );
+    }
+
+    return this.prisma.solicitudBannerMarketplace.create({
+      data: { empresaId, dias: pack.dias, monto: pack.precio },
+    });
+  }
+
   /** Config del banner de la empresa + si tiene la característica vigente. */
   async getBanner(empresaId: string, userId: string) {
     await this.verificarAdmin(empresaId, userId);
-    const [habilitado, banner, empresa] = await Promise.all([
-      this.caracteristicaEmpresa.estaHabilitada(
-        empresaId,
-        CaracteristicaPremium.BANNER_MARKETPLACE,
-      ),
-      this.prisma.bannerMarketplace.findUnique({
-        where: { empresaId },
-        include: {
-          lottieFondo: { select: { id: true, nombre: true, url: true, config: true } },
-        },
-      }),
-      this.prisma.empresa.findUnique({
-        where: { id: empresaId },
-        select: {
-          nombre: true,
-          logo: true,
-          configuracionDocumentos: { select: { nombreComercial: true } },
-        },
-      }),
-    ]);
+    const [habilitado, contrato, banner, empresa, solicitudPendiente] =
+      await Promise.all([
+        this.caracteristicaEmpresa.estaHabilitada(
+          empresaId,
+          CaracteristicaPremium.BANNER_MARKETPLACE,
+        ),
+        this.prisma.empresaCaracteristica.findUnique({
+          where: {
+            empresaId_caracteristica: {
+              empresaId,
+              caracteristica: CaracteristicaPremium.BANNER_MARKETPLACE,
+            },
+          },
+          select: { vigenteHasta: true },
+        }),
+        this.prisma.bannerMarketplace.findUnique({
+          where: { empresaId },
+          include: {
+            lottieFondo: { select: { id: true, nombre: true, url: true, config: true } },
+          },
+        }),
+        this.prisma.empresa.findUnique({
+          where: { id: empresaId },
+          select: {
+            nombre: true,
+            logo: true,
+            configuracionDocumentos: { select: { nombreComercial: true } },
+          },
+        }),
+        this.prisma.solicitudBannerMarketplace.findFirst({
+          where: { empresaId, estado: EstadoSolicitudBanner.PENDIENTE },
+          select: { id: true, dias: true, monto: true, creadoEn: true },
+        }),
+      ]);
     return {
       habilitado,
+      vigenteHasta: contrato?.vigenteHasta ?? null,
+      solicitudPendiente,
       banner,
       // Para el preview: mismo nombre que verá el público en el slider.
       nombreEmpresa:
@@ -222,18 +297,13 @@ export class BannerMarketplaceService {
     };
   }
 
-  /** Crea/actualiza el banner de la empresa (requiere característica vigente). */
+  /**
+   * Crea/actualiza el banner de la empresa. Se permite configurar SIN tener
+   * la característica (autoservicio: primero arma su banner, luego solicita
+   * mostrarlo); el feed público sigue gateado por la característica vigente.
+   */
   async upsertBanner(empresaId: string, userId: string, dto: ActualizarBannerDto) {
     await this.verificarAdmin(empresaId, userId);
-    const habilitado = await this.caracteristicaEmpresa.estaHabilitada(
-      empresaId,
-      CaracteristicaPremium.BANNER_MARKETPLACE,
-    );
-    if (!habilitado) {
-      throw new ForbiddenException(
-        'Tu plan no incluye el banner del marketplace',
-      );
-    }
     if (dto.lottieFondoId) {
       const lottie = await this.prisma.lottieFondo.findFirst({
         where: { id: dto.lottieFondoId, isActive: true },
@@ -267,6 +337,112 @@ export class BannerMarketplaceService {
         lottieFondo: { select: { id: true, nombre: true, url: true, config: true } },
       },
     });
+  }
+
+  // ===========================================================================
+  // Solicitudes de banner (solo super admin — aprueba/rechaza packs)
+  // ===========================================================================
+
+  async adminListarSolicitudes(estado?: EstadoSolicitudBanner) {
+    return this.prisma.solicitudBannerMarketplace.findMany({
+      where: estado ? { estado } : undefined,
+      orderBy: { creadoEn: 'desc' },
+      take: 100,
+      include: {
+        empresa: {
+          select: {
+            id: true,
+            nombre: true,
+            logo: true,
+            telefono: true,
+            configuracionDocumentos: { select: { nombreComercial: true } },
+            bannerMarketplace: {
+              include: {
+                lottieFondo: { select: { url: true, config: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Aprueba la solicitud: activa la característica con vigencia desde AHORA
+   * por los días del pack (la empresa paga exactamente esos días) y enciende
+   * el banner. Rechazar solo marca la solicitud.
+   */
+  async adminResolverSolicitud(
+    id: string,
+    adminUserId: string,
+    accion: 'APROBAR' | 'RECHAZAR',
+  ) {
+    const solicitud = await this.prisma.solicitudBannerMarketplace.findUnique({
+      where: { id },
+      select: { id: true, empresaId: true, dias: true, estado: true },
+    });
+    if (!solicitud) throw new NotFoundException('Solicitud no encontrada');
+    if (solicitud.estado !== EstadoSolicitudBanner.PENDIENTE) {
+      throw new BadRequestException('La solicitud ya fue atendida');
+    }
+
+    if (accion === 'RECHAZAR') {
+      return this.prisma.solicitudBannerMarketplace.update({
+        where: { id },
+        data: {
+          estado: EstadoSolicitudBanner.RECHAZADA,
+          atendidoPorId: adminUserId,
+          atendidoEn: new Date(),
+        },
+      });
+    }
+
+    const vigenteHasta = new Date(
+      Date.now() + solicitud.dias * 24 * 3600 * 1000,
+    );
+    const [resultado] = await this.prisma.$transaction([
+      this.prisma.solicitudBannerMarketplace.update({
+        where: { id },
+        data: {
+          estado: EstadoSolicitudBanner.APROBADA,
+          atendidoPorId: adminUserId,
+          atendidoEn: new Date(),
+        },
+      }),
+      this.prisma.empresaCaracteristica.upsert({
+        where: {
+          empresaId_caracteristica: {
+            empresaId: solicitud.empresaId,
+            caracteristica: CaracteristicaPremium.BANNER_MARKETPLACE,
+          },
+        },
+        create: {
+          empresaId: solicitud.empresaId,
+          caracteristica: CaracteristicaPremium.BANNER_MARKETPLACE,
+          habilitado: true,
+          vigenteHasta,
+          origen: OrigenCaracteristica.ADMIN,
+          notaAdmin: `Pack banner ${solicitud.dias} día(s) — solicitud ${id}`,
+          otorgadoPorId: adminUserId,
+        },
+        update: {
+          habilitado: true,
+          vigenteHasta,
+          otorgadoPorId: adminUserId,
+          notaAdmin: `Pack banner ${solicitud.dias} día(s) — solicitud ${id}`,
+        },
+      }),
+      this.prisma.bannerMarketplace.update({
+        where: { empresaId: solicitud.empresaId },
+        data: { isActive: true },
+      }),
+    ]);
+
+    // El gate del banner viaja en /context: invalidar cache de la empresa.
+    await this.cache.invalidatePattern(
+      `context:empresa:${solicitud.empresaId}:user:*`,
+    );
+    return resultado;
   }
 
   // ===========================================================================

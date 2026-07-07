@@ -3,6 +3,7 @@ model Empresa {
   integracionYape IntegracionYape? // config de validación de pagos Yape/Plin (api-yape)
   caracteristicas EmpresaCaracteristica[] // features premium habilitadas (gating)
   bannerMarketplace BannerMarketplace? // banner promocional en el home del marketplace
+  solicitudesBanner SolicitudBannerMarketplace[] // packs de días solicitados
   nombre      String
   ruc         String?      @unique
   subdominio  String?      @unique

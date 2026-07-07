@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -24,6 +25,8 @@ import {
   ActualizarLottieFondoDto,
   AvisoPlataformaDto,
   CrearLottieFondoDto,
+  ResolverSolicitudBannerDto,
+  SolicitarBannerDto,
 } from './dto/banner-marketplace.dto';
 
 /** Endpoints PÚBLICOS del banner (slider del home del marketplace). */
@@ -43,6 +46,12 @@ export class MarketplaceBannerPublicController {
   @ApiOperation({ summary: 'Catálogo de fondos Lottie activos' })
   async getLottieFondos() {
     return this.service.lottieFondos();
+  }
+
+  @Get('banner-packs')
+  @ApiOperation({ summary: 'Packs de campaña del banner + WhatsApp del admin' })
+  async getBannerPacks() {
+    return this.service.bannerPacks();
   }
 
   @Post('banners/:id/impresion')
@@ -86,6 +95,44 @@ export class EmpresaBannerController {
     @CurrentUser() user: any,
   ) {
     return this.service.upsertBanner(id, user.sub, dto);
+  }
+
+  @Post(':id/banner-marketplace/solicitud')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission(Permission.MANAGE_SETTINGS)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Solicitar mostrar el banner (pack de días)' })
+  async solicitarMostrar(
+    @Param('id') id: string,
+    @Body() dto: SolicitarBannerDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.solicitarMostrar(id, user.sub, dto.dias);
+  }
+}
+
+/** Solicitudes de banner de empresas (solo SUPER ADMIN). */
+@ApiTags('Admin')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, SuperAdminGuard)
+@Controller('admin/solicitudes-banner')
+export class AdminSolicitudBannerController {
+  constructor(private readonly service: BannerMarketplaceService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Listar solicitudes (query estado=PENDIENTE|...)' })
+  async listar(@Query('estado') estado?: string) {
+    return this.service.adminListarSolicitudes(estado as any);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Aprobar (activa el banner por los días del pack) o rechazar' })
+  async resolver(
+    @Param('id') id: string,
+    @Body() dto: ResolverSolicitudBannerDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.adminResolverSolicitud(id, user.sub, dto.accion);
   }
 }
 

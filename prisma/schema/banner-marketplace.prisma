@@ -16,6 +16,32 @@ model LottieFondo {
   avisosPlataforma  BannerPlataforma[]
 }
 
+enum EstadoSolicitudBanner {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+/// Solicitud de la empresa para MOSTRAR su banner: elige un pack de días con
+/// precio (1d/2d/3d…). El admin la aprueba desde syncronize-admin → se activa
+/// la característica con vigencia = aprobación + días. El pago se coordina
+/// fuera del sistema (Yape/WhatsApp); el monto queda registrado aquí.
+model SolicitudBannerMarketplace {
+  id            String                @id @default(cuid())
+  empresaId     String
+  dias          Int // pack solicitado
+  monto         Decimal               @db.Decimal(10, 2) // precio del pack al solicitar
+  estado        EstadoSolicitudBanner @default(PENDIENTE)
+  atendidoPorId String? // super admin que aprobó/rechazó (auditoría, sin FK)
+  atendidoEn    DateTime?
+  creadoEn      DateTime              @default(now())
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([estado, creadoEn])
+  @@index([empresaId])
+}
+
 /// Avisos del DUEÑO de la plataforma en el slider del home del marketplace
 /// (festividades, promoción del propio app). Sin gating por empresa; con
 /// vigencia programada (ej. banner de Navidad del 20 al 26 de diciembre).

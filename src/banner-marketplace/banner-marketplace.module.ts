@@ -5,6 +5,7 @@ import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteri
 import { BannerMarketplaceService } from './banner-marketplace.service';
 import {
   AdminAvisoPlataformaController,
+  AdminSolicitudBannerController,
   AdminLottieFondoController,
   EmpresaBannerController,
   MarketplaceBannerPublicController,
@@ -16,6 +17,7 @@ import {
     MarketplaceBannerPublicController,
     EmpresaBannerController,
     AdminAvisoPlataformaController,
+    AdminSolicitudBannerController,
     AdminLottieFondoController,
   ],
   providers: [BannerMarketplaceService],

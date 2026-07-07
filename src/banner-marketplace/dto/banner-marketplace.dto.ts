@@ -47,6 +47,21 @@ export class ActualizarBannerDto {
   isActive?: boolean;
 }
 
+/** La empresa solicita mostrar su banner por un pack de días. */
+export class SolicitarBannerDto {
+  @ApiProperty({ example: 2, description: 'Días del pack (1, 2 o 3)' })
+  @IsInt()
+  dias: number;
+}
+
+/** El super admin aprueba o rechaza una solicitud de banner. */
+export class ResolverSolicitudBannerDto {
+  @ApiProperty({ enum: ['APROBAR', 'RECHAZAR'] })
+  @IsString()
+  @IsNotEmpty()
+  accion: 'APROBAR' | 'RECHAZAR';
+}
+
 /** Aviso del dueño de la plataforma en el slider (solo super admin). */
 export class AvisoPlataformaDto {
   @ApiProperty({ example: '¡FELIZ NAVIDAD! DESCUENTOS EN TODO EL MARKETPLACE' })
