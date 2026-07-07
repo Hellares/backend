@@ -99,6 +99,8 @@ const ORDEN_SERVICIO_FULL_INCLUDE = {
   componentes: {
     include: { componente: { include: { tipoComponente: true } } },
   },
+  // Libro de adelantos (cada abono con fecha/hora/método/usuario).
+  adelantos: { orderBy: { creadoEn: 'desc' as const } },
 } as const;
 
 const ORDEN_SERVICIO_DETAIL_INCLUDE = {
@@ -206,11 +208,45 @@ export class OrdenServicioService {
       adelantoAnterior: number;
       adelantoNuevo: number;
       metodoPago?: string | null;
+      /** Nota para la fila del libro de adelantos. */
+      nota?: string | null;
+      /** true = anulación de una fila existente: registra caja SIN crear fila. */
+      sinFila?: boolean;
     },
   ) {
     const delta =
       Math.round((params.adelantoNuevo - params.adelantoAnterior) * 100) / 100;
     if (Math.abs(delta) < 0.01) return;
+
+    // LIBRO de adelantos: toda variación queda como fila con fecha/hora,
+    // método y usuario (los ajustes negativos también, para que
+    // Σ filas no anuladas == orden.adelanto SIEMPRE).
+    if (!params.sinFila) {
+      let creadoPorNombre: string | null = null;
+      try {
+        const u = await tx.usuario.findUnique({
+          where: { id: params.usuarioId },
+          select: { persona: { select: { nombres: true, apellidos: true } } },
+        });
+        creadoPorNombre = u?.persona
+          ? `${u.persona.nombres} ${u.persona.apellidos ?? ''}`.trim()
+          : null;
+      } catch {
+        // El snapshot de nombre es best-effort.
+      }
+      await tx.adelantoOrdenServicio.create({
+        data: {
+          ordenServicioId: params.ordenId,
+          monto: new Prisma.Decimal(delta.toFixed(2)),
+          metodoPago: params.metodoPago || 'EFECTIVO',
+          nota:
+            params.nota ??
+            (delta < 0 ? 'Ajuste/corrección del total de adelanto' : null),
+          creadoPor: params.usuarioId,
+          creadoPorNombre,
+        },
+      });
+    }
 
     // Fallback de sede: muchas órdenes se crean sin sedeId (el form no lo
     // exige). El dinero lo recibe quien registra → usar la sede de SU caja
@@ -1091,6 +1127,167 @@ export class OrdenServicioService {
       }
 
       return updated;
+    });
+  }
+
+  // ───────────────────────── Libro de adelantos ─────────────────────────
+
+  /**
+   * Registra un NUEVO abono de adelanto (ACUMULATIVO): el monto se SUMA al
+   * total — nunca lo reemplaza. Motivación: con el campo total editable,
+   * registrar un 2º abono (50 + 10) se interpretaba como corrección
+   * (50 → 10) y devolvía dinero en caja. Cada abono queda como fila del
+   * libro con fecha/hora, método y usuario.
+   */
+  async agregarAdelanto(
+    empresaId: string,
+    id: string,
+    usuarioId: string,
+    dto: { monto: number; metodoPago?: string; nota?: string },
+  ) {
+    if (!dto.monto || dto.monto <= 0) {
+      throw new BadRequestException('El monto del adelanto debe ser mayor a 0');
+    }
+
+    return await this.prisma.$transaction(async (tx) => {
+      // Lock: serializa abonos/ediciones concurrentes sobre el total.
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM "OrdenServicio" WHERE id = $1 AND "empresaId" = $2 FOR UPDATE`,
+        id,
+        empresaId,
+      );
+      const orden = await tx.ordenServicio.findFirst({
+        where: { id, empresaId },
+        include: {
+          componentes: { select: { costoAccion: true, costoRepuestos: true } },
+          ventaDetalle: { select: { id: true } },
+        },
+      });
+      if (!orden) throw new NotFoundException('Orden de servicio no encontrada');
+      if (orden.estado === EstadoOrdenServicio.CANCELADO) {
+        throw new BadRequestException('La orden está cancelada');
+      }
+      if (orden.ventaDetalle || orden.comprobanteId) {
+        throw new BadRequestException(
+          'La orden ya fue cobrada: no se pueden registrar más adelantos',
+        );
+      }
+
+      const adelantoAnterior = Number(orden.adelanto ?? 0);
+      const adelantoNuevo =
+        Math.round((adelantoAnterior + dto.monto) * 100) / 100;
+
+      OrdenServicioService.validarMontosOrden({
+        costoTotal: orden.costoTotal === null ? null : Number(orden.costoTotal),
+        adelanto: adelantoNuevo,
+        descuento: Number(orden.descuento ?? 0),
+        subtotalComponentes: OrdenServicioService.subtotalComponentes(orden),
+      });
+
+      await tx.ordenServicio.update({
+        where: { id },
+        data: {
+          adelanto: new Prisma.Decimal(adelantoNuevo.toFixed(2)),
+          metodoPagoAdelanto: dto.metodoPago ?? orden.metodoPagoAdelanto,
+        },
+      });
+
+      await this.registrarDeltaAdelantoEnCaja(tx, {
+        empresaId,
+        ordenId: id,
+        codigo: orden.codigo,
+        sedeId: orden.sedeId,
+        usuarioId,
+        adelantoAnterior,
+        adelantoNuevo,
+        metodoPago: dto.metodoPago ?? orden.metodoPagoAdelanto,
+        nota: dto.nota ?? null,
+      });
+
+      return tx.ordenServicio.findUnique({
+        where: { id },
+        include: ORDEN_SERVICIO_DETAIL_INCLUDE,
+      });
+    });
+  }
+
+  /**
+   * Anula UNA fila del libro de adelantos (abono registrado por error o
+   * devuelto al cliente): marca la fila, resta del total y registra el
+   * EGRESO en caja. No genera fila nueva (el flag `anulado` la excluye
+   * de la suma).
+   */
+  async anularAdelanto(
+    empresaId: string,
+    id: string,
+    adelantoId: string,
+    usuarioId: string,
+  ) {
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM "OrdenServicio" WHERE id = $1 AND "empresaId" = $2 FOR UPDATE`,
+        id,
+        empresaId,
+      );
+      const orden = await tx.ordenServicio.findFirst({
+        where: { id, empresaId },
+        include: { ventaDetalle: { select: { id: true } } },
+      });
+      if (!orden) throw new NotFoundException('Orden de servicio no encontrada');
+      if (orden.ventaDetalle || orden.comprobanteId) {
+        throw new BadRequestException(
+          'La orden ya fue cobrada: el adelanto ya se aplicó al comprobante',
+        );
+      }
+
+      const fila = await tx.adelantoOrdenServicio.findFirst({
+        where: { id: adelantoId, ordenServicioId: id },
+      });
+      if (!fila) throw new NotFoundException('Adelanto no encontrado');
+      if (fila.anulado) {
+        throw new BadRequestException('Este adelanto ya fue anulado');
+      }
+      const montoFila = Number(fila.monto);
+      if (montoFila <= 0) {
+        throw new BadRequestException(
+          'Los ajustes/correcciones no se anulan individualmente',
+        );
+      }
+
+      const adelantoAnterior = Number(orden.adelanto ?? 0);
+      const adelantoNuevo =
+        Math.round((adelantoAnterior - montoFila) * 100) / 100;
+      if (adelantoNuevo < -0.009) {
+        throw new BadRequestException(
+          'El total de adelantos quedaría negativo: revisa las filas del libro',
+        );
+      }
+
+      await tx.adelantoOrdenServicio.update({
+        where: { id: adelantoId },
+        data: { anulado: true, anuladoEn: new Date(), anuladoPor: usuarioId },
+      });
+      await tx.ordenServicio.update({
+        where: { id },
+        data: { adelanto: new Prisma.Decimal(Math.max(0, adelantoNuevo).toFixed(2)) },
+      });
+
+      await this.registrarDeltaAdelantoEnCaja(tx, {
+        empresaId,
+        ordenId: id,
+        codigo: orden.codigo,
+        sedeId: orden.sedeId,
+        usuarioId,
+        adelantoAnterior,
+        adelantoNuevo,
+        metodoPago: fila.metodoPago,
+        sinFila: true, // la anulación no crea fila: el flag excluye la original
+      });
+
+      return tx.ordenServicio.findUnique({
+        where: { id },
+        include: ORDEN_SERVICIO_DETAIL_INCLUDE,
+      });
     });
   }
 

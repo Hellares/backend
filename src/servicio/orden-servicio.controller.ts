@@ -31,6 +31,7 @@ import {
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { OrdenServicioService } from './orden-servicio.service';
 import { ServicioComponenteService } from './servicio-componente.service';
+import { AgregarAdelantoDto } from './dto/agregar-adelanto.dto';
 import { CreateOrdenServicioDto } from './dto/create-orden-servicio.dto';
 import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
 import { TransitionEstadoDto } from './dto/transition-estado.dto';
@@ -222,6 +223,36 @@ export class OrdenServicioController {
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.ordenServicioService.update(empresaId, id, dto, usuarioId);
+  }
+
+  @Post(':id/adelantos')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({
+    summary: 'Registrar un NUEVO abono de adelanto (se SUMA al total)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  agregarAdelanto(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Body() dto: AgregarAdelantoDto,
+    @CurrentUser('sub') usuarioId: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.ordenServicioService.agregarAdelanto(empresaId, id, usuarioId, dto);
+  }
+
+  @Patch(':id/adelantos/:adelantoId/anular')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({ summary: 'Anular un abono de adelanto (devuelve a caja)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  anularAdelanto(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Param('adelantoId') adelantoId: string,
+    @CurrentUser('sub') usuarioId: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.ordenServicioService.anularAdelanto(empresaId, id, adelantoId, usuarioId);
   }
 
   @Patch(':id/estado')

@@ -232,6 +232,7 @@ model OrdenServicio {
   servicio                  Servicio?                @relation(fields: [servicioId], references: [id])
   tecnico                   Usuario?                 @relation(fields: [tecnicoId], references: [id])
   componentes               ServicioComponente[]
+  adelantos                 AdelantoOrdenServicio[]
   historial                 HistorialOrdenServicio[]
   avisosMantenimiento       AvisoMantenimiento[]
   tercerizacionOrigen       TercerizacionServicio?   @relation("OrdenOrigen")
@@ -286,6 +287,29 @@ model ServicioComponente {
   @@index([componenteId])
   @@index([tipoAccion])
   @@index([estadoComponente])
+}
+
+/// LIBRO de adelantos de una orden: cada abono del cliente es una fila con
+/// fecha/hora, método y usuario (auditoría). `OrdenServicio.adelanto` es el
+/// TOTAL denormalizado = Σ filas no anuladas — se mantienen en la misma
+/// transacción. Los ajustes por edición de total (APKs viejos) generan filas
+/// con monto NEGATIVO para que la suma nunca desincronice.
+model AdelantoOrdenServicio {
+  id              String    @id @default(cuid())
+  ordenServicioId String
+  monto           Decimal   @db.Decimal(10, 2) // >0 abono; <0 ajuste/corrección
+  metodoPago      String    @default("EFECTIVO")
+  nota            String?
+  creadoPor       String? // usuarioId que registró el cobro
+  creadoPorNombre String? // snapshot para auditoría (usuario puede borrarse)
+  creadoEn        DateTime  @default(now())
+  anulado         Boolean   @default(false)
+  anuladoEn       DateTime?
+  anuladoPor      String?
+
+  orden OrdenServicio @relation(fields: [ordenServicioId], references: [id], onDelete: Cascade)
+
+  @@index([ordenServicioId])
 }
 
 model HistorialOrdenServicio {

@@ -15,10 +15,13 @@ import { OrdenServicioService } from './orden-servicio.service';
  * Invariantes:
  * - delta > 0 → INGRESO ADELANTO_SERVICIO por el delta.
  * - delta < 0 → EGRESO ADELANTO_SERVICIO (corrección) por |delta|.
- * - |delta| < 0.01 → no toca caja.
+ * - |delta| < 0.01 → no toca caja NI crea fila del libro.
  * - método inválido/ausente → fallback EFECTIVO.
  * - usa registrarMovimientoEnCajaOTesoreria (sin caja abierta cae a Caja
  *   Central — el dinero nunca se pierde).
+ * - TODO delta crea una fila en el LIBRO AdelantoOrdenServicio (con fecha/
+ *   hora/método/usuario); `sinFila: true` (anulaciones) la omite porque el
+ *   flag `anulado` de la fila original ya la excluye de la suma.
  */
 
 const registrar = (OrdenServicioService.prototype as any)[
@@ -50,6 +53,9 @@ const makeTx = (
   ({
     caja: { findFirst: jest.fn().mockResolvedValue(cajaUsuario) },
     sede: { findFirst: jest.fn().mockResolvedValue(sedePrincipal) },
+    // Libro de adelantos: snapshot de usuario (best-effort) + fila por delta.
+    usuario: { findUnique: jest.fn().mockResolvedValue(null) },
+    adelantoOrdenServicio: { create: jest.fn().mockResolvedValue({}) },
   }) as any;
 
 const TX = makeTx();
@@ -182,5 +188,63 @@ describe('OrdenServicioService.registrarDeltaAdelantoEnCaja', () => {
     const call =
       self.cajaService.registrarMovimientoEnCajaOTesoreria.mock.calls[0];
     expect(call[3].metodoPago).toBe(esperado);
+  });
+
+  // ── Libro de adelantos (AdelantoOrdenServicio) ──
+
+  it('abono → crea fila del libro con monto, método y usuario', async () => {
+    const self = makeSelf();
+    const tx = makeTx();
+    await registrar.call(self, tx, baseParams({ nota: 'Primer abono' }));
+
+    expect(tx.adelantoOrdenServicio.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ordenServicioId: 'orden-1',
+        metodoPago: 'YAPE',
+        nota: 'Primer abono',
+        creadoPor: 'user-1',
+      }),
+    });
+    const monto = tx.adelantoOrdenServicio.create.mock.calls[0][0].data.monto;
+    expect(Number(monto)).toBe(50);
+  });
+
+  it('corrección (delta negativo) → fila NEGATIVA con nota de ajuste', async () => {
+    const self = makeSelf();
+    const tx = makeTx();
+    await registrar.call(
+      self,
+      tx,
+      baseParams({ adelantoAnterior: 80, adelantoNuevo: 50 }),
+    );
+
+    const data = tx.adelantoOrdenServicio.create.mock.calls[0][0].data;
+    expect(Number(data.monto)).toBe(-30);
+    expect(data.nota).toContain('Ajuste');
+  });
+
+  it('sinFila (anulación) → registra caja pero NO crea fila', async () => {
+    const self = makeSelf();
+    const tx = makeTx();
+    await registrar.call(
+      self,
+      tx,
+      baseParams({ adelantoAnterior: 50, adelantoNuevo: 0, sinFila: true }),
+    );
+
+    expect(tx.adelantoOrdenServicio.create).not.toHaveBeenCalled();
+    expect(self.cajaService.registrarMovimientoEnCajaOTesoreria)
+      .toHaveBeenCalled();
+  });
+
+  it('sin cambio (delta 0) → tampoco crea fila del libro', async () => {
+    const self = makeSelf();
+    const tx = makeTx();
+    await registrar.call(
+      self,
+      tx,
+      baseParams({ adelantoAnterior: 50, adelantoNuevo: 50 }),
+    );
+    expect(tx.adelantoOrdenServicio.create).not.toHaveBeenCalled();
   });
 });
