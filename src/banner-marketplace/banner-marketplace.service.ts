@@ -95,7 +95,7 @@ export class BannerMarketplaceService {
   /** Config del banner de la empresa + si tiene la característica vigente. */
   async getBanner(empresaId: string, userId: string) {
     await this.verificarAdmin(empresaId, userId);
-    const [habilitado, banner] = await Promise.all([
+    const [habilitado, banner, empresa] = await Promise.all([
       this.caracteristicaEmpresa.estaHabilitada(
         empresaId,
         CaracteristicaPremium.BANNER_MARKETPLACE,
@@ -106,8 +106,23 @@ export class BannerMarketplaceService {
           lottieFondo: { select: { id: true, nombre: true, url: true } },
         },
       }),
+      this.prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: {
+          nombre: true,
+          logo: true,
+          configuracionDocumentos: { select: { nombreComercial: true } },
+        },
+      }),
     ]);
-    return { habilitado, banner };
+    return {
+      habilitado,
+      banner,
+      // Para el preview: mismo nombre que verá el público en el slider.
+      nombreEmpresa:
+        empresa?.configuracionDocumentos?.nombreComercial || empresa?.nombre || '',
+      logo: empresa?.logo ?? null,
+    };
   }
 
   /** Crea/actualiza el banner de la empresa (requiere característica vigente). */
