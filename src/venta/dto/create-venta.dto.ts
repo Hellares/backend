@@ -100,6 +100,14 @@ export class CreateVentaDto {
   @IsBoolean()
   aceptaRiesgoBancarizacion?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      'Venta CON ENVÍO (pedido por teléfono/WhatsApp que se despacha por agencia)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  conEnvio?: boolean;
+
   @ApiPropertyOptional({ description: 'Es venta a credito' })
   @IsOptional()
   @IsBoolean()

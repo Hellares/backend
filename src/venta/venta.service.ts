@@ -1003,6 +1003,7 @@ export class VentaService {
           montoRecibido: dto.montoRecibido,
           montoCambio,
           bancarizacionAdvertida: dto.aceptaRiesgoBancarizacion ?? false,
+          conEnvio: dto.conEnvio ?? false,
           esCredito: dto.esCredito ?? false,
           plazoCredito: dto.plazoCredito,
           fechaVencimientoPago: dto.fechaVencimientoPago
@@ -1251,6 +1252,7 @@ export class VentaService {
             montoRecibido: montoRecibido || null,
             montoCambio: montoCambio || null,
             bancarizacionAdvertida: dto.aceptaRiesgoBancarizacion ?? false,
+            conEnvio: dto.conEnvio ?? false,
             esCredito,
             plazoCredito: dto.plazoCredito,
             numeroCuotas: dto.numeroCuotas ?? null,
@@ -3253,7 +3255,84 @@ export class VentaService {
       orderBy: { creadoEn: 'asc' },
     });
 
-    return { ...venta, devoluciones };
+    // Datos del envío (ventas conEnvio) — fetch separado para no inflar
+    // el getInclude() compartido con el listado.
+    const envio = await this.prisma.ventaEnvio.findUnique({
+      where: { ventaId: id },
+    });
+
+    return { ...venta, devoluciones, envio };
+  }
+
+  /**
+   * Registra/actualiza los datos del ENVÍO de una venta (upsert) y marca
+   * la venta como conEnvio. Prellenar en el cliente con el snapshot del
+   * cliente de la venta; aquí todo es editable (el destinatario puede
+   * ser otra persona).
+   */
+  async upsertEnvio(
+    id: string,
+    empresaId: string,
+    dto: {
+      destinatarioNombre: string;
+      destinatarioDni?: string;
+      destinatarioCelular?: string;
+      agenciaNombre?: string;
+      destinoDepartamento?: string;
+      destinoProvincia?: string;
+      agenciaDireccion?: string;
+    },
+  ) {
+    const venta = await this.prisma.venta.findFirst({
+      where: { id, empresaId },
+      select: { id: true, conEnvio: true },
+    });
+    if (!venta) throw new NotFoundException('Venta no encontrada');
+
+    const [, envio] = await this.prisma.$transaction([
+      this.prisma.venta.update({
+        where: { id },
+        data: { conEnvio: true },
+      }),
+      this.prisma.ventaEnvio.upsert({
+        where: { ventaId: id },
+        create: {
+          ventaId: id,
+          empresaId,
+          destinatarioNombre: dto.destinatarioNombre,
+          destinatarioDni: dto.destinatarioDni,
+          destinatarioCelular: dto.destinatarioCelular,
+          agenciaNombre: dto.agenciaNombre,
+          destinoDepartamento: dto.destinoDepartamento,
+          destinoProvincia: dto.destinoProvincia,
+          agenciaDireccion: dto.agenciaDireccion,
+        },
+        update: {
+          destinatarioNombre: dto.destinatarioNombre,
+          destinatarioDni: dto.destinatarioDni,
+          destinatarioCelular: dto.destinatarioCelular,
+          agenciaNombre: dto.agenciaNombre,
+          destinoDepartamento: dto.destinoDepartamento,
+          destinoProvincia: dto.destinoProvincia,
+          agenciaDireccion: dto.agenciaDireccion,
+        },
+      }),
+    ]);
+    return envio;
+  }
+
+  /** Marca el rótulo de envío de la venta como impreso (idempotente). */
+  async marcarRotuloEnvioImpreso(id: string, empresaId: string) {
+    const envio = await this.prisma.ventaEnvio.findFirst({
+      where: { ventaId: id, empresaId },
+    });
+    if (!envio) {
+      throw new NotFoundException('La venta no tiene datos de envío');
+    }
+    return this.prisma.ventaEnvio.update({
+      where: { id: envio.id },
+      data: { rotuloImpresoEn: new Date() },
+    });
   }
 
   /**

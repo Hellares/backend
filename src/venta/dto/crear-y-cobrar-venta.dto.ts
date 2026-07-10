@@ -142,6 +142,14 @@ export class CrearYCobrarVentaDto {
   @IsBoolean()
   aceptaRiesgoBancarizacion?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      'Venta CON ENVÍO (pedido por teléfono/WhatsApp que se despacha por agencia)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  conEnvio?: boolean;
+
   @ApiPropertyOptional({ description: 'Tipo de comprobante', example: 'BOLETA' })
   @IsOptional()
   @IsString()

@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Body,
   Param,
   Query,
@@ -32,6 +33,7 @@ import { UpdateVentaDto } from './dto/update-venta.dto';
 import { ProcesarPagoDto } from './dto/procesar-pago.dto';
 import { AnularVentaDto } from './dto/anular-venta.dto';
 import { GenerarComprobanteDto } from './dto/generar-comprobante.dto';
+import { VentaEnvioDto } from './dto/venta-envio.dto';
 import { EstadoVenta } from '@prisma/client';
 
 @ApiTags('Ventas')
@@ -245,6 +247,32 @@ export class VentaController {
     @Body() dto: UpdateVentaDto,
   ) {
     return this.ventaService.update(id, empresaId, dto);
+  }
+
+  @Put(':id/envio')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Registrar/actualizar datos del envío (upsert) — marca conEnvio',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async upsertEnvio(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Body() dto: VentaEnvioDto,
+  ) {
+    return this.ventaService.upsertEnvio(id, empresaId, dto);
+  }
+
+  @Patch(':id/envio/rotulo-impreso')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Marcar el rótulo de envío como impreso' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async marcarRotuloEnvioImpreso(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.ventaService.marcarRotuloEnvioImpreso(id, empresaId);
   }
 
   @Post(':id/confirmar')

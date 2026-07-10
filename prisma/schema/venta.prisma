@@ -98,6 +98,11 @@ model Venta {
   // stock), no se anula. true solo en el flujo Yape pendiente.
   cobroDiferido                Boolean @default(false)
 
+  // Venta CON ENVÍO (pedidos por teléfono/WhatsApp que se despachan por
+  // agencia): habilita el rótulo de envío desde el detalle y el filtro
+  // de ventas para despachar. Los datos del envío viven en VentaEnvio.
+  conEnvio Boolean @default(false)
+
   // Crédito
   esCredito           Boolean  @default(false)
   plazoCredito        Int? // Días de crédito
@@ -146,6 +151,7 @@ model Venta {
   comprobante                 ComprobanteElectronico?
   guiasRemision               GuiaRemision[]
   pedidoMarketplace           PedidoMarketplace?      @relation("VentaPedidoMarketplace")
+  envio                       VentaEnvio?
 
   @@unique([empresaId, codigo])
   // FK indexes
@@ -367,4 +373,32 @@ model CuotaVenta {
   @@index([estado])
   @@index([fechaVencimiento])
   @@index([ventaId, estado])
+}
+
+// Datos del despacho de una venta CON ENVÍO — prellenados del cliente
+// de la venta pero EDITABLES (el destinatario puede ser otra persona).
+// Mismo formato que el envío de premios de sorteo (rótulo compartido).
+model VentaEnvio {
+  id        String @id @default(cuid())
+  ventaId   String @unique
+  empresaId String
+
+  destinatarioNombre  String
+  destinatarioDni     String?
+  destinatarioCelular String?
+
+  agenciaNombre       String?
+  destinoDepartamento String?
+  destinoProvincia    String?
+  agenciaDireccion    String?
+
+  // Rótulo de envío ya impreso (chip IMPRESO en el detalle de la venta).
+  rotuloImpresoEn DateTime?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
 }
