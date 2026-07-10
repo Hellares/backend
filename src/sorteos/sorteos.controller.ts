@@ -114,6 +114,17 @@ export class SorteosEmpresaController {
     return this.service.subirTicketEnvio(empresaId, usuarioId, premioId, file);
   }
 
+  @Patch('premios/:premioId/rotulo-impreso')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Marcar el rótulo de envío como impreso' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async marcarRotuloImpreso(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('premioId') premioId: string,
+  ) {
+    return this.service.marcarRotuloImpreso(empresaId, premioId);
+  }
+
   @Post('premios/:premioId/foto-premio')
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({ summary: 'Subir foto del premio ganado' })

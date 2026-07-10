@@ -100,6 +100,8 @@ model SorteoPremio {
   envioNumeroOrden String?
   envioCodigo      String?
   envioClave       String?
+  // Rótulo de envío ya impreso (chip "IMPRESO" en la card del premio).
+  rotuloImpresoEn DateTime?
 
   estado        EstadoPremioSorteo @default(REGISTRADO)
   enviadoEn     DateTime?

@@ -443,6 +443,15 @@ export class SorteosService {
     });
   }
 
+  /** Marca el rótulo de envío como impreso (idempotente). */
+  async marcarRotuloImpreso(empresaId: string, premioId: string) {
+    await this.assertPremio(empresaId, premioId);
+    return this.prisma.sorteoPremio.update({
+      where: { id: premioId },
+      data: { rotuloImpresoEn: new Date() },
+    });
+  }
+
   /** Foto del PREMIO ganado (SORTEO_PREMIO/PRINCIPAL). */
   async subirFotoPremio(
     empresaId: string,
