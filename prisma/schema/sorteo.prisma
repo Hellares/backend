@@ -95,6 +95,11 @@ model SorteoPremio {
   destinoDepartamento String?
   destinoProvincia    String?
   agenciaDireccion    String? // dirección de la oficina de la agencia destino
+  // Datos que entrega la agencia al despachar — el ganador los ve en
+  // Mis Premios (la CLAVE es lo que pide la agencia para entregar).
+  envioNumeroOrden String?
+  envioCodigo      String?
+  envioClave       String?
 
   estado        EstadoPremioSorteo @default(REGISTRADO)
   enviadoEn     DateTime?

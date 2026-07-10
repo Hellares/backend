@@ -378,6 +378,11 @@ export class SorteosService {
         data: {
           estado: dto.estado,
           observaciones: dto.observaciones ?? premio.observaciones,
+          // Datos del despacho: solo se pisan si vienen (permite marcar
+          // estados sin borrar lo ya registrado).
+          envioNumeroOrden: dto.envioNumeroOrden ?? undefined,
+          envioCodigo: dto.envioCodigo ?? undefined,
+          envioClave: dto.envioClave ?? undefined,
           enviadoEn:
             dto.estado === EstadoPremioSorteo.ENVIADO && !premio.enviadoEn
               ? new Date()
@@ -390,7 +395,12 @@ export class SorteosService {
       });
     });
 
-    if (dto.estado === EstadoPremioSorteo.ENVIADO) {
+    // Notificar solo en la TRANSICIÓN a ENVIADO (re-enviar el mismo
+    // estado es "editar datos de envío" y no debe duplicar el push).
+    if (
+      dto.estado === EstadoPremioSorteo.ENVIADO &&
+      premio.estado !== EstadoPremioSorteo.ENVIADO
+    ) {
       const destino = [premio.destinoProvincia, premio.destinoDepartamento]
         .filter(Boolean)
         .join(', ');

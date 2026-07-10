@@ -213,4 +213,24 @@ export class CambiarEstadoPremioDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  // Datos del despacho de agencia (típicamente al marcar ENVIADO;
+  // re-enviar el mismo estado permite corregirlos).
+  @ApiPropertyOptional({ example: '0012345' })
+  @IsOptional()
+  @IsString()
+  envioNumeroOrden?: string;
+
+  @ApiPropertyOptional({ example: 'SHA-88421' })
+  @IsOptional()
+  @IsString()
+  envioCodigo?: string;
+
+  @ApiPropertyOptional({
+    description: 'Clave de recojo — el ganador la muestra en la agencia',
+    example: '4471',
+  })
+  @IsOptional()
+  @IsString()
+  envioClave?: string;
 }
