@@ -51,6 +51,7 @@ export class SorteosService {
         descripcion: dto.descripcion,
         canal: dto.canal,
         fechaSorteo: dto.fechaSorteo ? new Date(dto.fechaSorteo) : undefined,
+        precioParticipacion: dto.precioParticipacion,
         creadoPorId: usuarioId,
       },
     });
@@ -83,8 +84,50 @@ export class SorteosService {
       include: { premios: { orderBy: { creadoEn: 'desc' } } },
     });
     if (!sorteo) throw new NotFoundException('Sorteo no encontrado');
-    const premios = await this.adjuntarTickets(sorteo.premios);
-    return { ...sorteo, premios };
+    const premios = await this.adjuntarArchivos(sorteo.premios);
+
+    // ── Economía del sorteo ──
+    // Recaudado = Σ participaciones registradas (sin anulados).
+    // Costo premios = Σ valorMovimiento de las SALIDA_SORTEO (costo real
+    // del kardex; premios sin stock no suman costo).
+    const activos = sorteo.premios.filter(
+      (p) => p.estado !== EstadoPremioSorteo.ANULADO,
+    );
+    const totalRecaudado = activos.reduce(
+      (s, p) => s + Number(p.montoParticipacion ?? 0),
+      0,
+    );
+    const movIds = activos
+      .map((p) => p.movimientoStockId)
+      .filter((id): id is string => !!id);
+    const movs = movIds.length
+      ? await this.prisma.movimientoStock.findMany({
+          where: { id: { in: movIds } },
+          select: { valorMovimiento: true },
+        })
+      : [];
+    const costoPremios = movs.reduce(
+      (s, m) => s + Number(m.valorMovimiento ?? 0),
+      0,
+    );
+
+    // Imagen promocional del sorteo (Archivo SORTEO).
+    const imagenes = await this.prisma.archivo.findMany({
+      where: { entidadTipo: 'SORTEO', entidadId: sorteoId },
+      orderBy: { creadoEn: 'desc' },
+      select: { id: true, url: true, urlThumbnail: true },
+    });
+
+    return {
+      ...sorteo,
+      premios,
+      imagenes,
+      resumen: {
+        totalRecaudado,
+        costoPremios,
+        ganancia: totalRecaudado - costoPremios,
+      },
+    };
   }
 
   async actualizarSorteo(
@@ -102,6 +145,7 @@ export class SorteosService {
         estado: dto.estado,
         sedeId: dto.sedeId,
         fechaSorteo: dto.fechaSorteo ? new Date(dto.fechaSorteo) : undefined,
+        precioParticipacion: dto.precioParticipacion,
       },
     });
   }
@@ -243,6 +287,10 @@ export class SorteosService {
           varianteId: dto.varianteId,
           cantidad,
           movimientoStockId,
+          // Lo pagado por ESTE ganador — editable; default el precio de
+          // participación del sorteo.
+          montoParticipacion:
+            dto.montoParticipacion ?? sorteo.precioParticipacion,
           modalidad: dto.modalidad,
           agenciaNombre: dto.agenciaNombre,
           agenciaSede: dto.agenciaSede,
@@ -357,9 +405,8 @@ export class SorteosService {
   }
 
   /**
-   * Sube la foto del ticket de envío (Archivo polimórfico
-   * SORTEO_PREMIO/EVIDENCIA). El contexto se fuerza aquí — el endpoint
-   * no permite subir a otras entidades.
+   * Sube la foto del ticket de envío (SORTEO_PREMIO/EVIDENCIA). El
+   * contexto se fuerza aquí — el endpoint no permite otras entidades.
    */
   async subirTicketEnvio(
     empresaId: string,
@@ -374,6 +421,42 @@ export class SorteosService {
       entidadTipo: 'SORTEO_PREMIO',
       entidadId: premioId,
       categoria: 'EVIDENCIA',
+      subidoPor: usuarioId,
+    });
+  }
+
+  /** Foto del PREMIO ganado (SORTEO_PREMIO/PRINCIPAL). */
+  async subirFotoPremio(
+    empresaId: string,
+    usuarioId: string,
+    premioId: string,
+    file: any,
+  ) {
+    await this.assertPremio(empresaId, premioId);
+    return this.storage.uploadArchivo({
+      empresaId,
+      file,
+      entidadTipo: 'SORTEO_PREMIO',
+      entidadId: premioId,
+      categoria: 'PRINCIPAL',
+      subidoPor: usuarioId,
+    });
+  }
+
+  /** Imagen promocional del SORTEO (SORTEO/BANNER). */
+  async subirImagenSorteo(
+    empresaId: string,
+    usuarioId: string,
+    sorteoId: string,
+    file: any,
+  ) {
+    await this.assertSorteo(empresaId, sorteoId);
+    return this.storage.uploadArchivo({
+      empresaId,
+      file,
+      entidadTipo: 'SORTEO',
+      entidadId: sorteoId,
+      categoria: 'BANNER',
       subidoPor: usuarioId,
     });
   }
@@ -440,9 +523,15 @@ export class SorteosService {
     return premio;
   }
 
-  /** Adjunta las fotos del ticket de envío a una lista de premios. */
-  private async adjuntarTickets<T extends { id: string }>(premios: T[]) {
-    if (premios.length === 0) return premios as (T & { tickets: any[] })[];
+  /**
+   * Adjunta los archivos del premio separados por rol: `tickets`
+   * (EVIDENCIA = foto del ticket de agencia) y `fotos` (PRINCIPAL =
+   * foto del premio ganado).
+   */
+  private async adjuntarArchivos<T extends { id: string }>(premios: T[]) {
+    if (premios.length === 0) {
+      return premios as (T & { tickets: any[]; fotos: any[] })[];
+    }
     const archivos = await this.prisma.archivo.findMany({
       where: {
         entidadTipo: 'SORTEO_PREMIO',
@@ -454,18 +543,24 @@ export class SorteosService {
         entidadId: true,
         url: true,
         urlThumbnail: true,
+        categoria: true,
         creadoEn: true,
       },
     });
     return premios.map((p) => ({
       ...p,
-      tickets: archivos.filter((a) => a.entidadId === p.id),
+      tickets: archivos.filter(
+        (a) => a.entidadId === p.id && a.categoria === 'EVIDENCIA',
+      ),
+      fotos: archivos.filter(
+        (a) => a.entidadId === p.id && a.categoria === 'PRINCIPAL',
+      ),
     }));
   }
 
-  /** Vista del cliente: tickets + datos de la sede de retiro. */
+  /** Vista del cliente: tickets/fotos + datos de la sede de retiro. */
   private async enriquecerPremiosCliente(premios: any[]) {
-    const conTickets = await this.adjuntarTickets(premios);
+    const conTickets = await this.adjuntarArchivos(premios);
     const sedeIds = [
       ...new Set(
         conTickets

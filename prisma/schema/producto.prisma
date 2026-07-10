@@ -593,6 +593,7 @@ enum EntidadTipo {
   PAGO_GASTO_RECURRENTE // Comprobante (foto del recibo) de un pago de gasto recurrente
   PAGO_COMPRA // Comprobante (voucher Yape/Plin/transferencia) de un pago a proveedor (CxP)
   SORTEO_PREMIO // Foto del ticket de envío de agencia del premio de sorteo
+  SORTEO // Imagen promocional del sorteo
 }
 
 enum TipoPrecioCombo {

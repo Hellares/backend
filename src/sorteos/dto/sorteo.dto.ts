@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   MaxLength,
@@ -45,6 +46,16 @@ export class CreateSorteoDto {
   @IsOptional()
   @IsString()
   sedeId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Precio de la participación (S/) — default por ganador',
+    example: 20,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  precioParticipacion?: number;
 }
 
 export class UpdateSorteoDto {
@@ -78,6 +89,13 @@ export class UpdateSorteoDto {
   @IsOptional()
   @IsString()
   sedeId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  precioParticipacion?: number;
 }
 
 export class RegistrarPremioDto {
@@ -133,6 +151,18 @@ export class RegistrarPremioDto {
   @IsInt()
   @Min(1)
   cantidad?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Lo que este ganador pagó por participar (default: el precio de ' +
+      'participación del sorteo). Editable — el último puede pagar menos.',
+    example: 20,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  montoParticipacion?: number;
 
   @ApiPropertyOptional({ enum: ModalidadEntregaPremio })
   @IsOptional()

@@ -45,6 +45,10 @@ model Sorteo {
   canal       CanalSorteo  @default(OTRO)
   fechaSorteo DateTime     @default(now())
   estado      EstadoSorteo @default(ABIERTO)
+  // Precio de la participación ("jugada") — default para cada ganador
+  // registrado; la suma de las participaciones registradas es lo
+  // recaudado del sorteo. Imagen promocional via Archivo (SORTEO).
+  precioParticipacion Decimal? @db.Decimal(14, 2)
   creadoPorId String
 
   creadoEn      DateTime @default(now())
@@ -80,6 +84,10 @@ model SorteoPremio {
   cantidad          Int     @default(1)
   // MovimientoStock de la SALIDA_SORTEO (trazabilidad kardex↔premio).
   movimientoStockId String?
+
+  // Lo que ESTE ganador pagó por su participación (prellenado con
+  // Sorteo.precioParticipacion, editable — el último puede pagar menos).
+  montoParticipacion Decimal? @db.Decimal(14, 2)
 
   modalidad     ModalidadEntregaPremio @default(RETIRO_TIENDA)
   agenciaNombre String? // Shalom / Olva / Marvisur / ...

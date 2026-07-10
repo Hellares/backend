@@ -114,6 +114,47 @@ export class SorteosEmpresaController {
     return this.service.subirTicketEnvio(empresaId, usuarioId, premioId, file);
   }
 
+  @Post('premios/:premioId/foto-premio')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Subir foto del premio ganado' })
+  @ApiConsumes('multipart/form-data')
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @UseInterceptors(FileInterceptor('file'))
+  async subirFotoPremio(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Param('premioId') premioId: string,
+    @UploadedFile() file: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó ningún archivo');
+    }
+    return this.service.subirFotoPremio(empresaId, usuarioId, premioId, file);
+  }
+
+  @Post(':id/imagen')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Subir imagen promocional del sorteo' })
+  @ApiConsumes('multipart/form-data')
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @UseInterceptors(FileInterceptor('file'))
+  async subirImagenSorteo(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') sorteoId: string,
+    @UploadedFile() file: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó ningún archivo');
+    }
+    return this.service.subirImagenSorteo(
+      empresaId,
+      usuarioId,
+      sorteoId,
+      file,
+    );
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Detalle del sorteo con premios y tickets' })
