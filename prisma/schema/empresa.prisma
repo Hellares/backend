@@ -171,6 +171,7 @@ model Empresa {
   carritoItems          CarritoItem[]         @relation("CarritoEmpresa")
   pedidosMarketplace    PedidoMarketplace[]   @relation("PedidosEmpresa")
   solicitudesCotizacion SolicitudCotizacion[] @relation("SolicitudesEmpresa")
+  sorteos               Sorteo[]              @relation("SorteosEmpresa")
 
   // Relaciones para módulo de caja
   cajas           Caja[]

@@ -133,6 +133,7 @@ model Usuario {
   carritoItems             CarritoItem[]             @relation("CarritoUsuario")
   pedidosMarketplace       PedidoMarketplace[]       @relation("PedidosComprador")
   solicitudesCotizacion    SolicitudCotizacion[]     @relation("SolicitudesCotizacion")
+  premiosGanados           SorteoPremio[]            @relation("PremiosGanador")
 
   // Relaciones para módulo de caja
   cajasAbiertas              Caja[]           @relation("CajaUsuario")

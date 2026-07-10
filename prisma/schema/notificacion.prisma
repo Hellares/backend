@@ -10,6 +10,7 @@ enum TipoNotificacion {
   MENSAJE
   SISTEMA
   PEDIDO_MARKETPLACE
+  SORTEO // premio ganado / actualización del envío del premio
 }
 
 model DispositivoNotificacion {

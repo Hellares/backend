@@ -312,6 +312,10 @@ enum TipoMovimientoStock {
   PRODUCCION_ENTRADA // Producto final fabricado desde componentes (suma stockActual)
   PRODUCCION_SALIDA // Insumo consumido en fabricación (resta stockActual)
 
+  // === SORTEOS / PROMOCIONES ===
+  SALIDA_SORTEO // Premio de sorteo entregado (marketing) — valorizado a costo
+  ENTRADA_SORTEO_ANULADO // Reposición por anulación de un premio que descontó stock
+
   // === OTROS (Legacy - mantener compatibilidad) ===
   ENTRADA_AJUSTE // (DEPRECADO) Usar AJUSTE_ENTRADA
   SALIDA_AJUSTE // (DEPRECADO) Usar AJUSTE_SALIDA

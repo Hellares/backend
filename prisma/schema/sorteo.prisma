@@ -1,0 +1,103 @@
+// ════════════════════════════════════════════════════════════════════
+// SORTEOS por redes sociales (F1/F2)
+// Las empresas sortean productos en Facebook/TikTok/IG y hoy registran
+// ganadores en papel/WhatsApp. Aquí: registro de ganadores con premio
+// (vínculo a inventario OPCIONAL — solo premios valiosos descuentan
+// stock) y envío trackeable (agencia + foto del ticket vía Archivo
+// polimórfico entidadTipo=SORTEO_PREMIO). El ganador es una cuenta del
+// app (Usuario, mismo patrón que PedidoMarketplace.compradorId) y ve
+// sus premios en la sección "Mis Premios".
+// F3 (venta de tickets online) NO está modelada — ver doc del proyecto.
+// ════════════════════════════════════════════════════════════════════
+
+enum EstadoSorteo {
+  ABIERTO
+  CERRADO
+}
+
+enum CanalSorteo {
+  FACEBOOK
+  INSTAGRAM
+  TIKTOK
+  WHATSAPP
+  OTRO
+}
+
+enum EstadoPremioSorteo {
+  REGISTRADO // ganador registrado, premio por preparar
+  PREPARANDO // alistando el premio
+  ENVIADO // despachado (agencia) o listo para retiro en tienda
+  ENTREGADO // el ganador lo tiene
+  ANULADO // registro anulado (repone stock si descontó)
+}
+
+enum ModalidadEntregaPremio {
+  ENVIO_AGENCIA // provincia: Shalom/Olva/etc.
+  RETIRO_TIENDA // ganador local recoge en la sede
+}
+
+model Sorteo {
+  id          String       @id @default(cuid())
+  empresaId   String
+  sedeId      String? // sede que organiza/despacha (stock sale de aquí)
+  titulo      String
+  descripcion String?
+  canal       CanalSorteo  @default(OTRO)
+  fechaSorteo DateTime     @default(now())
+  estado      EstadoSorteo @default(ABIERTO)
+  creadoPorId String
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa Empresa        @relation("SorteosEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+  premios SorteoPremio[]
+
+  @@index([empresaId, estado])
+  @@index([empresaId, fechaSorteo])
+}
+
+model SorteoPremio {
+  id        String @id @default(cuid())
+  sorteoId  String
+  empresaId String // denormalizado: listados por empresa sin join
+
+  // Ganador = cuenta del app. El registro por DNI (Factiliza) reusa el
+  // flujo de clientes que crea Persona+Usuario automáticamente.
+  ganadorId String
+  // Snapshot de los datos con los que se registró el premio (la Persona
+  // puede editar sus datos después; el acta del sorteo no debe mutar).
+  ganadorDni     String?
+  ganadorNombre  String
+  ganadorCelular String?
+
+  // Premio: descripción SIEMPRE. Producto/variante OPCIONALES — solo
+  // cuando la empresa quiere descontar stock (premios valiosos, ej.
+  // laptop). Sorteos de "productos varios pequeños" van sin vínculo.
+  descripcion       String
+  productoId        String?
+  varianteId        String?
+  cantidad          Int     @default(1)
+  // MovimientoStock de la SALIDA_SORTEO (trazabilidad kardex↔premio).
+  movimientoStockId String?
+
+  modalidad     ModalidadEntregaPremio @default(RETIRO_TIENDA)
+  agenciaNombre String? // Shalom / Olva / Marvisur / ...
+  agenciaSede   String? // sede-dirección de la agencia destino
+
+  estado        EstadoPremioSorteo @default(REGISTRADO)
+  enviadoEn     DateTime?
+  entregadoEn   DateTime?
+  observaciones String?
+
+  registradoPorId String
+  creadoEn        DateTime @default(now())
+  actualizadoEn   DateTime @updatedAt
+
+  sorteo  Sorteo  @relation(fields: [sorteoId], references: [id], onDelete: Cascade)
+  ganador Usuario @relation("PremiosGanador", fields: [ganadorId], references: [id])
+
+  @@index([empresaId, estado])
+  @@index([ganadorId])
+  @@index([sorteoId])
+}

@@ -9,6 +9,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
 import { EmpresaModule } from './empresa/empresa.module';
 import { MarketplaceModule } from './marketplace/marketplace.module';
 import { BannerMarketplaceModule } from './banner-marketplace/banner-marketplace.module';
+import { SorteosModule } from './sorteos/sorteos.module';
 import { StorageModule } from './storage/storage.module';
 import { ProductoModule } from './producto/producto.module';
 import { ConfiguracionCodigosModule } from './configuracion-codigos/configuracion-codigos.module';
@@ -96,6 +97,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     EmpresaModule,
     MarketplaceModule,
     BannerMarketplaceModule,
+    SorteosModule,
     StorageModule,
     ConfiguracionCodigosModule,
     ProductoModule,
