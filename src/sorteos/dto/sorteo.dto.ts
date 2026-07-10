@@ -174,10 +174,20 @@ export class RegistrarPremioDto {
   @IsString()
   agenciaNombre?: string;
 
-  @ApiPropertyOptional({ example: 'Agencia Trujillo - Av. España 123' })
+  @ApiPropertyOptional({ example: 'San Martín' })
   @IsOptional()
   @IsString()
-  agenciaSede?: string;
+  destinoDepartamento?: string;
+
+  @ApiPropertyOptional({ example: 'Tarapoto' })
+  @IsOptional()
+  @IsString()
+  destinoProvincia?: string;
+
+  @ApiPropertyOptional({ example: 'Jr. Los Pinos 123' })
+  @IsOptional()
+  @IsString()
+  agenciaDireccion?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -293,7 +293,9 @@ export class SorteosService {
             dto.montoParticipacion ?? sorteo.precioParticipacion,
           modalidad: dto.modalidad,
           agenciaNombre: dto.agenciaNombre,
-          agenciaSede: dto.agenciaSede,
+          destinoDepartamento: dto.destinoDepartamento,
+          destinoProvincia: dto.destinoProvincia,
+          agenciaDireccion: dto.agenciaDireccion,
           observaciones: dto.observaciones,
           registradoPorId: usuarioId,
         },
@@ -389,10 +391,16 @@ export class SorteosService {
     });
 
     if (dto.estado === EstadoPremioSorteo.ENVIADO) {
+      const destino = [premio.destinoProvincia, premio.destinoDepartamento]
+        .filter(Boolean)
+        .join(', ');
       const detalle =
         premio.modalidad === 'ENVIO_AGENCIA'
           ? `Enviado por ${premio.agenciaNombre ?? 'agencia'}` +
-            (premio.agenciaSede ? ` — recoge en ${premio.agenciaSede}` : '')
+            (destino ? ` a ${destino}` : '') +
+            (premio.agenciaDireccion
+              ? ` — recoge en ${premio.agenciaDireccion}`
+              : '')
           : 'Listo para recoger en tienda';
       this.notificarGanador(premio.id, empresaId, premio.ganadorId, {
         titulo: '📦 Tu premio está en camino',

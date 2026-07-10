@@ -91,7 +91,10 @@ model SorteoPremio {
 
   modalidad     ModalidadEntregaPremio @default(RETIRO_TIENDA)
   agenciaNombre String? // Shalom / Olva / Marvisur / ...
-  agenciaSede   String? // sede-dirección de la agencia destino
+  // Destino desglosado como se habla: "envío a San Martín, Tarapoto".
+  destinoDepartamento String?
+  destinoProvincia    String?
+  agenciaDireccion    String? // dirección de la oficina de la agencia destino
 
   estado        EstadoPremioSorteo @default(REGISTRADO)
   enviadoEn     DateTime?
