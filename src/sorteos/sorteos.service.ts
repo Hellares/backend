@@ -512,6 +512,47 @@ export class SorteosService {
     return this.enriquecerPremiosCliente(premios);
   }
 
+  /**
+   * El GANADOR indica dónde recogerá su premio — el ÚNICO dato que puede
+   * tocar (si no lo hace, la empresa lo llena como siempre). Solo antes
+   * del despacho; fija la modalidad en ENVIO_AGENCIA.
+   */
+  async elegirAgenciaMiPremio(
+    usuarioId: string,
+    premioId: string,
+    dto: {
+      agenciaNombre: string;
+      destinoDepartamento?: string;
+      destinoProvincia?: string;
+      agenciaDireccion?: string;
+    },
+  ) {
+    const premio = await this.prisma.sorteoPremio.findFirst({
+      where: { id: premioId, ganadorId: usuarioId },
+    });
+    if (!premio) throw new NotFoundException('Premio no encontrado');
+    if (
+      premio.estado !== EstadoPremioSorteo.REGISTRADO &&
+      premio.estado !== EstadoPremioSorteo.PREPARANDO
+    ) {
+      throw new ConflictException({
+        code: 'PREMIO_YA_DESPACHADO',
+        message:
+          'Tu premio ya fue despachado — coordina el cambio con la tienda',
+      });
+    }
+    return this.prisma.sorteoPremio.update({
+      where: { id: premioId },
+      data: {
+        modalidad: 'ENVIO_AGENCIA',
+        agenciaNombre: dto.agenciaNombre,
+        destinoDepartamento: dto.destinoDepartamento,
+        destinoProvincia: dto.destinoProvincia,
+        agenciaDireccion: dto.agenciaDireccion,
+      },
+    });
+  }
+
   async miPremioDetalle(usuarioId: string, premioId: string) {
     const premio = await this.prisma.sorteoPremio.findFirst({
       where: { id: premioId, ganadorId: usuarioId },

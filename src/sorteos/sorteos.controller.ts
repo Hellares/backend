@@ -31,6 +31,7 @@ import { SorteosService } from './sorteos.service';
 import {
   CambiarEstadoPremioDto,
   CreateSorteoDto,
+  ElegirAgenciaPremioDto,
   RegistrarPremioDto,
   UpdateSorteoDto,
 } from './dto/sorteo.dto';
@@ -227,5 +228,18 @@ export class MisPremiosController {
     @Param('id') premioId: string,
   ) {
     return this.service.miPremioDetalle(usuarioId, premioId);
+  }
+
+  @Patch('mis-premios/:id/agencia')
+  @ApiOperation({
+    summary:
+      'El ganador indica su agencia de recojo (solo antes del despacho)',
+  })
+  async elegirAgencia(
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') premioId: string,
+    @Body() dto: ElegirAgenciaPremioDto,
+  ) {
+    return this.service.elegirAgenciaMiPremio(usuarioId, premioId, dto);
   }
 }

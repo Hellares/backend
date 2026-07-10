@@ -204,6 +204,29 @@ export class RegistrarPremioDto {
   sedeId?: string;
 }
 
+/** El GANADOR indica su agencia de recojo (lo ÚNICO que puede editar). */
+export class ElegirAgenciaPremioDto {
+  @ApiProperty({ example: 'SHALOM' })
+  @IsString()
+  @IsNotEmpty()
+  agenciaNombre: string;
+
+  @ApiPropertyOptional({ example: 'San Martín' })
+  @IsOptional()
+  @IsString()
+  destinoDepartamento?: string;
+
+  @ApiPropertyOptional({ example: 'Tarapoto' })
+  @IsOptional()
+  @IsString()
+  destinoProvincia?: string;
+
+  @ApiPropertyOptional({ example: 'Jr. Los Pinos 123' })
+  @IsOptional()
+  @IsString()
+  agenciaDireccion?: string;
+}
+
 export class CambiarEstadoPremioDto {
   @ApiProperty({ enum: EstadoPremioSorteo })
   @IsEnum(EstadoPremioSorteo)
