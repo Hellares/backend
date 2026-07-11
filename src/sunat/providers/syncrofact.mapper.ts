@@ -187,6 +187,13 @@ export class SyncrofactMapper {
     return client;
   }
 
+  /** Gratuitas gravadas (cat. 07): llevan IGV informativo en mto_igv_gratuitas. */
+  private static readonly GRATUITAS_GRAVADAS = ['11', '12', '13', '14', '15', '16'];
+  /** Todas las afectaciones gratuitas (excluye '17' IVAP, que NO es gratuito). */
+  private static readonly GRATUITAS = [
+    '11', '12', '13', '14', '15', '16', '21', '31', '32', '33', '34', '35', '36',
+  ];
+
   private static buildItems(comprobante: ComprobanteData): SyncrofactItem[] {
     return comprobante.detalles.map((d) => {
       const cantidad = Number(d.cantidad);
@@ -195,6 +202,7 @@ export class SyncrofactMapper {
       const porcentajeIGV = Number(d.porcentajeIGV || IGV_DEFAULT);
       const tipAfeIgv = d.tipoAfectacion || '10';
       const itemIcbper = Number(d.icbper || 0);
+      const esGratuita = this.GRATUITAS.includes(tipAfeIgv);
 
       // Doc Syncrofact: "Usar `mto_valor_unitario` (sin IGV) O `mto_precio_unitario`
       // (con IGV), no ambos". Mandar solo uno evita desajuste de centavos al
@@ -216,7 +224,17 @@ export class SyncrofactMapper {
         porcentaje_igv: esGravado ? porcentajeIGV : 0,
       };
 
-      if (esGravado) {
+      if (esGratuita) {
+        // Operación gratuita (regalo/bonificación): el cliente paga 0 y el
+        // valor de LISTA viaja como referencial en mto_valor_gratuito.
+        // Syncrofact acumula mto_oper_gratuitas + mto_igv_gratuitas (solo
+        // gravadas 11-16 llevan % IGV informativo) y emite la leyenda 1002.
+        item.mto_valor_unitario = 0;
+        item.mto_valor_gratuito = this.round2(valorUnitario);
+        item.porcentaje_igv = this.GRATUITAS_GRAVADAS.includes(tipAfeIgv)
+          ? porcentajeIGV
+          : 0;
+      } else if (esGravado) {
         item.mto_precio_unitario = this.round2(montoUnitario);
       } else {
         item.mto_valor_unitario = this.round2(montoUnitario);

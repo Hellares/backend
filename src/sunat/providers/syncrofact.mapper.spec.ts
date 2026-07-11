@@ -157,3 +157,94 @@ describe('SyncrofactMapper.toInvoiceRequest — codigo_producto_sunat', () => {
     expect(body.detalles[0]).not.toHaveProperty('codigo_producto_sunat');
   });
 });
+
+/**
+ * Operaciones GRATUITAS (regalos/bonificaciones, guard SUNAT 3105): la línea
+ * convertida (afectación 15/21/31) viaja con mto_valor_unitario 0 y el valor
+ * de lista como mto_valor_gratuito. Solo las gravadas (11-16) llevan % IGV
+ * informativo.
+ */
+describe('SyncrofactMapper.toInvoiceRequest — líneas gratuitas', () => {
+  const config: any = {
+    porcentajeIGV: 18,
+    entorno: 'beta',
+    proveedorConfig: { companyId: 1, branchId: 1 },
+  };
+
+  const comprobanteConLinea = (detalle: any): any => ({
+    id: 'comp-3',
+    tipoComprobante: 'BOLETA',
+    serie: 'B002',
+    correlativo: '00000100',
+    tipoDocumento: 'DNI',
+    numeroDocumento: '12345678',
+    nombreCliente: 'CLIENTE',
+    direccionCliente: null,
+    emailCliente: null,
+    fechaEmision: new Date('2026-07-11'),
+    fechaVencimiento: null,
+    moneda: 'PEN',
+    tipoCambio: null,
+    total: 0,
+    detalles: [detalle],
+    venta: null,
+  });
+
+  const lineaBase = {
+    descripcion: 'BOLSA BLANDA (regalo)',
+    cantidad: 1,
+    precioUnitario: 0,
+    porcentajeIGV: 18,
+    igv: 0,
+    icbper: 0,
+    unidadMedida: 'NIU',
+    producto: { codigoEmpresa: 'BOLSA' },
+  };
+
+  it('gratuita GRAVADA (15) → valor_unitario 0 + valor_gratuito referencial + IGV informativo', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConLinea({ ...lineaBase, tipoAfectacion: '15', valorUnitario: 4.24 }),
+      config,
+    );
+    const item = body.detalles[0];
+    expect(item.tip_afe_igv).toBe('15');
+    expect(item.mto_valor_unitario).toBe(0);
+    expect(item.mto_valor_gratuito).toBe(4.24);
+    expect(item.porcentaje_igv).toBe(18);
+    expect(item).not.toHaveProperty('mto_precio_unitario');
+  });
+
+  it('gratuita INAFECTA (31) → sin IGV informativo', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConLinea({ ...lineaBase, tipoAfectacion: '31', valorUnitario: 5 }),
+      config,
+    );
+    const item = body.detalles[0];
+    expect(item.mto_valor_gratuito).toBe(5);
+    expect(item.porcentaje_igv).toBe(0);
+  });
+
+  it('gratuita EXONERADA (21) → sin IGV informativo', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConLinea({ ...lineaBase, tipoAfectacion: '21', valorUnitario: 3 }),
+      config,
+    );
+    const item = body.detalles[0];
+    expect(item.mto_valor_gratuito).toBe(3);
+    expect(item.porcentaje_igv).toBe(0);
+  });
+
+  it('línea onerosa normal NO lleva mto_valor_gratuito', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConLinea({
+        ...lineaBase,
+        tipoAfectacion: '10',
+        precioUnitario: 11.8,
+        valorUnitario: 10,
+      }),
+      config,
+    );
+    expect(body.detalles[0]).not.toHaveProperty('mto_valor_gratuito');
+    expect(body.detalles[0].mto_precio_unitario).toBe(11.8);
+  });
+});

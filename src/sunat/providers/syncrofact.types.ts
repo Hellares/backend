@@ -84,6 +84,8 @@ export interface SyncrofactItem {
   icbper?: number;
   /** Código de producto SUNAT (UNSPSC 8 dígitos, catálogos 25/25.1/25.2/25.3). */
   codigo_producto_sunat?: string;
+  /** Valor referencial unitario SIN IGV para operaciones GRATUITAS (afectación 11-16/21/31-36). */
+  mto_valor_gratuito?: number;
 }
 
 // ── Request: Cuota de crédito ──

@@ -581,6 +581,13 @@ export class FacturacionService {
 
       this.logger.log(`Enviando comprobante ${comprobante.codigoGenerado} vía ${proveedorEmisor}`);
 
+      // Líneas a precio 0 con afectación onerosa (regalos, bolsas, promos)
+      // → SUNAT las rechaza con 3105 ("al menos un tributo por línea").
+      // Se convierten a operación GRATUITA (cat. 07: 15/21/31) con el precio
+      // de lista como valor referencial. Si no hay precio de lista, se corta
+      // aquí con error claro (mejor que un rechazo de SUNAT).
+      await this.convertirLineasPrecioCeroAGratuitas(comprobante as any, config as any);
+
       const provider = this.providerFactory.get(proveedorEmisor);
       const result: EnvioResult = await provider.enviar(
         comprobante as any,
@@ -690,6 +697,114 @@ export class FacturacionService {
           ultimoIntentoEnvio: new Date(),
         },
       }).catch(() => {}); // Silenciar errores de update
+    }
+  }
+
+  // ── Conversión de líneas a precio 0 en operaciones GRATUITAS ──
+
+  /**
+   * SUNAT rechaza (error 3105) toda línea con afectación ONEROSA (10/20/30)
+   * cuyo precio es 0: una línea gravada debe llevar tributo. El tratamiento
+   * correcto para regalos/bonificaciones es declararla GRATUITA (catálogo 07:
+   * 15 bonificación gravada, 21 exonerado gratuito, 31 inafecto bonificación)
+   * con el precio de LISTA del producto como valor referencial — el total del
+   * comprobante no cambia (el cliente pagó lo mismo) y el IGV de gratuitas va
+   * en su bloque informativo (mto_igv_gratuitas + leyenda 1002, calculados por
+   * Syncrofact).
+   *
+   * Muta los detalles en memoria Y persiste la conversión en
+   * DetalleComprobante (tipoAfectacion + valorUnitario = referencial sin IGV)
+   * para que el registro refleje lo efectivamente declarado.
+   *
+   * Guard: si la línea a 0 es un servicio, o el producto no tiene precio de
+   * lista en la sede, lanza BadRequest con mensaje accionable (queda visible
+   * en el monitor como errorProveedor y se corrige + reenvía).
+   */
+  private async convertirLineasPrecioCeroAGratuitas(
+    comprobante: {
+      codigoGenerado: string;
+      sedeId: string | null;
+      detalles: Array<{
+        id: string;
+        descripcion: string;
+        productoId: string | null;
+        servicioId: string | null;
+        precioUnitario: any;
+        valorUnitario: any;
+        tipoAfectacion: string | null;
+      }>;
+    },
+    config: { porcentajeIGV: any },
+  ): Promise<void> {
+    const MAPA_GRATUITA: Record<string, string> = {
+      '10': '15', // Gravado → Gravado-Bonificaciones
+      '20': '21', // Exonerado → Exonerado-Transferencia gratuita
+      '30': '31', // Inafecto → Inafecto-Retiro por bonificación
+    };
+
+    const enCero = comprobante.detalles.filter(
+      (d) =>
+        Number(d.precioUnitario) === 0 &&
+        MAPA_GRATUITA[d.tipoAfectacion ?? '10'] !== undefined,
+    );
+    if (enCero.length === 0) return;
+
+    const igvPct = Number(config.porcentajeIGV) || 18;
+
+    for (const d of enCero) {
+      if (!d.productoId) {
+        throw new BadRequestException(
+          `La línea "${d.descripcion}" está a S/ 0.00 y no puede facturarse: ` +
+          `asígnale un precio o exclúyela del comprobante (los servicios no ` +
+          `tienen precio de lista para declararla como gratuita).`,
+        );
+      }
+
+      // Precio de lista del producto en la sede del comprobante (stock del
+      // producto base — las variantes no están referenciadas en el detalle).
+      const stock = comprobante.sedeId
+        ? await this.prisma.productoStock.findFirst({
+            where: {
+              sedeId: comprobante.sedeId,
+              productoId: d.productoId,
+              varianteId: null,
+            },
+            select: { precio: true },
+          })
+        : null;
+
+      const precioLista = Number(stock?.precio ?? 0);
+      if (!precioLista || precioLista <= 0) {
+        throw new BadRequestException(
+          `La línea "${d.descripcion}" está a S/ 0.00 y el producto no tiene ` +
+          `precio de lista en la sede: no se puede calcular el valor ` +
+          `referencial de la operación gratuita. Asigna precio de lista al ` +
+          `producto (o precio a la línea) y reenvía el comprobante.`,
+        );
+      }
+
+      const tipoOriginal = d.tipoAfectacion ?? '10';
+      const tipoGratuita = MAPA_GRATUITA[tipoOriginal];
+      // El valor referencial va SIN IGV: para gravados se desagrega del
+      // precio de lista; exonerados/inafectos no llevan IGV.
+      const valorReferencial =
+        tipoOriginal === '10' ? precioLista / (1 + igvPct / 100) : precioLista;
+      const valorRef2 = Math.round(valorReferencial * 100) / 100;
+
+      await this.prisma.detalleComprobante.update({
+        where: { id: d.id },
+        data: { tipoAfectacion: tipoGratuita, valorUnitario: valorRef2 },
+      });
+
+      // Mutar en memoria para que el mapper arme el item gratuito
+      d.tipoAfectacion = tipoGratuita;
+      d.valorUnitario = valorRef2;
+
+      this.logger.log(
+        `${comprobante.codigoGenerado}: línea "${d.descripcion}" a S/0.00 ` +
+        `convertida a GRATUITA (${tipoOriginal}→${tipoGratuita}, ` +
+        `referencial S/${valorRef2}).`,
+      );
     }
   }
 
