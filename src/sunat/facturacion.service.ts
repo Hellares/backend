@@ -722,6 +722,7 @@ export class FacturacionService {
    */
   private async convertirLineasPrecioCeroAGratuitas(
     comprobante: {
+      id: string;
       codigoGenerado: string;
       sedeId: string | null;
       detalles: Array<{
@@ -729,6 +730,7 @@ export class FacturacionService {
         descripcion: string;
         productoId: string | null;
         servicioId: string | null;
+        cantidad: any;
         precioUnitario: any;
         valorUnitario: any;
         tipoAfectacion: string | null;
@@ -750,6 +752,7 @@ export class FacturacionService {
     if (enCero.length === 0) return;
 
     const igvPct = Number(config.porcentajeIGV) || 18;
+    let totalGratuitas = 0;
 
     for (const d of enCero) {
       if (!d.productoId) {
@@ -799,12 +802,22 @@ export class FacturacionService {
       // Mutar en memoria para que el mapper arme el item gratuito
       d.tipoAfectacion = tipoGratuita;
       d.valorUnitario = valorRef2;
+      totalGratuitas += valorRef2 * (Number(d.cantidad) || 1);
 
       this.logger.log(
         `${comprobante.codigoGenerado}: línea "${d.descripcion}" a S/0.00 ` +
         `convertida a GRATUITA (${tipoOriginal}→${tipoGratuita}, ` +
         `referencial S/${valorRef2}).`,
       );
+    }
+
+    // Snapshot del total de gratuitas en el comprobante (espejo del
+    // mto_oper_gratuitas del proveedor) — lo consumen ticket y PDF del app.
+    if (totalGratuitas > 0) {
+      await this.prisma.comprobanteElectronico.update({
+        where: { id: comprobante.id },
+        data: { gratuitas: Math.round(totalGratuitas * 100) / 100 },
+      });
     }
   }
 

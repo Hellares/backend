@@ -699,7 +699,7 @@ export class VentaService {
         select: {
           id: true, sedeId: true, tipoComprobante: true, codigoGenerado: true, serie: true, correlativo: true,
           estado: true, sunatStatus: true, sunatHash: true,
-          gravada: true, exonerada: true, inafecta: true, igv: true, icbper: true, total: true,
+          gravada: true, exonerada: true, inafecta: true, gratuitas: true, igv: true, icbper: true, total: true,
           sunatXmlUrl: true, sunatPdfUrl: true, sunatCdrUrl: true,
           cadenaQR: true, enlaceProveedor: true,
           enviadoAProveedor: true, errorProveedor: true, intentosEnvio: true,

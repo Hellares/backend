@@ -121,6 +121,9 @@ model ComprobanteElectronico {
   gravada             Decimal                   @default(0) @db.Decimal(10, 2)
   inafecta            Decimal                   @default(0) @db.Decimal(10, 2)
   exonerada           Decimal                   @default(0) @db.Decimal(10, 2)
+  // Σ valores referenciales (sin IGV) de líneas GRATUITAS (regalos convertidos
+  // por precio 0 — catálogo 07: 15/21/31). Informativo: NO suma al total.
+  gratuitas           Decimal                   @default(0) @db.Decimal(10, 2)
   igv                 Decimal                   @default(0) @db.Decimal(10, 2)
   icbper              Decimal                   @default(0) @db.Decimal(10, 2)
   total               Decimal                   @default(0) @db.Decimal(10, 2)
