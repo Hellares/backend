@@ -505,7 +505,12 @@ export class FacturacionService {
 
   // ── Core: Enviar comprobante al proveedor ──
 
-  async enviarComprobante(comprobanteId: string, empresaId: string): Promise<void> {
+  async enviarComprobante(
+    comprobanteId: string,
+    empresaId: string,
+    /** true cuando el envío es el reintento tras reasignar correlativo por drift — evita loops. */
+    esReintentoCorrelativo = false,
+  ): Promise<void> {
     try {
       const comprobante = await this.prisma.comprobanteElectronico.findFirst({
         where: { id: comprobanteId, empresaId },
@@ -639,6 +644,26 @@ export class FacturacionService {
         });
         this.logger.log(`Comprobante ${comprobante.codigoGenerado} ya existía, marcado como ACEPTADO`);
       } else {
+        // Auto-heal de correlativo duplicado (drift del contador local vs el
+        // proveedor — p.ej. documentos emitidos DIRECTO en Syncrofact por fuera
+        // del SaaS). El documento NUNCA se creó en el proveedor, así que
+        // reintentar con el mismo correlativo fallaría por siempre: se reasigna
+        // el siguiente libre (max entre proveedor y BD local) y se reintenta
+        // UNA sola vez.
+        if (
+          !esReintentoCorrelativo &&
+          this.esErrorCorrelativoDuplicado(result.error)
+        ) {
+          const reasignado = await this.reasignarCorrelativoPorDrift(
+            comprobante as any,
+            provider,
+            config as any,
+          );
+          if (reasignado) {
+            return this.enviarComprobante(comprobanteId, empresaId, true);
+          }
+        }
+
         await this.prisma.comprobanteElectronico.update({
           where: { id: comprobanteId },
           data: {
@@ -665,6 +690,134 @@ export class FacturacionService {
           ultimoIntentoEnvio: new Date(),
         },
       }).catch(() => {}); // Silenciar errores de update
+    }
+  }
+
+  // ── Auto-heal de correlativo duplicado (drift local vs proveedor) ──
+
+  /** Detecta el rechazo de Syncrofact por correlativo ya usado (Branch.php:
+   *  "Correlativo F002-00000048 ya existe para esta empresa"). */
+  private esErrorCorrelativoDuplicado(error?: string | null): boolean {
+    return /correlativo\s+\S+\s+ya existe/i.test(error ?? '');
+  }
+
+  /** Mapea tipoComprobante → tipoDoc SUNAT + campo contador de la Sede.
+   *  NC/ND discriminan por prefijo de serie (B* = sobre boleta). */
+  private resolverContadorSede(
+    tipoComprobante: string,
+    serie: string,
+  ): { tipoDoc: string; campoContador: string } | null {
+    switch (tipoComprobante) {
+      case 'FACTURA':
+        return { tipoDoc: '01', campoContador: 'ultimoNumeroFactura' };
+      case 'BOLETA':
+        return { tipoDoc: '03', campoContador: 'ultimoNumeroBoleta' };
+      case 'NOTA_CREDITO':
+        return {
+          tipoDoc: '07',
+          campoContador: serie.startsWith('B')
+            ? 'ultimoNumeroNotaCreditoBoleta'
+            : 'ultimoNumeroNotaCredito',
+        };
+      case 'NOTA_DEBITO':
+        return {
+          tipoDoc: '08',
+          campoContador: serie.startsWith('B')
+            ? 'ultimoNumeroNotaDebitoBoleta'
+            : 'ultimoNumeroNotaDebito',
+        };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Reasigna el correlativo de un comprobante cuyo número ya estaba ocupado en
+   * el proveedor (drift: documentos emitidos por fuera del SaaS). Consulta el
+   * último correlativo del proveedor para la serie, toma el máximo contra la
+   * BD local (unique empresaId+tipo+serie+correlativo) y escribe el siguiente
+   * libre en el comprobante Y en el contador de la sede (GREATEST, para que la
+   * próxima emisión tampoco choque). Devuelve false si no pudo resolver — en
+   * ese caso el flujo persiste el RECHAZADO normal.
+   */
+  private async reasignarCorrelativoPorDrift(
+    comprobante: {
+      id: string;
+      empresaId: string;
+      sedeId: string | null;
+      tipoComprobante: string;
+      serie: string;
+      correlativo: string;
+      codigoGenerado: string;
+    },
+    provider: { obtenerSeries?: (config: any) => Promise<ProveedorSeriesInfo> },
+    config: any,
+  ): Promise<boolean> {
+    try {
+      if (!provider.obtenerSeries) return false;
+      const meta = this.resolverContadorSede(
+        comprobante.tipoComprobante,
+        comprobante.serie,
+      );
+      if (!meta) return false;
+
+      // Último correlativo emitido en el proveedor para esta serie
+      const info = await provider.obtenerSeries(config);
+      let correlativoProveedor = 0;
+      for (const b of info.branches) {
+        for (const s of b.series) {
+          if (s.serie === comprobante.serie && s.tipoDocumento === meta.tipoDoc) {
+            correlativoProveedor = Math.max(
+              correlativoProveedor,
+              Number(s.correlativoActual) || 0,
+            );
+          }
+        }
+      }
+      if (correlativoProveedor <= 0) return false;
+
+      // Máximo local en la serie (la unique es por empresa, no por sede)
+      const maxRows = await this.prisma.$queryRaw<Array<{ max: number | null }>>`
+        SELECT MAX(CAST(correlativo AS INTEGER)) as max
+        FROM "ComprobanteElectronico"
+        WHERE "empresaId" = ${comprobante.empresaId}
+          AND "tipoComprobante"::text = ${comprobante.tipoComprobante}
+          AND serie = ${comprobante.serie}
+          AND id <> ${comprobante.id}
+      `;
+      const maxBd = Number(maxRows[0]?.max ?? 0);
+
+      const nuevoNum = Math.max(correlativoProveedor, maxBd) + 1;
+      const actualNum = parseInt(comprobante.correlativo, 10);
+      if (!Number.isFinite(nuevoNum) || nuevoNum === actualNum) return false;
+
+      const nuevoCorrelativo = String(nuevoNum).padStart(8, '0');
+      const nuevoCodigo = `${comprobante.serie}-${nuevoCorrelativo}`;
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.comprobanteElectronico.update({
+          where: { id: comprobante.id },
+          data: { correlativo: nuevoCorrelativo, codigoGenerado: nuevoCodigo },
+        });
+        if (comprobante.sedeId) {
+          await tx.$executeRaw`
+            UPDATE "Sede"
+            SET "${Prisma.raw(meta.campoContador)}" = GREATEST("${Prisma.raw(meta.campoContador)}", ${nuevoNum})
+            WHERE id = ${comprobante.sedeId}
+          `;
+        }
+      });
+
+      this.logger.warn(
+        `Correlativo drift resuelto: ${comprobante.codigoGenerado} → ${nuevoCodigo} ` +
+        `(proveedor=${correlativoProveedor}, maxLocal=${maxBd}); contador de sede avanzado.`,
+      );
+      return true;
+    } catch (e: any) {
+      this.logger.error(
+        `No se pudo reasignar correlativo de ${comprobante.codigoGenerado}: ${e.message}`,
+      );
+      return false;
     }
   }
 
