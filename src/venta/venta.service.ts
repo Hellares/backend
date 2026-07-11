@@ -720,6 +720,45 @@ export class VentaService {
     };
   }
 
+  /**
+   * Completa el snapshot de contacto de la venta desde la Persona del
+   * cliente cuando el caller no lo mandó. Caso real (VTA-SED-00000686):
+   * el cobro de VR manda nombre+documento del cliente seleccionado pero
+   * NO su teléfono → el detalle de la venta no podía mostrarlo aunque el
+   * cliente sí lo tenía registrado. Aplica a teléfono, email y dirección;
+   * lo que el caller mande explícito siempre gana.
+   */
+  private async completarContactoCliente(
+    clienteId: string | null | undefined,
+    actual: {
+      telefono?: string | null;
+      email?: string | null;
+      direccion?: string | null;
+    },
+  ): Promise<{ telefono: string | null; email: string | null; direccion: string | null }> {
+    const base = {
+      telefono: actual.telefono ?? null,
+      email: actual.email ?? null,
+      direccion: actual.direccion ?? null,
+    };
+    if (!clienteId || (base.telefono && base.email && base.direccion)) {
+      return base;
+    }
+    const ep = await this.prisma.empresaPersona.findUnique({
+      where: { id: clienteId },
+      select: {
+        persona: { select: { telefono: true, email: true, direccion: true } },
+      },
+    });
+    const p = ep?.persona;
+    if (!p) return base;
+    return {
+      telefono: base.telefono ?? p.telefono ?? null,
+      email: base.email ?? p.email ?? null,
+      direccion: base.direccion ?? p.direccion ?? null,
+    };
+  }
+
   private getListInclude() {
     return {
       sede: { select: { id: true, nombre: true } },
@@ -979,6 +1018,12 @@ export class VentaService {
           ? round2(dto.montoRecibido - total)
           : null;
 
+      const contacto = await this.completarContactoCliente(dto.clienteId, {
+        telefono: dto.telefonoCliente,
+        email: dto.emailCliente,
+        direccion: dto.direccionCliente,
+      });
+
       const venta = await tx.venta.create({
         data: {
           empresaId,
@@ -990,9 +1035,9 @@ export class VentaService {
           codigo: codigoVenta,
           nombreCliente: dto.nombreCliente,
           documentoCliente: dto.documentoCliente,
-          emailCliente: dto.emailCliente,
-          telefonoCliente: dto.telefonoCliente,
-          direccionCliente: dto.direccionCliente,
+          emailCliente: contacto.email,
+          telefonoCliente: contacto.telefono,
+          direccionCliente: contacto.direccion,
           moneda: dto.moneda ?? 'PEN',
           tipoCambio: dto.tipoCambio,
           subtotal,
@@ -1226,6 +1271,12 @@ export class VentaService {
             ? round2(montoRecibido - totalACobrarHoy)
             : 0;
 
+        const contacto = await this.completarContactoCliente(dto.clienteId, {
+          telefono: dto.telefonoCliente,
+          email: dto.emailCliente,
+          direccion: dto.direccionCliente,
+        });
+
         // 3. Crear venta con estado final
         const venta = await tx.venta.create({
           data: {
@@ -1239,9 +1290,9 @@ export class VentaService {
             codigo: codigoVenta,
             nombreCliente: dto.nombreCliente,
             documentoCliente: dto.documentoCliente,
-            emailCliente: dto.emailCliente,
-            telefonoCliente: dto.telefonoCliente,
-            direccionCliente: dto.direccionCliente,
+            emailCliente: contacto.email,
+            telefonoCliente: contacto.telefono,
+            direccionCliente: contacto.direccion,
             moneda: dto.moneda ?? 'PEN',
             tipoCambio: dto.tipoCambio,
             subtotal: subtotalVenta,
@@ -2544,6 +2595,15 @@ export class VentaService {
         !esCredito &&
         (adelantoAplicado + totalPagadoEnEstaTx) >= totalVenta - 0.005;
 
+      const contactoCotizacion = await this.completarContactoCliente(
+        clienteVenta.clienteId,
+        {
+          telefono: cotizacion.telefonoCliente,
+          email: cotizacion.emailCliente,
+          direccion: clienteVenta.direccionCliente,
+        },
+      );
+
       // 4. Crear venta con datos de la cotización
       const venta = await tx.venta.create({
         data: {
@@ -2558,9 +2618,9 @@ export class VentaService {
           codigo: codigoVenta,
           nombreCliente: clienteVenta.nombreCliente,
           documentoCliente: clienteVenta.documentoCliente,
-          emailCliente: cotizacion.emailCliente,
-          telefonoCliente: cotizacion.telefonoCliente,
-          direccionCliente: clienteVenta.direccionCliente,
+          emailCliente: contactoCotizacion.email,
+          telefonoCliente: contactoCotizacion.telefono,
+          direccionCliente: contactoCotizacion.direccion,
           moneda: cotizacion.moneda,
           tipoCambio: cotizacion.tipoCambio,
           subtotal: new Prisma.Decimal(subtotalVenta.toFixed(2)),
