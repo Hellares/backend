@@ -215,6 +215,20 @@ export class VentaController {
     return this.ventaService.buscarFlujoDocumentos(empresaId, codigo);
   }
 
+  @Get('envio/ultimo')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({
+    summary:
+      'Último envío registrado para un cliente (prefill del sheet de envío: la agencia/destino suele repetirse entre ventas)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async ultimoEnvioCliente(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('clienteId') clienteId: string,
+  ) {
+    return this.ventaService.ultimoEnvioCliente(empresaId, clienteId);
+  }
+
   @Get(':id/flujo-documentos')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Obtener flujo de documentos de una venta' })

@@ -3325,6 +3325,29 @@ export class VentaService {
   }
 
   /**
+   * Último envío registrado para un cliente de la empresa. La agencia,
+   * destino y hasta el destinatario suelen repetirse entre ventas del
+   * mismo cliente — el sheet de envío lo usa como prefill para que el
+   * cajero solo corrobore e imprima en vez de re-tipear todo.
+   */
+  async ultimoEnvioCliente(empresaId: string, clienteId: string) {
+    if (!clienteId) return null;
+    return this.prisma.ventaEnvio.findFirst({
+      where: { empresaId, venta: { clienteId } },
+      orderBy: { creadoEn: 'desc' },
+      select: {
+        destinatarioNombre: true,
+        destinatarioDni: true,
+        destinatarioCelular: true,
+        agenciaNombre: true,
+        destinoDepartamento: true,
+        destinoProvincia: true,
+        agenciaDireccion: true,
+      },
+    });
+  }
+
+  /**
    * Registra/actualiza los datos del ENVÍO de una venta (upsert) y marca
    * la venta como conEnvio. Prellenar en el cliente con el snapshot del
    * cliente de la venta; aquí todo es editable (el destinatario puede
