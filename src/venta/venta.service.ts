@@ -3334,7 +3334,10 @@ export class VentaService {
     if (!clienteId) return null;
     return this.prisma.ventaEnvio.findFirst({
       where: { empresaId, venta: { clienteId } },
-      orderBy: { creadoEn: 'desc' },
+      // Por ÚLTIMA MODIFICACIÓN, no creación: si el usuario corrige datos
+      // en el envío de una venta vieja, esa corrección es la más fresca y
+      // debe ganar el prefill de la siguiente venta.
+      orderBy: { actualizadoEn: 'desc' },
       select: {
         destinatarioNombre: true,
         destinatarioDni: true,
