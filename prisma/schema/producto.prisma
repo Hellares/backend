@@ -31,6 +31,12 @@ model Producto {
   tipoAfectacionIgv  TipoAfectacionIgv @default(GRAVADO)
   aplicaIcbper       Boolean           @default(false)
 
+  // Código de producto SUNAT (UNSPSC, catálogos 25/25.1/25.2/25.3). Opcional:
+  // solo viaja al XML de facturación cuando está seteado. Desde 01.08.2026 un
+  // código inválido en el comprobante es RECHAZO (ERR-3496) → 8 dígitos, el
+  // app lo restringe a una lista curada.
+  codigoProductoSunat String?
+
   // Campos para Marketplace
   visibleMarketplace Boolean @default(false)
   destacado          Boolean @default(false)

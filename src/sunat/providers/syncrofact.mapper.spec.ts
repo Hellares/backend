@@ -80,3 +80,80 @@ describe('SyncrofactMapper.toInvoiceRequest — forma de pago crédito/contado',
     expect(body.forma_pago_cuotas).toBeUndefined();
   });
 });
+
+/**
+ * Código de producto SUNAT (catálogos 25/25.1/25.2/25.3): passthrough opcional
+ * al item. Desde 01.08.2026 un código inválido en el XML es RECHAZO (ERR-3496),
+ * por eso solo viaja cuando es un código de 8 dígitos.
+ */
+describe('SyncrofactMapper.toInvoiceRequest — codigo_producto_sunat', () => {
+  const config: any = {
+    porcentajeIGV: 18,
+    entorno: 'beta',
+    proveedorConfig: { companyId: 1, branchId: 1 },
+  };
+
+  const comprobanteConProducto = (producto: any): any => ({
+    id: 'comp-2',
+    tipoComprobante: 'FACTURA',
+    serie: 'F001',
+    correlativo: '00000001',
+    tipoDocumento: 'RUC',
+    numeroDocumento: '10466735600',
+    nombreCliente: 'GRAOS RAMIREZ NOE CONCEPCION',
+    direccionCliente: null,
+    emailCliente: null,
+    fechaEmision: new Date('2026-07-11'),
+    fechaVencimiento: null,
+    moneda: 'PEN',
+    tipoCambio: null,
+    total: 826,
+    detalles: [
+      {
+        descripcion: 'POLLO BENEFICIADO (kg)',
+        cantidad: 100,
+        valorUnitario: 7,
+        precioUnitario: 8.26,
+        tipoAfectacion: '10',
+        porcentajeIGV: 18,
+        igv: 126,
+        icbper: 0,
+        unidadMedida: 'KGM',
+        producto,
+      },
+    ],
+    venta: null,
+  });
+
+  it('producto CON código → item lleva codigo_producto_sunat', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConProducto({ codigoEmpresa: 'PBEN', codigoProductoSunat: '50111500' }),
+      config,
+    );
+    expect(body.detalles[0].codigo_producto_sunat).toBe('50111500');
+  });
+
+  it('producto SIN código → item NO lleva codigo_producto_sunat', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConProducto({ codigoEmpresa: 'PBEN', codigoProductoSunat: null }),
+      config,
+    );
+    expect(body.detalles[0]).not.toHaveProperty('codigo_producto_sunat');
+  });
+
+  it('código con formato inválido → se omite (no arriesgar ERR-3496)', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConProducto({ codigoEmpresa: 'PBEN', codigoProductoSunat: 'ABC123' }),
+      config,
+    );
+    expect(body.detalles[0]).not.toHaveProperty('codigo_producto_sunat');
+  });
+
+  it('detalle de servicio (sin producto) → item NO lleva codigo_producto_sunat', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      comprobanteConProducto(null),
+      config,
+    );
+    expect(body.detalles[0]).not.toHaveProperty('codigo_producto_sunat');
+  });
+});

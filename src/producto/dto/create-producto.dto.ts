@@ -9,6 +9,7 @@ import {
   IsArray,
   MaxLength,
   IsEnum,
+  Matches,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -176,6 +177,18 @@ export class CreateProductoDto {
   @IsOptional()
   @IsBoolean()
   aplicaIcbper?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Código de producto SUNAT (UNSPSC, catálogos 25/25.1/25.2/25.3). ' +
+      '8 dígitos. Solo viaja al XML de facturación cuando está seteado.',
+    example: '50111500',
+  })
+  @IsOptional()
+  @Matches(/^\d{8}$/, {
+    message: 'codigoProductoSunat debe ser un código de 8 dígitos (catálogo 25 SUNAT)',
+  })
+  codigoProductoSunat?: string;
 
   @ApiPropertyOptional({
     description: 'Visible en marketplace',

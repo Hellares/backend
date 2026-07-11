@@ -512,7 +512,7 @@ export class FacturacionService {
         include: {
           detalles: {
             include: {
-              producto: { select: { codigoEmpresa: true } },
+              producto: { select: { codigoEmpresa: true, codigoProductoSunat: true } },
               servicio: { select: { codigoEmpresa: true } },
             },
           },

@@ -73,7 +73,7 @@ interface DetalleData {
   total: any;
   descuentoItem: any;
   unidadMedida: string;
-  producto?: { codigoEmpresa?: string } | null;
+  producto?: { codigoEmpresa?: string; codigoProductoSunat?: string | null } | null;
   servicio?: { codigoEmpresa?: string } | null;
 }
 
@@ -223,6 +223,14 @@ export class SyncrofactMapper {
       }
 
       if (itemIcbper > 0) item.icbper = this.round2(itemIcbper);
+
+      // Código de producto SUNAT (catálogos 25/25.1/25.2/25.3): passthrough
+      // opcional. Solo cuando el producto lo tiene seteado — sin él, el XML
+      // sale sin cac:CommodityClassification y SUNAT no valida nada.
+      const codigoSunat = d.producto?.codigoProductoSunat;
+      if (codigoSunat && /^\d{8}$/.test(codigoSunat)) {
+        item.codigo_producto_sunat = codigoSunat;
+      }
 
       return item;
     });
