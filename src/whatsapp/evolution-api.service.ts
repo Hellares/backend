@@ -66,6 +66,23 @@ export class EvolutionApiService {
     };
   }
 
+  /**
+   * Settings de privacidad de la instancia — SOLO enviamos mensajes:
+   * no tocar llamadas (siguen sonando solo en el celular), ignorar
+   * grupos, no marcar leídos, no sincronizar historial.
+   */
+  private privacySettings() {
+    return {
+      rejectCall: false, // no interferir con las llamadas del negocio
+      msgCall: '',
+      groupsIgnore: true, // los grupos no se procesan
+      alwaysOnline: false,
+      readMessages: false, // no marcar como leído lo que le escriban
+      readStatus: false,
+      syncFullHistory: false, // nunca traer el historial de chats
+    };
+  }
+
   /** Crea la instancia (idempotente: "ya existe" no es error). */
   async createInstance(instanceName: string, webhookUrl: string) {
     try {
@@ -74,12 +91,22 @@ export class EvolutionApiService {
         integration: 'WHATSAPP-BAILEYS',
         qrcode: false,
         webhook: this.webhookConfig(webhookUrl),
+        ...this.privacySettings(),
       });
     } catch (e: any) {
       // 403: "This name is already in use" — la instancia ya existe.
       if (e.status === 403) return null;
       throw e;
     }
+  }
+
+  /** (Re)aplica los settings de privacidad (instancias ya existentes). */
+  async setSettings(instanceName: string) {
+    return this.request(
+      'POST',
+      `/settings/set/${instanceName}`,
+      this.privacySettings(),
+    );
   }
 
   /** (Re)apunta el webhook de la instancia al backend del ambiente. */

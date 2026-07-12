@@ -111,11 +111,17 @@ export class WhatsappService {
     });
 
     await this.evolution.createInstance(instanceName, this.webhookUrl);
-    // La instancia podía existir de antes: asegurar el webhook igual.
+    // La instancia podía existir de antes: asegurar webhook y settings
+    // de privacidad igual (solo mensajes; llamadas/grupos intactos).
     await this.evolution
       .setWebhook(instanceName, this.webhookUrl)
       .catch((e) =>
         this.logger.warn(`setWebhook ${instanceName}: ${e.message}`),
+      );
+    await this.evolution
+      .setSettings(instanceName)
+      .catch((e) =>
+        this.logger.warn(`setSettings ${instanceName}: ${e.message}`),
       );
 
     const state = await this.evolution.connectionState(instanceName);
