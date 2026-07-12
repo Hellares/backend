@@ -183,6 +183,20 @@ export class SorteosEmpresaController {
     );
   }
 
+  @Get('ganadores/ultima-entrega')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Última entrega por agencia de un DNI (prellenado de ganadores repetidos) — null si no tiene',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async ultimaEntregaGanador(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('dni') dni: string,
+  ) {
+    return this.service.ultimaEntregaGanador(empresaId, dni);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Detalle del sorteo con premios y tickets' })

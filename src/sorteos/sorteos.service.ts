@@ -613,6 +613,35 @@ export class SorteosService {
     });
   }
 
+  /**
+   * Última entrega POR AGENCIA registrada para un DNI — para prellenar
+   * el registro cuando el mismo participante gana otra vez (sus datos
+   * de agencia/destino casi nunca cambian entre sorteos).
+   */
+  async ultimaEntregaGanador(empresaId: string, dni: string) {
+    if (!dni?.trim()) {
+      throw new BadRequestException('Indique el DNI del ganador');
+    }
+    return this.prisma.sorteoPremio.findFirst({
+      where: {
+        empresaId,
+        ganadorDni: dni.trim(),
+        estado: { not: EstadoPremioSorteo.ANULADO },
+        modalidad: ModalidadEntregaPremio.ENVIO_AGENCIA,
+        agenciaNombre: { not: null },
+      },
+      orderBy: { creadoEn: 'desc' },
+      select: {
+        modalidad: true,
+        agenciaNombre: true,
+        destinoDepartamento: true,
+        destinoProvincia: true,
+        agenciaDireccion: true,
+        creadoEn: true,
+      },
+    }); // null si nunca tuvo un envío con agencia
+  }
+
   // ── Internos ─────────────────────────────────────────────────────────
 
   private async assertSorteo(empresaId: string, sorteoId: string) {
