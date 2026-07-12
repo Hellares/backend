@@ -1,0 +1,32 @@
+// Vinculación de WhatsApp por empresa vía Evolution API (no oficial,
+// container interno `evolution-api`). La instancia en Evolution se llama
+// `<prefijo>_<empresaId>` — prefijo beta|prod (EVOLUTION_INSTANCE_PREFIX)
+// para compartir un solo Evolution entre ambientes.
+
+enum EstadoWhatsappInstancia {
+  PENDIENTE_QR // instancia creada, falta escanear el QR
+  CONECTADO
+  DESCONECTADO
+}
+
+model IntegracionWhatsapp {
+  id           String                  @id @default(cuid())
+  empresaId    String                  @unique
+  instanceName String                  @unique
+  estado       EstadoWhatsappInstancia @default(PENDIENTE_QR)
+  // Número conectado (ownerJid sin sufijo) — informativo, llega al conectar.
+  numero       String?
+  // Plantilla del mensaje "premio enviado" (null = default del sistema).
+  // Variables: {saludo} {ganador} {premio} {agencia} {destino} {orden}
+  // {codigo} {clave} {empresa}. Las líneas cuyas variables queden todas
+  // vacías se eliminan del mensaje final.
+  plantillaPremio String?   @db.Text
+  habilitado      Boolean   @default(true)
+  conectadoEn     DateTime?
+  creadoEn        DateTime  @default(now())
+  actualizadoEn   DateTime  @updatedAt
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@map("integracion_whatsapp")
+}

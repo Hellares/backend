@@ -16,6 +16,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { StorageService } from '../storage/storage.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import {
   CambiarEstadoPremioDto,
@@ -40,6 +41,7 @@ export class SorteosService {
     private readonly prisma: PrismaService,
     private readonly notificaciones: NotificacionService,
     private readonly storage: StorageService,
+    private readonly whatsapp: WhatsappService,
   ) {}
 
   // ── Sorteos (empresa) ────────────────────────────────────────────────
@@ -435,7 +437,7 @@ export class SorteosService {
     file: any,
   ) {
     await this.assertPremio(empresaId, premioId);
-    return this.storage.uploadArchivo({
+    const archivo = await this.storage.uploadArchivo({
       empresaId,
       file,
       entidadTipo: 'SORTEO_PREMIO',
@@ -443,6 +445,24 @@ export class SorteosService {
       categoria: 'EVIDENCIA',
       subidoPor: usuarioId,
     });
+
+    // Si la empresa tiene WhatsApp vinculado, el ticket sale solo al
+    // ganador (imagen + plantilla). Best-effort: un fallo aquí NUNCA
+    // deshace la subida; el app usa whatsappEnviado para ofrecer el
+    // envío manual como fallback.
+    let whatsappEnviado = false;
+    try {
+      whatsappEnviado = await this.whatsapp.enviarTicketPremio(
+        empresaId,
+        premioId,
+        archivo.url,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `WhatsApp del ticket ${premioId} falló: ${(e as Error).message}`,
+      );
+    }
+    return { ...archivo, whatsappEnviado };
   }
 
   /** Marca el rótulo de envío como impreso (idempotente). */

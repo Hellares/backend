@@ -68,6 +68,7 @@ import { AuditModule } from './audit/audit.module';
 import { SunatModule } from './sunat/sunat.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { IntegracionYapeModule } from './integracion-yape/integracion-yape.module';
+import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { CaracteristicaEmpresaModule } from './caracteristica-empresa/caracteristica-empresa.module';
 import { GuiaRemisionModule } from './guia-remision/guia-remision.module';
 import { LoggerModule } from './common/logger/logger.module';
@@ -89,6 +90,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     SunatModule,
     WebhooksModule,
     IntegracionYapeModule,
+    WhatsappModule,
     CaracteristicaEmpresaModule,
     LoggerModule, // Logger global
     PrismaModule,

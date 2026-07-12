@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { StorageModule } from '../storage/storage.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { SorteosService } from './sorteos.service';
 import {
   MisPremiosController,
@@ -10,7 +11,13 @@ import {
 } from './sorteos.controller';
 
 @Module({
-  imports: [PrismaModule, AuthModule, NotificacionModule, StorageModule],
+  imports: [
+    PrismaModule,
+    AuthModule,
+    NotificacionModule,
+    StorageModule,
+    WhatsappModule,
+  ],
   controllers: [SorteosEmpresaController, MisPremiosController],
   providers: [SorteosService],
   exports: [SorteosService],
