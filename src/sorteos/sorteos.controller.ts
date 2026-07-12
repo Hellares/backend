@@ -29,6 +29,7 @@ import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SorteosService } from './sorteos.service';
 import {
+  CambiarEstadoParticipanteDto,
   CambiarEstadoPremioDto,
   CreateSorteoDto,
   EditarEntregaPremioDto,
@@ -195,6 +196,25 @@ export class SorteosEmpresaController {
     @Query('dni') dni: string,
   ) {
     return this.service.ultimaEntregaGanador(empresaId, dni);
+  }
+
+  @Patch('participantes/:id/estado')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Valida/rechaza un participante del bot (ACTIVO asigna ticket y confirma por WhatsApp)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async cambiarEstadoParticipante(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') participanteId: string,
+    @Body() dto: CambiarEstadoParticipanteDto,
+  ) {
+    return this.service.cambiarEstadoParticipante(
+      empresaId,
+      participanteId,
+      dto.estado,
+    );
   }
 
   @Get(':id')

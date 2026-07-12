@@ -30,3 +30,21 @@ model IntegracionWhatsapp {
 
   @@map("integracion_whatsapp")
 }
+
+// Estado de la conversación del BOT con cada número que le escribe al
+// WhatsApp de la empresa (máquina de estados: MENU, ESPERANDO_NOMBRE,
+// ESPERANDO_DNI, ESPERANDO_AGENCIA…). contexto guarda datos parciales
+// (sorteoId elegido, nombre ya capturado, premioId del ganador).
+model ConversacionWhatsapp {
+  id        String  @id @default(cuid())
+  empresaId String
+  celular   String
+  estado    String  @default("MENU")
+  contexto  Json?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  @@unique([empresaId, celular])
+  @@map("conversacion_whatsapp")
+}

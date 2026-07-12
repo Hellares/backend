@@ -54,11 +54,45 @@ model Sorteo {
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
-  empresa Empresa        @relation("SorteosEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
-  premios SorteoPremio[]
+  empresa       Empresa              @relation("SorteosEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+  premios       SorteoPremio[]
+  participantes SorteoParticipante[]
 
   @@index([empresaId, estado])
   @@index([empresaId, fechaSorteo])
+}
+
+enum EstadoParticipanteSorteo {
+  PENDIENTE_PAGO // registrado por el bot de WhatsApp, falta validar pago
+  ACTIVO // pago validado por la empresa (se le asigna numeroTicket)
+  RECHAZADO
+}
+
+// Participante captado por el BOT de WhatsApp (Fase A: el pago se valida
+// por fuera y la empresa lo activa desde el app; el bot le confirma su
+// numero de ticket). Un DNI participa una vez por sorteo.
+model SorteoParticipante {
+  id        String @id @default(cuid())
+  empresaId String
+  sorteoId  String
+  // Numero de WhatsApp del participante (formato 51XXXXXXXXX, viene del
+  // remitente del chat — no se le pide).
+  celular String
+  nombre  String
+  dni     String
+  estado  EstadoParticipanteSorteo @default(PENDIENTE_PAGO)
+  // Correlativo por sorteo, asignado al ACTIVAR (orden de validacion).
+  numeroTicket Int?
+  activadoEn   DateTime?
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  sorteo Sorteo @relation(fields: [sorteoId], references: [id], onDelete: Cascade)
+
+  @@unique([sorteoId, dni])
+  @@index([empresaId, celular])
+  @@index([sorteoId, estado])
 }
 
 model SorteoPremio {

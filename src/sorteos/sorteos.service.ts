@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  EstadoParticipanteSorteo,
   EstadoPremioSorteo,
   EstadoSorteo,
   ModalidadEntregaPremio,
@@ -85,7 +86,14 @@ export class SorteosService {
   async obtenerSorteo(empresaId: string, sorteoId: string) {
     const sorteo = await this.prisma.sorteo.findFirst({
       where: { id: sorteoId, empresaId },
-      include: { premios: { orderBy: { creadoEn: 'desc' } } },
+      include: {
+        premios: { orderBy: { creadoEn: 'desc' } },
+        // Captados por el bot de WhatsApp: pendientes primero, luego
+        // por ticket.
+        participantes: {
+          orderBy: [{ estado: 'asc' }, { creadoEn: 'desc' }],
+        },
+      },
     });
     if (!sorteo) throw new NotFoundException('Sorteo no encontrado');
     const premios = await this.adjuntarArchivos(sorteo.premios);
@@ -515,6 +523,67 @@ export class SorteosService {
       categoria: 'BANNER',
       subidoPor: usuarioId,
     });
+  }
+
+  // ── Participantes (captados por el bot de WhatsApp) ─────────────────
+
+  /**
+   * Valida/rechaza un participante. Al ACTIVAR se asigna el correlativo
+   * del ticket (orden de validación) y el bot le confirma por WhatsApp.
+   */
+  async cambiarEstadoParticipante(
+    empresaId: string,
+    participanteId: string,
+    estado: EstadoParticipanteSorteo,
+  ) {
+    const participante = await this.prisma.sorteoParticipante.findFirst({
+      where: { id: participanteId, empresaId },
+      include: { sorteo: { select: { titulo: true } } },
+    });
+    if (!participante) {
+      throw new NotFoundException('Participante no encontrado');
+    }
+
+    let numeroTicket = participante.numeroTicket;
+    if (
+      estado === EstadoParticipanteSorteo.ACTIVO &&
+      numeroTicket == null
+    ) {
+      const max = await this.prisma.sorteoParticipante.aggregate({
+        where: { sorteoId: participante.sorteoId },
+        _max: { numeroTicket: true },
+      });
+      numeroTicket = (max._max.numeroTicket ?? 0) + 1;
+    }
+
+    const actualizado = await this.prisma.sorteoParticipante.update({
+      where: { id: participante.id },
+      data: {
+        estado,
+        ...(estado === EstadoParticipanteSorteo.ACTIVO
+          ? { numeroTicket, activadoEn: new Date() }
+          : {}),
+      },
+    });
+
+    // Confirmación por WhatsApp (best-effort, nunca bloquea).
+    if (estado === EstadoParticipanteSorteo.ACTIVO) {
+      const nombre = participante.nombre.split(' ')[0];
+      await this.whatsapp
+        .enviarTexto(
+          empresaId,
+          participante.celular,
+          `🎟️ ¡Pago confirmado, ${nombre}! Ya estás participando en ` +
+            `*${participante.sorteo.titulo}* con el ticket *#${numeroTicket}*. ` +
+            '¡Mucha suerte! 🍀',
+        )
+        .catch((e) =>
+          this.logger.warn(
+            `Confirmación WhatsApp participante ${participanteId}: ${(e as Error).message}`,
+          ),
+        );
+    }
+    return actualizado;
   }
 
   // ── Mis Premios (cliente del app) ────────────────────────────────────

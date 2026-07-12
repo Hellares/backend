@@ -62,7 +62,9 @@ export class EvolutionApiService {
       url: webhookUrl,
       byEvents: false,
       base64: false,
-      events: ['CONNECTION_UPDATE'],
+      // MESSAGES_UPSERT alimenta el bot de sorteos (solo se procesa,
+      // nunca se almacena el contenido).
+      events: ['CONNECTION_UPDATE', 'MESSAGES_UPSERT'],
     };
   }
 

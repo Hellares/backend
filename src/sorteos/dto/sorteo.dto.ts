@@ -13,6 +13,7 @@ import {
 import { Type } from 'class-transformer';
 import {
   CanalSorteo,
+  EstadoParticipanteSorteo,
   EstadoPremioSorteo,
   EstadoSorteo,
   ModalidadEntregaPremio,
@@ -287,4 +288,10 @@ export class CambiarEstadoPremioDto {
   @IsOptional()
   @IsString()
   envioClave?: string;
+}
+
+export class CambiarEstadoParticipanteDto {
+  @ApiProperty({ enum: EstadoParticipanteSorteo })
+  @IsEnum(EstadoParticipanteSorteo)
+  estado: EstadoParticipanteSorteo;
 }

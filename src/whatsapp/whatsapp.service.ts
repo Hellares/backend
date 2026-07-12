@@ -13,6 +13,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EvolutionApiService } from './evolution-api.service';
+import { WhatsappBotService } from './whatsapp-bot.service';
 import { UpdateWhatsappDto } from './dto/whatsapp.dto';
 
 /**
@@ -46,6 +47,7 @@ export class WhatsappService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly evolution: EvolutionApiService,
+    private readonly bot: WhatsappBotService,
   ) {}
 
   // ── Helpers de identidad/URLs ─────────────────────────────────────────
@@ -244,20 +246,81 @@ export class WhatsappService {
     }
     const event: string = body?.event ?? '';
     const instanceName: string = body?.instance ?? '';
-    if (event !== 'connection.update' || !instanceName) return { ok: true };
+    if (!instanceName) return { ok: true };
 
-    const state: string = body?.data?.state ?? '';
-    this.logger.log(`WhatsApp ${instanceName}: connection.update → ${state}`);
-
-    if (state === 'open') {
-      await this.marcarConectado(instanceName);
-    } else if (state === 'close') {
-      await this.prisma.integracionWhatsapp.updateMany({
-        where: { instanceName },
-        data: { estado: EstadoWhatsappInstancia.DESCONECTADO },
-      });
+    if (event === 'connection.update') {
+      const state: string = body?.data?.state ?? '';
+      this.logger.log(
+        `WhatsApp ${instanceName}: connection.update → ${state}`,
+      );
+      if (state === 'open') {
+        await this.marcarConectado(instanceName);
+      } else if (state === 'close') {
+        await this.prisma.integracionWhatsapp.updateMany({
+          where: { instanceName },
+          data: { estado: EstadoWhatsappInstancia.DESCONECTADO },
+        });
+      }
+      return { ok: true };
     }
+
+    if (event === 'messages.upsert') {
+      // Puede venir un objeto o un array de mensajes.
+      const items = Array.isArray(body?.data) ? body.data : [body?.data];
+      for (const m of items) {
+        const jid: string = m?.key?.remoteJid ?? '';
+        // Solo chats directos de texto escritos POR el cliente.
+        if (
+          !jid ||
+          m?.key?.fromMe ||
+          jid.endsWith('@g.us') ||
+          jid.startsWith('status@')
+        ) {
+          continue;
+        }
+        const texto: string | undefined =
+          m?.message?.conversation ?? m?.message?.extendedTextMessage?.text;
+        if (!texto?.trim()) continue;
+        const celular = jid.split('@')[0].split(':')[0];
+        // Best-effort: el bot nunca debe tumbar el webhook.
+        await this.bot
+          .procesarMensaje(instanceName, celular, texto)
+          .catch((e) =>
+            this.logger.warn(`Bot ${instanceName}: ${e.message}`),
+          );
+      }
+      return { ok: true };
+    }
+
     return { ok: true };
+  }
+
+  /**
+   * Texto simple al número indicado desde el WhatsApp de la empresa
+   * (best-effort). true si salió.
+   */
+  async enviarTexto(
+    empresaId: string,
+    celular: string,
+    texto: string,
+  ): Promise<boolean> {
+    if (!this.evolution.disponible) return false;
+    const cfg = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId },
+    });
+    if (
+      !cfg ||
+      !cfg.habilitado ||
+      cfg.estado !== EstadoWhatsappInstancia.CONECTADO
+    ) {
+      return false;
+    }
+    await this.evolution.sendText({
+      instanceName: cfg.instanceName,
+      number: this.normalizarCelular(celular),
+      text: texto,
+    });
+    return true;
   }
 
   /** CONECTADO + número (ownerJid) — usado por webhook y sync de estado. */
