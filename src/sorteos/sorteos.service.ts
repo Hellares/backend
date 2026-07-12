@@ -457,6 +457,13 @@ export class SorteosService {
         premioId,
         archivo.url,
       );
+      if (whatsappEnviado) {
+        // Chip "ENVIADO POR WSP" en la card del premio.
+        await this.prisma.sorteoPremio.update({
+          where: { id: premioId },
+          data: { whatsappEnviadoEn: new Date() },
+        });
+      }
     } catch (e) {
       this.logger.warn(
         `WhatsApp del ticket ${premioId} falló: ${(e as Error).message}`,

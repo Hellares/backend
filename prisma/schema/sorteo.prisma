@@ -102,6 +102,8 @@ model SorteoPremio {
   envioClave       String?
   // Rótulo de envío ya impreso (chip "IMPRESO" en la card del premio).
   rotuloImpresoEn DateTime?
+  // Ticket enviado por WhatsApp automático al ganador (chip en la card).
+  whatsappEnviadoEn DateTime?
 
   estado        EstadoPremioSorteo @default(REGISTRADO)
   enviadoEn     DateTime?
