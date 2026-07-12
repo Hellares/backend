@@ -227,6 +227,37 @@ export class ElegirAgenciaPremioDto {
   agenciaDireccion?: string;
 }
 
+/**
+ * La EMPRESA corrige la entrega de un premio ya registrado (modalidad
+ * y/o datos de agencia) — p.ej. quedó en RETIRO_TIENDA por error. Solo
+ * antes del despacho.
+ */
+export class EditarEntregaPremioDto {
+  @ApiProperty({ enum: ModalidadEntregaPremio })
+  @IsEnum(ModalidadEntregaPremio)
+  modalidad: ModalidadEntregaPremio;
+
+  @ApiPropertyOptional({ example: 'SHALOM' })
+  @IsOptional()
+  @IsString()
+  agenciaNombre?: string;
+
+  @ApiPropertyOptional({ example: 'San Martín' })
+  @IsOptional()
+  @IsString()
+  destinoDepartamento?: string;
+
+  @ApiPropertyOptional({ example: 'Tarapoto' })
+  @IsOptional()
+  @IsString()
+  destinoProvincia?: string;
+
+  @ApiPropertyOptional({ example: 'Jr. Los Pinos 123' })
+  @IsOptional()
+  @IsString()
+  agenciaDireccion?: string;
+}
+
 export class CambiarEstadoPremioDto {
   @ApiProperty({ enum: EstadoPremioSorteo })
   @IsEnum(EstadoPremioSorteo)

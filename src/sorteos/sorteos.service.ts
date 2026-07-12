@@ -8,6 +8,7 @@ import {
 import {
   EstadoPremioSorteo,
   EstadoSorteo,
+  ModalidadEntregaPremio,
   Prisma,
   TipoMovimientoStock,
   TipoNotificacion,
@@ -19,6 +20,7 @@ import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-
 import {
   CambiarEstadoPremioDto,
   CreateSorteoDto,
+  EditarEntregaPremioDto,
   RegistrarPremioDto,
   UpdateSorteoDto,
 } from './dto/sorteo.dto';
@@ -571,6 +573,44 @@ export class SorteosService {
     if (!premio) throw new NotFoundException('Premio no encontrado');
     const [enriquecido] = await this.enriquecerPremiosCliente([premio]);
     return enriquecido;
+  }
+
+  /**
+   * La EMPRESA corrige la entrega de un premio (modalidad y/o agencia)
+   * — p.ej. quedó en RETIRO_TIENDA por error al registrar. Mismo guard
+   * de estados que elegirAgenciaMiPremio: solo antes del despacho.
+   */
+  async editarEntregaPremio(
+    empresaId: string,
+    premioId: string,
+    dto: EditarEntregaPremioDto,
+  ) {
+    const premio = await this.assertPremio(empresaId, premioId);
+    if (
+      premio.estado !== EstadoPremioSorteo.REGISTRADO &&
+      premio.estado !== EstadoPremioSorteo.PREPARANDO
+    ) {
+      throw new ConflictException({
+        code: 'PREMIO_YA_DESPACHADO',
+        message: `El premio ya está ${premio.estado} — la entrega ya no se puede modificar`,
+      });
+    }
+    return this.prisma.sorteoPremio.update({
+      where: { id: premioId },
+      data: {
+        modalidad: dto.modalidad,
+        // undefined = no tocar (permite cambiar solo la modalidad).
+        agenciaNombre: dto.agenciaNombre,
+        destinoDepartamento: dto.destinoDepartamento,
+        destinoProvincia: dto.destinoProvincia,
+        agenciaDireccion: dto.agenciaDireccion,
+        // Si deja de viajar, el rótulo impreso pierde validez (el chip
+        // IMPRESO no debe quedar mintiendo).
+        ...(dto.modalidad === ModalidadEntregaPremio.RETIRO_TIENDA
+          ? { rotuloImpresoEn: null }
+          : {}),
+      },
+    });
   }
 
   // ── Internos ─────────────────────────────────────────────────────────

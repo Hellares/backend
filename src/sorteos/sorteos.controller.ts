@@ -31,6 +31,7 @@ import { SorteosService } from './sorteos.service';
 import {
   CambiarEstadoPremioDto,
   CreateSorteoDto,
+  EditarEntregaPremioDto,
   ElegirAgenciaPremioDto,
   RegistrarPremioDto,
   UpdateSorteoDto,
@@ -93,6 +94,21 @@ export class SorteosEmpresaController {
       premioId,
       dto,
     );
+  }
+
+  @Patch('premios/:premioId/entrega')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Corregir la entrega del premio (modalidad y/o agencia) — solo antes del despacho',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async editarEntregaPremio(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('premioId') premioId: string,
+    @Body() dto: EditarEntregaPremioDto,
+  ) {
+    return this.service.editarEntregaPremio(empresaId, premioId, dto);
   }
 
   @Post('premios/:premioId/ticket-envio')
