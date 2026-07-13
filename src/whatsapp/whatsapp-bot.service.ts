@@ -85,9 +85,16 @@ export class WhatsappBotService {
     if (esComandoMenu) {
       estado = 'MENU';
     } else if (estado === 'ASESOR') {
-      // Silencio: un humano está atendiendo este chat.
-      if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) return;
-      estado = 'MENU';
+      // Silencio: un humano está atendiendo este chat. PERO una opción
+      // del menú ('1'/'2'/'3') reactiva al bot de inmediato — terminó
+      // de hablar con el asesor y quiere participar/registrar envío.
+      if (['1', '2', '3'].includes(msg)) {
+        estado = 'MENU';
+      } else if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) {
+        return;
+      } else {
+        estado = 'MENU';
+      }
     } else if (
       estado !== 'MENU' &&
       minutos > WhatsappBotService.TIMEOUT_PASO_MIN
