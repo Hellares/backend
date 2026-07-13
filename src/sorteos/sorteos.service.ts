@@ -12,6 +12,7 @@ import {
   ModalidadEntregaPremio,
   Prisma,
   TipoMovimientoStock,
+  TipoSorteo,
   TipoNotificacion,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -609,17 +610,49 @@ export class SorteosService {
   // ── Participantes (captados por el bot de WhatsApp) ─────────────────
 
   /**
+   * Cola global: participantes con pago por validar de todos los
+   * sorteos/dinámicas ABIERTOS de la empresa.
+   */
+  async listarParticipantesPendientes(empresaId: string) {
+    return this.prisma.sorteoParticipante.findMany({
+      where: {
+        empresaId,
+        estado: EstadoParticipanteSorteo.PENDIENTE_PAGO,
+        sorteo: { estado: EstadoSorteo.ABIERTO },
+      },
+      orderBy: { creadoEn: 'desc' },
+      include: {
+        sorteo: { select: { id: true, titulo: true, tipo: true } },
+      },
+    });
+  }
+
+  /**
    * Valida/rechaza un participante. Al ACTIVAR se asigna el correlativo
    * del ticket (orden de validación) y el bot le confirma por WhatsApp.
+   * En DINÁMICAS además se crea el premio AUTOMÁTICAMENTE (el que juega
+   * ya ganó y el bot ya capturó todos sus datos): la card queda lista
+   * para subir el ticket, imprimir el rótulo, etc.
    */
   async cambiarEstadoParticipante(
     empresaId: string,
+    usuarioId: string,
     participanteId: string,
     estado: EstadoParticipanteSorteo,
   ) {
     const participante = await this.prisma.sorteoParticipante.findFirst({
       where: { id: participanteId, empresaId },
-      include: { sorteo: { select: { titulo: true } } },
+      include: {
+        sorteo: {
+          select: {
+            id: true,
+            titulo: true,
+            tipo: true,
+            descripcion: true,
+            precioParticipacion: true,
+          },
+        },
+      },
     });
     if (!participante) {
       throw new NotFoundException('Participante no encontrado');
@@ -664,7 +697,88 @@ export class SorteosService {
           ),
         );
     }
-    return actualizado;
+
+    // DINÁMICA: el jugador validado YA ganó — crear su premio de una vez
+    // con los datos del bot. Best-effort: si falla (p.ej. RENIEC caído al
+    // crear la cuenta), la activación queda y el 🏆 manual sigue de
+    // respaldo en el app.
+    let premioCreado = false;
+    if (
+      estado === EstadoParticipanteSorteo.ACTIVO &&
+      participante.sorteo.tipo === TipoSorteo.DINAMICA
+    ) {
+      premioCreado = await this.crearPremioDesdeParticipante(
+        empresaId,
+        usuarioId,
+        participante,
+      );
+    }
+    return { ...actualizado, premioCreado };
+  }
+
+  /**
+   * Premio automático de la dinámica (idempotente: si el DNI ya tiene
+   * premio no anulado en el sorteo, no duplica). Devuelve true si creó.
+   */
+  private async crearPremioDesdeParticipante(
+    empresaId: string,
+    usuarioId: string,
+    participante: {
+      dni: string;
+      nombre: string;
+      celular: string;
+      agenciaNombre: string | null;
+      destinoDepartamento: string | null;
+      destinoProvincia: string | null;
+      agenciaDireccion: string | null;
+      sorteo: {
+        id: string;
+        titulo: string;
+        descripcion: string | null;
+        precioParticipacion: Prisma.Decimal | null;
+      };
+    },
+  ): Promise<boolean> {
+    try {
+      const existente = await this.prisma.sorteoPremio.findFirst({
+        where: {
+          sorteoId: participante.sorteo.id,
+          ganadorDni: participante.dni,
+          estado: { not: EstadoPremioSorteo.ANULADO },
+        },
+        select: { id: true },
+      });
+      if (existente) return false;
+
+      const conAgencia = !!participante.agenciaNombre?.trim();
+      await this.registrarPremio(empresaId, usuarioId, participante.sorteo.id, {
+        ganadorDni: participante.dni,
+        ganadorNombre: participante.nombre,
+        ganadorCelular: participante.celular.slice(-9),
+        descripcion:
+          participante.sorteo.descripcion?.trim() ||
+          participante.sorteo.titulo,
+        modalidad: conAgencia
+          ? ModalidadEntregaPremio.ENVIO_AGENCIA
+          : ModalidadEntregaPremio.RETIRO_TIENDA,
+        agenciaNombre: participante.agenciaNombre ?? undefined,
+        destinoDepartamento: participante.destinoDepartamento ?? undefined,
+        destinoProvincia: participante.destinoProvincia ?? undefined,
+        agenciaDireccion: participante.agenciaDireccion ?? undefined,
+        montoParticipacion: participante.sorteo.precioParticipacion
+          ? Number(participante.sorteo.precioParticipacion)
+          : undefined,
+      } as RegistrarPremioDto);
+      this.logger.log(
+        `Premio automático de dinámica creado (DNI ${participante.dni}, sorteo ${participante.sorteo.id})`,
+      );
+      return true;
+    } catch (e) {
+      this.logger.warn(
+        `Premio automático de dinámica falló (DNI ${participante.dni}): ${(e as Error).message}`,
+      );
+      return false;
+    }
   }
 
   // ── Mis Premios (cliente del app) ────────────────────────────────────

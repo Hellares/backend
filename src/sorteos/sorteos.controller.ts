@@ -198,20 +198,33 @@ export class SorteosEmpresaController {
     return this.service.ultimaEntregaGanador(empresaId, dni);
   }
 
+  @Get('participantes/pendientes')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({
+    summary:
+      'Cola global: participantes con pago por validar (sorteos abiertos)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async participantesPendientes(@Headers('x-tenant-id') empresaId: string) {
+    return this.service.listarParticipantesPendientes(empresaId);
+  }
+
   @Patch('participantes/:id/estado')
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({
     summary:
-      'Valida/rechaza un participante del bot (ACTIVO asigna ticket y confirma por WhatsApp)',
+      'Valida/rechaza un participante del bot (ACTIVO asigna ticket, confirma por WhatsApp y en DINAMICAS crea el premio automatico)',
   })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async cambiarEstadoParticipante(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') participanteId: string,
     @Body() dto: CambiarEstadoParticipanteDto,
+    @CurrentUser() user: any,
   ) {
     return this.service.cambiarEstadoParticipante(
       empresaId,
+      user.sub,
       participanteId,
       dto.estado,
     );
