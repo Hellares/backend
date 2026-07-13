@@ -32,6 +32,10 @@ export class WhatsappBotService {
   private static readonly SILENCIO_ASESOR_HORAS = 12;
   private static readonly THROTTLE_MENU_MIN = 60;
 
+  /// Los envíos SIEMPRE van por esta agencia — el bot lo informa y ya
+  /// no pregunta cuál (pedido del negocio).
+  private static readonly AGENCIA_DEFAULT = 'SHALOM';
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly evolution: EvolutionApiService,
@@ -257,7 +261,7 @@ export class WhatsappBotService {
         return irA('ESPERANDO_NOMBRE', { ...s.ctx, dni });
       }
 
-      case 'PART_AGENCIA': {
+      case 'PART_CIUDAD': {
         if (msg === '-') {
           await responder(
             (await this.instruccionesPago(empresaId, s.ctx)) +
@@ -268,31 +272,30 @@ export class WhatsappBotService {
         }
         if (msg.length < 3) {
           await responder(
-            '¿Por qué *agencia* te enviaríamos el premio? (ej. SHALOM / OLVA) — o responde *-* para omitir',
+            '¿A qué *ciudad* te enviaríamos el premio? (ej. TRUJILLO) — o responde *-* para omitir',
           );
           return;
         }
+        const ciudad = msg.toUpperCase();
         await responder(
-          '📍 ¿A qué *ciudad y departamento* llegaría?\n' +
-            'Sepáralos con coma, ej: *TARAPOTO, SAN MARTÍN*',
+          `📍 ¿En qué *departamento* está ${ciudad}? (ej. LA LIBERTAD)`,
         );
-        return irA('PART_DESTINO', { ...s.ctx, agencia: msg.toUpperCase() });
+        return irA('PART_DEPARTAMENTO', { ...s.ctx, provincia: ciudad });
       }
 
-      case 'PART_DESTINO': {
+      case 'PART_DEPARTAMENTO': {
         if (msg.length < 3) {
-          await responder('Ej: *TARAPOTO, SAN MARTÍN* (ciudad, departamento)');
+          await responder('¿En qué *departamento*? (ej. LA LIBERTAD)');
           return;
         }
-        const [prov, dep] = msg.split(',').map((x) => x.trim().toUpperCase());
         await responder(
-          '¿Conoces la *dirección de la agencia* en tu ciudad? ' +
-            'Escríbela, o responde *-* para omitir.',
+          `¿Cuál es la *dirección o sucursal* de ${WhatsappBotService.AGENCIA_DEFAULT} ` +
+            'en tu ciudad? (ej. ATAHUALPA)\n' +
+            'Responde *-* si no la sabes.',
         );
         return irA('PART_DIRECCION', {
           ...s.ctx,
-          provincia: prov,
-          departamento: dep || null,
+          departamento: msg.toUpperCase(),
         });
       }
 
@@ -307,45 +310,45 @@ export class WhatsappBotService {
             agenciaDireccion: direccion,
           },
         });
+        const destinoTxt = [s.ctx.provincia, s.ctx.departamento]
+          .filter(Boolean)
+          .join(', ');
         await responder(
           '📦 ¡Datos de envío guardados! Si ganas, tu premio saldría por ' +
-            `*${s.ctx.agencia}*.\n\n` +
+            `*${s.ctx.agencia}*${destinoTxt ? ` a *${destinoTxt}*` : ''}` +
+            `${direccion ? ` (sucursal ${direccion})` : ''}.\n\n` +
             (await this.instruccionesPago(empresaId, s.ctx)),
         );
         return irA('MENU', {});
       }
 
-      case 'GANADOR_AGENCIA': {
+      case 'GANADOR_CIUDAD': {
         if (msg.length < 3) {
           await responder(
-            '¿Por qué *agencia* quieres recibirlo? (ej. SHALOM / OLVA / MARVISUR)',
+            '¿A qué *ciudad* te lo enviamos? (ej. TRUJILLO)',
           );
           return;
         }
+        const ciudad = msg.toUpperCase();
         await responder(
-          'Perfecto 📦 ¿a qué *ciudad y departamento* llega?\n' +
-            'Sepáralos con coma, ej: *TARAPOTO, SAN MARTÍN*',
+          `📍 ¿En qué *departamento* está ${ciudad}? (ej. LA LIBERTAD)`,
         );
-        return irA('GANADOR_DESTINO', {
-          ...s.ctx,
-          agencia: msg.toUpperCase(),
-        });
+        return irA('GANADOR_DEPARTAMENTO', { ...s.ctx, provincia: ciudad });
       }
 
-      case 'GANADOR_DESTINO': {
+      case 'GANADOR_DEPARTAMENTO': {
         if (msg.length < 3) {
-          await responder('Ej: *TARAPOTO, SAN MARTÍN* (ciudad, departamento)');
+          await responder('¿En qué *departamento*? (ej. LA LIBERTAD)');
           return;
         }
-        const [prov, dep] = msg.split(',').map((x) => x.trim().toUpperCase());
         await responder(
-          '¿Conoces la *dirección de la agencia* en tu ciudad? ' +
-            'Escríbela, o responde *-* para omitir.',
+          `¿Cuál es la *dirección o sucursal* de ${WhatsappBotService.AGENCIA_DEFAULT} ` +
+            'en tu ciudad? (ej. ATAHUALPA)\n' +
+            'Responde *-* si no la sabes.',
         );
         return irA('GANADOR_DIRECCION', {
           ...s.ctx,
-          provincia: prov,
-          departamento: dep || null,
+          departamento: msg.toUpperCase(),
         });
       }
 
@@ -454,17 +457,20 @@ export class WhatsappBotService {
 
     // Registrado ✅ — ahora los datos de envío (opcionales): si gana,
     // la entrega ya queda lista y se muestran en el app.
+    // La agencia es fija (SHALOM): se informa, no se pregunta.
     await responder(
       (ctx.verificado == true ? `🪪 DNI verificado: *${ctx.nombre}*\n` : '') +
         `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!\n\n` +
-        '📦 Para tener tu envío listo si ganas: ¿por qué *agencia* te ' +
-        'enviaríamos el premio? (ej. SHALOM / OLVA / MARVISUR)\n' +
+        `📦 Los envíos se hacen por *${WhatsappBotService.AGENCIA_DEFAULT}*. ` +
+        'Para dejar tu envío listo si ganas:\n' +
+        '¿A qué *ciudad* te lo enviaríamos? (ej. TRUJILLO)\n' +
         'Responde *-* si prefieres omitirlo.',
     );
-    return irA('PART_AGENCIA', {
+    return irA('PART_CIUDAD', {
       ...ctx,
       participanteId,
       sorteoId: sorteo.id,
+      agencia: WhatsappBotService.AGENCIA_DEFAULT,
     });
   }
 
@@ -536,9 +542,13 @@ export class WhatsappBotService {
       await responder(
         `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
           `Tu premio: *${premio.descripcion}*.\n\n` +
-          '¿Por qué *agencia* quieres recibirlo? (ej. SHALOM / OLVA / MARVISUR)',
+          `📦 Los envíos se hacen por *${WhatsappBotService.AGENCIA_DEFAULT}*.\n` +
+          '¿A qué *ciudad* te lo enviamos? (ej. TRUJILLO)',
       );
-      return irA('GANADOR_AGENCIA', { premioId: premio.id });
+      return irA('GANADOR_CIUDAD', {
+        premioId: premio.id,
+        agencia: WhatsappBotService.AGENCIA_DEFAULT,
+      });
     }
 
     // Sin premio pendiente: ¿es participante de un sorteo abierto? Sus
@@ -562,10 +572,14 @@ export class WhatsappBotService {
     }
     await responder(
       `📦 ${participante.nombre.split(' ')[0]}, registremos tus datos de ` +
-        `envío para *${participante.sorteo.titulo}*.\n\n` +
-        '¿Por qué *agencia* te enviaríamos el premio? (ej. SHALOM / OLVA / MARVISUR)',
+        `envío para *${participante.sorteo.titulo}* — los envíos se hacen ` +
+        `por *${WhatsappBotService.AGENCIA_DEFAULT}*.\n\n` +
+        '¿A qué *ciudad* te enviaríamos el premio? (ej. TRUJILLO)',
     );
-    return irA('GANADOR_AGENCIA', { participanteId: participante.id });
+    return irA('GANADOR_CIUDAD', {
+      participanteId: participante.id,
+      agencia: WhatsappBotService.AGENCIA_DEFAULT,
+    });
   }
 
   private async guardarAgenciaGanador(
