@@ -304,6 +304,18 @@ export class WhatsappService {
   }
 
   /**
+   * Tras validar el pago de un participante: el bot confirma el ticket
+   * y pide/confirma los datos de envío (deja la conversación en el paso
+   * correspondiente). Best-effort.
+   */
+  async notificarActivacionParticipante(
+    empresaId: string,
+    participanteId: string,
+  ): Promise<boolean> {
+    return this.bot.notificarActivacionParticipante(empresaId, participanteId);
+  }
+
+  /**
    * Texto simple al número indicado desde el WhatsApp de la empresa
    * (best-effort). true si salió.
    */

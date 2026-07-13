@@ -423,7 +423,7 @@ export class WhatsappBotService {
         if (msg === '1') {
           await responder(
             '✅ ¡Perfecto, mismo envío!\n\n' +
-              (await this.instruccionesPago(empresaId, s.ctx)),
+              (await this.cierreFlujo(empresaId, s.ctx)),
           );
           return irA('MENU', {});
         }
@@ -453,7 +453,7 @@ export class WhatsappBotService {
         }
         if (msg === '-') {
           await responder(
-            (await this.instruccionesPago(empresaId, s.ctx)) +
+            (await this.cierreFlujo(empresaId, s.ctx)) +
               '\n\n(cuando tengas tus datos de envío, escribe *2* en el ' +
               'menú para registrarlos 📦)',
           );
@@ -507,6 +507,12 @@ export class WhatsappBotService {
             recibeDni: s.ctx.recibeDni ?? null,
           },
         });
+        // Dinámica post-activación: el premio ya existe → copiarle la
+        // dirección recién capturada.
+        await this.sincronizarPremioDeParticipacion(
+          empresaId,
+          s.ctx.participanteId,
+        );
         const destinoTxt = [s.ctx.provincia, s.ctx.departamento]
           .filter(Boolean)
           .join(', ');
@@ -517,7 +523,7 @@ export class WhatsappBotService {
               `🎁 El premio lo recibirá *${s.ctx.recibeNombre}* por ` +
               `*${s.ctx.agencia}*${destinoTxt ? ` a *${destinoTxt}*` : ''}` +
               `${direccion ? ` (sucursal ${direccion})` : ''}.\n\n` +
-              (await this.instruccionesPago(empresaId, s.ctx)),
+              (await this.cierreFlujo(empresaId, s.ctx)),
           );
           return irA('MENU', {});
         }
@@ -543,7 +549,7 @@ export class WhatsappBotService {
           // guardar la dirección).
           await responder(
             '✅ ¡Listo! Tú recogerás el paquete con tu DNI.\n\n' +
-              (await this.instruccionesPago(empresaId, s.ctx)),
+              (await this.cierreFlujo(empresaId, s.ctx)),
           );
           return irA('MENU', {});
         }
@@ -710,57 +716,145 @@ export class WhatsappBotService {
     // La lista de participantes se refresca sola en los devices.
     this.realtime.notifySorteoCambiado({ empresaId, sorteoId: sorteo.id });
 
-    // Registrado ✅ — ahora los datos de envío (opcionales): si gana,
-    // la entrega ya queda lista y se muestran en el app.
+    // Registrado ✅ → el PAGO va de inmediato (los datos de envío se
+    // piden recién cuando la empresa VALIDA el pago — ver
+    // notificarActivacionParticipante).
     const cabecera =
       (ctx.verificado == true ? `🪪 DNI verificado: *${ctx.nombre}*\n` : '') +
       `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!\n\n`;
-    const agencia = ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT;
 
-    // Participante RECURRENTE: si ya dejó datos de envío antes (otra
-    // participación o un premio), se copian a este registro y solo se
-    // le pide confirmar o cambiarlos — cero fricción.
+    // Recurrente: sus datos de envío previos se copian YA (el auto-premio
+    // los usa aunque no responda después) — se confirman tras el pago.
     const previos = await this.datosEnvioPrevios(empresaId, dni);
     if (previos) {
       await this.prisma.sorteoParticipante.update({
         where: { id: participanteId },
         data: previos,
       });
-      const destino = [previos.destinoProvincia, previos.destinoDepartamento]
-        .filter(Boolean)
-        .join(', ');
-      await responder(
-        cabecera +
-          `📦 Ya tienes una dirección de envío registrada con *${previos.agenciaNombre}*:` +
-          `${destino ? `\n📍 *${destino}*` : ''}` +
-          `${previos.agenciaDireccion ? ` (sucursal *${previos.agenciaDireccion}*)` : ''}\n\n` +
-          '¿La usamos para este envío?\n' +
-          '*1* — Sí, es la misma ✅\n' +
-          '*2* — Cambiarla\n' +
-          '*3* — La misma, pero el paquete lo recogerá OTRA persona 👤',
-      );
-      return irA('CONFIRMAR_ENVIO', {
-        ...ctx,
-        participanteId,
-        sorteoId: sorteo.id,
-        agencia,
-      });
     }
-
-    // Primera vez: la agencia es fija (se informa, no se pregunta).
     await responder(
       cabecera +
-        `📦 Los envíos se hacen por *${agencia}*. ` +
-        'Para dejar tu envío listo si ganas:\n' +
-        '¿A qué *ciudad* te lo enviaríamos? (ej. TRUJILLO)\n' +
-        'Responde *-* si prefieres omitirlo.',
+        (await this.instruccionesPago(empresaId, {
+          ...ctx,
+          sorteoId: sorteo.id,
+        })) +
+        '\n\n📦 Cuando validemos tu pago te pediremos ' +
+        (previos ? 'confirmar tu dirección de envío.' : 'los datos de envío.'),
     );
-    return irA('PART_CIUDAD', {
-      ...ctx,
-      participanteId,
-      sorteoId: sorteo.id,
-      agencia,
+    return irA('MENU', {});
+  }
+
+  /**
+   * Cierre del flujo de envío: antes de validar el pago → instrucciones
+   * de pago; después (postActivacion) → despedida.
+   */
+  private async cierreFlujo(empresaId: string, ctx: any): Promise<string> {
+    if (ctx.postActivacion) {
+      return '✅ ¡Todo listo! Te avisaremos por aquí cuando tu premio esté en camino 🚚';
+    }
+    return this.instruccionesPago(empresaId, ctx);
+  }
+
+  /**
+   * Dinámicas: si la participación ya tiene premio (auto-creado al
+   * validar) y el cliente completa/cambia su envío DESPUÉS, el premio
+   * hereda los datos — solo antes del despacho.
+   */
+  private async sincronizarPremioDeParticipacion(
+    empresaId: string,
+    participanteId: string | undefined,
+  ): Promise<void> {
+    if (!participanteId) return;
+    const p = await this.prisma.sorteoParticipante.findFirst({
+      where: { id: participanteId, empresaId },
     });
+    if (!p?.agenciaNombre) return;
+    const { count } = await this.prisma.sorteoPremio.updateMany({
+      where: {
+        participanteId,
+        estado: {
+          in: [EstadoPremioSorteo.REGISTRADO, EstadoPremioSorteo.PREPARANDO],
+        },
+      },
+      data: {
+        modalidad: 'ENVIO_AGENCIA',
+        agenciaNombre: p.agenciaNombre,
+        destinoDepartamento: p.destinoDepartamento,
+        destinoProvincia: p.destinoProvincia,
+        agenciaDireccion: p.agenciaDireccion,
+        recibeNombre: p.recibeNombre,
+        recibeDni: p.recibeDni,
+      },
+    });
+    if (count > 0) {
+      this.realtime.notifySorteoCambiado({ empresaId, sorteoId: p.sorteoId });
+    }
+  }
+
+  /**
+   * Tras VALIDAR el pago (llamado desde el backend al activar): confirma
+   * el ticket y pide los datos de envío (o confirmar los ya copiados).
+   * Deja la conversación en el paso correspondiente con postActivacion —
+   * los cierres de flujo ya no piden pago.
+   */
+  async notificarActivacionParticipante(
+    empresaId: string,
+    participanteId: string,
+  ): Promise<boolean> {
+    if (!this.evolution.disponible) return false;
+    const cfg = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId },
+    });
+    if (!cfg || !cfg.habilitado || cfg.estado !== 'CONECTADO') return false;
+    const p = await this.prisma.sorteoParticipante.findFirst({
+      where: { id: participanteId, empresaId },
+      include: { sorteo: { select: { titulo: true } } },
+    });
+    if (!p) return false;
+
+    const agencia =
+      cfg.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT;
+    const base =
+      `🎟️ ¡Pago confirmado, ${p.nombre.split(' ')[0]}! Ya estás participando en ` +
+      `*${p.sorteo.titulo}* con el ticket *#${p.numeroTicket}*. ¡Mucha suerte! 🍀\n\n`;
+    const ctx = {
+      participanteId: p.id,
+      sorteoId: p.sorteoId,
+      agencia,
+      postActivacion: true,
+    };
+
+    let texto: string;
+    let estado: string;
+    if (p.agenciaNombre) {
+      const destino = [p.destinoProvincia, p.destinoDepartamento]
+        .filter(Boolean)
+        .join(', ');
+      texto =
+        base +
+        `📦 Tenemos esta dirección para tu envío: *${p.agenciaNombre}*` +
+        `${destino ? ` a *${destino}*` : ''}` +
+        `${p.agenciaDireccion ? ` (sucursal *${p.agenciaDireccion}*)` : ''}.\n` +
+        '¿La usamos?\n' +
+        '*1* — Sí, es la misma ✅\n' +
+        '*2* — Cambiarla\n' +
+        '*3* — La misma, pero el paquete lo recogerá OTRA persona 👤';
+      estado = 'CONFIRMAR_ENVIO';
+    } else {
+      texto =
+        base +
+        `📦 Ahora tus datos de envío (van por *${agencia}*):\n` +
+        '¿A qué *ciudad* te lo enviaríamos? (ej. TRUJILLO)\n' +
+        'Responde *-* si prefieres coordinarlo después.';
+      estado = 'PART_CIUDAD';
+    }
+    await this.evolution.sendText({
+      instanceName: cfg.instanceName,
+      number: p.celular,
+      text: texto,
+    });
+    await this.guardarConversacion(empresaId, p.celular, estado, ctx);
+    return true;
   }
 
   /**
@@ -981,8 +1075,12 @@ export class WhatsappBotService {
           recibeDni: ctx.recibeDni ?? null,
         },
       });
+      await this.sincronizarPremioDeParticipacion(
+        empresaId,
+        ctx.participanteId,
+      );
       await responder(
-        `${intro}\n\n` + (await this.instruccionesPago(empresaId, ctx)),
+        `${intro}\n\n` + (await this.cierreFlujo(empresaId, ctx)),
       );
       return irA('MENU', {});
     }

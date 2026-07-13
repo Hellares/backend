@@ -695,17 +695,11 @@ export class SorteosService {
       },
     });
 
-    // Confirmación por WhatsApp (best-effort, nunca bloquea).
+    // Confirmación por WhatsApp + pedido de datos de envío (el bot deja
+    // la conversación en el paso correspondiente). Best-effort.
     if (estado === EstadoParticipanteSorteo.ACTIVO) {
-      const nombre = participante.nombre.split(' ')[0];
       await this.whatsapp
-        .enviarTexto(
-          empresaId,
-          participante.celular,
-          `🎟️ ¡Pago confirmado, ${nombre}! Ya estás participando en ` +
-            `*${participante.sorteo.titulo}* con el ticket *#${numeroTicket}*. ` +
-            '¡Mucha suerte! 🍀',
-        )
+        .notificarActivacionParticipante(empresaId, participante.id)
         .catch((e) =>
           this.logger.warn(
             `Confirmación WhatsApp participante ${participanteId}: ${(e as Error).message}`,
