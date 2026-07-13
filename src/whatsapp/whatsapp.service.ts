@@ -186,6 +186,7 @@ export class WhatsappService {
       habilitado: cfg?.habilitado ?? true,
       plantillaPremio: cfg?.plantillaPremio ?? null,
       plantillaDefault: PLANTILLA_PREMIO_DEFAULT,
+      agenciaEnvio: cfg?.agenciaEnvio ?? 'SHALOM',
       conectadoEn: cfg?.conectadoEn ?? null,
       actualizadoEn: cfg?.actualizadoEn ?? null,
     };
@@ -205,11 +206,18 @@ export class WhatsappService {
         empresaId,
         instanceName,
         plantillaPremio: dto.plantillaPremio?.trim() || null,
+        // '' o undefined → default SHALOM (columna NOT NULL).
+        ...(dto.agenciaEnvio?.trim() && {
+          agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase(),
+        }),
         habilitado: dto.habilitado ?? true,
       },
       update: {
         ...(dto.plantillaPremio !== undefined && {
           plantillaPremio: dto.plantillaPremio.trim() || null,
+        }),
+        ...(dto.agenciaEnvio !== undefined && {
+          agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase() || 'SHALOM',
         }),
         ...(dto.habilitado !== undefined && { habilitado: dto.habilitado }),
       },

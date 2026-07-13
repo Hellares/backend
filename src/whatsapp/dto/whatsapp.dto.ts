@@ -14,6 +14,17 @@ export class UpdateWhatsappDto {
   plantillaPremio?: string;
 
   @ApiPropertyOptional({
+    description:
+      'Agencia con la que la empresa hace TODOS los envíos — el bot la ' +
+      "informa y no pregunta. '' = volver al default (SHALOM).",
+    example: 'SHALOM',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  agenciaEnvio?: string;
+
+  @ApiPropertyOptional({
     description: 'Apagar/encender los envíos automáticos sin desvincular',
   })
   @IsOptional()

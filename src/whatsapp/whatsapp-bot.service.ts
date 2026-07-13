@@ -32,8 +32,8 @@ export class WhatsappBotService {
   private static readonly SILENCIO_ASESOR_HORAS = 12;
   private static readonly THROTTLE_MENU_MIN = 60;
 
-  /// Los envíos SIEMPRE van por esta agencia — el bot lo informa y ya
-  /// no pregunta cuál (pedido del negocio).
+  /// Fallback si la empresa no configuró su agencia (IntegracionWhatsapp
+  /// .agenciaEnvio): el bot la informa y no pregunta cuál.
   private static readonly AGENCIA_DEFAULT = 'SHALOM';
 
   constructor(
@@ -126,6 +126,8 @@ export class WhatsappBotService {
         estado,
         ctx,
         sorteos,
+        agencia:
+          cfg.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT,
       });
     } catch (e) {
       this.logger.warn(
@@ -148,6 +150,7 @@ export class WhatsappBotService {
         tipo: TipoSorteo;
         precioParticipacion: Prisma.Decimal | null;
       }[];
+      agencia: string;
     },
   ) {
     const responder = (texto: string) =>
@@ -163,6 +166,7 @@ export class WhatsappBotService {
               empresaId,
               celular,
               s.sorteos[0].id,
+              s.agencia,
               responder,
               irA,
             );
@@ -181,6 +185,7 @@ export class WhatsappBotService {
           return this.iniciarFlujoGanador(
             empresaId,
             celular,
+            s.agencia,
             responder,
             irA,
           );
@@ -204,7 +209,14 @@ export class WhatsappBotService {
           );
           return;
         }
-        return this.iniciarRegistro(empresaId, celular, ids[idx], responder, irA);
+        return this.iniciarRegistro(
+          empresaId,
+          celular,
+          ids[idx],
+          s.agencia,
+          responder,
+          irA,
+        );
       }
 
       case 'ESPERANDO_NOMBRE': {
@@ -393,6 +405,7 @@ export class WhatsappBotService {
     empresaId: string,
     celular: string,
     sorteoId: string,
+    agencia: string,
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
@@ -408,7 +421,7 @@ export class WhatsappBotService {
     await responder(
       '¡Buenísimo! 🎉 Para registrarte envíame tu *DNI* (8 dígitos):',
     );
-    return irA('ESPERANDO_DNI', { sorteoId });
+    return irA('ESPERANDO_DNI', { sorteoId, agencia });
   }
 
   private async registrarParticipante(
@@ -470,7 +483,7 @@ export class WhatsappBotService {
       ...ctx,
       participanteId,
       sorteoId: sorteo.id,
-      agencia: WhatsappBotService.AGENCIA_DEFAULT,
+      agencia: ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT,
     });
   }
 
@@ -522,6 +535,7 @@ export class WhatsappBotService {
   private async iniciarFlujoGanador(
     empresaId: string,
     celular: string,
+    agencia: string,
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
