@@ -273,6 +273,27 @@ export class WhatsappBotService {
         return irA('ESPERANDO_NOMBRE', { ...s.ctx, dni });
       }
 
+      case 'CONFIRMAR_ENVIO': {
+        // Recurrente: sus datos previos ya quedaron copiados al registro.
+        if (msg === '1') {
+          await responder(
+            '✅ ¡Perfecto, mismo envío!\n\n' +
+              (await this.instruccionesPago(empresaId, s.ctx)),
+          );
+          return irA('MENU', {});
+        }
+        if (msg === '2') {
+          await responder(
+            '📍 ¿A qué *ciudad* te lo enviaríamos? (ej. TRUJILLO)',
+          );
+          return irA('PART_CIUDAD', s.ctx);
+        }
+        await responder(
+          'Responde *1* si tu dirección es la misma, o *2* para cambiarla 🙂',
+        );
+        return;
+      }
+
       case 'PART_CIUDAD': {
         if (msg === '-') {
           await responder(
@@ -470,11 +491,44 @@ export class WhatsappBotService {
 
     // Registrado ✅ — ahora los datos de envío (opcionales): si gana,
     // la entrega ya queda lista y se muestran en el app.
-    // La agencia es fija (SHALOM): se informa, no se pregunta.
-    await responder(
+    const cabecera =
       (ctx.verificado == true ? `🪪 DNI verificado: *${ctx.nombre}*\n` : '') +
-        `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!\n\n` +
-        `📦 Los envíos se hacen por *${WhatsappBotService.AGENCIA_DEFAULT}*. ` +
+      `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!\n\n`;
+    const agencia = ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT;
+
+    // Participante RECURRENTE: si ya dejó datos de envío antes (otra
+    // participación o un premio), se copian a este registro y solo se
+    // le pide confirmar o cambiarlos — cero fricción.
+    const previos = await this.datosEnvioPrevios(empresaId, dni);
+    if (previos) {
+      await this.prisma.sorteoParticipante.update({
+        where: { id: participanteId },
+        data: previos,
+      });
+      const destino = [previos.destinoProvincia, previos.destinoDepartamento]
+        .filter(Boolean)
+        .join(', ');
+      await responder(
+        cabecera +
+          `📦 Ya tienes una dirección de envío registrada con *${previos.agenciaNombre}*:` +
+          `${destino ? `\n📍 *${destino}*` : ''}` +
+          `${previos.agenciaDireccion ? ` (sucursal *${previos.agenciaDireccion}*)` : ''}\n\n` +
+          '¿La usamos para este envío?\n' +
+          '*1* — Sí, es la misma ✅\n' +
+          '*2* — Cambiarla',
+      );
+      return irA('CONFIRMAR_ENVIO', {
+        ...ctx,
+        participanteId,
+        sorteoId: sorteo.id,
+        agencia,
+      });
+    }
+
+    // Primera vez: la agencia es fija (se informa, no se pregunta).
+    await responder(
+      cabecera +
+        `📦 Los envíos se hacen por *${agencia}*. ` +
         'Para dejar tu envío listo si ganas:\n' +
         '¿A qué *ciudad* te lo enviaríamos? (ej. TRUJILLO)\n' +
         'Responde *-* si prefieres omitirlo.',
@@ -483,8 +537,53 @@ export class WhatsappBotService {
       ...ctx,
       participanteId,
       sorteoId: sorteo.id,
-      agencia: ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT,
+      agencia,
     });
+  }
+
+  /**
+   * Datos de envío previos del DNI (participante recurrente): última
+   * participación con agencia, o su último premio enviado. null si es
+   * la primera vez.
+   */
+  private async datosEnvioPrevios(
+    empresaId: string,
+    dni: string,
+  ): Promise<{
+    agenciaNombre: string;
+    destinoDepartamento: string | null;
+    destinoProvincia: string | null;
+    agenciaDireccion: string | null;
+  } | null> {
+    const participante = await this.prisma.sorteoParticipante.findFirst({
+      where: { empresaId, dni, agenciaNombre: { not: null } },
+      orderBy: { creadoEn: 'desc' },
+      select: {
+        agenciaNombre: true,
+        destinoDepartamento: true,
+        destinoProvincia: true,
+        agenciaDireccion: true,
+      },
+    });
+    if (participante?.agenciaNombre) {
+      return participante as any;
+    }
+    const premio = await this.prisma.sorteoPremio.findFirst({
+      where: {
+        empresaId,
+        ganadorDni: dni,
+        agenciaNombre: { not: null },
+        estado: { not: EstadoPremioSorteo.ANULADO },
+      },
+      orderBy: { creadoEn: 'desc' },
+      select: {
+        agenciaNombre: true,
+        destinoDepartamento: true,
+        destinoProvincia: true,
+        agenciaDireccion: true,
+      },
+    });
+    return premio?.agenciaNombre ? (premio as any) : null;
   }
 
   /**
