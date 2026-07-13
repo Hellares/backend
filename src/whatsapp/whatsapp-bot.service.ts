@@ -29,6 +29,7 @@ export class WhatsappBotService {
 
   private static readonly TIMEOUT_PASO_MIN = 30;
   private static readonly SILENCIO_ASESOR_HORAS = 12;
+  private static readonly THROTTLE_MENU_MIN = 60;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -56,10 +57,15 @@ export class WhatsappBotService {
     });
     if (sorteos.length === 0) return;
 
-    const conv = await this.prisma.conversacionWhatsapp.upsert({
+    // OJO: NO upsert con update:{} — bumpeaba actualizadoEn en cada
+    // mensaje y los timeouts (asesor 12h, paso 30min, menú 1h) nunca
+    // vencían. Solo se escribe en los cambios reales de estado.
+    let conv = await this.prisma.conversacionWhatsapp.findUnique({
       where: { empresaId_celular: { empresaId, celular } },
-      create: { empresaId, celular },
-      update: {},
+    });
+    const esNuevo = conv == null;
+    conv ??= await this.prisma.conversacionWhatsapp.create({
+      data: { empresaId, celular },
     });
 
     const msg = texto.trim();
@@ -68,8 +74,9 @@ export class WhatsappBotService {
     const ctx: any = conv.contexto ?? {};
 
     // "menu"/"cancelar" siempre reinician; pasos a medias caducan.
+    const esComandoMenu = ['menu', 'menú', 'cancelar', '0'].includes(msgLower);
     const minutos = (Date.now() - conv.actualizadoEn.getTime()) / 60000;
-    if (['menu', 'menú', 'cancelar', '0'].includes(msgLower)) {
+    if (esComandoMenu) {
       estado = 'MENU';
     } else if (estado === 'ASESOR') {
       // Silencio: un humano está atendiendo este chat.
@@ -80,6 +87,32 @@ export class WhatsappBotService {
       minutos > WhatsappBotService.TIMEOUT_PASO_MIN
     ) {
       estado = 'MENU';
+    }
+
+    // Texto libre en MENU (no es comando ni opción): modo NO intrusivo.
+    // - Quien YA participa está haciendo una consulta humana (captura
+    //   de pago, pregunta) → el bot calla; 1/2/3/menu siguen activos.
+    // - Número nuevo: el menú se muestra máx. 1 vez/hora para no
+    //   estorbar una conversación con el asesor.
+    if (
+      estado === 'MENU' &&
+      !esComandoMenu &&
+      !['1', '2', '3'].includes(msg)
+    ) {
+      const yaParticipa = await this.prisma.sorteoParticipante.findFirst({
+        where: {
+          empresaId,
+          celular,
+          sorteo: { estado: EstadoSorteo.ABIERTO },
+        },
+        select: { id: true },
+      });
+      if (yaParticipa) return;
+      const menuMostradoHaceUnRato =
+        !esNuevo &&
+        conv.contexto != null &&
+        minutos < WhatsappBotService.THROTTLE_MENU_MIN;
+      if (menuMostradoHaceUnRato) return;
     }
 
     try {
