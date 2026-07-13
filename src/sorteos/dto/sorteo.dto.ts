@@ -141,6 +141,14 @@ export class RegistrarPremioDto {
   @IsString()
   ganadorCelular?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Participacion (SorteoParticipante) que origina el premio — permite un premio por jugada',
+  })
+  @IsOptional()
+  @IsString()
+  participanteId?: string;
+
   @ApiProperty({ example: 'Laptop Lenovo IdeaPad 3 15.6"' })
   @IsString()
   @IsNotEmpty()

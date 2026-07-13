@@ -105,7 +105,9 @@ model SorteoParticipante {
 
   sorteo Sorteo @relation(fields: [sorteoId], references: [id], onDelete: Cascade)
 
-  @@unique([sorteoId, dni])
+  // Un DNI puede participar VARIAS veces en el mismo sorteo (compra
+  // multiple de tickets) — cada fila es una participacion/ticket.
+  @@index([sorteoId, dni])
   @@index([empresaId, celular])
   @@index([sorteoId, estado])
 }
@@ -151,6 +153,9 @@ model SorteoPremio {
   envioClave       String?
   // Rótulo de envío ya impreso (chip "IMPRESO" en la card del premio).
   rotuloImpresoEn DateTime?
+  // Participacion (SorteoParticipante) que origino este premio — permite
+  // un premio POR PARTICIPACION cuando el mismo DNI juega varias veces.
+  participanteId String? @unique
   // Ticket enviado por WhatsApp automático al ganador (chip en la card).
   whatsappEnviadoEn DateTime?
 

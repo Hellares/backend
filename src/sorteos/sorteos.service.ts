@@ -313,6 +313,7 @@ export class SorteosService {
         data: {
           sorteoId,
           empresaId,
+          participanteId: dto.participanteId,
           ganadorId: ganadorId!,
           ganadorDni: dto.ganadorDni,
           ganadorNombre: dto.ganadorNombre,
@@ -740,6 +741,7 @@ export class SorteosService {
     empresaId: string,
     usuarioId: string,
     participante: {
+      id: string;
       dni: string;
       nombre: string;
       celular: string;
@@ -756,18 +758,17 @@ export class SorteosService {
     },
   ): Promise<boolean> {
     try {
+      // Idempotente POR PARTICIPACION (el mismo DNI puede jugar varias
+      // veces: cada jugada validada genera su propio premio).
       const existente = await this.prisma.sorteoPremio.findFirst({
-        where: {
-          sorteoId: participante.sorteo.id,
-          ganadorDni: participante.dni,
-          estado: { not: EstadoPremioSorteo.ANULADO },
-        },
+        where: { participanteId: participante.id },
         select: { id: true },
       });
       if (existente) return false;
 
       const conAgencia = !!participante.agenciaNombre?.trim();
       await this.registrarPremio(empresaId, usuarioId, participante.sorteo.id, {
+        participanteId: participante.id,
         ganadorDni: participante.dni,
         ganadorNombre: participante.nombre,
         ganadorCelular: participante.celular.slice(-9),

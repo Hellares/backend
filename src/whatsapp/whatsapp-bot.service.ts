@@ -244,13 +244,19 @@ export class WhatsappBotService {
           await responder('El DNI debe tener *8 dígitos* — inténtalo de nuevo:');
           return;
         }
-        // ¿Ya está en este sorteo? (antes de gastar la consulta RENIEC)
-        const previo = await this.prisma.sorteoParticipante.findUnique({
-          where: { sorteoId_dni: { sorteoId: s.ctx.sorteoId, dni } },
+        // ¿Ya está en este sorteo? → ofrecer participar OTRA VEZ (comprar
+        // varias participaciones es normal). Antes de gastar RENIEC.
+        const previo = await this.prisma.sorteoParticipante.findFirst({
+          where: { sorteoId: s.ctx.sorteoId, dni },
+          orderBy: { creadoEn: 'desc' },
         });
         if (previo) {
-          await responder(this.textoEstadoParticipante(previo));
-          return irA('MENU', {});
+          return this.ofrecerReparticipacion(
+            s.ctx.sorteoId,
+            previo,
+            responder,
+            irA,
+          );
         }
         // Nombre OFICIAL: primero la BD (cliente existente), luego
         // RENIEC — nunca confiar en el nombre tipeado (llegó a registrar
@@ -271,6 +277,48 @@ export class WhatsappBotService {
             'escríbeme tu *nombre completo* (nombre y apellidos):',
         );
         return irA('ESPERANDO_NOMBRE', { ...s.ctx, dni });
+      }
+
+      case 'REPARTICIPAR': {
+        if (msg === '1') {
+          const previo = await this.prisma.sorteoParticipante.findFirst({
+            where: { id: s.ctx.previoId, empresaId },
+          });
+          if (!previo) return this.mostrarMenu(s.sorteos, responder, irA);
+          const nuevo = await this.prisma.sorteoParticipante.create({
+            data: {
+              empresaId,
+              sorteoId: previo.sorteoId,
+              celular,
+              nombre: previo.nombre,
+              dni: previo.dni,
+              // Misma dirección de envío de su participación anterior.
+              agenciaNombre: previo.agenciaNombre,
+              destinoDepartamento: previo.destinoDepartamento,
+              destinoProvincia: previo.destinoProvincia,
+              agenciaDireccion: previo.agenciaDireccion,
+            },
+          });
+          this.realtime.notifySorteoCambiado({
+            empresaId,
+            sorteoId: nuevo.sorteoId,
+          });
+          const conEnvio = previo.agenciaNombre
+            ? ` Usaremos tu misma dirección de envío (*${previo.agenciaNombre}*).`
+            : '';
+          await responder(
+            `🎟️ ¡Nueva participación registrada, ${previo.nombre.split(' ')[0]}!${conEnvio}\n\n` +
+              (await this.instruccionesPago(empresaId, {
+                sorteoId: nuevo.sorteoId,
+              })),
+          );
+          return irA('MENU', {});
+        }
+        await responder(
+          '👌 Listo, sigues con tus participaciones actuales. ' +
+            'Escribe *menu* para ver las opciones.',
+        );
+        return irA('MENU', {});
       }
 
       case 'CONFIRMAR_ENVIO': {
@@ -430,14 +478,14 @@ export class WhatsappBotService {
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
-    // ¿Este número ya está registrado en el sorteo?
+    // ¿Este número ya está registrado en el sorteo? → ofrecer otra
+    // participación (compra múltiple de tickets).
     const previo = await this.prisma.sorteoParticipante.findFirst({
       where: { sorteoId, celular },
       orderBy: { creadoEn: 'desc' },
     });
     if (previo) {
-      await responder(this.textoEstadoParticipante(previo));
-      return irA('MENU', {});
+      return this.ofrecerReparticipacion(sorteoId, previo, responder, irA);
     }
     await responder(
       '¡Buenísimo! 🎉 Para registrarte envíame tu *DNI* (8 dígitos):',
@@ -460,34 +508,20 @@ export class WhatsappBotService {
       await responder('Ese sorteo ya se cerró 🙈 escribe *menu* para ver los activos.');
       return irA('MENU', {});
     }
-    let participanteId: string;
-    try {
-      const creado = await this.prisma.sorteoParticipante.create({
-        data: {
-          empresaId,
-          sorteoId: sorteo.id,
-          celular,
-          nombre: ctx.nombre ?? '',
-          dni,
-        },
-      });
-      participanteId = creado.id;
-      // La lista de participantes se refresca sola en los devices.
-      this.realtime.notifySorteoCambiado({ empresaId, sorteoId: sorteo.id });
-    } catch (e: any) {
-      if (e?.code === 'P2002') {
-        const previo = await this.prisma.sorteoParticipante.findUnique({
-          where: { sorteoId_dni: { sorteoId: sorteo.id, dni } },
-        });
-        await responder(
-          previo
-            ? this.textoEstadoParticipante(previo)
-            : 'Ese DNI ya está registrado en este sorteo 🙂',
-        );
-        return irA('MENU', {});
-      }
-      throw e;
-    }
+    // El duplicado se maneja ANTES (ofrecerReparticipacion): un DNI
+    // puede tener varias participaciones en el mismo sorteo.
+    const creado = await this.prisma.sorteoParticipante.create({
+      data: {
+        empresaId,
+        sorteoId: sorteo.id,
+        celular,
+        nombre: ctx.nombre ?? '',
+        dni,
+      },
+    });
+    const participanteId = creado.id;
+    // La lista de participantes se refresca sola en los devices.
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId: sorteo.id });
 
     // Registrado ✅ — ahora los datos de envío (opcionales): si gana,
     // la entrega ya queda lista y se muestran en el app.
@@ -616,19 +650,55 @@ export class WhatsappBotService {
     ].join('\n');
   }
 
-  private textoEstadoParticipante(p: {
-    estado: EstadoParticipanteSorteo;
-    numeroTicket: number | null;
-    nombre: string;
-  }): string {
-    switch (p.estado) {
-      case EstadoParticipanteSorteo.ACTIVO:
-        return `🎟️ ¡Ya estás participando, ${p.nombre.split(' ')[0]}! Tu ticket es el *#${p.numeroTicket}*. ¡Suerte! 🍀`;
-      case EstadoParticipanteSorteo.RECHAZADO:
-        return 'Tu registro anterior fue rechazado 🙁 escríbenos por este chat (opción *3*) para revisarlo.';
-      default:
-        return '📝 Ya estás registrado — nos falta validar tu pago. Si ya pagaste, envía tu captura por este chat 🙂';
-    }
+  /**
+   * Ya participa en el sorteo: informa su estado y ofrece registrar
+   * OTRA participación (compra múltiple de tickets — cada una con su
+   * propio ticket y, en dinámicas, su propio premio al validar).
+   */
+  private async ofrecerReparticipacion(
+    sorteoId: string,
+    previo: {
+      id: string;
+      dni: string;
+      nombre: string;
+      estado: EstadoParticipanteSorteo;
+      numeroTicket: number | null;
+    },
+    responder: (t: string) => Promise<any>,
+    irA: (e: string, c?: any) => Promise<void>,
+  ) {
+    const [activas, pendientes] = await Promise.all([
+      this.prisma.sorteoParticipante.count({
+        where: {
+          sorteoId,
+          dni: previo.dni,
+          estado: EstadoParticipanteSorteo.ACTIVO,
+        },
+      }),
+      this.prisma.sorteoParticipante.count({
+        where: {
+          sorteoId,
+          dni: previo.dni,
+          estado: EstadoParticipanteSorteo.PENDIENTE_PAGO,
+        },
+      }),
+    ]);
+    const resumen = [
+      activas > 0 ? `${activas} activa${activas === 1 ? '' : 's'} 🎟️` : null,
+      pendientes > 0
+        ? `${pendientes} pendiente${pendientes === 1 ? '' : 's'} de pago`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    await responder(
+      `¡Hola ${previo.nombre.split(' ')[0]}! Ya estás participando` +
+        `${resumen ? ` (${resumen})` : ''}.\n\n` +
+        '¿Quieres participar *otra vez*? 🎟️\n' +
+        '*1* — Sí, registrar otra participación\n' +
+        '*0* — No, volver al menú',
+    );
+    return irA('REPARTICIPAR', { sorteoId, previoId: previo.id });
   }
 
   private async iniciarFlujoGanador(
