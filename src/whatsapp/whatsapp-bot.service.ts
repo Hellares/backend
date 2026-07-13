@@ -7,6 +7,7 @@ import {
   TipoSorteo,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { EvolutionApiService } from './evolution-api.service';
 
 /**
@@ -32,6 +33,7 @@ export class WhatsappBotService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly evolution: EvolutionApiService,
+    private readonly consultasExternas: ConsultasExternasService,
   ) {}
 
   /** Punto de entrada desde el webhook MESSAGES_UPSERT. */
@@ -167,16 +169,22 @@ export class WhatsappBotService {
       }
 
       case 'ESPERANDO_NOMBRE': {
+        // Fallback: solo se llega aquí si BD y RENIEC no resolvieron
+        // el nombre del DNI.
         if (msg.length < 5 || !msg.includes(' ')) {
           await responder(
             'Escríbeme tu *nombre completo* por favor (nombre y apellidos) 🙂',
           );
           return;
         }
-        await responder(
-          `Gracias ${msg.split(' ')[0]} 🙌 ahora envíame tu *DNI* (8 dígitos):`,
+        return this.registrarParticipante(
+          empresaId,
+          celular,
+          { ...s.ctx, nombre: msg.toUpperCase() },
+          s.ctx.dni,
+          responder,
+          irA,
         );
-        return irA('ESPERANDO_DNI', { ...s.ctx, nombre: msg.toUpperCase() });
       }
 
       case 'ESPERANDO_DNI': {
@@ -185,14 +193,33 @@ export class WhatsappBotService {
           await responder('El DNI debe tener *8 dígitos* — inténtalo de nuevo:');
           return;
         }
-        return this.registrarParticipante(
-          empresaId,
-          celular,
-          s.ctx,
-          dni,
-          responder,
-          irA,
+        // ¿Ya está en este sorteo? (antes de gastar la consulta RENIEC)
+        const previo = await this.prisma.sorteoParticipante.findUnique({
+          where: { sorteoId_dni: { sorteoId: s.ctx.sorteoId, dni } },
+        });
+        if (previo) {
+          await responder(this.textoEstadoParticipante(previo));
+          return irA('MENU', {});
+        }
+        // Nombre OFICIAL: primero la BD (cliente existente), luego
+        // RENIEC — nunca confiar en el nombre tipeado (llegó a registrar
+        // nombres incorrectos para DNIs ya conocidos).
+        const nombre = await this.resolverNombrePorDni(dni);
+        if (nombre != null) {
+          return this.registrarParticipante(
+            empresaId,
+            celular,
+            { ...s.ctx, nombre, verificado: true },
+            dni,
+            responder,
+            irA,
+          );
+        }
+        await responder(
+          'No pudimos validar tu DNI automáticamente 🙈 ' +
+            'escríbeme tu *nombre completo* (nombre y apellidos):',
         );
+        return irA('ESPERANDO_NOMBRE', { ...s.ctx, dni });
       }
 
       case 'PART_AGENCIA': {
@@ -337,9 +364,9 @@ export class WhatsappBotService {
       return irA('MENU', {});
     }
     await responder(
-      '¡Buenísimo! 🎉 Para registrarte envíame tu *nombre completo*:',
+      '¡Buenísimo! 🎉 Para registrarte envíame tu *DNI* (8 dígitos):',
     );
-    return irA('ESPERANDO_NOMBRE', { sorteoId });
+    return irA('ESPERANDO_DNI', { sorteoId });
   }
 
   private async registrarParticipante(
@@ -387,7 +414,8 @@ export class WhatsappBotService {
     // Registrado ✅ — ahora los datos de envío (opcionales): si gana,
     // la entrega ya queda lista y se muestran en el app.
     await responder(
-      `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!\n\n` +
+      (ctx.verificado == true ? `🪪 DNI verificado: *${ctx.nombre}*\n` : '') +
+        `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!\n\n` +
         '📦 Para tener tu envío listo si ganas: ¿por qué *agencia* te ' +
         'enviaríamos el premio? (ej. SHALOM / OLVA / MARVISUR)\n' +
         'Responde *-* si prefieres omitirlo.',
@@ -520,6 +548,36 @@ export class WhatsappBotService {
         '.\nTe enviaremos el ticket de envío por aquí cuando lo despachemos 🚚',
     );
     return irA('MENU', {});
+  }
+
+  /**
+   * Nombre oficial del DNI: primero la BD (Persona de un cliente ya
+   * registrado), luego RENIEC (consultas-externas). null si ninguna
+   * fuente responde — el bot pide el nombre a mano como fallback.
+   */
+  private async resolverNombrePorDni(dni: string): Promise<string | null> {
+    const persona = await this.prisma.persona.findUnique({
+      where: { dni },
+      select: { nombres: true, apellidos: true },
+    });
+    if (persona) {
+      const full = `${persona.nombres} ${persona.apellidos}`.trim();
+      if (full) return full.toUpperCase();
+    }
+    try {
+      const reniec = await this.consultasExternas.consultarDni(dni);
+      const full = [
+        reniec?.nombres,
+        reniec?.apellidoPaterno,
+        reniec?.apellidoMaterno,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      return full ? full.toUpperCase() : null;
+    } catch {
+      return null;
+    }
   }
 
   private async guardarConversacion(
