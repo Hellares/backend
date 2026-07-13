@@ -334,9 +334,10 @@ export class WhatsappBotService {
           if (esRegalo) {
             await responder(
               `🎟️ ¡Nueva participación registrada, ${previo.nombre.split(' ')[0]}!\n\n` +
-                '🎁 ¿Quién *recibirá* el premio? Escríbeme su *nombre completo*:',
+                '🎁 Envíame el *DNI* de quien recogerá el premio (8 dígitos) ' +
+                '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
             );
-            return irA('REGALO_NOMBRE', {
+            return irA('REGALO_DNI', {
               participanteId: nuevo.id,
               sorteoId: nuevo.sorteoId,
               agencia: s.agencia,
@@ -360,7 +361,43 @@ export class WhatsappBotService {
         return irA('MENU', {});
       }
 
+      case 'REGALO_DNI': {
+        // Quien RECOGE se identifica por DNI: el nombre oficial sale de
+        // la BD o RENIEC (Factiliza) — igual que el registro del jugador.
+        if (!s.ctx.participanteId && !s.ctx.premioId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg === '-') {
+          await responder(
+            '👤 Escríbeme entonces el *nombre completo* de quien recogerá:',
+          );
+          return irA('REGALO_NOMBRE', { ...s.ctx, recibeDni: null });
+        }
+        const dni = msg.replace(/\D/g, '');
+        if (dni.length !== 8) {
+          await responder(
+            'El DNI debe tener *8 dígitos* — o responde *-* si no lo sabes.',
+          );
+          return;
+        }
+        const nombre = await this.resolverNombrePorDni(dni);
+        if (nombre == null) {
+          await responder(
+            'No pudimos validar ese DNI automáticamente 🙈 ' +
+              'escríbeme el *nombre completo* de quien recogerá:',
+          );
+          return irA('REGALO_NOMBRE', { ...s.ctx, recibeDni: dni });
+        }
+        return this.continuarConRecibe(
+          empresaId,
+          { ...s.ctx, recibeDni: dni, recibeNombre: nombre, recibeVerificado: true },
+          responder,
+          irA,
+        );
+      }
+
       case 'REGALO_NOMBRE': {
+        // Fallback: solo si no dio DNI o BD/RENIEC no resolvieron.
         if (!s.ctx.participanteId && !s.ctx.premioId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
@@ -370,52 +407,12 @@ export class WhatsappBotService {
           );
           return;
         }
-        await responder(
-          '🪪 ¿Cuál es el *DNI* de quien recoge? (la agencia lo pide al ' +
-            'entregar)\nResponde *-* si no lo sabes.',
+        return this.continuarConRecibe(
+          empresaId,
+          { ...s.ctx, recibeNombre: msg.toUpperCase() },
+          responder,
+          irA,
         );
-        return irA('REGALO_DNI', {
-          ...s.ctx,
-          recibeNombre: msg.toUpperCase(),
-        });
-      }
-
-      case 'REGALO_DNI': {
-        const recibeDni = msg === '-' ? null : msg.replace(/\D/g, '');
-        if (recibeDni != null && recibeDni.length !== 8) {
-          await responder(
-            'El DNI debe tener *8 dígitos* — o responde *-* para omitir.',
-          );
-          return;
-        }
-        const ctxRegalo = { ...s.ctx, recibeDni };
-
-        // ENCARGO: la dirección ya está guardada — solo se actualiza
-        // quién recogerá el paquete.
-        if (s.ctx.soloRecoge && s.ctx.participanteId) {
-          await this.prisma.sorteoParticipante.updateMany({
-            where: { id: s.ctx.participanteId, empresaId },
-            data: {
-              recibeNombre: s.ctx.recibeNombre ?? null,
-              recibeDni,
-            },
-          });
-          await responder(
-            `👤 ¡Listo! *${s.ctx.recibeNombre}* recogerá el paquete` +
-              `${recibeDni ? ` con su DNI ${recibeDni}` : ''}.\n\n` +
-              (await this.instruccionesPago(empresaId, s.ctx)),
-          );
-          return irA('MENU', {});
-        }
-
-        // Regalo con dirección nueva: sigue ciudad → departamento →
-        // sucursal; PART/GANADOR_DIRECCION guardan también al que recibe.
-        await responder(
-          `📍 ¿A qué *ciudad* se lo enviamos? (ej. TRUJILLO)`,
-        );
-        return s.ctx.premioId
-            ? irA('GANADOR_CIUDAD', ctxRegalo)
-            : irA('PART_CIUDAD', ctxRegalo);
       }
 
       case 'CONFIRMAR_ENVIO': {
@@ -438,9 +435,10 @@ export class WhatsappBotService {
         }
         if (msg === '3') {
           await responder(
-            '👤 ¿Quién *recogerá* el paquete? Escríbeme su *nombre completo*:',
+            '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
+              '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
           );
-          return irA('REGALO_NOMBRE', { ...s.ctx, soloRecoge: true });
+          return irA('REGALO_DNI', { ...s.ctx, soloRecoge: true });
         }
         await responder(
           'Responde *1* (misma dirección), *2* (cambiarla) o *3* (la ' +
@@ -551,11 +549,12 @@ export class WhatsappBotService {
         }
         if (msg === '2') {
           await responder(
-            '👤 ¿Quién *recogerá* el paquete? Escríbeme su *nombre completo*:',
+            '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
+              '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
           );
           // soloRecoge: la dirección YA está guardada — al terminar solo
           // se actualiza quién recibe.
-          return irA('REGALO_NOMBRE', { ...s.ctx, soloRecoge: true });
+          return irA('REGALO_DNI', { ...s.ctx, soloRecoge: true });
         }
         await responder(
           'Responde *1* si lo recoges tú, o *2* si irá otra persona 👤',
@@ -580,9 +579,10 @@ export class WhatsappBotService {
         }
         if (msg === '2') {
           await responder(
-            '👤 ¿Quién *recogerá* el paquete? Escríbeme su *nombre completo*:',
+            '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
+              '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
           );
-          return irA('REGALO_NOMBRE', s.ctx);
+          return irA('REGALO_DNI', s.ctx);
         }
         await responder(
           'Responde *1* si lo recoges tú, o *2* si irá otra persona 👤',
@@ -956,6 +956,42 @@ export class WhatsappBotService {
       participanteId: participante.id,
       agencia,
     });
+  }
+
+  /**
+   * Con quien-recoge resuelto (nombre + DNI): si la dirección ya está
+   * guardada (encargo) actualiza solo recibe* y cierra con el pago; si
+   * no, sigue el flujo de dirección (ciudad → departamento → sucursal).
+   */
+  private async continuarConRecibe(
+    empresaId: string,
+    ctx: any,
+    responder: (t: string) => Promise<any>,
+    irA: (e: string, c?: any) => Promise<void>,
+  ) {
+    const intro =
+      `🪪 Recogerá: *${ctx.recibeNombre}*` +
+      `${ctx.recibeDni ? ` (DNI ${ctx.recibeDni})` : ''}` +
+      `${ctx.recibeVerificado ? ' ✅' : ''}`;
+    if (ctx.soloRecoge && ctx.participanteId) {
+      await this.prisma.sorteoParticipante.updateMany({
+        where: { id: ctx.participanteId, empresaId },
+        data: {
+          recibeNombre: ctx.recibeNombre ?? null,
+          recibeDni: ctx.recibeDni ?? null,
+        },
+      });
+      await responder(
+        `${intro}\n\n` + (await this.instruccionesPago(empresaId, ctx)),
+      );
+      return irA('MENU', {});
+    }
+    await responder(
+      `${intro}\n\n📍 ¿A qué *ciudad* se lo enviamos? (ej. TRUJILLO)`,
+    );
+    return ctx.premioId
+        ? irA('GANADOR_CIUDAD', ctx)
+        : irA('PART_CIUDAD', ctx);
   }
 
   private async guardarAgenciaGanador(
