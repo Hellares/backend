@@ -379,14 +379,22 @@ export class WhatsappService {
     });
     if (!premio?.ganadorCelular?.trim()) return false;
 
-    const empresa = await this.prisma.empresa.findUnique({
-      where: { id: empresaId },
-      select: { nombre: true },
-    });
+    // {empresa} = nombre COMERCIAL (la marca que ve el cliente, misma
+    // fuente que los documentos); fallback a la razón social.
+    const [empresa, configDocs] = await Promise.all([
+      this.prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: { nombre: true },
+      }),
+      this.prisma.configuracionDocumentos.findUnique({
+        where: { empresaId },
+        select: { nombreComercial: true },
+      }),
+    ]);
     const caption = this.renderPlantillaPremio(
       cfg.plantillaPremio,
       premio,
-      empresa?.nombre ?? '',
+      configDocs?.nombreComercial?.trim() || empresa?.nombre || '',
     );
     await this.evolution.sendImage({
       instanceName: cfg.instanceName,
