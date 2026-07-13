@@ -366,12 +366,12 @@ export class WhatsappBotService {
         }
         if (msg.length < 5 || !msg.includes(' ')) {
           await responder(
-            '🎁 Escríbeme el *nombre completo* de quien recibirá el premio:',
+            '👤 Escríbeme el *nombre completo* de quien recogerá el paquete:',
           );
           return;
         }
         await responder(
-          '🪪 ¿Cuál es el *DNI* de quien recibe? (la agencia lo pide al ' +
+          '🪪 ¿Cuál es el *DNI* de quien recoge? (la agencia lo pide al ' +
             'entregar)\nResponde *-* si no lo sabes.',
         );
         return irA('REGALO_DNI', {
@@ -388,12 +388,31 @@ export class WhatsappBotService {
           );
           return;
         }
+        const ctxRegalo = { ...s.ctx, recibeDni };
+
+        // ENCARGO: la dirección ya está guardada — solo se actualiza
+        // quién recogerá el paquete.
+        if (s.ctx.soloRecoge && s.ctx.participanteId) {
+          await this.prisma.sorteoParticipante.updateMany({
+            where: { id: s.ctx.participanteId, empresaId },
+            data: {
+              recibeNombre: s.ctx.recibeNombre ?? null,
+              recibeDni,
+            },
+          });
+          await responder(
+            `👤 ¡Listo! *${s.ctx.recibeNombre}* recogerá el paquete` +
+              `${recibeDni ? ` con su DNI ${recibeDni}` : ''}.\n\n` +
+              (await this.instruccionesPago(empresaId, s.ctx)),
+          );
+          return irA('MENU', {});
+        }
+
+        // Regalo con dirección nueva: sigue ciudad → departamento →
+        // sucursal; PART/GANADOR_DIRECCION guardan también al que recibe.
         await responder(
           `📍 ¿A qué *ciudad* se lo enviamos? (ej. TRUJILLO)`,
         );
-        // El premio-regalo sigue el mismo flujo de ciudad → departamento
-        // → sucursal; PART/GANADOR_DIRECCION guardan también al que recibe.
-        const ctxRegalo = { ...s.ctx, recibeDni };
         return s.ctx.premioId
             ? irA('GANADOR_CIUDAD', ctxRegalo)
             : irA('PART_CIUDAD', ctxRegalo);
@@ -417,8 +436,15 @@ export class WhatsappBotService {
           );
           return irA('PART_CIUDAD', s.ctx);
         }
+        if (msg === '3') {
+          await responder(
+            '👤 ¿Quién *recogerá* el paquete? Escríbeme su *nombre completo*:',
+          );
+          return irA('REGALO_NOMBRE', { ...s.ctx, soloRecoge: true });
+        }
         await responder(
-          'Responde *1* si tu dirección es la misma, o *2* para cambiarla 🙂',
+          'Responde *1* (misma dirección), *2* (cambiarla) o *3* (la ' +
+            'recogerá otra persona) 🙂',
         );
         return;
       }
@@ -486,16 +512,55 @@ export class WhatsappBotService {
         const destinoTxt = [s.ctx.provincia, s.ctx.departamento]
           .filter(Boolean)
           .join(', ');
+        if (s.ctx.recibeNombre) {
+          // Regalo/encargo ya definido antes de la dirección.
+          await responder(
+            '📦 ¡Datos de envío guardados! ' +
+              `🎁 El premio lo recibirá *${s.ctx.recibeNombre}* por ` +
+              `*${s.ctx.agencia}*${destinoTxt ? ` a *${destinoTxt}*` : ''}` +
+              `${direccion ? ` (sucursal ${direccion})` : ''}.\n\n` +
+              (await this.instruccionesPago(empresaId, s.ctx)),
+          );
+          return irA('MENU', {});
+        }
+        // El registrado no siempre puede ir a la agencia: preguntar
+        // SIEMPRE quién recogerá el paquete (encargo o regalo).
         await responder(
-          '📦 ¡Datos de envío guardados! ' +
-            (s.ctx.recibeNombre
-                ? `🎁 El premio lo recibirá *${s.ctx.recibeNombre}* por `
-                : 'Si ganas, tu premio saldría por ') +
-            `*${s.ctx.agencia}*${destinoTxt ? ` a *${destinoTxt}*` : ''}` +
+          '📦 ¡Dirección guardada! ' +
+            `Envío por *${s.ctx.agencia}*${destinoTxt ? ` a *${destinoTxt}*` : ''}` +
             `${direccion ? ` (sucursal ${direccion})` : ''}.\n\n` +
-            (await this.instruccionesPago(empresaId, s.ctx)),
+            '👤 ¿Quién *recogerá* el paquete en la agencia?\n' +
+            '*1* — Yo mismo\n' +
+            '*2* — Otra persona (regalo o encargo) 🎁',
         );
-        return irA('MENU', {});
+        return irA('PART_RECOGE', { ...s.ctx, direccion });
+      }
+
+      case 'PART_RECOGE': {
+        if (!s.ctx.participanteId || !s.ctx.sorteoId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg === '1') {
+          // Lo recoge el propio jugador (recibe* ya quedó null al
+          // guardar la dirección).
+          await responder(
+            '✅ ¡Listo! Tú recogerás el paquete con tu DNI.\n\n' +
+              (await this.instruccionesPago(empresaId, s.ctx)),
+          );
+          return irA('MENU', {});
+        }
+        if (msg === '2') {
+          await responder(
+            '👤 ¿Quién *recogerá* el paquete? Escríbeme su *nombre completo*:',
+          );
+          // soloRecoge: la dirección YA está guardada — al terminar solo
+          // se actualiza quién recibe.
+          return irA('REGALO_NOMBRE', { ...s.ctx, soloRecoge: true });
+        }
+        await responder(
+          'Responde *1* si lo recoges tú, o *2* si irá otra persona 👤',
+        );
+        return;
       }
 
       case 'GANADOR_QUIEN': {
@@ -515,12 +580,12 @@ export class WhatsappBotService {
         }
         if (msg === '2') {
           await responder(
-            '🎁 ¿Quién *recibirá* el premio? Escríbeme su *nombre completo*:',
+            '👤 ¿Quién *recogerá* el paquete? Escríbeme su *nombre completo*:',
           );
           return irA('REGALO_NOMBRE', s.ctx);
         }
         await responder(
-          'Responde *1* si lo recibes tú, o *2* si es un regalo 🎁',
+          'Responde *1* si lo recoges tú, o *2* si irá otra persona 👤',
         );
         return;
       }
@@ -671,7 +736,8 @@ export class WhatsappBotService {
           `${previos.agenciaDireccion ? ` (sucursal *${previos.agenciaDireccion}*)` : ''}\n\n` +
           '¿La usamos para este envío?\n' +
           '*1* — Sí, es la misma ✅\n' +
-          '*2* — Cambiarla',
+          '*2* — Cambiarla\n' +
+          '*3* — La misma, pero el paquete lo recogerá OTRA persona 👤',
       );
       return irA('CONFIRMAR_ENVIO', {
         ...ctx,
@@ -849,9 +915,9 @@ export class WhatsappBotService {
         `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
           `Tu premio: *${premio.descripcion}*.\n\n` +
           `📦 Los envíos se hacen por *${agencia}*.\n` +
-          '¿Quién *recibirá* el premio?\n' +
+          '¿Quién *recogerá* el paquete en la agencia?\n' +
           '*1* — Yo mismo\n' +
-          '*2* — Es un REGALO 🎁 para otra persona',
+          '*2* — Otra persona (regalo o encargo) 👤',
       );
       return irA('GANADOR_QUIEN', {
         premioId: premio.id,
