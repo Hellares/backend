@@ -18,6 +18,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { StorageService } from '../storage/storage.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { ClientesService } from '../clientes/clientes.service';
+import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import {
   CambiarEstadoPremioDto,
@@ -43,6 +45,8 @@ export class SorteosService {
     private readonly notificaciones: NotificacionService,
     private readonly storage: StorageService,
     private readonly whatsapp: WhatsappService,
+    private readonly clientes: ClientesService,
+    private readonly consultasExternas: ConsultasExternasService,
   ) {}
 
   // ── Sorteos (empresa) ────────────────────────────────────────────────
@@ -55,6 +59,7 @@ export class SorteosService {
         titulo: dto.titulo,
         descripcion: dto.descripcion,
         canal: dto.canal,
+        tipo: dto.tipo,
         fechaSorteo: dto.fechaSorteo ? new Date(dto.fechaSorteo) : undefined,
         precioParticipacion: dto.precioParticipacion,
         creadoPorId: usuarioId,
@@ -154,6 +159,7 @@ export class SorteosService {
         titulo: dto.titulo,
         descripcion: dto.descripcion,
         canal: dto.canal,
+        tipo: dto.tipo,
         estado: dto.estado,
         sedeId: dto.sedeId,
         fechaSorteo: dto.fechaSorteo ? new Date(dto.fechaSorteo) : undefined,
@@ -201,12 +207,26 @@ export class SorteosService {
       });
       ganadorId = persona?.usuario?.id ?? null;
       if (!ganadorId) {
-        throw new NotFoundException({
-          code: 'GANADOR_SIN_CUENTA',
-          message:
-            'El DNI no tiene cuenta en el app — registra primero al ' +
-            'ganador como cliente',
+        // ¿Es un participante captado por el bot de WhatsApp? Entonces
+        // tenemos nombre y celular: crear su cuenta de cliente al vuelo
+        // (dinámicas: el que juega YA ganó y pasa directo a premio).
+        const participante = await this.prisma.sorteoParticipante.findFirst({
+          where: { empresaId, dni: dto.ganadorDni },
+          orderBy: { creadoEn: 'desc' },
         });
+        if (!participante) {
+          throw new NotFoundException({
+            code: 'GANADOR_SIN_CUENTA',
+            message:
+              'El DNI no tiene cuenta en el app — registra primero al ' +
+              'ganador como cliente',
+          });
+        }
+        ganadorId = await this.crearCuentaDesdeParticipante(
+          empresaId,
+          usuarioId,
+          participante,
+        );
       }
     } else {
       const ganador = await this.prisma.usuario.findUnique({
@@ -523,6 +543,67 @@ export class SorteosService {
       categoria: 'BANNER',
       subidoPor: usuarioId,
     });
+  }
+
+  /**
+   * Crea la cuenta de cliente de un participante del bot (Persona +
+   * Usuario + relaciones — registrarCliente maneja los 3 casos). Nombres
+   * oficiales de RENIEC si responde; si no, split del nombre del bot
+   * (últimas 2 palabras = apellidos). Devuelve el usuarioId del ganador.
+   */
+  private async crearCuentaDesdeParticipante(
+    empresaId: string,
+    registradoPorId: string,
+    participante: { dni: string; nombre: string; celular: string },
+  ): Promise<string> {
+    let nombres = '';
+    let apellidos = '';
+    try {
+      const reniec = await this.consultasExternas.consultarDni(
+        participante.dni,
+      );
+      nombres = reniec.nombres ?? '';
+      apellidos = [reniec.apellidoPaterno, reniec.apellidoMaterno]
+        .filter(Boolean)
+        .join(' ');
+    } catch {
+      // RENIEC caído — usamos lo que capturó el bot.
+    }
+    if (!nombres || !apellidos) {
+      const partes = participante.nombre.trim().split(/\s+/);
+      apellidos = partes.length >= 3
+        ? partes.slice(-2).join(' ')
+        : partes.length === 2
+          ? partes[1]
+          : 'SIN APELLIDO';
+      nombres = partes.length >= 3
+        ? partes.slice(0, -2).join(' ')
+        : partes[0];
+    }
+    await this.clientes.registrarCliente(
+      {
+        dni: participante.dni,
+        nombres,
+        apellidos,
+        telefono: participante.celular.slice(-9),
+      } as any,
+      empresaId,
+      registradoPorId,
+    );
+    const persona = await this.prisma.persona.findUnique({
+      where: { dni: participante.dni },
+      select: { usuario: { select: { id: true } } },
+    });
+    if (!persona?.usuario?.id) {
+      throw new NotFoundException({
+        code: 'GANADOR_SIN_CUENTA',
+        message: 'No se pudo crear la cuenta del ganador — regístralo como cliente',
+      });
+    }
+    this.logger.log(
+      `Cuenta de cliente auto-creada para participante DNI ${participante.dni}`,
+    );
+    return persona.usuario.id;
   }
 
   // ── Participantes (captados por el bot de WhatsApp) ─────────────────

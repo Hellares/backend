@@ -17,6 +17,7 @@ import {
   EstadoPremioSorteo,
   EstadoSorteo,
   ModalidadEntregaPremio,
+  TipoSorteo,
 } from '@prisma/client';
 
 export class CreateSorteoDto {
@@ -35,6 +36,14 @@ export class CreateSorteoDto {
   @IsOptional()
   @IsEnum(CanalSorteo)
   canal?: CanalSorteo;
+
+  @ApiPropertyOptional({
+    enum: TipoSorteo,
+    description: 'SORTEO clasico o DINAMICA (todo jugador gana lo que saca)',
+  })
+  @IsOptional()
+  @IsEnum(TipoSorteo)
+  tipo?: TipoSorteo;
 
   @ApiPropertyOptional({ description: 'Fecha del sorteo (default: ahora)' })
   @IsOptional()
@@ -65,6 +74,11 @@ export class UpdateSorteoDto {
   @IsString()
   @MaxLength(150)
   titulo?: string;
+
+  @ApiPropertyOptional({ enum: TipoSorteo })
+  @IsOptional()
+  @IsEnum(TipoSorteo)
+  tipo?: TipoSorteo;
 
   @ApiPropertyOptional()
   @IsOptional()

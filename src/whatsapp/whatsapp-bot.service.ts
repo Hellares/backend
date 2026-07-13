@@ -4,6 +4,7 @@ import {
   EstadoPremioSorteo,
   EstadoSorteo,
   Prisma,
+  TipoSorteo,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EvolutionApiService } from './evolution-api.service';
@@ -49,7 +50,7 @@ export class WhatsappBotService {
     const sorteos = await this.prisma.sorteo.findMany({
       where: { empresaId, estado: EstadoSorteo.ABIERTO },
       orderBy: { creadoEn: 'desc' },
-      select: { id: true, titulo: true, precioParticipacion: true },
+      select: { id: true, titulo: true, tipo: true, precioParticipacion: true },
     });
     if (sorteos.length === 0) return;
 
@@ -103,6 +104,7 @@ export class WhatsappBotService {
       sorteos: {
         id: string;
         titulo: string;
+        tipo: TipoSorteo;
         precioParticipacion: Prisma.Decimal | null;
       }[];
     },

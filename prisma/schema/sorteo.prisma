@@ -36,10 +36,19 @@ enum ModalidadEntregaPremio {
   RETIRO_TIENDA // ganador local recoge en la sede
 }
 
+// SORTEO clasico (se sortea entre participantes) o DINAMICA (el
+// participante paga, juega — canasta, etc. — y lo que saca YA lo gano:
+// cada jugador termina registrado como ganador con su premio).
+enum TipoSorteo {
+  SORTEO
+  DINAMICA
+}
+
 model Sorteo {
   id          String       @id @default(cuid())
   empresaId   String
   sedeId      String? // sede que organiza/despacha (stock sale de aquí)
+  tipo        TipoSorteo   @default(SORTEO)
   titulo      String
   descripcion String?
   canal       CanalSorteo  @default(OTRO)
