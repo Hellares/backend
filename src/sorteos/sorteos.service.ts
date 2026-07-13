@@ -718,7 +718,7 @@ export class SorteosService {
     if (!dni?.trim()) {
       throw new BadRequestException('Indique el DNI del ganador');
     }
-    return this.prisma.sorteoPremio.findFirst({
+    const previa = await this.prisma.sorteoPremio.findFirst({
       where: {
         empresaId,
         ganadorDni: dni.trim(),
@@ -735,7 +735,27 @@ export class SorteosService {
         agenciaDireccion: true,
         creadoEn: true,
       },
-    }); // null si nunca tuvo un envío con agencia
+    });
+    if (previa) return previa;
+
+    // Sin premios previos: usar los datos de envío que dejó como
+    // PARTICIPANTE en el bot de WhatsApp (si los dejó).
+    const participante = await this.prisma.sorteoParticipante.findFirst({
+      where: { empresaId, dni: dni.trim(), agenciaNombre: { not: null } },
+      orderBy: { creadoEn: 'desc' },
+      select: {
+        agenciaNombre: true,
+        destinoDepartamento: true,
+        destinoProvincia: true,
+        agenciaDireccion: true,
+        creadoEn: true,
+      },
+    });
+    if (!participante) return null;
+    return {
+      modalidad: ModalidadEntregaPremio.ENVIO_AGENCIA,
+      ...participante,
+    }; // null si nunca tuvo envío ni datos de participante
   }
 
   // ── Internos ─────────────────────────────────────────────────────────

@@ -84,6 +84,12 @@ model SorteoParticipante {
   // Correlativo por sorteo, asignado al ACTIVAR (orden de validacion).
   numeroTicket Int?
   activadoEn   DateTime?
+  // Datos de envio capturados por el bot al registrarse (opcionales):
+  // si gana, la entrega ya esta lista y prellenan el registro del ganador.
+  agenciaNombre       String?
+  destinoDepartamento String?
+  destinoProvincia    String?
+  agenciaDireccion    String?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

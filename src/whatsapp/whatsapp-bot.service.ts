@@ -193,6 +193,60 @@ export class WhatsappBotService {
         );
       }
 
+      case 'PART_AGENCIA': {
+        if (msg === '-') {
+          await responder(await this.instruccionesPago(empresaId, s.ctx));
+          return irA('MENU', {});
+        }
+        if (msg.length < 3) {
+          await responder(
+            '¿Por qué *agencia* te enviaríamos el premio? (ej. SHALOM / OLVA) — o responde *-* para omitir',
+          );
+          return;
+        }
+        await responder(
+          '📍 ¿A qué *ciudad y departamento* llegaría?\n' +
+            'Sepáralos con coma, ej: *TARAPOTO, SAN MARTÍN*',
+        );
+        return irA('PART_DESTINO', { ...s.ctx, agencia: msg.toUpperCase() });
+      }
+
+      case 'PART_DESTINO': {
+        if (msg.length < 3) {
+          await responder('Ej: *TARAPOTO, SAN MARTÍN* (ciudad, departamento)');
+          return;
+        }
+        const [prov, dep] = msg.split(',').map((x) => x.trim().toUpperCase());
+        await responder(
+          '¿Conoces la *dirección de la agencia* en tu ciudad? ' +
+            'Escríbela, o responde *-* para omitir.',
+        );
+        return irA('PART_DIRECCION', {
+          ...s.ctx,
+          provincia: prov,
+          departamento: dep || null,
+        });
+      }
+
+      case 'PART_DIRECCION': {
+        const direccion = msg === '-' ? null : msg.toUpperCase();
+        await this.prisma.sorteoParticipante.updateMany({
+          where: { id: s.ctx.participanteId, empresaId },
+          data: {
+            agenciaNombre: s.ctx.agencia,
+            destinoProvincia: s.ctx.provincia ?? null,
+            destinoDepartamento: s.ctx.departamento ?? null,
+            agenciaDireccion: direccion,
+          },
+        });
+        await responder(
+          '📦 ¡Datos de envío guardados! Si ganas, tu premio saldría por ' +
+            `*${s.ctx.agencia}*.\n\n` +
+            (await this.instruccionesPago(empresaId, s.ctx)),
+        );
+        return irA('MENU', {});
+      }
+
       case 'GANADOR_AGENCIA': {
         if (msg.length < 3) {
           await responder(
@@ -301,8 +355,9 @@ export class WhatsappBotService {
       await responder('Ese sorteo ya se cerró 🙈 escribe *menu* para ver los activos.');
       return irA('MENU', {});
     }
+    let participanteId: string;
     try {
-      await this.prisma.sorteoParticipante.create({
+      const creado = await this.prisma.sorteoParticipante.create({
         data: {
           empresaId,
           sorteoId: sorteo.id,
@@ -311,6 +366,7 @@ export class WhatsappBotService {
           dni,
         },
       });
+      participanteId = creado.id;
     } catch (e: any) {
       if (e?.code === 'P2002') {
         const previo = await this.prisma.sorteoParticipante.findUnique({
@@ -326,26 +382,49 @@ export class WhatsappBotService {
       throw e;
     }
 
-    // Instrucciones de pago: monto del sorteo + Yape de la empresa si
-    // está configurado en la integración Yape.
-    const yape = await this.prisma.integracionYape.findUnique({
-      where: { empresaId },
-      select: { celular: true },
+    // Registrado ✅ — ahora los datos de envío (opcionales): si gana,
+    // la entrega ya queda lista y se muestran en el app.
+    await responder(
+      `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!\n\n` +
+        '📦 Para tener tu envío listo si ganas: ¿por qué *agencia* te ' +
+        'enviaríamos el premio? (ej. SHALOM / OLVA / MARVISUR)\n' +
+        'Responde *-* si prefieres omitirlo.',
+    );
+    return irA('PART_AGENCIA', {
+      ...ctx,
+      participanteId,
+      sorteoId: sorteo.id,
     });
-    const monto = sorteo.precioParticipacion
+  }
+
+  /**
+   * Instrucciones de pago: monto del sorteo + Yape de la empresa si está
+   * configurado en la integración Yape. Cierra el flujo de registro.
+   */
+  private async instruccionesPago(
+    empresaId: string,
+    ctx: any,
+  ): Promise<string> {
+    const [sorteo, yape] = await Promise.all([
+      this.prisma.sorteo.findUnique({
+        where: { id: ctx.sorteoId },
+        select: { precioParticipacion: true },
+      }),
+      this.prisma.integracionYape.findUnique({
+        where: { empresaId },
+        select: { celular: true },
+      }),
+    ]);
+    const monto = sorteo?.precioParticipacion
       ? `S/ ${Number(sorteo.precioParticipacion).toFixed(2)}`
       : null;
-    const lineas = [
-      `✅ ¡Quedaste registrado en *${sorteo.titulo}*, ${(ctx.nombre ?? '').split(' ')[0]}!`,
-      '',
+    return [
       '💰 *Último paso — el pago:*',
       monto
         ? `Yapea *${monto}*${yape?.celular ? ` al *${yape.celular}*` : ' al número de la empresa'} y envía tu captura por este chat.`
         : `Coordina el pago de tu participación por este chat${yape?.celular ? ` (Yape: *${yape.celular}*)` : ''}.`,
       'Cuando lo validemos te confirmaremos tu *número de ticket* 🎟️',
-    ];
-    await responder(lineas.join('\n'));
-    return irA('MENU', {});
+    ].join('\n');
   }
 
   private textoEstadoParticipante(p: {
