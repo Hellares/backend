@@ -17,6 +17,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { StorageService } from '../storage/storage.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ClientesService } from '../clientes/clientes.service';
@@ -44,6 +45,7 @@ export class SorteosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificaciones: NotificacionService,
+    private readonly realtime: RealtimeInvalidationService,
     private readonly storage: StorageService,
     private readonly whatsapp: WhatsappService,
     private readonly clientes: ClientesService,
@@ -341,6 +343,8 @@ export class SorteosService {
       cuerpoBase: dto.descripcion,
       action: 'ganado',
     });
+    // Refresco instantáneo del detalle en otros devices.
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId });
 
     return premio;
   }
@@ -452,6 +456,10 @@ export class SorteosService {
       });
     }
 
+    this.realtime.notifySorteoCambiado({
+      empresaId,
+      sorteoId: premio.sorteoId,
+    });
     return actualizado;
   }
 
@@ -465,7 +473,7 @@ export class SorteosService {
     premioId: string,
     file: any,
   ) {
-    await this.assertPremio(empresaId, premioId);
+    const premio = await this.assertPremio(empresaId, premioId);
     const archivo = await this.storage.uploadArchivo({
       empresaId,
       file,
@@ -498,6 +506,10 @@ export class SorteosService {
         `WhatsApp del ticket ${premioId} falló: ${(e as Error).message}`,
       );
     }
+    this.realtime.notifySorteoCambiado({
+      empresaId,
+      sorteoId: premio.sorteoId,
+    });
     return { ...archivo, whatsappEnviado };
   }
 
@@ -713,6 +725,10 @@ export class SorteosService {
         participante,
       );
     }
+    this.realtime.notifySorteoCambiado({
+      empresaId,
+      sorteoId: participante.sorteoId,
+    });
     return { ...actualizado, premioCreado };
   }
 
@@ -886,7 +902,7 @@ export class SorteosService {
         message: `El premio ya está ${premio.estado} — la entrega ya no se puede modificar`,
       });
     }
-    return this.prisma.sorteoPremio.update({
+    const actualizado = await this.prisma.sorteoPremio.update({
       where: { id: premioId },
       data: {
         modalidad: dto.modalidad,
@@ -902,6 +918,11 @@ export class SorteosService {
           : {}),
       },
     });
+    this.realtime.notifySorteoCambiado({
+      empresaId,
+      sorteoId: premio.sorteoId,
+    });
+    return actualizado;
   }
 
   /**

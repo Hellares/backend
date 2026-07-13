@@ -143,6 +143,25 @@ export class RealtimeInvalidationService {
     }
   }
 
+  /// Cambió algo de un sorteo/dinámica: participante del bot, validación
+  /// (con auto-premio), premio o su ticket. Las pantallas del sorteo
+  /// abiertas en OTROS devices recargan al instante (el cajero valida en
+  /// un celular y la lista se refresca sola en el otro).
+  notifySorteoCambiado(args: { empresaId: string; sorteoId: string }): void {
+    this.firebase
+      .sendDataToTopic(
+        this.topicForEmpresa(args.empresaId),
+        this.toStringMap({
+          tipo: 'SORTEO_CAMBIADO',
+          empresaId: args.empresaId,
+          sorteoId: args.sorteoId,
+        }),
+      )
+      .catch((err) => {
+        this.logger.warn(`SORTEO_CAMBIADO send failed: ${err?.message}`);
+      });
+  }
+
   /// Un cliente empresa B2B (ClienteEmpresa o sus contactos) cambió.
   /// A diferencia de la Persona, es per-empresa: sin fan-out.
   notifyClienteEmpresaCambiado(args: {

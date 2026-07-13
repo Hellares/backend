@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { EvolutionApiService } from './evolution-api.service';
 
 /**
@@ -35,6 +36,7 @@ export class WhatsappBotService {
     private readonly prisma: PrismaService,
     private readonly evolution: EvolutionApiService,
     private readonly consultasExternas: ConsultasExternasService,
+    private readonly realtime: RealtimeInvalidationService,
   ) {}
 
   /** Punto de entrada desde el webhook MESSAGES_UPSERT. */
@@ -433,6 +435,8 @@ export class WhatsappBotService {
         },
       });
       participanteId = creado.id;
+      // La lista de participantes se refresca sola en los devices.
+      this.realtime.notifySorteoCambiado({ empresaId, sorteoId: sorteo.id });
     } catch (e: any) {
       if (e?.code === 'P2002') {
         const previo = await this.prisma.sorteoParticipante.findUnique({
@@ -584,10 +588,20 @@ export class WhatsappBotService {
     // Caso participante SIN premio aún: los datos quedan en su registro
     // (el auto-premio los usa al validar el pago).
     if (!ctx.premioId && ctx.participanteId) {
+      const p = await this.prisma.sorteoParticipante.findFirst({
+        where: { id: ctx.participanteId, empresaId },
+        select: { sorteoId: true },
+      });
       const { count } = await this.prisma.sorteoParticipante.updateMany({
         where: { id: ctx.participanteId, empresaId },
         data: datosEnvio,
       });
+      if (p && count > 0) {
+        this.realtime.notifySorteoCambiado({
+          empresaId,
+          sorteoId: p.sorteoId,
+        });
+      }
       await responder(
         count > 0
           ? `📦 ¡Datos de envío guardados! Si ganas, tu premio saldría por ` +
@@ -617,6 +631,10 @@ export class WhatsappBotService {
     await this.prisma.sorteoPremio.update({
       where: { id: premio.id },
       data: { modalidad: 'ENVIO_AGENCIA', ...datosEnvio },
+    });
+    this.realtime.notifySorteoCambiado({
+      empresaId,
+      sorteoId: premio.sorteoId,
     });
     // Sincronizar también su registro de participante (prellenados
     // futuros usan estos datos).
