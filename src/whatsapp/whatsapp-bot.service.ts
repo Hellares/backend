@@ -102,6 +102,19 @@ export class WhatsappBotService {
       estado = 'MENU';
     }
 
+    // Paso a medias de un sorteo que YA CERRÓ (la empresa lo cerró con
+    // la conversación abierta): resetear — si hay un sorteo nuevo, el
+    // menú lo ofrece; los flujos de PREMIO (ctx.premioId, sin sorteoId)
+    // no se tocan porque un premio pendiente se envía igual.
+    if (
+      estado !== 'MENU' &&
+      estado !== 'ASESOR' &&
+      ctx?.sorteoId &&
+      !sorteos.some((x) => x.id === ctx.sorteoId)
+    ) {
+      estado = 'MENU';
+    }
+
     // Texto libre en MENU (no es comando ni opción): modo NO intrusivo.
     // - Quien YA participa está haciendo una consulta humana (captura
     //   de pago, pregunta) → el bot calla; 1/2/3/menu siguen activos.
