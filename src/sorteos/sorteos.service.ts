@@ -314,6 +314,8 @@ export class SorteosService {
           sorteoId,
           empresaId,
           participanteId: dto.participanteId,
+          recibeNombre: dto.recibeNombre,
+          recibeDni: dto.recibeDni,
           ganadorId: ganadorId!,
           ganadorDni: dto.ganadorDni,
           ganadorNombre: dto.ganadorNombre,
@@ -745,6 +747,8 @@ export class SorteosService {
       dni: string;
       nombre: string;
       celular: string;
+      recibeNombre: string | null;
+      recibeDni: string | null;
       agenciaNombre: string | null;
       destinoDepartamento: string | null;
       destinoProvincia: string | null;
@@ -769,6 +773,8 @@ export class SorteosService {
       const conAgencia = !!participante.agenciaNombre?.trim();
       await this.registrarPremio(empresaId, usuarioId, participante.sorteo.id, {
         participanteId: participante.id,
+        recibeNombre: participante.recibeNombre ?? undefined,
+        recibeDni: participante.recibeDni ?? undefined,
         ganadorDni: participante.dni,
         ganadorNombre: participante.nombre,
         ganadorCelular: participante.celular.slice(-9),

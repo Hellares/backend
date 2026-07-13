@@ -93,6 +93,10 @@ model SorteoParticipante {
   // Correlativo por sorteo, asignado al ACTIVAR (orden de validacion).
   numeroTicket Int?
   activadoEn   DateTime?
+  // REGALO 🎁: quien recibe el premio si NO es el propio jugador
+  // (el juega, otra persona lo recibe en otra sede de la agencia).
+  recibeNombre String?
+  recibeDni    String? // la agencia lo pide al entregar
   // Datos de envio capturados por el bot al registrarse (opcionales):
   // si gana, la entrega ya esta lista y prellenan el registro del ganador.
   agenciaNombre       String?
@@ -156,6 +160,10 @@ model SorteoPremio {
   // Participacion (SorteoParticipante) que origino este premio — permite
   // un premio POR PARTICIPACION cuando el mismo DNI juega varias veces.
   participanteId String? @unique
+  // REGALO 🎁: quien recibe (null = el propio ganador). El rotulo y la
+  // entrega en agencia usan estos datos como destinatario.
+  recibeNombre String?
+  recibeDni    String?
   // Ticket enviado por WhatsApp automático al ganador (chip en la card).
   whatsappEnviadoEn DateTime?
 

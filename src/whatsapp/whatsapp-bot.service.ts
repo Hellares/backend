@@ -302,7 +302,8 @@ export class WhatsappBotService {
         if (!s.ctx.previoId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
-        if (msg === '1') {
+        if (msg === '1' || msg === '2') {
+          const esRegalo = msg === '2';
           const previo = await this.prisma.sorteoParticipante.findFirst({
             where: { id: s.ctx.previoId, empresaId },
           });
@@ -314,17 +315,33 @@ export class WhatsappBotService {
               celular,
               nombre: previo.nombre,
               dni: previo.dni,
-              // Misma dirección de envío de su participación anterior.
-              agenciaNombre: previo.agenciaNombre,
-              destinoDepartamento: previo.destinoDepartamento,
-              destinoProvincia: previo.destinoProvincia,
-              agenciaDireccion: previo.agenciaDireccion,
+              // REGALO: el destino se captura a continuación; si no,
+              // misma dirección de su participación anterior.
+              ...(esRegalo
+                ? {}
+                : {
+                    agenciaNombre: previo.agenciaNombre,
+                    destinoDepartamento: previo.destinoDepartamento,
+                    destinoProvincia: previo.destinoProvincia,
+                    agenciaDireccion: previo.agenciaDireccion,
+                  }),
             },
           });
           this.realtime.notifySorteoCambiado({
             empresaId,
             sorteoId: nuevo.sorteoId,
           });
+          if (esRegalo) {
+            await responder(
+              `🎟️ ¡Nueva participación registrada, ${previo.nombre.split(' ')[0]}!\n\n` +
+                '🎁 ¿Quién *recibirá* el premio? Escríbeme su *nombre completo*:',
+            );
+            return irA('REGALO_NOMBRE', {
+              participanteId: nuevo.id,
+              sorteoId: nuevo.sorteoId,
+              agencia: s.agencia,
+            });
+          }
           const conEnvio = previo.agenciaNombre
             ? ` Usaremos tu misma dirección de envío (*${previo.agenciaNombre}*).`
             : '';
@@ -341,6 +358,45 @@ export class WhatsappBotService {
             'Escribe *menu* para ver las opciones.',
         );
         return irA('MENU', {});
+      }
+
+      case 'REGALO_NOMBRE': {
+        if (!s.ctx.participanteId && !s.ctx.premioId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg.length < 5 || !msg.includes(' ')) {
+          await responder(
+            '🎁 Escríbeme el *nombre completo* de quien recibirá el premio:',
+          );
+          return;
+        }
+        await responder(
+          '🪪 ¿Cuál es el *DNI* de quien recibe? (la agencia lo pide al ' +
+            'entregar)\nResponde *-* si no lo sabes.',
+        );
+        return irA('REGALO_DNI', {
+          ...s.ctx,
+          recibeNombre: msg.toUpperCase(),
+        });
+      }
+
+      case 'REGALO_DNI': {
+        const recibeDni = msg === '-' ? null : msg.replace(/\D/g, '');
+        if (recibeDni != null && recibeDni.length !== 8) {
+          await responder(
+            'El DNI debe tener *8 dígitos* — o responde *-* para omitir.',
+          );
+          return;
+        }
+        await responder(
+          `📍 ¿A qué *ciudad* se lo enviamos? (ej. TRUJILLO)`,
+        );
+        // El premio-regalo sigue el mismo flujo de ciudad → departamento
+        // → sucursal; PART/GANADOR_DIRECCION guardan también al que recibe.
+        const ctxRegalo = { ...s.ctx, recibeDni };
+        return s.ctx.premioId
+            ? irA('GANADOR_CIUDAD', ctxRegalo)
+            : irA('PART_CIUDAD', ctxRegalo);
       }
 
       case 'CONFIRMAR_ENVIO': {
@@ -398,7 +454,7 @@ export class WhatsappBotService {
           return;
         }
         await responder(
-          `¿Cuál es la *dirección o sucursal* de ${WhatsappBotService.AGENCIA_DEFAULT} ` +
+          `¿Cuál es la *dirección o sucursal* de ${s.ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT} ` +
             'en tu ciudad? (ej. ATAHUALPA)\n' +
             'Responde *-* si no la sabes.',
         );
@@ -422,18 +478,51 @@ export class WhatsappBotService {
             destinoProvincia: s.ctx.provincia ?? null,
             destinoDepartamento: s.ctx.departamento ?? null,
             agenciaDireccion: direccion,
+            // REGALO: quien recibe (null = el propio jugador).
+            recibeNombre: s.ctx.recibeNombre ?? null,
+            recibeDni: s.ctx.recibeDni ?? null,
           },
         });
         const destinoTxt = [s.ctx.provincia, s.ctx.departamento]
           .filter(Boolean)
           .join(', ');
         await responder(
-          '📦 ¡Datos de envío guardados! Si ganas, tu premio saldría por ' +
+          '📦 ¡Datos de envío guardados! ' +
+            (s.ctx.recibeNombre
+                ? `🎁 El premio lo recibirá *${s.ctx.recibeNombre}* por `
+                : 'Si ganas, tu premio saldría por ') +
             `*${s.ctx.agencia}*${destinoTxt ? ` a *${destinoTxt}*` : ''}` +
             `${direccion ? ` (sucursal ${direccion})` : ''}.\n\n` +
             (await this.instruccionesPago(empresaId, s.ctx)),
         );
         return irA('MENU', {});
+      }
+
+      case 'GANADOR_QUIEN': {
+        if (!s.ctx.premioId && !s.ctx.participanteId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg === '1') {
+          await responder(
+            '📍 ¿A qué *ciudad* te lo enviamos? (ej. TRUJILLO)',
+          );
+          // Yo mismo: limpiar cualquier regalo previo.
+          return irA('GANADOR_CIUDAD', {
+            ...s.ctx,
+            recibeNombre: null,
+            recibeDni: null,
+          });
+        }
+        if (msg === '2') {
+          await responder(
+            '🎁 ¿Quién *recibirá* el premio? Escríbeme su *nombre completo*:',
+          );
+          return irA('REGALO_NOMBRE', s.ctx);
+        }
+        await responder(
+          'Responde *1* si lo recibes tú, o *2* si es un regalo 🎁',
+        );
+        return;
       }
 
       case 'GANADOR_CIUDAD': {
@@ -456,7 +545,7 @@ export class WhatsappBotService {
           return;
         }
         await responder(
-          `¿Cuál es la *dirección o sucursal* de ${WhatsappBotService.AGENCIA_DEFAULT} ` +
+          `¿Cuál es la *dirección o sucursal* de ${s.ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT} ` +
             'en tu ciudad? (ej. ATAHUALPA)\n' +
             'Responde *-* si no la sabes.',
         );
@@ -728,7 +817,8 @@ export class WhatsappBotService {
       `¡Hola ${previo.nombre.split(' ')[0]}! Ya estás participando` +
         `${resumen ? ` (${resumen})` : ''}.\n\n` +
         '¿Quieres participar *otra vez*? 🎟️\n' +
-        '*1* — Sí, registrar otra participación\n' +
+        '*1* — Sí, con mi misma dirección\n' +
+        '*2* — Sí, pero es un REGALO 🎁 (lo recibe otra persona)\n' +
         '*0* — No, volver al menú',
     );
     return irA('REPARTICIPAR', { sorteoId, previoId: previo.id });
@@ -758,12 +848,14 @@ export class WhatsappBotService {
       await responder(
         `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
           `Tu premio: *${premio.descripcion}*.\n\n` +
-          `📦 Los envíos se hacen por *${WhatsappBotService.AGENCIA_DEFAULT}*.\n` +
-          '¿A qué *ciudad* te lo enviamos? (ej. TRUJILLO)',
+          `📦 Los envíos se hacen por *${agencia}*.\n` +
+          '¿Quién *recibirá* el premio?\n' +
+          '*1* — Yo mismo\n' +
+          '*2* — Es un REGALO 🎁 para otra persona',
       );
-      return irA('GANADOR_CIUDAD', {
+      return irA('GANADOR_QUIEN', {
         premioId: premio.id,
-        agencia: WhatsappBotService.AGENCIA_DEFAULT,
+        agencia,
       });
     }
 
@@ -789,12 +881,14 @@ export class WhatsappBotService {
     await responder(
       `📦 ${participante.nombre.split(' ')[0]}, registremos tus datos de ` +
         `envío para *${participante.sorteo.titulo}* — los envíos se hacen ` +
-        `por *${WhatsappBotService.AGENCIA_DEFAULT}*.\n\n` +
-        '¿A qué *ciudad* te enviaríamos el premio? (ej. TRUJILLO)',
+        `por *${agencia}*.\n\n` +
+        '¿Quién *recibirá* el premio?\n' +
+        '*1* — Yo mismo\n' +
+        '*2* — Es un REGALO 🎁 para otra persona',
     );
-    return irA('GANADOR_CIUDAD', {
+    return irA('GANADOR_QUIEN', {
       participanteId: participante.id,
-      agencia: WhatsappBotService.AGENCIA_DEFAULT,
+      agencia,
     });
   }
 
@@ -816,6 +910,10 @@ export class WhatsappBotService {
       destinoProvincia: ctx.provincia ?? null,
       destinoDepartamento: ctx.departamento ?? null,
       agenciaDireccion: ctx.direccion ?? null,
+      // REGALO: quien recibe (null explícito = lo recibe el ganador,
+      // limpia un regalo anterior).
+      recibeNombre: ctx.recibeNombre ?? null,
+      recibeDni: ctx.recibeDni ?? null,
     };
     const destino = [ctx.provincia, ctx.departamento]
       .filter(Boolean)

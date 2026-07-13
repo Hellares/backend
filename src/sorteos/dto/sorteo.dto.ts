@@ -149,6 +149,18 @@ export class RegistrarPremioDto {
   @IsString()
   participanteId?: string;
 
+  @ApiPropertyOptional({
+    description: 'REGALO: quien recibe el premio (null = el propio ganador)',
+  })
+  @IsOptional()
+  @IsString()
+  recibeNombre?: string;
+
+  @ApiPropertyOptional({ description: 'DNI de quien recibe (regalo)' })
+  @IsOptional()
+  @IsString()
+  recibeDni?: string;
+
   @ApiProperty({ example: 'Laptop Lenovo IdeaPad 3 15.6"' })
   @IsString()
   @IsNotEmpty()
