@@ -948,9 +948,9 @@ export class WhatsappBotService {
       `📦 ${participante.nombre.split(' ')[0]}, registremos tus datos de ` +
         `envío para *${participante.sorteo.titulo}* — los envíos se hacen ` +
         `por *${agencia}*.\n\n` +
-        '¿Quién *recibirá* el premio?\n' +
+        '¿Quién *recogerá* el paquete en la agencia?\n' +
         '*1* — Yo mismo\n' +
-        '*2* — Es un REGALO 🎁 para otra persona',
+        '*2* — Otra persona (regalo o encargo) 👤',
     );
     return irA('GANADOR_QUIEN', {
       participanteId: participante.id,
