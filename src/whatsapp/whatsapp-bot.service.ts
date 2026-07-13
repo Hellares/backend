@@ -229,6 +229,12 @@ export class WhatsappBotService {
       case 'ESPERANDO_NOMBRE': {
         // Fallback: solo se llega aquí si BD y RENIEC no resolvieron
         // el nombre del DNI.
+        // GUARD: ctx incompleto (conversación de una versión anterior)
+        // → reset. OJO: Prisma IGNORA los undefined en where — sin esto
+        // se registraría en un sorteo arbitrario.
+        if (!s.ctx.sorteoId || !s.ctx.dni) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
         if (msg.length < 5 || !msg.includes(' ')) {
           await responder(
             'Escríbeme tu *nombre completo* por favor (nombre y apellidos) 🙂',
@@ -246,6 +252,9 @@ export class WhatsappBotService {
       }
 
       case 'ESPERANDO_DNI': {
+        if (!s.ctx.sorteoId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
         const dni = msg.replace(/\D/g, '');
         if (dni.length !== 8) {
           await responder('El DNI debe tener *8 dígitos* — inténtalo de nuevo:');
@@ -287,6 +296,12 @@ export class WhatsappBotService {
       }
 
       case 'REPARTICIPAR': {
+        // GUARD: sin previoId, el findFirst con id undefined matchearía
+        // una participación ARBITRARIA de la empresa (Prisma ignora
+        // undefined en where).
+        if (!s.ctx.previoId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
         if (msg === '1') {
           const previo = await this.prisma.sorteoParticipante.findFirst({
             where: { id: s.ctx.previoId, empresaId },
@@ -329,6 +344,9 @@ export class WhatsappBotService {
       }
 
       case 'CONFIRMAR_ENVIO': {
+        if (!s.ctx.participanteId || !s.ctx.sorteoId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
         // Recurrente: sus datos previos ya quedaron copiados al registro.
         if (msg === '1') {
           await responder(
@@ -350,6 +368,9 @@ export class WhatsappBotService {
       }
 
       case 'PART_CIUDAD': {
+        if (!s.ctx.participanteId || !s.ctx.sorteoId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
         if (msg === '-') {
           await responder(
             (await this.instruccionesPago(empresaId, s.ctx)) +
@@ -388,6 +409,11 @@ export class WhatsappBotService {
       }
 
       case 'PART_DIRECCION': {
+        // GUARD CRÍTICO: sin participanteId, el updateMany quedaría solo
+        // con {empresaId} y pisaría el envío de TODOS los participantes.
+        if (!s.ctx.participanteId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
         const direccion = msg === '-' ? null : msg.toUpperCase();
         await this.prisma.sorteoParticipante.updateMany({
           where: { id: s.ctx.participanteId, empresaId },
@@ -779,6 +805,12 @@ export class WhatsappBotService {
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
+    // GUARD: sin ningún id, la rama del premio haría findFirst con id
+    // undefined y actualizaría un premio ARBITRARIO de la empresa.
+    if (!ctx.premioId && !ctx.participanteId) {
+      await responder('Se perdió el contexto 🙈 escribe *menu* y volvemos a empezar.');
+      return irA('MENU', {});
+    }
     const datosEnvio = {
       agenciaNombre: ctx.agencia,
       destinoProvincia: ctx.provincia ?? null,
