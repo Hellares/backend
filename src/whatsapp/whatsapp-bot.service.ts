@@ -224,7 +224,11 @@ export class WhatsappBotService {
 
       case 'PART_AGENCIA': {
         if (msg === '-') {
-          await responder(await this.instruccionesPago(empresaId, s.ctx));
+          await responder(
+            (await this.instruccionesPago(empresaId, s.ctx)) +
+              '\n\n(cuando tengas tus datos de envío, escribe *2* en el ' +
+              'menú para registrarlos 📦)',
+          );
           return irA('MENU', {});
         }
         if (msg.length < 3) {
@@ -341,7 +345,7 @@ export class WhatsappBotService {
       `¡Hola! 👋 ${titulos}\n\n` +
         'Responde con el número:\n' +
         '*1* — Participar en el sorteo\n' +
-        '*2* — Soy ganador 🏆 registrar mi agencia de envío\n' +
+        '*2* — Registrar/cambiar mis datos de envío 📦\n' +
         '*3* — Hablar con un asesor',
     );
     return irA('MENU', {});
@@ -491,19 +495,40 @@ export class WhatsappBotService {
       },
       orderBy: { creadoEn: 'desc' },
     });
-    if (!premio) {
+    if (premio) {
       await responder(
-        'No encontré un premio pendiente asociado a este número 🤔\n' +
-          'Si eres ganador, elige la opción *3* para hablar con un asesor.',
+        `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
+          `Tu premio: *${premio.descripcion}*.\n\n` +
+          '¿Por qué *agencia* quieres recibirlo? (ej. SHALOM / OLVA / MARVISUR)',
+      );
+      return irA('GANADOR_AGENCIA', { premioId: premio.id });
+    }
+
+    // Sin premio pendiente: ¿es participante de un sorteo abierto? Sus
+    // datos quedan en su registro y el auto-premio los usa al validar.
+    const participante = await this.prisma.sorteoParticipante.findFirst({
+      where: {
+        empresaId,
+        celular: { contains: last9 },
+        estado: { not: EstadoParticipanteSorteo.RECHAZADO },
+        sorteo: { estado: EstadoSorteo.ABIERTO },
+      },
+      orderBy: { creadoEn: 'desc' },
+      include: { sorteo: { select: { titulo: true } } },
+    });
+    if (!participante) {
+      await responder(
+        'No encontré un premio ni una participación asociada a este número 🤔\n' +
+          'Elige la opción *3* para hablar con un asesor.',
       );
       return irA('MENU', {});
     }
     await responder(
-      `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
-        `Tu premio: *${premio.descripcion}*.\n\n` +
-        '¿Por qué *agencia* quieres recibirlo? (ej. SHALOM / OLVA / MARVISUR)',
+      `📦 ${participante.nombre.split(' ')[0]}, registremos tus datos de ` +
+        `envío para *${participante.sorteo.titulo}*.\n\n` +
+        '¿Por qué *agencia* te enviaríamos el premio? (ej. SHALOM / OLVA / MARVISUR)',
     );
-    return irA('GANADOR_AGENCIA', { premioId: premio.id });
+    return irA('GANADOR_AGENCIA', { participanteId: participante.id });
   }
 
   private async guardarAgenciaGanador(
@@ -513,7 +538,34 @@ export class WhatsappBotService {
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
-    // Mismo guard que elegirAgenciaMiPremio: solo antes del despacho.
+    const datosEnvio = {
+      agenciaNombre: ctx.agencia,
+      destinoProvincia: ctx.provincia ?? null,
+      destinoDepartamento: ctx.departamento ?? null,
+      agenciaDireccion: ctx.direccion ?? null,
+    };
+    const destino = [ctx.provincia, ctx.departamento]
+      .filter(Boolean)
+      .join(', ');
+
+    // Caso participante SIN premio aún: los datos quedan en su registro
+    // (el auto-premio los usa al validar el pago).
+    if (!ctx.premioId && ctx.participanteId) {
+      const { count } = await this.prisma.sorteoParticipante.updateMany({
+        where: { id: ctx.participanteId, empresaId },
+        data: datosEnvio,
+      });
+      await responder(
+        count > 0
+          ? `📦 ¡Datos de envío guardados! Si ganas, tu premio saldría por ` +
+              `*${ctx.agencia}*${destino ? ` a *${destino}*` : ''} 🚚`
+          : 'No pude actualizar tus datos — intenta de nuevo con *2* o habla con un asesor (*3*).',
+      );
+      return irA('MENU', {});
+    }
+
+    // Caso ganador con premio: mismo guard que elegirAgenciaMiPremio
+    // (solo antes del despacho).
     const premio = await this.prisma.sorteoPremio.findFirst({
       where: {
         id: ctx.premioId,
@@ -531,17 +583,16 @@ export class WhatsappBotService {
     }
     await this.prisma.sorteoPremio.update({
       where: { id: premio.id },
-      data: {
-        modalidad: 'ENVIO_AGENCIA',
-        agenciaNombre: ctx.agencia,
-        destinoProvincia: ctx.provincia ?? null,
-        destinoDepartamento: ctx.departamento ?? null,
-        agenciaDireccion: ctx.direccion ?? null,
-      },
+      data: { modalidad: 'ENVIO_AGENCIA', ...datosEnvio },
     });
-    const destino = [ctx.provincia, ctx.departamento]
-      .filter(Boolean)
-      .join(', ');
+    // Sincronizar también su registro de participante (prellenados
+    // futuros usan estos datos).
+    if (premio.ganadorDni) {
+      await this.prisma.sorteoParticipante.updateMany({
+        where: { sorteoId: premio.sorteoId, dni: premio.ganadorDni },
+        data: datosEnvio,
+      });
+    }
     await responder(
       `📦 ¡Listo! Tu premio te llegará por *${ctx.agencia}*` +
         (destino ? ` a *${destino}*` : '') +
