@@ -937,7 +937,7 @@ export class WhatsappBotService {
       ? `S/ ${Number(sorteo.precioParticipacion).toFixed(2)}`
       : null;
     return [
-      '💰 *Último paso — el pago:*',
+      '💰 *Siguiente paso — el pago:*',
       monto
         ? `Yapea *${monto}*${yape?.celular ? ` al *${yape.celular}*` : ' al número de la empresa'} y envía tu captura por este chat.`
         : `Coordina el pago de tu participación por este chat${yape?.celular ? ` (Yape: *${yape.celular}*)` : ''}.`,
