@@ -756,6 +756,89 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('18. Cambiar quién recoge con atajo');
   });
 
+  it('19. dinámica CERRADA: sus participaciones y auto-premios NO son editables', async () => {
+    const sim = new Simulador();
+    const abierta = sim.crearSorteo({ titulo: 'DINAMICA NUEVA' });
+    const cerrada = sim.crearSorteo({
+      titulo: 'DINAMICA VIEJA',
+      estado: EstadoSorteo.CERRADO,
+    });
+    sim.db.participantes.push({
+      id: 'jc1',
+      empresaId: EMPRESA,
+      sorteoId: cerrada.id,
+      celular: CEL,
+      dni: '44881122',
+      nombre: 'ROSA MARIA TORRES DIAZ',
+      estado: EstadoParticipanteSorteo.ACTIVO,
+      numeroTicket: 1,
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TRUJILLO',
+      destinoDepartamento: 'LA LIBERTAD',
+      agenciaDireccion: null,
+      recibeNombre: null,
+      recibeDni: null,
+      pagadorNombre: null,
+      pagadorCelular: null,
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+    // auto-premio de la jugada cerrada: tampoco debe listarse.
+    sim.db.premios.push({
+      id: 'pjc1',
+      empresaId: EMPRESA,
+      sorteoId: cerrada.id,
+      participanteId: 'jc1',
+      estado: EstadoPremioSorteo.REGISTRADO,
+      ganadorDni: '44881122',
+      ganadorNombre: 'ROSA MARIA TORRES DIAZ',
+      ganadorCelular: CEL,
+      descripcion: 'CANASTA VIEJA',
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+    // participación en la ABIERTA: la única editable.
+    sim.db.participantes.push({
+      id: 'ja1',
+      empresaId: EMPRESA,
+      sorteoId: abierta.id,
+      celular: CEL,
+      dni: '44881122',
+      nombre: 'ROSA MARIA TORRES DIAZ',
+      estado: EstadoParticipanteSorteo.ACTIVO,
+      numeroTicket: 1,
+      agenciaNombre: null,
+      destinoDepartamento: null,
+      destinoProvincia: null,
+      agenciaDireccion: null,
+      recibeNombre: null,
+      recibeDni: null,
+      pagadorNombre: null,
+      pagadorCelular: null,
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+
+    const r = await sim.cliente(CEL, '2');
+    // Un solo ítem (el de la abierta) → directo, sin lista ni rastro
+    // de la dinámica cerrada.
+    expect(r[0]).toContain('registremos el envío de tu participación *#1*');
+    expect(r[0]).toContain('DINAMICA NUEVA');
+    expect(r[0]).not.toContain('VIEJA');
+    sim.imprimir('19. Cerrada no editable');
+  });
+
+  it('20. "0" vuelve al menú desde cualquier paso', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo();
+    await sim.cliente(CEL, '1');
+    await sim.cliente(CEL, '44881122');
+    // Está en la pregunta del yape → 0 = menú.
+    const r = await sim.cliente(CEL, '0');
+    expect(r[0]).toContain('¡Tenemos *CANASTAZO* activo!');
+    sim.imprimir('20. "0" desde un paso');
+  });
+
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
   async function registrarConDireccion(sim: Simulador) {
     const s = sim.db.sorteos[0] ?? sim.crearSorteo();

@@ -55,7 +55,15 @@ export class WhatsappBotService {
   private static readonly MSG_QUIEN_YAPEA =
     '\n\n💳 ¿Quién hará el *yape*?\n' +
     '*1* — Yo mismo\n' +
-    '*2* — Otra persona (desde otro número)';
+    '*2* — Otra persona (desde otro número)\n' +
+    '*0* — Volver al menú';
+
+  /// Pregunta compartida de quién recoge el paquete en la agencia.
+  private static readonly MSG_QUIEN_RECOGE =
+    '¿Quién *recogerá* el paquete en la agencia?\n' +
+    '*1* — Yo mismo\n' +
+    '*2* — Otra persona (regalo o encargo) 🎁\n' +
+    '*0* — Volver al menú';
 
   /// Qué sigue después del pago (según si ya hay dirección previa).
   private static avisoDireccion(confirma: boolean): string {
@@ -248,7 +256,8 @@ export class WhatsappBotService {
             .map((x, i) => `*${i + 1}* — ${x.titulo}`)
             .join('\n');
           await responder(
-            `¿En cuál quieres participar? Responde con el número:\n${lista}`,
+            `¿En cuál quieres participar? Responde con el número:\n${lista}\n` +
+              '*0* — Volver al menú',
           );
           return irA('ELIGIENDO_SORTEO', {
             sorteoIds: s.sorteos.map((x) => x.id),
@@ -278,7 +287,7 @@ export class WhatsappBotService {
         const ids: string[] = s.ctx.sorteoIds ?? [];
         if (isNaN(idx) || idx < 0 || idx >= ids.length) {
           await responder(
-            'No entendí 🙈 responde solo con el número del sorteo (o *menu*).',
+            'No entendí 🙈 responde solo con el número de la lista (o *0* para el menú).',
           );
           return;
         }
@@ -302,7 +311,7 @@ export class WhatsappBotService {
         const idx = parseInt(msg, 10) - 1;
         if (isNaN(idx) || idx < 0 || idx >= items.length) {
           await responder(
-            'No entendí 🙈 responde solo con el número de la lista (o *menu*).',
+            'No entendí 🙈 responde solo con el número de la lista (o *0* para el menú).',
           );
           return;
         }
@@ -346,7 +355,10 @@ export class WhatsappBotService {
         }
         const dni = msg.replace(/\D/g, '');
         if (dni.length !== 8) {
-          await responder('El DNI debe tener *8 dígitos* — inténtalo de nuevo:');
+          await responder(
+            'Ese no parece un DNI 🙈 deben ser *8 dígitos* (ej. 44881122) ' +
+              '— inténtalo de nuevo (o *0* para el menú):',
+          );
           return;
         }
         // ¿Ya está en este sorteo? → ofrecer participar OTRA VEZ (comprar
@@ -466,7 +478,8 @@ export class WhatsappBotService {
         const cel = msg.replace(/\D/g, '');
         if (cel.length !== 9 || !cel.startsWith('9')) {
           await responder(
-            'El número debe tener *9 dígitos* (ej. 987654321) — inténtalo de nuevo:',
+            'Ese no parece un celular 🙈 deben ser *9 dígitos* ' +
+              '(ej. 987654321) — inténtalo de nuevo (o *0* para el menú):',
           );
           return;
         }
@@ -511,9 +524,9 @@ export class WhatsappBotService {
         const dni = msg.replace(/\D/g, '');
         if (dni.length !== 8) {
           await responder(
-            '🪪 Necesito el *DNI* de quien recogerá (8 dígitos) — la ' +
-              'agencia lo pide para entregar el paquete, sin él no ' +
-              'podríamos enviarlo a su nombre.',
+            '🪪 Necesito el *DNI* de quien recogerá — deben ser *8 ' +
+              'dígitos* (ej. 44881122). La agencia lo pide para entregar ' +
+              'el paquete. Inténtalo de nuevo (o *0* para el menú):',
           );
           return;
         }
@@ -596,8 +609,8 @@ export class WhatsappBotService {
         }
         await responder(
           'Responde *1* (misma dirección), *2* (cambiarla), *3* (la misma ' +
-            'pero recoge otra persona) o *4* (para otra persona en otra ' +
-            'dirección) 🙂',
+            'pero recoge otra persona), *4* (para otra persona en otra ' +
+            'dirección) o *0* para el menú 🙂',
         );
         return;
       }
@@ -744,9 +757,8 @@ export class WhatsappBotService {
           '📦 ¡Dirección guardada! ' +
             `Envío por *${s.ctx.agencia}*${destinoTxt ? ` a *${destinoTxt}*` : ''}` +
             `${direccion ? ` (sucursal ${direccion})` : ''}.\n\n` +
-            '👤 ¿Quién *recogerá* el paquete en la agencia?\n' +
-            '*1* — Yo mismo\n' +
-            '*2* — Otra persona (regalo o encargo) 🎁',
+            '👤 ' +
+            WhatsappBotService.MSG_QUIEN_RECOGE,
         );
         return irA('PART_RECOGE', { ...s.ctx, direccion });
       }
@@ -773,7 +785,8 @@ export class WhatsappBotService {
           return irA('REGALO_DNI', { ...s.ctx, soloRecoge: true });
         }
         await responder(
-          'Responde *1* si lo recoges tú, o *2* si irá otra persona 🎁',
+          'Responde *1* si lo recoges tú, *2* si irá otra persona 🎁 ' +
+            'o *0* para el menú.',
         );
         return;
       }
@@ -802,7 +815,8 @@ export class WhatsappBotService {
           return irA('REGALO_DNI', { ...s.ctx, regaloDireccion: true });
         }
         await responder(
-          'Responde *1* si lo recoges tú, o *2* si irá otra persona 🎁',
+          'Responde *1* si lo recoges tú, *2* si irá otra persona 🎁 ' +
+            'o *0* para el menú.',
         );
         return;
       }
@@ -1095,7 +1109,8 @@ export class WhatsappBotService {
         '*1* — Sí, es la misma ✅\n' +
         '*2* — Cambiarla\n' +
         '*3* — La misma, pero el paquete lo recogerá OTRA persona 👤\n' +
-        '*4* — Es para OTRA persona en OTRA dirección (regalo/encargo) 🎁';
+        '*4* — Es para OTRA persona en OTRA dirección (regalo/encargo) 🎁\n' +
+        '*0* — Volver al menú';
       estado = 'CONFIRMAR_ENVIO';
     } else {
       texto =
@@ -1364,14 +1379,15 @@ export class WhatsappBotService {
         include: { sorteo: { select: { titulo: true, tipo: true } } },
       }),
     ]);
-    // Un premio ligado a una participación listada se gestiona POR la
-    // participación (sincronizarPremioDeParticipacion lo hereda) — no
-    // se duplica en la lista. Quedan "sueltos" los premios manuales y
-    // los de sorteos ya cerrados (se envían igual).
-    const idsPart = new Set(participaciones.map((p) => p.id));
+    // Un premio ligado a una participación se gestiona SOLO por su
+    // participación (sincronizarPremioDeParticipacion lo hereda): si la
+    // dinámica cerró, la jugada ya no se lista y su premio TAMPOCO — lo
+    // cerrado no es editable por el cliente. Quedan "sueltos" únicamente
+    // los premios manuales de ganador (sorteo clásico), que sí deben
+    // completar su envío aunque el sorteo cierre.
     const items: { premioId?: string; participanteId?: string; etiqueta: string }[] = [
       ...premios
-        .filter((x) => !x.participanteId || !idsPart.has(x.participanteId))
+        .filter((x) => !x.participanteId)
         .map((x) => ({
           premioId: x.id,
           etiqueta: `🏆 ${x.descripcion} · ${this.resumenEnvio(x)}`,
@@ -1396,7 +1412,8 @@ export class WhatsappBotService {
         .join('\n');
       await responder(
         `📦 Tienes *${items.length}* envíos conmigo. ¿Cuál quieres ` +
-          `registrar o actualizar? Responde con el número:\n${lista}`,
+          `registrar o actualizar? Responde con el número:\n${lista}\n` +
+          '*0* — Volver al menú',
       );
       return irA('ELIGIENDO_ENVIO', { items, agencia });
     }
@@ -1437,9 +1454,7 @@ export class WhatsappBotService {
         `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
           `Tu premio: *${premio.descripcion}*.\n\n` +
           `📦 Los envíos se hacen por *${agencia}*.\n` +
-          '¿Quién *recogerá* el paquete en la agencia?\n' +
-          '*1* — Yo mismo\n' +
-          '*2* — Otra persona (regalo o encargo) 🎁',
+          WhatsappBotService.MSG_QUIEN_RECOGE,
       );
       return irA('GANADOR_QUIEN', {
         premioId: premio.id,
@@ -1467,9 +1482,7 @@ export class WhatsappBotService {
       `📦 ${participante.nombre.split(' ')[0]}, ${verbo} el envío de ` +
         `${cual} en *${(participante as any).sorteo.titulo}* — los envíos ` +
         `se hacen por *${agencia}*.\n\n` +
-        '¿Quién *recogerá* el paquete en la agencia?\n' +
-        '*1* — Yo mismo\n' +
-        '*2* — Otra persona (regalo o encargo) 🎁',
+        WhatsappBotService.MSG_QUIEN_RECOGE,
     );
     return irA('GANADOR_QUIEN', {
       participanteId: participante.id,
