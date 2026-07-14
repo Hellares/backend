@@ -600,8 +600,26 @@ export class WhatsappBotService {
           return irA('MENU', {});
         }
         if (msg === '-') {
+          // Si venía definiendo un regalo/encargo, NO perder al que
+          // recibe: queda anotado aunque la dirección se coordine luego.
+          if (s.ctx.recibeNombre) {
+            await this.prisma.sorteoParticipante.updateMany({
+              where: { id: s.ctx.participanteId, empresaId },
+              data: {
+                recibeNombre: s.ctx.recibeNombre,
+                recibeDni: s.ctx.recibeDni ?? null,
+              },
+            });
+            await this.sincronizarPremioDeParticipacion(
+              empresaId,
+              s.ctx.participanteId,
+            );
+          }
           await responder(
             '👌 De acuerdo. ' +
+              (s.ctx.recibeNombre
+                ? `Quedó anotado que lo recibirá *${s.ctx.recibeNombre}*. `
+                : '') +
               (await this.cierreFlujo(empresaId, s.ctx)) +
               '\n\n(cuando tengas tus datos de envío, escribe *2* en el ' +
               'menú para registrarlos 📦)',
@@ -610,7 +628,10 @@ export class WhatsappBotService {
         }
         if (msg.length < 3) {
           await responder(
-            '¿A qué *ciudad* enviaríamos el paquete? (ej. TRUJILLO) — o responde *-* para omitir',
+            '¿A qué *ciudad* enviaríamos el paquete? (ej. TRUJILLO)' +
+              (s.ctx.regaloDireccion && s.ctx.recibeNombre
+                ? '\n*1* — A la misma dirección'
+                : ' — o responde *-* para omitir'),
           );
           return;
         }
@@ -711,7 +732,7 @@ export class WhatsappBotService {
           return irA('REGALO_DNI', { ...s.ctx, soloRecoge: true });
         }
         await responder(
-          'Responde *1* si lo recoges tú, o *2* si irá otra persona 👤',
+          'Responde *1* si lo recoges tú, o *2* si irá otra persona 🎁',
         );
         return;
       }
@@ -738,7 +759,7 @@ export class WhatsappBotService {
           return irA('REGALO_DNI', s.ctx);
         }
         await responder(
-          'Responde *1* si lo recoges tú, o *2* si irá otra persona 👤',
+          'Responde *1* si lo recoges tú, o *2* si irá otra persona 🎁',
         );
         return;
       }
@@ -1261,7 +1282,7 @@ export class WhatsappBotService {
           `📦 Los envíos se hacen por *${agencia}*.\n` +
           '¿Quién *recogerá* el paquete en la agencia?\n' +
           '*1* — Yo mismo\n' +
-          '*2* — Otra persona (regalo o encargo) 👤',
+          '*2* — Otra persona (regalo o encargo) 🎁',
       );
       return irA('GANADOR_QUIEN', {
         premioId: premio.id,
@@ -1294,7 +1315,7 @@ export class WhatsappBotService {
         `por *${agencia}*.\n\n` +
         '¿Quién *recogerá* el paquete en la agencia?\n' +
         '*1* — Yo mismo\n' +
-        '*2* — Otra persona (regalo o encargo) 👤',
+        '*2* — Otra persona (regalo o encargo) 🎁',
     );
     return irA('GANADOR_QUIEN', {
       participanteId: participante.id,
