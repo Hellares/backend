@@ -600,6 +600,7 @@ enum EntidadTipo {
   PAGO_COMPRA // Comprobante (voucher Yape/Plin/transferencia) de un pago a proveedor (CxP)
   SORTEO_PREMIO // Foto del ticket de envío de agencia del premio de sorteo
   SORTEO // Imagen promocional del sorteo
+  SORTEO_PREMIO_CATALOGO // Imagen del premio del catálogo de la rifa
 }
 
 enum TipoPrecioCombo {

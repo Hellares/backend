@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -29,11 +30,14 @@ import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SorteosService } from './sorteos.service';
 import {
+  ActualizarPremioCatalogoDto,
   CambiarEstadoParticipanteDto,
   CambiarEstadoPremioDto,
+  CrearPremioCatalogoDto,
   CreateSorteoDto,
   EditarEntregaPremioDto,
   ElegirAgenciaPremioDto,
+  JugarTicketDto,
   RegistrarPremioDto,
   UpdateSorteoDto,
 } from './dto/sorteo.dto';
@@ -228,6 +232,82 @@ export class SorteosEmpresaController {
       participanteId,
       dto.estado,
     );
+  }
+
+  // ── Catálogo de premios de la rifa (ánfora) ──────────────────────────
+
+  @Patch('premios-catalogo/:catalogoId')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Editar un premio del catálogo (si no se sorteó)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async actualizarPremioCatalogo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('catalogoId') catalogoId: string,
+    @Body() dto: ActualizarPremioCatalogoDto,
+  ) {
+    return this.service.actualizarPremioCatalogo(empresaId, catalogoId, dto);
+  }
+
+  @Delete('premios-catalogo/:catalogoId')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Eliminar un premio del catálogo (si no se sorteó)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async eliminarPremioCatalogo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('catalogoId') catalogoId: string,
+  ) {
+    return this.service.eliminarPremioCatalogo(empresaId, catalogoId);
+  }
+
+  @Post('premios-catalogo/:catalogoId/imagen')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Subir imagen del premio del catálogo (opcional)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @UseInterceptors(FileInterceptor('file'))
+  async subirImagenPremioCatalogo(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Param('catalogoId') catalogoId: string,
+    @UploadedFile() file: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No se proporcionó ningún archivo');
+    }
+    return this.service.subirImagenPremioCatalogo(
+      empresaId,
+      usuarioId,
+      catalogoId,
+      file,
+    );
+  }
+
+  @Post(':id/premios-catalogo')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Agregar un premio al catálogo de la rifa' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async crearPremioCatalogo(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') sorteoId: string,
+    @Body() dto: CrearPremioCatalogoDto,
+  ) {
+    return this.service.crearPremioCatalogo(empresaId, sorteoId, dto);
+  }
+
+  @Post(':id/jugar')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Salió un ticket del ánfora: adjudicar un premio del catálogo (solo sorteo CERRADO)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async jugarTicket(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Param('id') sorteoId: string,
+    @Body() dto: JugarTicketDto,
+  ) {
+    return this.service.jugarTicket(empresaId, usuarioId, sorteoId, dto);
   }
 
   @Get(':id')

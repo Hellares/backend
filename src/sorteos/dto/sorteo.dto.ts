@@ -199,6 +199,12 @@ export class RegistrarPremioDto {
   @Min(0)
   montoParticipacion?: number;
 
+  /** Item del catálogo de la rifa que origina este premio (modo jugar). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  catalogoId?: string;
+
   @ApiPropertyOptional({ enum: ModalidadEntregaPremio })
   @IsOptional()
   @IsEnum(ModalidadEntregaPremio)
@@ -328,4 +334,50 @@ export class CambiarEstadoParticipanteDto {
   @ApiProperty({ enum: EstadoParticipanteSorteo })
   @IsEnum(EstadoParticipanteSorteo)
   estado: EstadoParticipanteSorteo;
+}
+
+/** Item del catálogo de premios de la rifa ("3× S/ 500 en efectivo"). */
+export class CrearPremioCatalogoDto {
+  @ApiProperty({ example: 'S/ 500 EN EFECTIVO' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  descripcion: string;
+
+  @ApiPropertyOptional({ example: 3, description: 'Unidades (default 1)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  cantidad?: number;
+}
+
+export class ActualizarPremioCatalogoDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  descripcion?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  cantidad?: number;
+}
+
+/** Salió un ticket del ánfora: adjudicar un premio del catálogo. */
+export class JugarTicketDto {
+  @ApiProperty({ example: 47 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  numeroTicket: number;
+
+  @ApiProperty({ description: 'Item del catálogo a adjudicar' })
+  @IsString()
+  @IsNotEmpty()
+  catalogoId: string;
 }

@@ -138,6 +138,43 @@ export class SorteosService {
       select: { id: true, url: true, urlThumbnail: true },
     });
 
+    // Catálogo de premios de la rifa: cuánto se sorteó de cada item, a
+    // quién (con su ticket) y la imagen opcional.
+    const catalogoRaw = await this.prisma.sorteoPremioCatalogo.findMany({
+      where: { sorteoId },
+      orderBy: { creadoEn: 'asc' },
+    });
+    let premiosCatalogo: any[] = [];
+    if (catalogoRaw.length > 0) {
+      const imagenesCatalogo = await this.prisma.archivo.findMany({
+        where: {
+          entidadTipo: 'SORTEO_PREMIO_CATALOGO',
+          entidadId: { in: catalogoRaw.map((c) => c.id) },
+        },
+        orderBy: { creadoEn: 'desc' },
+        select: { id: true, url: true, urlThumbnail: true, entidadId: true },
+      });
+      premiosCatalogo = catalogoRaw.map((c) => {
+        const adjudicados = sorteo.premios.filter(
+          (p) =>
+            (p as any).catalogoId === c.id &&
+            p.estado !== EstadoPremioSorteo.ANULADO,
+        );
+        return {
+          ...c,
+          sorteados: adjudicados.length,
+          ganadores: adjudicados.map((p) => ({
+            nombre: p.ganadorNombre,
+            numeroTicket:
+              sorteo.participantes.find((x) => x.id === p.participanteId)
+                ?.numeroTicket ?? null,
+          })),
+          imagen:
+            imagenesCatalogo.find((a) => a.entidadId === c.id) ?? null,
+        };
+      });
+    }
+
     // Venta de TICKETS del bot (tipo SORTEO): recaudación adicional =
     // tickets validados × precio (los premios del ganador se registran
     // aparte — si el ganador ya pagó por tickets, registrar su premio
@@ -159,6 +196,7 @@ export class SorteosService {
       ...sorteo,
       premios,
       imagenes,
+      premiosCatalogo,
       resumen: {
         totalRecaudado: totalRecaudado + recaudadoTickets,
         costoPremios,
@@ -210,9 +248,12 @@ export class SorteosService {
     usuarioId: string,
     sorteoId: string,
     dto: RegistrarPremioDto,
+    opts?: { permitirCerrado?: boolean },
   ) {
     const sorteo = await this.assertSorteo(empresaId, sorteoId);
-    if (sorteo.estado === EstadoSorteo.CERRADO) {
+    // El modo JUGAR (rifa con ánfora) opera justamente con el sorteo
+    // CERRADO — ventas cerradas, se sortea.
+    if (sorteo.estado === EstadoSorteo.CERRADO && !opts?.permitirCerrado) {
       throw new ConflictException({
         code: 'SORTEO_CERRADO',
         message: 'El sorteo está cerrado — reábrelo para registrar premios',
@@ -338,6 +379,7 @@ export class SorteosService {
         data: {
           sorteoId,
           empresaId,
+          catalogoId: dto.catalogoId,
           participanteId: dto.participanteId,
           recibeNombre: dto.recibeNombre,
           recibeDni: dto.recibeDni,
@@ -1035,6 +1077,220 @@ export class SorteosService {
   }
 
   // ── Internos ─────────────────────────────────────────────────────────
+
+  // ── Catálogo de premios (rifa con ánfora) ────────────────────────────
+
+  async crearPremioCatalogo(
+    empresaId: string,
+    sorteoId: string,
+    dto: { descripcion: string; cantidad?: number },
+  ) {
+    await this.assertSorteo(empresaId, sorteoId);
+    const item = await this.prisma.sorteoPremioCatalogo.create({
+      data: {
+        empresaId,
+        sorteoId,
+        descripcion: dto.descripcion.trim().toUpperCase(),
+        cantidad: dto.cantidad ?? 1,
+      },
+    });
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId });
+    return item;
+  }
+
+  async actualizarPremioCatalogo(
+    empresaId: string,
+    catalogoId: string,
+    dto: { descripcion?: string; cantidad?: number },
+  ) {
+    const item = await this.prisma.sorteoPremioCatalogo.findFirst({
+      where: { id: catalogoId, empresaId },
+    });
+    if (!item) throw new NotFoundException('Premio del catálogo no encontrado');
+    const adjudicados = await this.prisma.sorteoPremio.count({
+      where: { catalogoId, estado: { not: EstadoPremioSorteo.ANULADO } },
+    });
+    if (dto.cantidad != null && dto.cantidad < adjudicados) {
+      throw new ConflictException(
+        `Ya se sortearon ${adjudicados} unidades — la cantidad no puede ser menor`,
+      );
+    }
+    const actualizado = await this.prisma.sorteoPremioCatalogo.update({
+      where: { id: item.id },
+      data: {
+        ...(dto.descripcion?.trim() && {
+          descripcion: dto.descripcion.trim().toUpperCase(),
+        }),
+        ...(dto.cantidad != null && { cantidad: dto.cantidad }),
+      },
+    });
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId: item.sorteoId });
+    return actualizado;
+  }
+
+  async eliminarPremioCatalogo(empresaId: string, catalogoId: string) {
+    const item = await this.prisma.sorteoPremioCatalogo.findFirst({
+      where: { id: catalogoId, empresaId },
+    });
+    if (!item) throw new NotFoundException('Premio del catálogo no encontrado');
+    const adjudicados = await this.prisma.sorteoPremio.count({
+      where: { catalogoId, estado: { not: EstadoPremioSorteo.ANULADO } },
+    });
+    if (adjudicados > 0) {
+      throw new ConflictException(
+        'Ese premio ya se sorteó — no se puede eliminar',
+      );
+    }
+    await this.prisma.sorteoPremioCatalogo.delete({ where: { id: item.id } });
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId: item.sorteoId });
+    return { ok: true };
+  }
+
+  async subirImagenPremioCatalogo(
+    empresaId: string,
+    usuarioId: string,
+    catalogoId: string,
+    file: any,
+  ) {
+    const item = await this.prisma.sorteoPremioCatalogo.findFirst({
+      where: { id: catalogoId, empresaId },
+    });
+    if (!item) throw new NotFoundException('Premio del catálogo no encontrado');
+    const archivo = await this.storage.uploadArchivo({
+      empresaId,
+      file,
+      entidadTipo: 'SORTEO_PREMIO_CATALOGO',
+      entidadId: catalogoId,
+      categoria: 'PRINCIPAL',
+      subidoPor: usuarioId,
+    });
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId: item.sorteoId });
+    return archivo;
+  }
+
+  /**
+   * MODO JUGAR (rifa con ánfora, SOLO con el sorteo CERRADO): salió el
+   * ticket #N → se busca su dueño y se le adjudica un premio del
+   * catálogo. El premio queda ligado a ESA participación (el ticket ya
+   * "salió del ánfora": sus demás tickets siguen jugando) y hereda los
+   * datos de envío del bot. montoParticipacion = 0 (la recaudación ya
+   * está contada por la venta de tickets).
+   */
+  async jugarTicket(
+    empresaId: string,
+    usuarioId: string,
+    sorteoId: string,
+    dto: { numeroTicket: number; catalogoId: string },
+  ) {
+    const sorteo = await this.assertSorteo(empresaId, sorteoId);
+    if (sorteo.tipo !== TipoSorteo.SORTEO) {
+      throw new BadRequestException('Solo los sorteos clásicos se juegan por ticket');
+    }
+    if (sorteo.estado !== EstadoSorteo.CERRADO) {
+      throw new ConflictException({
+        code: 'SORTEO_ABIERTO',
+        message: 'Cierra las ventas del sorteo antes de jugar',
+      });
+    }
+    const catalogo = await this.prisma.sorteoPremioCatalogo.findFirst({
+      where: { id: dto.catalogoId, sorteoId, empresaId },
+    });
+    if (!catalogo) {
+      throw new NotFoundException('Premio del catálogo no encontrado');
+    }
+    const adjudicados = await this.prisma.sorteoPremio.count({
+      where: {
+        catalogoId: catalogo.id,
+        estado: { not: EstadoPremioSorteo.ANULADO },
+      },
+    });
+    if (adjudicados >= catalogo.cantidad) {
+      throw new ConflictException({
+        code: 'PREMIO_AGOTADO',
+        message: `"${catalogo.descripcion}" ya se sorteó completo (${catalogo.cantidad})`,
+      });
+    }
+    const ticket = await this.prisma.sorteoParticipante.findFirst({
+      where: {
+        sorteoId,
+        empresaId,
+        numeroTicket: dto.numeroTicket,
+        estado: EstadoParticipanteSorteo.ACTIVO,
+      },
+    });
+    if (!ticket) {
+      throw new NotFoundException({
+        code: 'TICKET_NO_EXISTE',
+        message: `No hay ticket #${dto.numeroTicket} validado en este sorteo`,
+      });
+    }
+    const yaPremiado = await this.prisma.sorteoPremio.findFirst({
+      where: {
+        participanteId: ticket.id,
+        estado: { not: EstadoPremioSorteo.ANULADO },
+      },
+      select: { descripcion: true },
+    });
+    if (yaPremiado) {
+      throw new ConflictException({
+        code: 'TICKET_YA_PREMIADO',
+        message:
+          `El ticket #${dto.numeroTicket} ya ganó "${yaPremiado.descripcion}" ` +
+          '— ese ticket ya salió del ánfora 🙈',
+      });
+    }
+
+    const conAgencia = !!ticket.agenciaNombre?.trim();
+    const premio = await this.registrarPremio(
+      empresaId,
+      usuarioId,
+      sorteoId,
+      {
+        participanteId: ticket.id,
+        catalogoId: catalogo.id,
+        recibeNombre: ticket.recibeNombre ?? undefined,
+        recibeDni: ticket.recibeDni ?? undefined,
+        ganadorDni: ticket.dni,
+        ganadorNombre: ticket.nombre,
+        ganadorCelular: ticket.celular.slice(-9),
+        descripcion: catalogo.descripcion,
+        modalidad: conAgencia
+          ? ModalidadEntregaPremio.ENVIO_AGENCIA
+          : ModalidadEntregaPremio.RETIRO_TIENDA,
+        agenciaNombre: ticket.agenciaNombre ?? undefined,
+        destinoDepartamento: ticket.destinoDepartamento ?? undefined,
+        destinoProvincia: ticket.destinoProvincia ?? undefined,
+        agenciaDireccion: ticket.agenciaDireccion ?? undefined,
+        montoParticipacion: 0,
+      } as RegistrarPremioDto,
+      { permitirCerrado: true },
+    );
+
+    // Tickets del dueño que SIGUEN jugando (compró 10, ganó 1 → 9).
+    const jugadas = await this.prisma.sorteoParticipante.findMany({
+      where: {
+        sorteoId,
+        dni: ticket.dni,
+        estado: EstadoParticipanteSorteo.ACTIVO,
+      },
+      select: { id: true },
+    });
+    const premiadas = await this.prisma.sorteoPremio.count({
+      where: {
+        participanteId: { in: jugadas.map((j) => j.id) },
+        estado: { not: EstadoPremioSorteo.ANULADO },
+      },
+    });
+
+    return {
+      premio,
+      ganadorNombre: ticket.nombre,
+      ganadorDni: ticket.dni,
+      numeroTicket: dto.numeroTicket,
+      premioDescripcion: catalogo.descripcion,
+      ticketsRestantes: jugadas.length - premiadas,
+    };
+  }
 
   private async assertSorteo(empresaId: string, sorteoId: string) {
     const sorteo = await this.prisma.sorteo.findFirst({

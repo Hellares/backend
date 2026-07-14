@@ -67,9 +67,10 @@ model Sorteo {
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
-  empresa       Empresa              @relation("SorteosEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
-  premios       SorteoPremio[]
-  participantes SorteoParticipante[]
+  empresa         Empresa                @relation("SorteosEmpresa", fields: [empresaId], references: [id], onDelete: Cascade)
+  premios         SorteoPremio[]
+  participantes   SorteoParticipante[]
+  premiosCatalogo SorteoPremioCatalogo[]
 
   @@index([empresaId, estado])
   @@index([empresaId, fechaSorteo])
@@ -186,14 +187,40 @@ model SorteoPremio {
   entregadoEn   DateTime?
   observaciones String?
 
+  // Item del CATALOGO de premios de la rifa que se adjudico al salir
+  // este ticket del anfora (null = premio registrado a mano).
+  catalogoId String?
+
   registradoPorId String
   creadoEn        DateTime @default(now())
   actualizadoEn   DateTime @updatedAt
 
-  sorteo  Sorteo  @relation(fields: [sorteoId], references: [id], onDelete: Cascade)
-  ganador Usuario @relation("PremiosGanador", fields: [ganadorId], references: [id])
+  sorteo   Sorteo                @relation(fields: [sorteoId], references: [id], onDelete: Cascade)
+  ganador  Usuario               @relation("PremiosGanador", fields: [ganadorId], references: [id])
+  catalogo SorteoPremioCatalogo? @relation(fields: [catalogoId], references: [id], onDelete: SetNull)
 
   @@index([empresaId, estado])
   @@index([ganadorId])
+  @@index([sorteoId])
+  @@index([catalogoId])
+}
+
+// Catalogo de premios de la RIFA con anfora (tipo SORTEO): se registran
+// ANTES de jugar ("3× S/ 500 en efectivo", "2× celular"). Cada unidad se
+// adjudica al salir un ticket ganador (SorteoPremio.catalogoId); imagen
+// opcional via Archivo (SORTEO_PREMIO_CATALOGO / PRINCIPAL).
+model SorteoPremioCatalogo {
+  id          String @id @default(cuid())
+  empresaId   String
+  sorteoId    String
+  descripcion String
+  cantidad    Int    @default(1)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  sorteo  Sorteo         @relation(fields: [sorteoId], references: [id], onDelete: Cascade)
+  premios SorteoPremio[]
+
   @@index([sorteoId])
 }
