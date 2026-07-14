@@ -204,6 +204,7 @@ export class WhatsappService {
       plantillaConfirmacionDinamicaDefault:
         PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT,
       agenciaEnvio: cfg?.agenciaEnvio ?? 'SHALOM',
+      numeroPago: cfg?.numeroPago ?? null,
       conectadoEn: cfg?.conectadoEn ?? null,
       actualizadoEn: cfg?.actualizadoEn ?? null,
     };
@@ -233,6 +234,7 @@ export class WhatsappService {
         ...(dto.agenciaEnvio?.trim() && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase(),
         }),
+        numeroPago: dto.numeroPago?.trim() || null,
         habilitado: dto.habilitado ?? true,
       },
       update: {
@@ -255,6 +257,10 @@ export class WhatsappService {
         }),
         ...(dto.agenciaEnvio !== undefined && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase() || 'SHALOM',
+        }),
+        // '' = quitar el número (vuelve al fallback Yape → vinculado).
+        ...(dto.numeroPago !== undefined && {
+          numeroPago: dto.numeroPago.trim() || null,
         }),
         ...(dto.habilitado !== undefined && { habilitado: dto.habilitado }),
       },

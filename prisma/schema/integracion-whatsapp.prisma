@@ -33,6 +33,9 @@ model IntegracionWhatsapp {
   // Agencia con la que la empresa hace TODOS los envíos: el bot la
   // informa ("los envíos se hacen por X") y no pregunta cuál.
   agenciaEnvio    String    @default("SHALOM")
+  // Celular al que los clientes YAPEAN (9 dígitos). Null = fallback:
+  // IntegracionYape.celular → número vinculado por WhatsApp.
+  numeroPago      String?
   habilitado      Boolean   @default(true)
   conectadoEn     DateTime?
   creadoEn        DateTime  @default(now())

@@ -1,5 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 export class UpdateWhatsappDto {
   @ApiPropertyOptional({
@@ -63,6 +69,20 @@ export class UpdateWhatsappDto {
   @IsString()
   @MaxLength(40)
   agenciaEnvio?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Celular al que los clientes YAPEAN (9 dígitos). No siempre es el ' +
+      "número vinculado por WhatsApp. '' = quitar (fallback: celular de " +
+      'la integración Yape → número vinculado).',
+    example: '901168935',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^(9\d{8})?$/, {
+    message: 'numeroPago debe ser un celular de 9 dígitos (empieza en 9)',
+  })
+  numeroPago?: string;
 
   @ApiPropertyOptional({
     description: 'Apagar/encender los envíos automáticos sin desvincular',

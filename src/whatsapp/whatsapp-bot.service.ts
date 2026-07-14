@@ -958,14 +958,18 @@ export class WhatsappBotService {
         select: {
           plantillaPagoSorteo: true,
           plantillaPagoDinamica: true,
+          numeroPago: true,
           numero: true,
         },
       }),
     ]);
-    // Número para yapear: el de la integración Yape si está configurado;
-    // si no, el celular con el que la empresa vinculó su WhatsApp (QR).
+    // Número para yapear: el configurado por la empresa; si no, el de la
+    // integración Yape; último recurso el celular vinculado por WhatsApp.
     const numeroPago =
-      yape?.celular?.trim() || this.celularLocal(cfg?.numero) || null;
+      cfg?.numeroPago?.trim() ||
+      yape?.celular?.trim() ||
+      this.celularLocal(cfg?.numero) ||
+      null;
     const monto = sorteo?.precioParticipacion
       ? `S/ ${Number(sorteo.precioParticipacion).toFixed(2)}`
       : null;
