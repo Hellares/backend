@@ -213,11 +213,11 @@ export class SorteosService {
     dto: UpdateSorteoDto,
   ) {
     const actual = await this.assertSorteo(empresaId, sorteoId);
-    // Reabrir (CERRADO → ABIERTO) es solo para REGULARIZAR en el app:
-    // queda marcado y el bot de WhatsApp lo ignora por completo.
+    // Reabrir (CERRADO/FINALIZADO → ABIERTO) es solo para REGULARIZAR en
+    // el app: queda marcado y el bot de WhatsApp lo ignora por completo.
     const reabre =
       dto.estado === EstadoSorteo.ABIERTO &&
-      actual.estado === EstadoSorteo.CERRADO;
+      actual.estado !== EstadoSorteo.ABIERTO;
     return this.prisma.sorteo.update({
       where: { id: sorteoId },
       data: {
@@ -252,11 +252,15 @@ export class SorteosService {
   ) {
     const sorteo = await this.assertSorteo(empresaId, sorteoId);
     // El modo JUGAR (rifa con ánfora) opera justamente con el sorteo
-    // CERRADO — ventas cerradas, se sortea.
-    if (sorteo.estado === EstadoSorteo.CERRADO && !opts?.permitirCerrado) {
+    // CERRADO — ventas cerradas, se sortea. FINALIZADO tampoco admite
+    // registros manuales (reabrir para regularizar).
+    if (sorteo.estado !== EstadoSorteo.ABIERTO && !opts?.permitirCerrado) {
       throw new ConflictException({
         code: 'SORTEO_CERRADO',
-        message: 'El sorteo está cerrado — reábrelo para registrar premios',
+        message:
+          sorteo.estado === EstadoSorteo.FINALIZADO
+            ? 'El sorteo ya finalizó — reábrelo para regularizar'
+            : 'El sorteo está cerrado — reábrelo para registrar premios',
       });
     }
 
@@ -1186,10 +1190,16 @@ export class SorteosService {
     if (sorteo.tipo !== TipoSorteo.SORTEO) {
       throw new BadRequestException('Solo los sorteos clásicos se juegan por ticket');
     }
-    if (sorteo.estado !== EstadoSorteo.CERRADO) {
+    if (sorteo.estado === EstadoSorteo.ABIERTO) {
       throw new ConflictException({
         code: 'SORTEO_ABIERTO',
         message: 'Cierra las ventas del sorteo antes de jugar',
+      });
+    }
+    if (sorteo.estado === EstadoSorteo.FINALIZADO) {
+      throw new ConflictException({
+        code: 'SORTEO_FINALIZADO',
+        message: 'El sorteo ya finalizó — no se puede seguir jugando',
       });
     }
     const catalogo = await this.prisma.sorteoPremioCatalogo.findFirst({

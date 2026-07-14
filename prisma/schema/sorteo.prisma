@@ -12,7 +12,8 @@
 
 enum EstadoSorteo {
   ABIERTO
-  CERRADO
+  CERRADO // ventas cerradas — la rifa está JUGANDO (se sortean tickets)
+  FINALIZADO // ya se jugó todo: cerrado definitivo
 }
 
 enum CanalSorteo {

@@ -196,7 +196,9 @@ export class WhatsappBotService {
             empresaId,
             celular,
             sorteo: {
-              estado: EstadoSorteo.CERRADO,
+              estado: {
+                in: [EstadoSorteo.CERRADO, EstadoSorteo.FINALIZADO],
+              },
               actualizadoEn: { gt: conv.actualizadoEn },
             },
           },
