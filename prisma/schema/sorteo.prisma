@@ -101,6 +101,11 @@ model SorteoParticipante {
   // (el juega, otra persona lo recibe en otra sede de la agencia).
   recibeNombre String?
   recibeDni    String? // la agencia lo pide al entregar
+  // Quién hará el YAPE si NO es el propio participante (el bot lo
+  // pregunta tras las instrucciones de pago; null = paga él mismo) —
+  // la empresa lo ve al validar para cuadrar la notificación de Yape.
+  pagadorNombre  String?
+  pagadorCelular String?
   // Datos de envio capturados por el bot al registrarse (opcionales):
   // si gana, la entrega ya esta lista y prellenan el registro del ganador.
   agenciaNombre       String?

@@ -50,6 +50,21 @@ export class WhatsappBotService {
     '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
     'entregar el paquete 🪪';
 
+  /// Pregunta tras las instrucciones de pago: a veces el yape lo hace
+  /// un tercero y la empresa necesita saberlo para cuadrar el pago.
+  private static readonly MSG_QUIEN_YAPEA =
+    '\n\n💳 ¿Quién hará el *yape*?\n' +
+    '*1* — Yo mismo\n' +
+    '*2* — Otra persona (desde otro número)';
+
+  /// Qué sigue después del pago (según si ya hay dirección previa).
+  private static avisoDireccion(confirma: boolean): string {
+    return (
+      '📦 Cuando validemos tu pago te pediremos ' +
+      (confirma ? 'confirmar tu dirección de envío.' : 'los datos de envío.')
+    );
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly evolution: EvolutionApiService,
@@ -378,16 +393,82 @@ export class WhatsappBotService {
               (await this.instruccionesPago(empresaId, {
                 sorteoId: nuevo.sorteoId,
               })) +
-              '\n\n📦 Cuando validemos tu pago te pediremos ' +
-              (previo.agenciaNombre
-                ? 'confirmar tu dirección de envío.'
-                : 'los datos de envío.'),
+              WhatsappBotService.MSG_QUIEN_YAPEA,
           );
-          return irA('MENU', {});
+          return irA('PAGO_QUIEN', {
+            participanteId: nuevo.id,
+            sorteoId: nuevo.sorteoId,
+            confirmaDireccion: !!previo.agenciaNombre,
+          });
         }
         await responder(
           '👌 Listo, sigues con tus participaciones actuales. ' +
             'Escribe *menu* para ver las opciones.',
+        );
+        return irA('MENU', {});
+      }
+
+      case 'PAGO_QUIEN': {
+        if (!s.ctx.participanteId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg === '1') {
+          // Paga él mismo: nombre y número ya los tenemos.
+          await responder(
+            '✅ ¡Listo! Esperamos tu yape 🙌\n\n' +
+              WhatsappBotService.avisoDireccion(s.ctx.confirmaDireccion),
+          );
+          return irA('MENU', {});
+        }
+        if (msg === '2') {
+          await responder(
+            '💳 ¿Desde qué *número* harán el yape? (9 dígitos)',
+          );
+          return irA('PAGO_NUMERO', s.ctx);
+        }
+        // Texto libre (la captura del yape, una consulta): no estorbar —
+        // 1/2/menu siguen activos y el paso caduca solo.
+        return;
+      }
+
+      case 'PAGO_NUMERO': {
+        if (!s.ctx.participanteId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        const cel = msg.replace(/\D/g, '');
+        if (cel.length !== 9 || !cel.startsWith('9')) {
+          await responder(
+            'El número debe tener *9 dígitos* (ej. 987654321) — inténtalo de nuevo:',
+          );
+          return;
+        }
+        await responder('¿Y a nombre de *quién* está esa cuenta Yape?');
+        return irA('PAGO_NOMBRE', { ...s.ctx, pagadorCelular: cel });
+      }
+
+      case 'PAGO_NOMBRE': {
+        if (!s.ctx.participanteId || !s.ctx.pagadorCelular) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg.length < 3) {
+          await responder('¿A nombre de *quién* está esa cuenta Yape?');
+          return;
+        }
+        const pagadorNombre = msg.toUpperCase();
+        await this.prisma.sorteoParticipante.updateMany({
+          where: { id: s.ctx.participanteId, empresaId },
+          data: { pagadorNombre, pagadorCelular: s.ctx.pagadorCelular },
+        });
+        if (s.ctx.sorteoId) {
+          this.realtime.notifySorteoCambiado({
+            empresaId,
+            sorteoId: s.ctx.sorteoId,
+          });
+        }
+        await responder(
+          `✅ Anotado: *${pagadorNombre}* yapeará desde el ` +
+            `*${s.ctx.pagadorCelular}*.\n\n` +
+            WhatsappBotService.avisoDireccion(s.ctx.confirmaDireccion),
         );
         return irA('MENU', {});
       }
@@ -825,10 +906,14 @@ export class WhatsappBotService {
           ...ctx,
           sorteoId: sorteo.id,
         })) +
-        '\n\n📦 Cuando validemos tu pago te pediremos ' +
-        (previos ? 'confirmar tu dirección de envío.' : 'los datos de envío.'),
+        WhatsappBotService.MSG_QUIEN_YAPEA,
     );
-    return irA('MENU', {});
+    return irA('PAGO_QUIEN', {
+      participanteId,
+      sorteoId: sorteo.id,
+      agencia: ctx.agencia,
+      confirmaDireccion: !!previos,
+    });
   }
 
   /**
