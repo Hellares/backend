@@ -43,6 +43,13 @@ export class WhatsappBotService {
   /// .agenciaEnvio): el bot la informa y no pregunta cuál.
   private static readonly AGENCIA_DEFAULT = 'SHALOM';
 
+  /// Prompt compartido para pedir el DNI del que recoge (la agencia lo
+  /// exige para entregar) — un solo texto para que no diverja.
+  private static readonly MSG_DNI_RECOGE =
+    '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
+    '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
+    'entregar el paquete 🪪';
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly evolution: EvolutionApiService,
@@ -221,7 +228,7 @@ export class WhatsappBotService {
             .map((x, i) => `*${i + 1}* — ${x.titulo}`)
             .join('\n');
           await responder(
-            `¿En cuál sorteo quieres participar? Responde con el número:\n${lista}`,
+            `¿En cuál quieres participar? Responde con el número:\n${lista}`,
           );
           return irA('ELIGIENDO_SORTEO', {
             sorteoIds: s.sorteos.map((x) => x.id),
@@ -370,7 +377,11 @@ export class WhatsappBotService {
             `🎟️ ¡Nueva participación registrada, ${previo.nombre.split(' ')[0]}!\n\n` +
               (await this.instruccionesPago(empresaId, {
                 sorteoId: nuevo.sorteoId,
-              })),
+              })) +
+              '\n\n📦 Cuando validemos tu pago te pediremos ' +
+              (previo.agenciaNombre
+                ? 'confirmar tu dirección de envío.'
+                : 'los datos de envío.'),
           );
           return irA('MENU', {});
         }
@@ -461,9 +472,7 @@ export class WhatsappBotService {
         }
         if (msg === '3') {
           await responder(
-            '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
-              '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
-              'entregar el paquete 🪪',
+            WhatsappBotService.MSG_DNI_RECOGE,
           );
           return irA('REGALO_DNI', { ...s.ctx, soloRecoge: true });
         }
@@ -472,9 +481,7 @@ export class WhatsappBotService {
           // (puede ser otra ciudad). Tras el DNI se captura la dirección
           // con atajo "misma" — ver continuarConRecibe/PART_CIUDAD.
           await responder(
-            '🎁 ¡Buen detalle! Envíame el *DNI* de quien recibirá el ' +
-              'paquete (8 dígitos) — sus nombres salen solos. La agencia ' +
-              'pedirá ese DNI para entregarlo 🪪',
+            '🎁 ¡Buen detalle! ' + WhatsappBotService.MSG_DNI_RECOGE,
           );
           return irA('REGALO_DNI', { ...s.ctx, regaloDireccion: true });
         }
@@ -513,7 +520,8 @@ export class WhatsappBotService {
         }
         if (msg === '-') {
           await responder(
-            (await this.cierreFlujo(empresaId, s.ctx)) +
+            '👌 De acuerdo. ' +
+              (await this.cierreFlujo(empresaId, s.ctx)) +
               '\n\n(cuando tengas tus datos de envío, escribe *2* en el ' +
               'menú para registrarlos 📦)',
           );
@@ -521,7 +529,7 @@ export class WhatsappBotService {
         }
         if (msg.length < 3) {
           await responder(
-            '¿A qué *ciudad* te enviaríamos el premio? (ej. TRUJILLO) — o responde *-* para omitir',
+            '¿A qué *ciudad* enviaríamos el paquete? (ej. TRUJILLO) — o responde *-* para omitir',
           );
           return;
         }
@@ -539,7 +547,7 @@ export class WhatsappBotService {
         }
         await responder(
           `¿Cuál es la *dirección o sucursal* de ${s.ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT} ` +
-            'en tu ciudad? (ej. ATAHUALPA)\n' +
+            'en esa ciudad? (ej. ATAHUALPA)\n' +
             'Responde *-* si no la sabes.',
         );
         return irA('PART_DIRECCION', {
@@ -615,9 +623,7 @@ export class WhatsappBotService {
         }
         if (msg === '2') {
           await responder(
-            '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
-              '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
-              'entregar el paquete 🪪',
+            WhatsappBotService.MSG_DNI_RECOGE,
           );
           // soloRecoge: la dirección YA está guardada — al terminar solo
           // se actualiza quién recibe.
@@ -646,9 +652,7 @@ export class WhatsappBotService {
         }
         if (msg === '2') {
           await responder(
-            '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
-              '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
-              'entregar el paquete 🪪',
+            WhatsappBotService.MSG_DNI_RECOGE,
           );
           return irA('REGALO_DNI', s.ctx);
         }
@@ -661,7 +665,7 @@ export class WhatsappBotService {
       case 'GANADOR_CIUDAD': {
         if (msg.length < 3) {
           await responder(
-            '¿A qué *ciudad* te lo enviamos? (ej. TRUJILLO)',
+            '¿A qué *ciudad* lo enviamos? (ej. TRUJILLO)',
           );
           return;
         }
@@ -679,7 +683,7 @@ export class WhatsappBotService {
         }
         await responder(
           `¿Cuál es la *dirección o sucursal* de ${s.ctx.agencia ?? WhatsappBotService.AGENCIA_DEFAULT} ` +
-            'en tu ciudad? (ej. ATAHUALPA)\n' +
+            'en esa ciudad? (ej. ATAHUALPA)\n' +
             'Responde *-* si no la sabes.',
         );
         return irA('GANADOR_DIRECCION', {
@@ -729,7 +733,7 @@ export class WhatsappBotService {
       opcion1 = '*1* — Participar en una dinámica';
     } else {
       saludo = `¡Hola! 👋 ¡Tenemos ${sorteos.length} sorteos activos! 🎉`;
-      opcion1 = '*1* — Participar en el sorteo';
+      opcion1 = '*1* — Participar en un sorteo';
     }
     await responder(
       `${saludo}\n\n` +
@@ -833,7 +837,8 @@ export class WhatsappBotService {
    */
   private async cierreFlujo(empresaId: string, ctx: any): Promise<string> {
     if (ctx.postActivacion) {
-      return '✅ ¡Todo listo! Te avisaremos por aquí cuando tu premio esté en camino 🚚';
+      // Sin "¡Listo!" propio: cada caller ya abre celebrando.
+      return 'Te avisaremos por aquí cuando tu premio esté en camino 🚚';
     }
     return this.instruccionesPago(empresaId, ctx);
   }
