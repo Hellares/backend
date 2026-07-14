@@ -777,6 +777,8 @@ export class SorteosService {
       });
       let siguiente = (max._max.numeroTicket ?? 0) + 1;
       const ahora = new Date();
+      // BINGO: cada cartilla nace con su grilla 5×5 al activarse.
+      const esBingo = participante.sorteo.tipo === TipoSorteo.BINGO;
       await this.prisma.$transaction(
         filas.map((f) => {
           // Fila ya activada antes (re-validación): conserva su ticket.
@@ -789,6 +791,9 @@ export class SorteosService {
               ...(yaTiene
                 ? {}
                 : { numeroTicket: siguiente++, activadoEn: ahora }),
+              ...(esBingo && !yaTiene
+                ? { cartilla: this.generarCartilla() }
+                : {}),
             },
           });
         }),
@@ -1191,8 +1196,10 @@ export class SorteosService {
     dto: { numeroTicket: number; catalogoId: string },
   ) {
     const sorteo = await this.assertSorteo(empresaId, sorteoId);
-    if (sorteo.tipo !== TipoSorteo.SORTEO) {
-      throw new BadRequestException('Solo los sorteos clásicos se juegan por ticket');
+    if (sorteo.tipo === TipoSorteo.DINAMICA) {
+      throw new BadRequestException(
+        'Las dinámicas no se juegan por ticket (cada jugador ya ganó)',
+      );
     }
     if (sorteo.estado === EstadoSorteo.ABIERTO) {
       throw new ConflictException({
@@ -1304,6 +1311,136 @@ export class SorteosService {
       premioDescripcion: catalogo.descripcion,
       ticketsRestantes: jugadas.length - premiadas,
     };
+  }
+
+  // ── BINGO ────────────────────────────────────────────────────────────
+
+  /** Cartilla 5×5 B-I-N-G-O (columnas 1-15/…/61-75, centro 0 = LIBRE). */
+  private generarCartilla(): number[][] {
+    const col = (min: number, max: number) => {
+      const pool: number[] = [];
+      for (let i = min; i <= max; i++) pool.push(i);
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      return pool.slice(0, 5);
+    };
+    const cols = [
+      col(1, 15),
+      col(16, 30),
+      col(31, 45),
+      col(46, 60),
+      col(61, 75),
+    ];
+    const grid: number[][] = [];
+    for (let r = 0; r < 5; r++) {
+      grid.push([cols[0][r], cols[1][r], cols[2][r], cols[3][r], cols[4][r]]);
+    }
+    grid[2][2] = 0; // centro LIBRE
+    return grid;
+  }
+
+  /** Logros de una cartilla: LINEA (fila/columna/diagonal) y BINGO. */
+  private logrosCartilla(
+    cartilla: number[][],
+    bolillas: number[],
+  ): string[] {
+    const marc = (r: number, c: number) =>
+      cartilla[r][c] === 0 || bolillas.includes(cartilla[r][c]);
+    const idx = [0, 1, 2, 3, 4];
+    let linea = false;
+    for (const i of idx) {
+      if (idx.every((j) => marc(i, j)) || idx.every((j) => marc(j, i))) {
+        linea = true;
+        break;
+      }
+    }
+    if (!linea && idx.every((i) => marc(i, i))) linea = true;
+    if (!linea && idx.every((i) => marc(i, 4 - i))) linea = true;
+    const bingo = idx.every((r) => idx.every((c) => marc(r, c)));
+    const logros: string[] = [];
+    if (linea || bingo) logros.push('LINEA');
+    if (bingo) logros.push('BINGO');
+    return logros;
+  }
+
+  /**
+   * BINGO jugando (CERRADO): canta una bolilla — la registra, marca
+   * TODAS las cartillas activas y devuelve los LOGROS NUEVOS (línea /
+   * bingo) para que la empresa adjudique el premio del catálogo (modo
+   * jugar con el número de la cartilla).
+   */
+  async registrarBolilla(
+    empresaId: string,
+    sorteoId: string,
+    numero: number,
+  ) {
+    const sorteo = await this.assertSorteo(empresaId, sorteoId);
+    if (sorteo.tipo !== TipoSorteo.BINGO) {
+      throw new BadRequestException('Este sorteo no es un bingo');
+    }
+    if (sorteo.estado !== EstadoSorteo.CERRADO) {
+      throw new ConflictException({
+        code: 'BINGO_NO_JUGANDO',
+        message:
+          sorteo.estado === EstadoSorteo.ABIERTO
+            ? 'Cierra las ventas del bingo antes de cantar bolillas'
+            : 'El bingo ya finalizó',
+      });
+    }
+    const bolillas: number[] = Array.isArray(sorteo.bolillas)
+      ? [...(sorteo.bolillas as number[])]
+      : [];
+    if (bolillas.includes(numero)) {
+      throw new ConflictException({
+        code: 'BOLILLA_REPETIDA',
+        message: `La bolilla ${numero} ya fue cantada`,
+      });
+    }
+    bolillas.push(numero);
+    await this.prisma.sorteo.update({
+      where: { id: sorteoId },
+      data: { bolillas },
+    });
+
+    const cartillas = await this.prisma.sorteoParticipante.findMany({
+      where: { sorteoId, estado: EstadoParticipanteSorteo.ACTIVO },
+    });
+    const eventos: {
+      participanteId: string;
+      numeroCartilla: number | null;
+      nombre: string;
+      dni: string;
+      logro: string;
+    }[] = [];
+    for (const p of cartillas) {
+      if (!Array.isArray(p.cartilla)) continue;
+      const previos: string[] = Array.isArray(p.bingoLogros)
+        ? (p.bingoLogros as string[])
+        : [];
+      const actuales = this.logrosCartilla(
+        p.cartilla as number[][],
+        bolillas,
+      );
+      const nuevos = actuales.filter((l) => !previos.includes(l));
+      if (nuevos.length === 0) continue;
+      await this.prisma.sorteoParticipante.update({
+        where: { id: p.id },
+        data: { bingoLogros: actuales },
+      });
+      for (const logro of nuevos) {
+        eventos.push({
+          participanteId: p.id,
+          numeroCartilla: p.numeroTicket,
+          nombre: p.nombre,
+          dni: p.dni,
+          logro,
+        });
+      }
+    }
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId });
+    return { bolillas, eventos };
   }
 
   private async assertSorteo(empresaId: string, sorteoId: string) {

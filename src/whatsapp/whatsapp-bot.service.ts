@@ -431,16 +431,20 @@ export class WhatsappBotService {
             where: { id: s.ctx.previoId, empresaId },
           });
           if (!previo) return this.mostrarMenu(s.sorteos, responder, irA);
-          // SORTEO clásico: comprar MÁS tickets = preguntar cuántos.
+          // SORTEO/BINGO: comprar MÁS tickets/cartillas = preguntar cuántos.
           const sorteoPrevio = s.sorteos.find(
             (x) => x.id === previo.sorteoId,
           );
-          if (sorteoPrevio?.tipo === TipoSorteo.SORTEO) {
+          if (sorteoPrevio && sorteoPrevio.tipo !== TipoSorteo.DINAMICA) {
             const precio = sorteoPrevio.precioParticipacion
               ? ` (S/ ${Number(sorteoPrevio.precioParticipacion).toFixed(2)} c/u)`
               : '';
+            const unidadMas =
+              sorteoPrevio.tipo === TipoSorteo.BINGO
+                ? '🎱 ¿Cuántas cartillas más quieres'
+                : '🎟️ ¿Cuántos tickets más quieres';
             await responder(
-              `🎟️ ¿Cuántos tickets más quieres${precio}?\n` +
+              `${unidadMas}${precio}?\n` +
                 `Responde con un número del *1* al *${WhatsappBotService.MAX_TICKETS_COMPRA}*.`,
             );
             return irA('CANTIDAD_TICKETS', {
@@ -955,6 +959,14 @@ export class WhatsappBotService {
     if (sorteos.length === 1 && todasDinamicas) {
       saludo = `¡Hola! ¡Tenemos *${sorteos[0].titulo}* activo! 😄`;
       opcion1 = `*1* — Participar en el ${sorteos[0].titulo}`;
+    } else if (
+      sorteos.length === 1 &&
+      (sorteos[0] as any).tipo === TipoSorteo.BINGO
+    ) {
+      saludo =
+        `¡Hola! 🎱 ¡Tenemos el bingo *${sorteos[0].titulo}* activo!` +
+        this.infoFechasRifa(sorteos[0] as any);
+      opcion1 = '*1* — Comprar cartillas del bingo';
     } else if (sorteos.length === 1) {
       saludo =
         `¡Hola! 👋 ¡Tenemos el sorteo *${sorteos[0].titulo}* activo! 🎉` +
@@ -1102,18 +1114,23 @@ export class WhatsappBotService {
       await responder('Ese sorteo ya se cerró 🙈 escribe *menu* para ver los activos.');
       return irA('MENU', {});
     }
-    // SORTEO clásico = venta de TICKETS: se pregunta cuántos (cada uno
-    // lleva su nombre al ánfora — más tickets, más chances).
-    if (sorteo.tipo === TipoSorteo.SORTEO) {
+    // SORTEO/BINGO = venta de TICKETS/CARTILLAS: se pregunta cuántos
+    // (más unidades, más chances).
+    if (sorteo.tipo !== TipoSorteo.DINAMICA) {
       const precio = sorteo.precioParticipacion
         ? ` (S/ ${Number(sorteo.precioParticipacion).toFixed(2)} c/u)`
         : '';
+      const esBingo = sorteo.tipo === TipoSorteo.BINGO;
       await responder(
         (ctx.verificado == true
           ? `🪪 DNI verificado: *${ctx.nombre}*\n`
           : '') +
-          `🎟️ ¿Cuántos tickets quieres${precio}? Cada ticket lleva tu ` +
-          'nombre al ánfora — mientras más tengas, más chances de ganar.\n' +
+          (esBingo
+            ? `🎱 ¿Cuántas cartillas quieres${precio}? Te enviaré cada ` +
+              'cartilla B-I-N-G-O por aquí al validar tu pago — mientras ' +
+              'más tengas, más chances.\n'
+            : `🎟️ ¿Cuántos tickets quieres${precio}? Cada ticket lleva tu ` +
+              'nombre al ánfora — mientras más tengas, más chances de ganar.\n') +
           `Responde con un número del *1* al *${WhatsappBotService.MAX_TICKETS_COMPRA}*.`,
       );
       return irA('CANTIDAD_TICKETS', { ...ctx, dni });
@@ -1211,11 +1228,14 @@ export class WhatsappBotService {
     }
     this.realtime.notifySorteoCambiado({ empresaId, sorteoId: sorteo.id });
 
+    const unidad =
+      sorteo.tipo === TipoSorteo.BINGO
+        ? `cartilla${cantidad === 1 ? '' : 's'} 🎱`
+        : `ticket${cantidad === 1 ? '' : 's'} 🎟️`;
     const cabecera =
       (ctx.verificado == true ? `🪪 DNI verificado: *${ctx.nombre}*\n` : '') +
       `✅ ¡Listo, ${(ctx.nombre ?? '').split(' ')[0]}! Reservé tus ` +
-      `*${cantidad}* ticket${cantidad === 1 ? '' : 's'} para ` +
-      `*${sorteo.titulo}* 🎟️` +
+      `*${cantidad}* ${unidad} para *${sorteo.titulo}*` +
       this.infoFechasRifa(sorteo) +
       '\n\n';
     await responder(
@@ -1401,8 +1421,53 @@ export class WhatsappBotService {
       number: p.celular,
       text: texto,
     });
+    // BINGO: enviarle sus CARTILLAS (grilla B-I-N-G-O) — en bloques de
+    // 3 por mensaje para no spamear compras grandes.
+    if ((p.sorteo as any).tipo === TipoSorteo.BINGO) {
+      const filasCartilla = await this.prisma.sorteoParticipante.findMany({
+        where: p.compraId
+          ? {
+              compraId: p.compraId,
+              empresaId,
+              estado: EstadoParticipanteSorteo.ACTIVO,
+            }
+          : { id: p.id, empresaId },
+        orderBy: { numeroTicket: 'asc' },
+      });
+      const bloques = filasCartilla
+        .filter((f) => Array.isArray(f.cartilla))
+        .map((f) =>
+          this.textoCartilla(f.numeroTicket, f.cartilla as number[][]),
+        );
+      for (let i = 0; i < bloques.length; i += 3) {
+        await this.evolution
+          .sendText({
+            instanceName: cfg.instanceName,
+            number: p.celular,
+            text: bloques.slice(i, i + 3).join('\n\n'),
+          })
+          .catch((e) =>
+            this.logger.warn(
+              `Cartillas bingo no enviadas: ${(e as Error).message}`,
+            ),
+          );
+      }
+    }
     await this.guardarConversacion(empresaId, p.celular, estado, ctx);
     return true;
+  }
+
+  /** Cartilla 5×5 como texto monospace de WhatsApp (** = centro LIBRE). */
+  private textoCartilla(numero: number | null, grid: number[][]): string {
+    const cell = (n: number) =>
+      n === 0 ? '**' : n.toString().padStart(2, ' ');
+    const filas = grid.map((f) => f.map(cell).join('  ')).join('\n');
+    return (
+      `🎱 *CARTILLA #${numero ?? '—'}*\n` +
+      '```\n B   I   N   G   O\n' +
+      filas +
+      '\n```'
+    );
   }
 
   /**
@@ -1585,10 +1650,11 @@ export class WhatsappBotService {
       where: { id: sorteoId },
       select: { tipo: true },
     });
-    const pregunta =
-      sorteo?.tipo === TipoSorteo.SORTEO
+    const pregunta = sorteo?.tipo === TipoSorteo.SORTEO
         ? '¿Quieres comprar *más tickets*? 🎟️'
-        : '¿Quieres participar *otra vez*? 🎟️';
+        : sorteo?.tipo === TipoSorteo.BINGO
+            ? '¿Quieres comprar *más cartillas*? 🎱'
+            : '¿Quieres participar *otra vez*? 🎟️';
     await responder(
       `¡Hola ${previo.nombre.split(' ')[0]}! Ya estás participando` +
         `${resumen ? ` (${resumen})` : ''}.\n\n` +
@@ -1628,10 +1694,16 @@ export class WhatsappBotService {
     fechaSorteo?: Date | null;
     ventaHasta?: Date | null;
   }): string {
-    if (s.tipo !== TipoSorteo.SORTEO) return '';
+    if (s.tipo === TipoSorteo.DINAMICA) return '';
     const partes: string[] = [];
     const hasta = this.fechaLima(s.ventaHasta ?? null);
-    if (hasta) partes.push(`🎟️ Tickets a la venta hasta el *${hasta}*`);
+    if (hasta) {
+      partes.push(
+        s.tipo === TipoSorteo.BINGO
+          ? `🎱 Cartillas a la venta hasta el *${hasta}*`
+          : `🎟️ Tickets a la venta hasta el *${hasta}*`,
+      );
+    }
     if (s.fechaSorteo) {
       const hoyLima = new Date(Date.now() - 5 * 3600000);
       const inicioHoy = Date.UTC(
@@ -1648,15 +1720,15 @@ export class WhatsappBotService {
     return partes.length ? `\n${partes.join('\n')}` : '';
   }
 
-  /** "Ticket #N" (sorteo) / "Participación #N" (dinámica: no hay ticket). */
+  /** "Ticket #N" / "Cartilla #N" (bingo) / "Participación #N" (dinámica). */
   private etiquetaJugada(
     numeroTicket: number | null,
     tipo: TipoSorteo,
   ): string {
     if (numeroTicket == null) return 'Pago por validar';
-    return tipo === TipoSorteo.DINAMICA
-      ? `Participación #${numeroTicket}`
-      : `Ticket #${numeroTicket}`;
+    if (tipo === TipoSorteo.DINAMICA) return `Participación #${numeroTicket}`;
+    if (tipo === TipoSorteo.BINGO) return `Cartilla #${numeroTicket}`;
+    return `Ticket #${numeroTicket}`;
   }
 
   /** Etiqueta de un grupo de tickets de la misma compra ("#12 al #31"). */
@@ -1664,14 +1736,16 @@ export class WhatsappBotService {
     if (grupo.length === 1) {
       return this.etiquetaJugada(grupo[0].numeroTicket, grupo[0].sorteo.tipo);
     }
+    const unidad =
+      grupo[0].sorteo?.tipo === TipoSorteo.BINGO ? 'Cartilla' : 'Ticket';
     const nums = grupo
       .map((x) => x.numeroTicket)
       .filter((x: number | null): x is number => x != null)
       .sort((a, b) => a - b);
     if (nums.length === 0) return `Pago por validar (×${grupo.length})`;
     return nums.length === 1
-      ? `Ticket #${nums[0]}`
-      : `Tickets #${nums[0]} al #${nums[nums.length - 1]}`;
+      ? `${unidad} #${nums[0]}`
+      : `${unidad}s #${nums[0]} al #${nums[nums.length - 1]}`;
   }
 
   /** "SHALOM → TRUJILLO, LA LIBERTAD · 🎁 recibe X" o "sin datos de envío". */
@@ -1755,7 +1829,7 @@ export class WhatsappBotService {
         .filter((x) => !x.participanteId)
         .filter(
           (x: any) =>
-            x.sorteo.tipo === TipoSorteo.SORTEO ||
+            x.sorteo.tipo !== TipoSorteo.DINAMICA ||
             x.sorteo.estado === EstadoSorteo.ABIERTO,
         )
         .map((x) => ({

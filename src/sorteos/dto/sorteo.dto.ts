@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -386,6 +387,16 @@ export class ActualizarPremioCatalogoDto {
   @IsInt()
   @Min(1)
   cantidad?: number;
+}
+
+/** BINGO: cantar una bolilla (1-75). */
+export class CantarBolillaDto {
+  @ApiProperty({ example: 42 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(75)
+  numero: number;
 }
 
 /** Salió un ticket del ánfora: adjudicar un premio del catálogo. */

@@ -43,6 +43,7 @@ enum ModalidadEntregaPremio {
 enum TipoSorteo {
   SORTEO
   DINAMICA
+  BINGO // cartillas 5×5 B-I-N-G-O + bolillas con detección automática
 }
 
 model Sorteo {
@@ -58,6 +59,8 @@ model Sorteo {
   // Ventana de VENTA de tickets (informativa — el cierre es manual).
   ventaDesde  DateTime?
   ventaHasta  DateTime?
+  // BINGO: bolillas cantadas en orden (array de ints 1-75).
+  bolillas    Json?
   estado      EstadoSorteo @default(ABIERTO)
   // true = se reabrió tras cerrarse (solo para REGULARIZAR en el app):
   // el bot de WhatsApp lo ignora por completo — no lo ofrece en el menú
@@ -107,6 +110,11 @@ model SorteoParticipante {
   // mismo compraId — un solo pago, validacion en bloque (tickets
   // consecutivos) y una sola confirmacion de WhatsApp.
   compraId String?
+  // BINGO: grilla 5×5 de la cartilla (matriz de ints, 0 = centro LIBRE),
+  // generada al ACTIVAR; y logros ya detectados (["LINEA","BINGO"]) para
+  // no re-alertar el mismo logro con cada bolilla.
+  cartilla    Json?
+  bingoLogros Json?
   // REGALO 🎁: quien recibe el premio si NO es el propio jugador
   // (el juega, otra persona lo recibe en otra sede de la agencia).
   recibeNombre String?

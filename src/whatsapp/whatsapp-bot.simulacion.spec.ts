@@ -301,9 +301,22 @@ class Simulador {
           .filter((x) => x.sorteoId === p.sorteoId && x.numeroTicket != null)
           .map((x) => x.numeroTicket as number),
       ) + 1;
+    const sorteoDeP = this.db.sorteos.find((s) => s.id === p.sorteoId);
     for (const f of filas) {
       f.estado = EstadoParticipanteSorteo.ACTIVO;
       if (f.numeroTicket == null) f.numeroTicket = siguiente++;
+      // BINGO: cartilla determinística (como generarCartilla del backend).
+      if (sorteoDeP?.tipo === TipoSorteo.BINGO && f.cartilla == null) {
+        const grid = [0, 1, 2, 3, 4].map((r) => [
+          1 + r,
+          16 + r,
+          31 + r,
+          46 + r,
+          61 + r,
+        ]);
+        grid[2][2] = 0;
+        f.cartilla = grid;
+      }
     }
     this.transcript.push('  🏪 [la empresa VALIDA el pago]');
     const antes = this.enviados.length;
@@ -1100,6 +1113,37 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[0]).toContain('¡Quedaste registrado en *CANASTAZO*');
     expect(r[0]).not.toContain('Cuántos tickets');
     sim.imprimir('25. Dinámica + rifa a la vez');
+  });
+
+  it('26. BINGO: compra de cartillas y el bot las envía al validar', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo({
+      tipo: TipoSorteo.BINGO,
+      titulo: 'GRAN BINGO',
+      precioParticipacion: 5,
+    });
+
+    let r = await sim.cliente(CEL, 'hola');
+    expect(r[0]).toContain('¡Tenemos el bingo *GRAN BINGO* activo!');
+    expect(r[0]).toContain('*1* — Comprar cartillas del bingo');
+
+    r = await sim.cliente(CEL, '1');
+    r = await sim.cliente(CEL, '44881122');
+    expect(r[0]).toContain('¿Cuántas cartillas quieres (S/ 5.00 c/u)?');
+
+    r = await sim.cliente(CEL, '2');
+    expect(r[0]).toContain('Reservé tus *2* cartillas 🎱');
+    expect(r[0]).toContain('Yapea *S/ 10.00*');
+
+    r = await sim.cliente(CEL, '1'); // yapeo yo
+
+    // La empresa valida → confirmación con rango + las 2 CARTILLAS.
+    r = await sim.validar(sim.db.participantes[0].id);
+    expect(r[0]).toContain('*#1 al #2*');
+    expect(r.some((m) => m.includes('CARTILLA #1'))).toBe(true);
+    expect(r.some((m) => m.includes('CARTILLA #2'))).toBe(true);
+    expect(r.some((m) => m.includes('B   I   N   G   O'))).toBe(true);
+    sim.imprimir('26. Bingo: compra y envío de cartillas');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).

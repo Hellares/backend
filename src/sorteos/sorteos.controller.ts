@@ -33,6 +33,7 @@ import {
   ActualizarPremioCatalogoDto,
   CambiarEstadoParticipanteDto,
   CambiarEstadoPremioDto,
+  CantarBolillaDto,
   CrearPremioCatalogoDto,
   CreateSorteoDto,
   EditarEntregaPremioDto,
@@ -292,6 +293,21 @@ export class SorteosEmpresaController {
     @Body() dto: CrearPremioCatalogoDto,
   ) {
     return this.service.crearPremioCatalogo(empresaId, sorteoId, dto);
+  }
+
+  @Post(':id/bolillas')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'BINGO jugando: cantar una bolilla — marca todas las cartillas y devuelve los logros nuevos (línea/bingo)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async cantarBolilla(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') sorteoId: string,
+    @Body() dto: CantarBolillaDto,
+  ) {
+    return this.service.registrarBolilla(empresaId, sorteoId, dto.numero);
   }
 
   @Post(':id/jugar')
