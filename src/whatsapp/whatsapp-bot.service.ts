@@ -658,18 +658,34 @@ export class WhatsappBotService {
   // ── Pasos compuestos ─────────────────────────────────────────────────
 
   private async mostrarMenu(
-    sorteos: { titulo: string }[],
+    sorteos: { titulo: string; tipo: TipoSorteo }[],
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
-    const titulos =
-      sorteos.length === 1
-        ? `¡Tenemos el sorteo *${sorteos[0].titulo}* activo! 🎉`
-        : `¡Tenemos ${sorteos.length} sorteos activos! 🎉`;
+    // Una dinámica no es un "sorteo" para el cliente: se saluda con su
+    // propio nombre ("¡Tenemos *CANASTAZO* activo! 😄").
+    const todasDinamicas = sorteos.every(
+      (x) => x.tipo === TipoSorteo.DINAMICA,
+    );
+    let saludo: string;
+    let opcion1: string;
+    if (sorteos.length === 1 && todasDinamicas) {
+      saludo = `¡Hola! ¡Tenemos *${sorteos[0].titulo}* activo! 😄`;
+      opcion1 = `*1* — Participar en el ${sorteos[0].titulo}`;
+    } else if (sorteos.length === 1) {
+      saludo = `¡Hola! 👋 ¡Tenemos el sorteo *${sorteos[0].titulo}* activo! 🎉`;
+      opcion1 = '*1* — Participar en el sorteo';
+    } else if (todasDinamicas) {
+      saludo = `¡Hola! ¡Tenemos ${sorteos.length} dinámicas activas! 😄`;
+      opcion1 = '*1* — Participar en una dinámica';
+    } else {
+      saludo = `¡Hola! 👋 ¡Tenemos ${sorteos.length} sorteos activos! 🎉`;
+      opcion1 = '*1* — Participar en el sorteo';
+    }
     await responder(
-      `¡Hola! 👋 ${titulos}\n\n` +
+      `${saludo}\n\n` +
         'Responde con el número:\n' +
-        '*1* — Participar en el sorteo\n' +
+        `${opcion1}\n` +
         '*2* — Registrar/cambiar mis datos de envío 📦\n' +
         '*3* — Hablar con un asesor',
     );
