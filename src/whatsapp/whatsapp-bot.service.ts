@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { EvolutionApiService } from './evolution-api.service';
+import { PLANTILLA_PAGO_DEFAULT, renderPlantilla } from './plantilla.util';
 
 /**
  * BOT conversacional del WhatsApp de la empresa (Fase A de sorteos):
@@ -932,14 +933,16 @@ export class WhatsappBotService {
   }
 
   /**
-   * Instrucciones de pago: monto del sorteo + Yape de la empresa si está
-   * configurado en la integración Yape. Cierra el flujo de registro.
+   * Instrucciones de pago: plantilla configurable por empresa
+   * (IntegracionWhatsapp.plantillaPago, null = default) con variables
+   * {monto} (precio de la participación), {numero} (Yape de la empresa)
+   * y {empresa}. Cierra el flujo de registro.
    */
   private async instruccionesPago(
     empresaId: string,
     ctx: any,
   ): Promise<string> {
-    const [sorteo, yape] = await Promise.all([
+    const [sorteo, yape, cfg] = await Promise.all([
       this.prisma.sorteo.findUnique({
         where: { id: ctx.sorteoId },
         select: { precioParticipacion: true },
@@ -948,17 +951,45 @@ export class WhatsappBotService {
         where: { empresaId },
         select: { celular: true },
       }),
+      this.prisma.integracionWhatsapp.findUnique({
+        where: { empresaId },
+        select: { plantillaPago: true },
+      }),
     ]);
     const monto = sorteo?.precioParticipacion
       ? `S/ ${Number(sorteo.precioParticipacion).toFixed(2)}`
       : null;
-    return [
-      '💰 *Siguiente paso — el pago:*',
-      monto
-        ? `Yapea *${monto}*${yape?.celular ? ` al *${yape.celular}*` : ' al número de la empresa'} y envía tu captura por este chat.`
-        : `Coordina el pago de tu participación por este chat${yape?.celular ? ` (Yape: *${yape.celular}*)` : ''}.`,
-      'Cuando lo validemos te confirmaremos tu *número de ticket* 🎟️',
-    ].join('\n');
+    if (!monto) {
+      // Sorteo sin precio: no hay monto que yapear — se coordina a mano.
+      return (
+        '💰 *Siguiente paso — el pago:*\n' +
+        `Coordina el pago de tu participación por este chat${yape?.celular ? ` (Yape: *${yape.celular}*)` : ''}.\n` +
+        'Cuando lo validemos te confirmaremos tu *número de ticket* 🎟️'
+      );
+    }
+    const plantilla = cfg?.plantillaPago?.trim() || PLANTILLA_PAGO_DEFAULT;
+    return renderPlantilla(plantilla, {
+      monto,
+      numero: yape?.celular?.trim() || 'número de la empresa',
+      empresa: plantilla.includes('{empresa}')
+        ? await this.nombreEmpresa(empresaId)
+        : '',
+    });
+  }
+
+  /** Nombre COMERCIAL de la empresa (fallback a la razón social). */
+  private async nombreEmpresa(empresaId: string): Promise<string> {
+    const [empresa, configDocs] = await Promise.all([
+      this.prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: { nombre: true },
+      }),
+      this.prisma.configuracionDocumentos.findUnique({
+        where: { empresaId },
+        select: { nombreComercial: true },
+      }),
+    ]);
+    return configDocs?.nombreComercial?.trim() || empresa?.nombre || '';
   }
 
   /**

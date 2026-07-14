@@ -21,6 +21,9 @@ model IntegracionWhatsapp {
   // {codigo} {clave} {empresa}. Las líneas cuyas variables queden todas
   // vacías se eliminan del mensaje final.
   plantillaPremio String?   @db.Text
+  // Plantilla de las instrucciones de pago del BOT (null = default).
+  // Variables: {monto} {numero} {empresa}. Misma regla de líneas vacías.
+  plantillaPago   String?   @db.Text
   // Agencia con la que la empresa hace TODOS los envíos: el bot la
   // informa ("los envíos se hacen por X") y no pregunta cuál.
   agenciaEnvio    String    @default("SHALOM")

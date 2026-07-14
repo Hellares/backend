@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EvolutionApiService } from './evolution-api.service';
 import { WhatsappBotService } from './whatsapp-bot.service';
 import { UpdateWhatsappDto } from './dto/whatsapp.dto';
+import { PLANTILLA_PAGO_DEFAULT, renderPlantilla } from './plantilla.util';
 
 /**
  * Plantilla default del mensaje "premio enviado". Las líneas cuyas
@@ -186,6 +187,8 @@ export class WhatsappService {
       habilitado: cfg?.habilitado ?? true,
       plantillaPremio: cfg?.plantillaPremio ?? null,
       plantillaDefault: PLANTILLA_PREMIO_DEFAULT,
+      plantillaPago: cfg?.plantillaPago ?? null,
+      plantillaPagoDefault: PLANTILLA_PAGO_DEFAULT,
       agenciaEnvio: cfg?.agenciaEnvio ?? 'SHALOM',
       conectadoEn: cfg?.conectadoEn ?? null,
       actualizadoEn: cfg?.actualizadoEn ?? null,
@@ -206,6 +209,7 @@ export class WhatsappService {
         empresaId,
         instanceName,
         plantillaPremio: dto.plantillaPremio?.trim() || null,
+        plantillaPago: dto.plantillaPago?.trim() || null,
         // '' o undefined → default SHALOM (columna NOT NULL).
         ...(dto.agenciaEnvio?.trim() && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase(),
@@ -215,6 +219,9 @@ export class WhatsappService {
       update: {
         ...(dto.plantillaPremio !== undefined && {
           plantillaPremio: dto.plantillaPremio.trim() || null,
+        }),
+        ...(dto.plantillaPago !== undefined && {
+          plantillaPago: dto.plantillaPago.trim() || null,
         }),
         ...(dto.agenciaEnvio !== undefined && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase() || 'SHALOM',
@@ -440,20 +447,10 @@ export class WhatsappService {
       clave: premio.envioClave ?? '',
       empresa: empresaNombre,
     };
-    const lineas = (plantilla?.trim() || PLANTILLA_PREMIO_DEFAULT).split('\n');
-    const resultado: string[] = [];
-    for (const linea of lineas) {
-      const tokens = [...linea.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
-      if (tokens.length > 0) {
-        // Línea con variables: si TODAS quedaron vacías, se omite.
-        const algunaConValor = tokens.some((t) => (valores[t] ?? '').trim());
-        if (!algunaConValor) continue;
-      }
-      resultado.push(
-        linea.replace(/\{(\w+)\}/g, (_, t) => valores[t] ?? ''),
-      );
-    }
-    return resultado.join('\n').trim();
+    return renderPlantilla(
+      plantilla?.trim() || PLANTILLA_PREMIO_DEFAULT,
+      valores,
+    );
   }
 
   /** Saludo según la hora de Perú (UTC-5, sin horario de verano). */

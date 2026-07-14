@@ -15,6 +15,16 @@ export class UpdateWhatsappDto {
 
   @ApiPropertyOptional({
     description:
+      'Plantilla de las instrucciones de pago del bot. Variables: ' +
+      "{monto} {numero} {empresa}. Cadena vacía = volver a la default.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  plantillaPago?: string;
+
+  @ApiPropertyOptional({
+    description:
       'Agencia con la que la empresa hace TODOS los envíos — el bot la ' +
       "informa y no pregunta. '' = volver al default (SHALOM).",
     example: 'SHALOM',
