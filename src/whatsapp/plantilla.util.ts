@@ -20,14 +20,21 @@ export function renderPlantilla(
 }
 
 /**
- * Plantilla default de las instrucciones de pago del BOT (tras el
- * registro del participante). Variables: {monto} = precio de la
- * participación, {numero} = celular Yape de IntegracionYape,
- * {empresa} = nombre comercial. La empresa puede personalizarla, p.ej.
- * agregando el nombre de la cuenta Yape: "al *{numero}* (SYNCRONIZE)".
+ * Plantillas default de las instrucciones de pago del BOT (tras el
+ * registro del participante), una por tipo de sorteo. Variables:
+ * {monto} = precio de la participación, {numero} = celular Yape de
+ * IntegracionYape, {empresa} = nombre comercial. La empresa puede
+ * personalizarlas, p.ej. agregando el nombre de la cuenta Yape:
+ * "al *{numero}* (SYNCRONIZE)".
  */
-export const PLANTILLA_PAGO_DEFAULT = [
+export const PLANTILLA_PAGO_SORTEO_DEFAULT = [
   '💰 *Siguiente paso — el pago:*',
   'Yapea *{monto}* al *{numero}* y envía tu captura por este chat.',
   'Cuando lo validemos te confirmaremos tu *número de ticket* 🎟️',
+].join('\n');
+
+export const PLANTILLA_PAGO_DINAMICA_DEFAULT = [
+  '💰 *Siguiente paso — el pago:*',
+  'Yapea *{monto}* al *{numero}* y envía tu captura por este chat.',
+  'Lo validamos y te confirmamos tu participación 🎟️',
 ].join('\n');

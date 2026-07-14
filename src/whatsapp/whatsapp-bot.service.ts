@@ -10,7 +10,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { EvolutionApiService } from './evolution-api.service';
-import { PLANTILLA_PAGO_DEFAULT, renderPlantilla } from './plantilla.util';
+import {
+  PLANTILLA_PAGO_DINAMICA_DEFAULT,
+  PLANTILLA_PAGO_SORTEO_DEFAULT,
+  renderPlantilla,
+} from './plantilla.util';
 
 /**
  * BOT conversacional del WhatsApp de la empresa (Fase A de sorteos):
@@ -933,10 +937,11 @@ export class WhatsappBotService {
   }
 
   /**
-   * Instrucciones de pago: plantilla configurable por empresa
-   * (IntegracionWhatsapp.plantillaPago, null = default) con variables
-   * {monto} (precio de la participación), {numero} (Yape de la empresa)
-   * y {empresa}. Cierra el flujo de registro.
+   * Instrucciones de pago: plantilla configurable por empresa Y por tipo
+   * de sorteo (plantillaPagoSorteo | plantillaPagoDinamica, null =
+   * default) con variables {monto} (precio de la participación),
+   * {numero} (Yape de la empresa) y {empresa}. Cierra el flujo de
+   * registro.
    */
   private async instruccionesPago(
     empresaId: string,
@@ -945,7 +950,7 @@ export class WhatsappBotService {
     const [sorteo, yape, cfg] = await Promise.all([
       this.prisma.sorteo.findUnique({
         where: { id: ctx.sorteoId },
-        select: { precioParticipacion: true },
+        select: { precioParticipacion: true, tipo: true },
       }),
       this.prisma.integracionYape.findUnique({
         where: { empresaId },
@@ -953,7 +958,7 @@ export class WhatsappBotService {
       }),
       this.prisma.integracionWhatsapp.findUnique({
         where: { empresaId },
-        select: { plantillaPago: true },
+        select: { plantillaPagoSorteo: true, plantillaPagoDinamica: true },
       }),
     ]);
     const monto = sorteo?.precioParticipacion
@@ -967,7 +972,10 @@ export class WhatsappBotService {
         'Cuando lo validemos te confirmaremos tu *número de ticket* 🎟️'
       );
     }
-    const plantilla = cfg?.plantillaPago?.trim() || PLANTILLA_PAGO_DEFAULT;
+    const esDinamica = sorteo?.tipo === TipoSorteo.DINAMICA;
+    const plantilla = esDinamica
+      ? cfg?.plantillaPagoDinamica?.trim() || PLANTILLA_PAGO_DINAMICA_DEFAULT
+      : cfg?.plantillaPagoSorteo?.trim() || PLANTILLA_PAGO_SORTEO_DEFAULT;
     return renderPlantilla(plantilla, {
       monto,
       numero: yape?.celular?.trim() || 'número de la empresa',

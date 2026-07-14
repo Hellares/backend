@@ -15,7 +15,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EvolutionApiService } from './evolution-api.service';
 import { WhatsappBotService } from './whatsapp-bot.service';
 import { UpdateWhatsappDto } from './dto/whatsapp.dto';
-import { PLANTILLA_PAGO_DEFAULT, renderPlantilla } from './plantilla.util';
+import {
+  PLANTILLA_PAGO_DINAMICA_DEFAULT,
+  PLANTILLA_PAGO_SORTEO_DEFAULT,
+  renderPlantilla,
+} from './plantilla.util';
 
 /**
  * Plantilla default del mensaje "premio enviado". Las líneas cuyas
@@ -187,8 +191,10 @@ export class WhatsappService {
       habilitado: cfg?.habilitado ?? true,
       plantillaPremio: cfg?.plantillaPremio ?? null,
       plantillaDefault: PLANTILLA_PREMIO_DEFAULT,
-      plantillaPago: cfg?.plantillaPago ?? null,
-      plantillaPagoDefault: PLANTILLA_PAGO_DEFAULT,
+      plantillaPagoSorteo: cfg?.plantillaPagoSorteo ?? null,
+      plantillaPagoSorteoDefault: PLANTILLA_PAGO_SORTEO_DEFAULT,
+      plantillaPagoDinamica: cfg?.plantillaPagoDinamica ?? null,
+      plantillaPagoDinamicaDefault: PLANTILLA_PAGO_DINAMICA_DEFAULT,
       agenciaEnvio: cfg?.agenciaEnvio ?? 'SHALOM',
       conectadoEn: cfg?.conectadoEn ?? null,
       actualizadoEn: cfg?.actualizadoEn ?? null,
@@ -209,7 +215,8 @@ export class WhatsappService {
         empresaId,
         instanceName,
         plantillaPremio: dto.plantillaPremio?.trim() || null,
-        plantillaPago: dto.plantillaPago?.trim() || null,
+        plantillaPagoSorteo: dto.plantillaPagoSorteo?.trim() || null,
+        plantillaPagoDinamica: dto.plantillaPagoDinamica?.trim() || null,
         // '' o undefined → default SHALOM (columna NOT NULL).
         ...(dto.agenciaEnvio?.trim() && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase(),
@@ -220,8 +227,11 @@ export class WhatsappService {
         ...(dto.plantillaPremio !== undefined && {
           plantillaPremio: dto.plantillaPremio.trim() || null,
         }),
-        ...(dto.plantillaPago !== undefined && {
-          plantillaPago: dto.plantillaPago.trim() || null,
+        ...(dto.plantillaPagoSorteo !== undefined && {
+          plantillaPagoSorteo: dto.plantillaPagoSorteo.trim() || null,
+        }),
+        ...(dto.plantillaPagoDinamica !== undefined && {
+          plantillaPagoDinamica: dto.plantillaPagoDinamica.trim() || null,
         }),
         ...(dto.agenciaEnvio !== undefined && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase() || 'SHALOM',
