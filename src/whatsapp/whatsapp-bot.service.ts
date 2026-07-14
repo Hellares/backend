@@ -136,6 +136,7 @@ export class WhatsappBotService {
     // la conversación abierta): resetear — si hay un sorteo nuevo, el
     // menú lo ofrece; los flujos de PREMIO (ctx.premioId, sin sorteoId)
     // no se tocan porque un premio pendiente se envía igual.
+    let resetPorCierre = false;
     if (
       estado !== 'MENU' &&
       estado !== 'ASESOR' &&
@@ -143,6 +144,10 @@ export class WhatsappBotService {
       !sorteos.some((x) => x.id === ctx.sorteoId)
     ) {
       estado = 'MENU';
+      // Estaba a MITAD de un flujo: su próximo mensaje merece el menú
+      // de inmediato (sin throttle) — si no, respondería p.ej. su DNI
+      // y recibiría silencio.
+      resetPorCierre = true;
     }
 
     // Texto libre en MENU (no es comando ni opción): modo NO intrusivo.
@@ -168,7 +173,7 @@ export class WhatsappBotService {
         !esNuevo &&
         conv.contexto != null &&
         minutos < WhatsappBotService.THROTTLE_MENU_MIN;
-      if (menuMostradoHaceUnRato) {
+      if (menuMostradoHaceUnRato && !resetPorCierre) {
         // EXCEPCIÓN al throttle: si un sorteo donde participaba CERRÓ
         // después del último intercambio con el bot, su ciclo terminó —
         // el siguiente mensaje vuelve a ofrecer el menú con los sorteos
@@ -562,7 +567,7 @@ export class WhatsappBotService {
           // (puede ser otra ciudad). Tras el DNI se captura la dirección
           // con atajo "misma" — ver continuarConRecibe/PART_CIUDAD.
           await responder(
-            '🎁 ¡Buen detalle! ' + WhatsappBotService.MSG_DNI_RECOGE,
+            '🎁 ¡Buen detalle!\n' + WhatsappBotService.MSG_DNI_RECOGE,
           );
           return irA('REGALO_DNI', { ...s.ctx, regaloDireccion: true });
         }
