@@ -797,6 +797,21 @@ describe('Simulación E2E del bot de sorteos', () => {
       creadoEn: new Date(),
       actualizadoEn: new Date(),
     });
+    // premio MANUAL (sin participanteId) de la dinámica cerrada: la
+    // dinámica cerrada no es editable — tampoco debe listarse.
+    sim.db.premios.push({
+      id: 'pmc1',
+      empresaId: EMPRESA,
+      sorteoId: cerrada.id,
+      participanteId: null,
+      estado: EstadoPremioSorteo.PREPARANDO,
+      ganadorDni: '44881122',
+      ganadorNombre: 'ROSA MARIA TORRES DIAZ',
+      ganadorCelular: CEL,
+      descripcion: 'PREMIO MANUAL VIEJO',
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
     // participación en la ABIERTA: la única editable.
     sim.db.participantes.push({
       id: 'ja1',
@@ -821,10 +836,11 @@ describe('Simulación E2E del bot de sorteos', () => {
 
     const r = await sim.cliente(CEL, '2');
     // Un solo ítem (el de la abierta) → directo, sin lista ni rastro
-    // de la dinámica cerrada.
+    // de la dinámica cerrada (ni jugadas, ni auto-premios, ni manuales).
     expect(r[0]).toContain('registremos el envío de tu participación *#1*');
     expect(r[0]).toContain('DINAMICA NUEVA');
     expect(r[0]).not.toContain('VIEJA');
+    expect(r[0]).not.toContain('VIEJO');
     sim.imprimir('19. Cerrada no editable');
   });
 

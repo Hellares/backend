@@ -1367,6 +1367,7 @@ export class WhatsappBotService {
           ganadorCelular: { contains: last9 },
         },
         orderBy: { creadoEn: 'asc' },
+        include: { sorteo: { select: { estado: true, tipo: true } } },
       }),
       this.prisma.sorteoParticipante.findMany({
         where: {
@@ -1383,11 +1384,17 @@ export class WhatsappBotService {
     // participación (sincronizarPremioDeParticipacion lo hereda): si la
     // dinámica cerró, la jugada ya no se lista y su premio TAMPOCO — lo
     // cerrado no es editable por el cliente. Quedan "sueltos" únicamente
-    // los premios manuales de ganador (sorteo clásico), que sí deben
-    // completar su envío aunque el sorteo cierre.
+    // los premios manuales de ganador: los de SORTEO clásico siempre que
+    // estén pendientes (el ganador da su dirección aunque el sorteo ya
+    // cerró); los de dinámicas solo con la dinámica ABIERTA.
     const items: { premioId?: string; participanteId?: string; etiqueta: string }[] = [
       ...premios
         .filter((x) => !x.participanteId)
+        .filter(
+          (x: any) =>
+            x.sorteo.tipo === TipoSorteo.SORTEO ||
+            x.sorteo.estado === EstadoSorteo.ABIERTO,
+        )
         .map((x) => ({
           premioId: x.id,
           etiqueta: `🏆 ${x.descripcion} · ${this.resumenEnvio(x)}`,
