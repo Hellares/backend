@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import {
   EstadoParticipanteSorteo,
   EstadoPremioSorteo,
@@ -38,6 +39,9 @@ export class WhatsappBotService {
   private static readonly TIMEOUT_PASO_MIN = 30;
   private static readonly SILENCIO_ASESOR_HORAS = 12;
   private static readonly THROTTLE_MENU_MIN = 60;
+
+  /// Tope de tickets por compra en sorteos clásicos (anti "quiero 99999").
+  private static readonly MAX_TICKETS_COMPRA = 100;
 
   /// Fallback si la empresa no configuró su agencia (IntegracionWhatsapp
   /// .agenciaEnvio): el bot la informa y no pregunta cuál.
@@ -408,9 +412,27 @@ export class WhatsappBotService {
             where: { id: s.ctx.previoId, empresaId },
           });
           if (!previo) return this.mostrarMenu(s.sorteos, responder, irA);
-          // PAGO-PRIMERO, igual que la primera vez: la dirección previa
-          // se copia EN SILENCIO y al VALIDAR el pago el bot la pide o
-          // confirma (ahí también se resuelve regalo/quién recoge).
+          // SORTEO clásico: comprar MÁS tickets = preguntar cuántos.
+          const sorteoPrevio = s.sorteos.find(
+            (x) => x.id === previo.sorteoId,
+          );
+          if (sorteoPrevio?.tipo === TipoSorteo.SORTEO) {
+            const precio = sorteoPrevio.precioParticipacion
+              ? ` (S/ ${Number(sorteoPrevio.precioParticipacion).toFixed(2)} c/u)`
+              : '';
+            await responder(
+              `🎟️ ¿Cuántos tickets más quieres${precio}?\n` +
+                `Responde con un número del *1* al *${WhatsappBotService.MAX_TICKETS_COMPRA}*.`,
+            );
+            return irA('CANTIDAD_TICKETS', {
+              sorteoId: previo.sorteoId,
+              dni: previo.dni,
+              nombre: previo.nombre,
+            });
+          }
+          // DINÁMICA — PAGO-PRIMERO, igual que la primera vez: la
+          // dirección previa se copia EN SILENCIO y al VALIDAR el pago
+          // el bot la pide o confirma (regalo/quién recoge también ahí).
           const nuevo = await this.prisma.sorteoParticipante.create({
             data: {
               empresaId,
@@ -446,6 +468,33 @@ export class WhatsappBotService {
             'Escribe *menu* para ver las opciones.',
         );
         return irA('MENU', {});
+      }
+
+      case 'CANTIDAD_TICKETS': {
+        // Compra de tickets (tipo SORTEO): cuántos quiere este DNI.
+        if (!s.ctx.sorteoId || !s.ctx.dni) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        const n = parseInt(msg.replace(/\D/g, ''), 10);
+        if (
+          isNaN(n) ||
+          n < 1 ||
+          n > WhatsappBotService.MAX_TICKETS_COMPRA
+        ) {
+          await responder(
+            '¿Cuántos tickets quieres? Responde con un número del *1* ' +
+              `al *${WhatsappBotService.MAX_TICKETS_COMPRA}* (o *0* para el menú).`,
+          );
+          return;
+        }
+        return this.crearTickets(
+          empresaId,
+          celular,
+          s.ctx,
+          n,
+          responder,
+          irA,
+        );
       }
 
       case 'PAGO_QUIEN': {
@@ -496,8 +545,11 @@ export class WhatsappBotService {
           return;
         }
         const pagadorNombre = msg.toUpperCase();
+        // Compra de tickets: el pagador aplica a TODAS las filas.
         await this.prisma.sorteoParticipante.updateMany({
-          where: { id: s.ctx.participanteId, empresaId },
+          where: s.ctx.compraId
+            ? { compraId: s.ctx.compraId, empresaId }
+            : { id: s.ctx.participanteId, empresaId },
           data: { pagadorNombre, pagadorCelular: s.ctx.pagadorCelular },
         });
         if (s.ctx.sorteoId) {
@@ -623,7 +675,7 @@ export class WhatsappBotService {
         // la dirección guardada se queda, solo se actualiza quién recibe.
         if (msg === '1' && s.ctx.regaloDireccion && s.ctx.recibeNombre) {
           await this.prisma.sorteoParticipante.updateMany({
-            where: { id: s.ctx.participanteId, empresaId },
+            where: this.whereParticipacion(empresaId, s.ctx),
             data: {
               recibeNombre: s.ctx.recibeNombre ?? null,
               recibeDni: s.ctx.recibeDni ?? null,
@@ -649,7 +701,7 @@ export class WhatsappBotService {
           // recibe: queda anotado aunque la dirección se coordine luego.
           if (s.ctx.recibeNombre) {
             await this.prisma.sorteoParticipante.updateMany({
-              where: { id: s.ctx.participanteId, empresaId },
+              where: this.whereParticipacion(empresaId, s.ctx),
               data: {
                 recibeNombre: s.ctx.recibeNombre,
                 recibeDni: s.ctx.recibeDni ?? null,
@@ -715,7 +767,7 @@ export class WhatsappBotService {
         }
         const direccion = msg === '-' ? null : msg.toUpperCase();
         await this.prisma.sorteoParticipante.updateMany({
-          where: { id: s.ctx.participanteId, empresaId },
+          where: this.whereParticipacion(empresaId, s.ctx),
           data: {
             agenciaNombre: s.ctx.agencia,
             destinoProvincia: s.ctx.provincia ?? null,
@@ -947,6 +999,22 @@ export class WhatsappBotService {
       await responder('Ese sorteo ya se cerró 🙈 escribe *menu* para ver los activos.');
       return irA('MENU', {});
     }
+    // SORTEO clásico = venta de TICKETS: se pregunta cuántos (cada uno
+    // lleva su nombre al ánfora — más tickets, más chances).
+    if (sorteo.tipo === TipoSorteo.SORTEO) {
+      const precio = sorteo.precioParticipacion
+        ? ` (S/ ${Number(sorteo.precioParticipacion).toFixed(2)} c/u)`
+        : '';
+      await responder(
+        (ctx.verificado == true
+          ? `🪪 DNI verificado: *${ctx.nombre}*\n`
+          : '') +
+          `🎟️ ¿Cuántos tickets quieres${precio}? Cada ticket lleva tu ` +
+          'nombre al ánfora — mientras más tengas, más chances de ganar.\n' +
+          `Responde con un número del *1* al *${WhatsappBotService.MAX_TICKETS_COMPRA}*.`,
+      );
+      return irA('CANTIDAD_TICKETS', { ...ctx, dni });
+    }
     // El duplicado se maneja ANTES (ofrecerReparticipacion): un DNI
     // puede tener varias participaciones en el mismo sorteo.
     const creado = await this.prisma.sorteoParticipante.create({
@@ -990,6 +1058,74 @@ export class WhatsappBotService {
       participanteId,
       sorteoId: sorteo.id,
       agencia: ctx.agencia,
+      confirmaDireccion: !!previos,
+    });
+  }
+
+  /**
+   * COMPRA de tickets (tipo SORTEO): crea N participaciones con el mismo
+   * compraId — un solo pago (monto = N × precio), validación en bloque y
+   * una sola confirmación. Copia la dirección previa del DNI a TODAS.
+   */
+  private async crearTickets(
+    empresaId: string,
+    celular: string,
+    ctx: any,
+    cantidad: number,
+    responder: (t: string) => Promise<any>,
+    irA: (e: string, c?: any) => Promise<void>,
+  ) {
+    const sorteo = await this.prisma.sorteo.findFirst({
+      where: {
+        id: ctx.sorteoId,
+        empresaId,
+        estado: EstadoSorteo.ABIERTO,
+        reabierto: false,
+      },
+    });
+    if (!sorteo) {
+      await responder(
+        'Ese sorteo ya se cerró 🙈 escribe *menu* para ver los activos.',
+      );
+      return irA('MENU', {});
+    }
+    const previos = await this.datosEnvioPrevios(empresaId, ctx.dni);
+    const compraId = randomUUID();
+    let primeraId = '';
+    for (let i = 0; i < cantidad; i++) {
+      const creado = await this.prisma.sorteoParticipante.create({
+        data: {
+          empresaId,
+          sorteoId: sorteo.id,
+          celular,
+          nombre: ctx.nombre ?? '',
+          dni: ctx.dni,
+          compraId,
+          ...(previos ?? {}),
+        },
+      });
+      if (!primeraId) primeraId = creado.id;
+    }
+    this.realtime.notifySorteoCambiado({ empresaId, sorteoId: sorteo.id });
+
+    const cabecera =
+      (ctx.verificado == true ? `🪪 DNI verificado: *${ctx.nombre}*\n` : '') +
+      `✅ ¡Listo, ${(ctx.nombre ?? '').split(' ')[0]}! Reservé tus ` +
+      `*${cantidad}* ticket${cantidad === 1 ? '' : 's'} para ` +
+      `*${sorteo.titulo}* 🎟️\n\n`;
+    await responder(
+      cabecera +
+        (await this.instruccionesPago(empresaId, {
+          sorteoId: sorteo.id,
+          cantidadTickets: cantidad,
+        })) +
+        WhatsappBotService.MSG_QUIEN_YAPEA,
+    );
+    return irA('PAGO_QUIEN', {
+      participanteId: primeraId,
+      compraId,
+      sorteoId: sorteo.id,
+      agencia: ctx.agencia ?? null,
       confirmaDireccion: !!previos,
     });
   }
@@ -1083,6 +1219,27 @@ export class WhatsappBotService {
 
     const agencia =
       cfg.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT;
+    // COMPRA de tickets: la confirmación muestra el RANGO ("#12 al #31").
+    let ticket = p.numeroTicket != null ? `#${p.numeroTicket}` : '';
+    if (p.compraId) {
+      const nums = (
+        await this.prisma.sorteoParticipante.findMany({
+          where: {
+            compraId: p.compraId,
+            empresaId,
+            numeroTicket: { not: null },
+          },
+          select: { numeroTicket: true },
+        })
+      )
+        .map((x) => x.numeroTicket as number)
+        .sort((a, b) => a - b);
+      if (nums.length > 1) {
+        ticket = `#${nums[0]} al #${nums[nums.length - 1]}`;
+      } else if (nums.length === 1) {
+        ticket = `#${nums[0]}`;
+      }
+    }
     // Cabecera configurable por tipo (plantillaConfirmacion*); el cuerpo
     // (datos de envío) lo arma el bot según lo que ya tenga guardado.
     const plantilla =
@@ -1095,13 +1252,14 @@ export class WhatsappBotService {
       renderPlantilla(plantilla, {
         nombre: p.nombre.split(' ')[0],
         titulo: p.sorteo.titulo,
-        ticket: p.numeroTicket != null ? `#${p.numeroTicket}` : '',
+        ticket,
         empresa: plantilla.includes('{empresa}')
           ? await this.nombreEmpresa(empresaId)
           : '',
       }) + '\n\n';
     const ctx = {
       participanteId: p.id,
+      compraId: p.compraId ?? null,
       sorteoId: p.sorteoId,
       agencia,
       postActivacion: true,
@@ -1224,8 +1382,10 @@ export class WhatsappBotService {
       yape?.celular?.trim() ||
       this.celularLocal(cfg?.numero) ||
       null;
+    // Compra de tickets: el monto es N × precio (una sola transferencia).
+    const cantidad = ctx.cantidadTickets ?? 1;
     const monto = sorteo?.precioParticipacion
-      ? `S/ ${Number(sorteo.precioParticipacion).toFixed(2)}`
+      ? `S/ ${(Number(sorteo.precioParticipacion) * cantidad).toFixed(2)}`
       : null;
     const esDinamica = sorteo?.tipo === TipoSorteo.DINAMICA;
     if (!monto) {
@@ -1316,14 +1476,33 @@ export class WhatsappBotService {
     ]
       .filter(Boolean)
       .join(' · ');
+    const sorteo = await this.prisma.sorteo.findUnique({
+      where: { id: sorteoId },
+      select: { tipo: true },
+    });
+    const pregunta =
+      sorteo?.tipo === TipoSorteo.SORTEO
+        ? '¿Quieres comprar *más tickets*? 🎟️'
+        : '¿Quieres participar *otra vez*? 🎟️';
     await responder(
       `¡Hola ${previo.nombre.split(' ')[0]}! Ya estás participando` +
         `${resumen ? ` (${resumen})` : ''}.\n\n` +
-        '¿Quieres participar *otra vez*? 🎟️\n' +
+        `${pregunta}\n` +
         '*1* — Sí\n' +
         '*0* — No, volver al menú',
     );
     return irA('REPARTICIPAR', { sorteoId, previoId: previo.id });
+  }
+
+  /**
+   * Where de la participación en edición: si el contexto viene de una
+   * COMPRA de tickets, los datos (dirección/recibe/pagador) aplican a
+   * TODAS sus filas — el ganador puede salir de cualquier ticket.
+   */
+  private whereParticipacion(empresaId: string, ctx: any) {
+    return ctx.compraId
+      ? { compraId: ctx.compraId as string, empresaId }
+      : { id: ctx.participanteId as string, empresaId };
   }
 
   /** "Ticket #N" (sorteo) / "Participación #N" (dinámica: no hay ticket). */
@@ -1335,6 +1514,21 @@ export class WhatsappBotService {
     return tipo === TipoSorteo.DINAMICA
       ? `Participación #${numeroTicket}`
       : `Ticket #${numeroTicket}`;
+  }
+
+  /** Etiqueta de un grupo de tickets de la misma compra ("#12 al #31"). */
+  private etiquetaGrupo(grupo: any[]): string {
+    if (grupo.length === 1) {
+      return this.etiquetaJugada(grupo[0].numeroTicket, grupo[0].sorteo.tipo);
+    }
+    const nums = grupo
+      .map((x) => x.numeroTicket)
+      .filter((x: number | null): x is number => x != null)
+      .sort((a, b) => a - b);
+    if (nums.length === 0) return `Pago por validar (×${grupo.length})`;
+    return nums.length === 1
+      ? `Ticket #${nums[0]}`
+      : `Tickets #${nums[0]} al #${nums[nums.length - 1]}`;
   }
 
   /** "SHALOM → TRUJILLO, LA LIBERTAD · 🎁 recibe X" o "sin datos de envío". */
@@ -1400,7 +1594,20 @@ export class WhatsappBotService {
     // los premios manuales de ganador: los de SORTEO clásico siempre que
     // estén pendientes (el ganador da su dirección aunque el sorteo ya
     // cerró); los de dinámicas solo con la dinámica ABIERTA.
-    const items: { premioId?: string; participanteId?: string; etiqueta: string }[] = [
+    // COMPRA de tickets = UN solo ítem con su rango ("#12 al #31") —
+    // comparten dirección/recibe, así que se editan juntas.
+    const grupos = new Map<string, any[]>();
+    for (const p of participaciones) {
+      const key = (p as any).compraId ?? p.id;
+      if (!grupos.has(key)) grupos.set(key, []);
+      grupos.get(key)!.push(p);
+    }
+    const items: {
+      premioId?: string;
+      participanteId?: string;
+      compraId?: string;
+      etiqueta: string;
+    }[] = [
       ...premios
         .filter((x) => !x.participanteId)
         .filter(
@@ -1412,11 +1619,12 @@ export class WhatsappBotService {
           premioId: x.id,
           etiqueta: `🏆 ${x.descripcion} · ${this.resumenEnvio(x)}`,
         })),
-      ...participaciones.map((p) => ({
-        participanteId: p.id,
+      ...[...grupos.values()].map((grupo) => ({
+        participanteId: grupo[0].id,
+        ...(grupo[0].compraId ? { compraId: grupo[0].compraId } : {}),
         etiqueta:
-          `🎟️ ${this.etiquetaJugada(p.numeroTicket, (p as any).sorteo.tipo)}` +
-          ` · ${(p as any).sorteo.titulo} · ${this.resumenEnvio(p)}`,
+          `🎟️ ${this.etiquetaGrupo(grupo)}` +
+          ` · ${grupo[0].sorteo.titulo} · ${this.resumenEnvio(grupo[0])}`,
       })),
     ];
     if (items.length === 0) {
@@ -1449,7 +1657,7 @@ export class WhatsappBotService {
   /** Arranca quién-recoge/dirección para un premio suelto o una participación. */
   private async arrancarActualizacionEnvio(
     empresaId: string,
-    item: { premioId?: string; participanteId?: string },
+    item: { premioId?: string; participanteId?: string; compraId?: string },
     agencia: string,
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
@@ -1494,10 +1702,20 @@ export class WhatsappBotService {
     const verbo = participante.agenciaNombre ? 'actualicemos' : 'registremos';
     const esDinamica =
       (participante as any).sorteo.tipo === TipoSorteo.DINAMICA;
-    const cual =
+    let cual =
       participante.numeroTicket != null
         ? `tu ${esDinamica ? 'participación' : 'ticket'} *#${participante.numeroTicket}*`
         : 'tu participación';
+    if (item.compraId) {
+      // Compra de tickets: hablar del RANGO — se editan todas juntas.
+      const grupo = await this.prisma.sorteoParticipante.findMany({
+        where: { compraId: item.compraId, empresaId },
+        include: { sorteo: { select: { titulo: true, tipo: true } } },
+      });
+      if (grupo.length > 1) {
+        cual = `tus *${this.etiquetaGrupo(grupo)}*`;
+      }
+    }
     await responder(
       `📦 ${participante.nombre.split(' ')[0]}, ${verbo} el envío de ` +
         `${cual} en *${(participante as any).sorteo.titulo}* — los envíos ` +
@@ -1506,6 +1724,7 @@ export class WhatsappBotService {
     );
     return irA('GANADOR_QUIEN', {
       participanteId: participante.id,
+      compraId: item.compraId ?? null,
       // sorteoId es requisito de los pasos PART_* (guard + reset por
       // cierre) — sin él, el flujo de regalo moría en el menú.
       sorteoId: participante.sorteoId,
@@ -1530,7 +1749,7 @@ export class WhatsappBotService {
       `${ctx.recibeVerificado ? ' ✅' : ''}`;
     if (ctx.soloRecoge && ctx.participanteId) {
       await this.prisma.sorteoParticipante.updateMany({
-        where: { id: ctx.participanteId, empresaId },
+        where: this.whereParticipacion(empresaId, ctx),
         data: {
           recibeNombre: ctx.recibeNombre ?? null,
           recibeDni: ctx.recibeDni ?? null,

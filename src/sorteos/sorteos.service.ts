@@ -138,14 +138,33 @@ export class SorteosService {
       select: { id: true, url: true, urlThumbnail: true },
     });
 
+    // Venta de TICKETS del bot (tipo SORTEO): recaudación adicional =
+    // tickets validados × precio (los premios del ganador se registran
+    // aparte — si el ganador ya pagó por tickets, registrar su premio
+    // con monto 0 para no duplicar).
+    let ticketsVendidos = 0;
+    let recaudadoTickets = 0;
+    if (
+      sorteo.tipo === TipoSorteo.SORTEO &&
+      sorteo.precioParticipacion != null
+    ) {
+      ticketsVendidos = await this.prisma.sorteoParticipante.count({
+        where: { sorteoId, estado: EstadoParticipanteSorteo.ACTIVO },
+      });
+      recaudadoTickets =
+        ticketsVendidos * Number(sorteo.precioParticipacion);
+    }
+
     return {
       ...sorteo,
       premios,
       imagenes,
       resumen: {
-        totalRecaudado,
+        totalRecaudado: totalRecaudado + recaudadoTickets,
         costoPremios,
-        ganancia: totalRecaudado - costoPremios,
+        ganancia: totalRecaudado + recaudadoTickets - costoPremios,
+        ticketsVendidos,
+        recaudadoTickets,
       },
     };
   }
@@ -643,7 +662,14 @@ export class SorteosService {
       },
       orderBy: { creadoEn: 'desc' },
       include: {
-        sorteo: { select: { id: true, titulo: true, tipo: true } },
+        sorteo: {
+          select: {
+            id: true,
+            titulo: true,
+            tipo: true,
+            precioParticipacion: true,
+          },
+        },
       },
     });
   }
@@ -679,27 +705,54 @@ export class SorteosService {
       throw new NotFoundException('Participante no encontrado');
     }
 
-    let numeroTicket = participante.numeroTicket;
-    if (
-      estado === EstadoParticipanteSorteo.ACTIVO &&
-      numeroTicket == null
-    ) {
+    // COMPRA de tickets: un solo pago → un solo veredicto. Validar (o
+    // rechazar) cualquier fila de la compra opera sobre TODAS las que
+    // sigan pendientes, con tickets CONSECUTIVOS.
+    const filas = participante.compraId
+      ? await this.prisma.sorteoParticipante.findMany({
+          where: {
+            compraId: participante.compraId,
+            empresaId,
+            estado: EstadoParticipanteSorteo.PENDIENTE_PAGO,
+          },
+          orderBy: { creadoEn: 'asc' },
+          select: { id: true },
+        })
+      : [{ id: participante.id }];
+
+    if (estado === EstadoParticipanteSorteo.ACTIVO) {
       const max = await this.prisma.sorteoParticipante.aggregate({
         where: { sorteoId: participante.sorteoId },
         _max: { numeroTicket: true },
       });
-      numeroTicket = (max._max.numeroTicket ?? 0) + 1;
+      let siguiente = (max._max.numeroTicket ?? 0) + 1;
+      const ahora = new Date();
+      await this.prisma.$transaction(
+        filas.map((f) => {
+          // Fila ya activada antes (re-validación): conserva su ticket.
+          const yaTiene =
+            f.id === participante.id && participante.numeroTicket != null;
+          return this.prisma.sorteoParticipante.update({
+            where: { id: f.id },
+            data: {
+              estado,
+              ...(yaTiene
+                ? {}
+                : { numeroTicket: siguiente++, activadoEn: ahora }),
+            },
+          });
+        }),
+      );
+    } else {
+      await this.prisma.sorteoParticipante.updateMany({
+        where: { id: { in: filas.map((f) => f.id) } },
+        data: { estado },
+      });
     }
-
-    const actualizado = await this.prisma.sorteoParticipante.update({
-      where: { id: participante.id },
-      data: {
-        estado,
-        ...(estado === EstadoParticipanteSorteo.ACTIVO
-          ? { numeroTicket, activadoEn: new Date() }
-          : {}),
-      },
-    });
+    const actualizado =
+      (await this.prisma.sorteoParticipante.findFirst({
+        where: { id: participante.id },
+      })) ?? participante;
 
     // Confirmación por WhatsApp + pedido de datos de envío (el bot deja
     // la conversación en el paso correspondiente). Best-effort.

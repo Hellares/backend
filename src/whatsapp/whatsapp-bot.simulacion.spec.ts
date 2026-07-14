@@ -81,15 +81,29 @@ function conInclude(row: Row | null, include: any, db: FakeDb): Row | null {
   return { ...row, sorteo: db.sorteos.find((s) => s.id === row.sorteoId) };
 }
 
+/** Como Prisma: con select solo vuelven los campos pedidos (escalares). */
+function aplicarSelect(row: Row | null, select: any): Row | null {
+  if (!row || !select) return row;
+  const out: Row = {};
+  for (const k of Object.keys(select)) {
+    if (select[k]) out[k] = row[k];
+  }
+  return out;
+}
+
 function modelo(db: FakeDb, tabla: () => Row[], defaults: Row = {}) {
   const buscar = (where: any) => tabla().filter((r) => coincide(r, where, db));
   return {
-    findUnique: async ({ where }: any) => buscar(where)[0] ?? null,
-    findFirst: async ({ where, orderBy, include }: any) =>
-      conInclude(ordenar(buscar(where), orderBy)[0] ?? null, include, db),
-    findMany: async ({ where, orderBy, include }: any) =>
+    findUnique: async ({ where, select }: any) =>
+      aplicarSelect(buscar(where)[0] ?? null, select),
+    findFirst: async ({ where, orderBy, include, select }: any) =>
+      aplicarSelect(
+        conInclude(ordenar(buscar(where), orderBy)[0] ?? null, include, db),
+        select,
+      ),
+    findMany: async ({ where, orderBy, include, select }: any) =>
       ordenar(buscar(where), orderBy).map(
-        (r) => conInclude(r, include, db) as Row,
+        (r) => aplicarSelect(conInclude(r, include, db), select) as Row,
       ),
     count: async ({ where }: any) => buscar(where).length,
     create: async ({ data }: any) => {
@@ -263,16 +277,28 @@ class Simulador {
     return nuevos;
   }
 
-  /** La empresa VALIDA el pago (como cambiarEstadoParticipante). */
+  /** La empresa VALIDA el pago (como cambiarEstadoParticipante, con
+   *  soporte de COMPRA: activa todas las filas con tickets consecutivos). */
   async validar(participanteId: string): Promise<string[]> {
     const p = this.db.participantes.find((x) => x.id === participanteId)!;
-    p.estado = EstadoParticipanteSorteo.ACTIVO;
-    p.numeroTicket =
-      this.db.participantes.filter(
-        (x) =>
-          x.sorteoId === p.sorteoId &&
-          x.estado === EstadoParticipanteSorteo.ACTIVO,
-      ).length;
+    const filas = p.compraId
+      ? this.db.participantes.filter(
+          (x) =>
+            x.compraId === p.compraId &&
+            x.estado === EstadoParticipanteSorteo.PENDIENTE_PAGO,
+        )
+      : [p];
+    let siguiente =
+      Math.max(
+        0,
+        ...this.db.participantes
+          .filter((x) => x.sorteoId === p.sorteoId && x.numeroTicket != null)
+          .map((x) => x.numeroTicket as number),
+      ) + 1;
+    for (const f of filas) {
+      f.estado = EstadoParticipanteSorteo.ACTIVO;
+      if (f.numeroTicket == null) f.numeroTicket = siguiente++;
+    }
     this.transcript.push('  🏪 [la empresa VALIDA el pago]');
     const antes = this.enviados.length;
     await this.bot.notificarActivacionParticipante(EMPRESA, participanteId);
@@ -888,6 +914,94 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[0]).not.toContain('pago');
     expect(r[0]).toContain('premio esté en camino'); // dinámica ACTIVO
     sim.imprimir('21. Editar jugada validada (sin re-pago)');
+  });
+
+  it('22. SORTEO clásico: compra de 20 tickets en un solo pago', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'GRAN RIFA',
+      precioParticipacion: 1,
+    });
+
+    let r = await sim.cliente(CEL, '1');
+    r = await sim.cliente(CEL, '44881122');
+    expect(r[0]).toContain('¿Cuántos tickets quieres (S/ 1.00 c/u)?');
+
+    r = await sim.cliente(CEL, '500'); // pasa el tope
+    expect(r[0]).toContain('del *1* al *100*');
+
+    r = await sim.cliente(CEL, '20');
+    expect(r[0]).toContain('Reservé tus *20* tickets');
+    expect(r[0]).toContain('Yapea *S/ 20.00*'); // monto TOTAL
+    expect(r[0]).toContain('¿Quién hará el *yape*?');
+
+    r = await sim.cliente(CEL, '1'); // yapeo yo
+    expect(r[0]).toContain('Esperamos tu yape');
+
+    expect(sim.db.participantes).toHaveLength(20);
+    const compraId = sim.db.participantes[0].compraId;
+    expect(compraId).toBeTruthy();
+    expect(
+      sim.db.participantes.every((x) => x.compraId === compraId),
+    ).toBe(true);
+
+    // La empresa valida UNA fila cualquiera → se activan las 20 con
+    // tickets consecutivos y UNA sola confirmación con el rango.
+    r = await sim.validar(sim.db.participantes[5].id);
+    expect(r[0]).toContain('*#1 al #20*');
+    const nums = sim.db.participantes
+      .map((x) => x.numeroTicket)
+      .sort((a, b) => a - b);
+    expect(nums[0]).toBe(1);
+    expect(nums[19]).toBe(20);
+    sim.imprimir('22. Compra de 20 tickets');
+  });
+
+  it('23. comprar MÁS tickets: re-participación en sorteo pregunta cuántos', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'GRAN RIFA',
+      precioParticipacion: 1,
+    });
+    sim.db.participantes.push({
+      id: 'prev1',
+      empresaId: EMPRESA,
+      sorteoId: s.id,
+      celular: CEL,
+      dni: '44881122',
+      nombre: 'ROSA MARIA TORRES DIAZ',
+      estado: EstadoParticipanteSorteo.ACTIVO,
+      numeroTicket: 1,
+      compraId: 'compra_vieja',
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TRUJILLO',
+      destinoDepartamento: 'LA LIBERTAD',
+      agenciaDireccion: null,
+      recibeNombre: null,
+      recibeDni: null,
+      pagadorNombre: null,
+      pagadorCelular: null,
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+
+    let r = await sim.cliente(CEL, '1');
+    expect(r[0]).toContain('¿Quieres comprar *más tickets*?');
+
+    r = await sim.cliente(CEL, '1');
+    expect(r[0]).toContain('¿Cuántos tickets más quieres');
+
+    r = await sim.cliente(CEL, '5');
+    expect(r[0]).toContain('Reservé tus *5* tickets');
+    expect(r[0]).toContain('Yapea *S/ 5.00*');
+
+    // 5 filas nuevas con la dirección previa copiada en silencio.
+    const nuevas = sim.db.participantes.filter((x) => x.id !== 'prev1');
+    expect(nuevas).toHaveLength(5);
+    expect(nuevas.every((x) => x.agenciaNombre === 'SHALOM')).toBe(true);
+    sim.imprimir('23. Comprar más tickets');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).

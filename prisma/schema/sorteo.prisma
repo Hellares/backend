@@ -97,6 +97,10 @@ model SorteoParticipante {
   // Correlativo por sorteo, asignado al ACTIVAR (orden de validacion).
   numeroTicket Int?
   activadoEn   DateTime?
+  // COMPRA de tickets (tipo SORTEO): "quiero 20" crea 20 filas con el
+  // mismo compraId — un solo pago, validacion en bloque (tickets
+  // consecutivos) y una sola confirmacion de WhatsApp.
+  compraId String?
   // REGALO 🎁: quien recibe el premio si NO es el propio jugador
   // (el juega, otra persona lo recibe en otra sede de la agencia).
   recibeNombre String?
@@ -123,6 +127,7 @@ model SorteoParticipante {
   @@index([sorteoId, dni])
   @@index([empresaId, celular])
   @@index([sorteoId, estado])
+  @@index([compraId])
 }
 
 model SorteoPremio {
