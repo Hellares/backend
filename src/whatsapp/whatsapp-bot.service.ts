@@ -322,12 +322,14 @@ export class WhatsappBotService {
         if (!s.ctx.previoId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
-        if (msg === '1' || msg === '2') {
-          const esRegalo = msg === '2';
+        if (msg === '1') {
           const previo = await this.prisma.sorteoParticipante.findFirst({
             where: { id: s.ctx.previoId, empresaId },
           });
           if (!previo) return this.mostrarMenu(s.sorteos, responder, irA);
+          // PAGO-PRIMERO, igual que la primera vez: la dirección previa
+          // se copia EN SILENCIO y al VALIDAR el pago el bot la pide o
+          // confirma (ahí también se resuelve regalo/quién recoge).
           const nuevo = await this.prisma.sorteoParticipante.create({
             data: {
               empresaId,
@@ -335,39 +337,18 @@ export class WhatsappBotService {
               celular,
               nombre: previo.nombre,
               dni: previo.dni,
-              // REGALO: el destino se captura a continuación; si no,
-              // misma dirección de su participación anterior.
-              ...(esRegalo
-                ? {}
-                : {
-                    agenciaNombre: previo.agenciaNombre,
-                    destinoDepartamento: previo.destinoDepartamento,
-                    destinoProvincia: previo.destinoProvincia,
-                    agenciaDireccion: previo.agenciaDireccion,
-                  }),
+              agenciaNombre: previo.agenciaNombre,
+              destinoDepartamento: previo.destinoDepartamento,
+              destinoProvincia: previo.destinoProvincia,
+              agenciaDireccion: previo.agenciaDireccion,
             },
           });
           this.realtime.notifySorteoCambiado({
             empresaId,
             sorteoId: nuevo.sorteoId,
           });
-          if (esRegalo) {
-            await responder(
-              `🎟️ ¡Nueva participación registrada, ${previo.nombre.split(' ')[0]}!\n\n` +
-                '🎁 Envíame el *DNI* de quien recogerá el premio (8 dígitos) ' +
-                '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
-            );
-            return irA('REGALO_DNI', {
-              participanteId: nuevo.id,
-              sorteoId: nuevo.sorteoId,
-              agencia: s.agencia,
-            });
-          }
-          const conEnvio = previo.agenciaNombre
-            ? ` Usaremos tu misma dirección de envío (*${previo.agenciaNombre}*).`
-            : '';
           await responder(
-            `🎟️ ¡Nueva participación registrada, ${previo.nombre.split(' ')[0]}!${conEnvio}\n\n` +
+            `🎟️ ¡Nueva participación registrada, ${previo.nombre.split(' ')[0]}!\n\n` +
               (await this.instruccionesPago(empresaId, {
                 sorteoId: nuevo.sorteoId,
               })),
@@ -1061,8 +1042,7 @@ export class WhatsappBotService {
       `¡Hola ${previo.nombre.split(' ')[0]}! Ya estás participando` +
         `${resumen ? ` (${resumen})` : ''}.\n\n` +
         '¿Quieres participar *otra vez*? 🎟️\n' +
-        '*1* — Sí, con mi misma dirección\n' +
-        '*2* — Sí, pero es un REGALO 🎁 (lo recibe otra persona)\n' +
+        '*1* — Sí\n' +
         '*0* — No, volver al menú',
     );
     return irA('REPARTICIPAR', { sorteoId, previoId: previo.id });
