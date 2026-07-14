@@ -146,7 +146,25 @@ export class WhatsappBotService {
         !esNuevo &&
         conv.contexto != null &&
         minutos < WhatsappBotService.THROTTLE_MENU_MIN;
-      if (menuMostradoHaceUnRato) return;
+      if (menuMostradoHaceUnRato) {
+        // EXCEPCIÓN al throttle: si un sorteo donde participaba CERRÓ
+        // después del último intercambio con el bot, su ciclo terminó —
+        // el siguiente mensaje vuelve a ofrecer el menú con los sorteos
+        // vigentes (una sola vez: al mostrarse se bumpea actualizadoEn
+        // y el throttle normal retoma).
+        const cicloCerrado = await this.prisma.sorteoParticipante.findFirst({
+          where: {
+            empresaId,
+            celular,
+            sorteo: {
+              estado: EstadoSorteo.CERRADO,
+              actualizadoEn: { gt: conv.actualizadoEn },
+            },
+          },
+          select: { id: true },
+        });
+        if (!cicloCerrado) return;
+      }
     }
 
     try {
