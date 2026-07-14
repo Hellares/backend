@@ -1066,6 +1066,42 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('24. Ver los premios (listado + foto)');
   });
 
+  it('25. DINÁMICA + RIFA activas a la vez: el bot guía cuál elegir', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo({
+      titulo: 'CANASTAZO',
+      creadoEn: new Date(Date.now() - 60000),
+    }); // dinámica
+    sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'GRAN RIFA',
+      precioParticipacion: 1,
+    });
+
+    let r = await sim.cliente(CEL, 'hola');
+    expect(r[0]).toContain('¡Tenemos 2 sorteos activos!');
+
+    r = await sim.cliente(CEL, '1');
+    expect(r[0]).toContain('¿En cuál quieres participar?');
+    expect(r[0]).toContain('GRAN RIFA');
+    expect(r[0]).toContain('CANASTAZO');
+
+    // Elige la RIFA (primera por creadoEn desc) → pregunta CUÁNTOS.
+    r = await sim.cliente(CEL, '1');
+    r = await sim.cliente(CEL, '44881122');
+    expect(r[0]).toContain('¿Cuántos tickets quieres (S/ 1.00 c/u)?');
+
+    // Otro cliente elige la DINÁMICA → registro directo (sin cantidad).
+    const CEL2 = '51900333444';
+    await sim.cliente(CEL2, '1');
+    r = await sim.cliente(CEL2, '2'); // CANASTAZO
+    expect(r[0]).toContain('envíame tu *DNI*');
+    r = await sim.cliente(CEL2, '40556677');
+    expect(r[0]).toContain('¡Quedaste registrado en *CANASTAZO*');
+    expect(r[0]).not.toContain('Cuántos tickets');
+    sim.imprimir('25. Dinámica + rifa a la vez');
+  });
+
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
   async function registrarConDireccion(sim: Simulador) {
     const s = sim.db.sorteos[0] ?? sim.crearSorteo();
