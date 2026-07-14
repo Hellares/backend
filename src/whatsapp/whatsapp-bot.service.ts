@@ -597,6 +597,10 @@ export class WhatsappBotService {
             empresaId,
             s.ctx.participanteId,
           );
+          this.realtime.notifySorteoCambiado({
+            empresaId,
+            sorteoId: s.ctx.sorteoId,
+          });
           await responder(
             `🎁 ¡Listo! El paquete lo recogerá *${s.ctx.recibeNombre}* ` +
               'en la misma dirección.\n\n' +
@@ -619,6 +623,10 @@ export class WhatsappBotService {
               empresaId,
               s.ctx.participanteId,
             );
+            this.realtime.notifySorteoCambiado({
+              empresaId,
+              sorteoId: s.ctx.sorteoId,
+            });
           }
           await responder(
             '👌 De acuerdo. ' +
@@ -688,6 +696,11 @@ export class WhatsappBotService {
           empresaId,
           s.ctx.participanteId,
         );
+        // La card del participante muestra estos datos → refrescar YA.
+        this.realtime.notifySorteoCambiado({
+          empresaId,
+          sorteoId: s.ctx.sorteoId,
+        });
         const destinoTxt = [s.ctx.provincia, s.ctx.departamento]
           .filter(Boolean)
           .join(', ');
@@ -1355,6 +1368,18 @@ export class WhatsappBotService {
         empresaId,
         ctx.participanteId,
       );
+      // Refrescar la card YA (ctx puede no traer sorteoId — p.ej. vía
+      // opción 2 del menú — así que se resuelve del participante).
+      const part = await this.prisma.sorteoParticipante.findFirst({
+        where: { id: ctx.participanteId, empresaId },
+        select: { sorteoId: true },
+      });
+      if (part) {
+        this.realtime.notifySorteoCambiado({
+          empresaId,
+          sorteoId: part.sorteoId,
+        });
+      }
       await responder(
         `${intro}\n\n` + (await this.cierreFlujo(empresaId, ctx)),
       );
