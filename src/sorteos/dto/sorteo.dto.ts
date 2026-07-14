@@ -50,6 +50,16 @@ export class CreateSorteoDto {
   @IsDateString()
   fechaSorteo?: string;
 
+  @ApiPropertyOptional({ description: 'Venta de tickets: desde' })
+  @IsOptional()
+  @IsDateString()
+  ventaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Venta de tickets: hasta' })
+  @IsOptional()
+  @IsDateString()
+  ventaHasta?: string;
+
   @ApiPropertyOptional({
     description: 'Sede que organiza/despacha (el stock sale de aquí)',
   })
@@ -99,6 +109,16 @@ export class UpdateSorteoDto {
   @IsOptional()
   @IsDateString()
   fechaSorteo?: string;
+
+  @ApiPropertyOptional({ description: 'Venta de tickets: desde' })
+  @IsOptional()
+  @IsDateString()
+  ventaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Venta de tickets: hasta' })
+  @IsOptional()
+  @IsDateString()
+  ventaHasta?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

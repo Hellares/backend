@@ -101,7 +101,14 @@ export class WhatsappBotService {
     const sorteos = await this.prisma.sorteo.findMany({
       where: { empresaId, estado: EstadoSorteo.ABIERTO, reabierto: false },
       orderBy: { creadoEn: 'desc' },
-      select: { id: true, titulo: true, tipo: true, precioParticipacion: true },
+      select: {
+        id: true,
+        titulo: true,
+        tipo: true,
+        precioParticipacion: true,
+        fechaSorteo: true,
+        ventaHasta: true,
+      },
     });
     if (sorteos.length === 0) return;
 
@@ -949,7 +956,9 @@ export class WhatsappBotService {
       saludo = `¡Hola! ¡Tenemos *${sorteos[0].titulo}* activo! 😄`;
       opcion1 = `*1* — Participar en el ${sorteos[0].titulo}`;
     } else if (sorteos.length === 1) {
-      saludo = `¡Hola! 👋 ¡Tenemos el sorteo *${sorteos[0].titulo}* activo! 🎉`;
+      saludo =
+        `¡Hola! 👋 ¡Tenemos el sorteo *${sorteos[0].titulo}* activo! 🎉` +
+        this.infoFechasRifa(sorteos[0] as any);
       opcion1 = '*1* — Participar en el sorteo';
     } else if (todasDinamicas) {
       saludo = `¡Hola! ¡Tenemos ${sorteos.length} dinámicas activas! 😄`;
@@ -983,7 +992,7 @@ export class WhatsappBotService {
     instanceName: string,
     empresaId: string,
     celular: string,
-    sorteos: { id: string; titulo: string }[],
+    sorteos: any[],
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
@@ -1004,15 +1013,18 @@ export class WhatsappBotService {
       porSorteo.get(it.sorteoId)!.push(it);
     }
     const bloques = [...porSorteo.entries()].map(([sorteoId, lista]) => {
-      const titulo =
-        sorteos.find((x) => x.id === sorteoId)?.titulo ?? 'el sorteo';
+      const sorteo = sorteos.find((x) => x.id === sorteoId);
+      const titulo = sorteo?.titulo ?? 'el sorteo';
       const lineas = lista
         .map(
           (it) =>
             `• ${it.cantidad > 1 ? `${it.cantidad}× ` : ''}${it.descripcion}`,
         )
         .join('\n');
-      return `🎁 *Premios de ${titulo}:*\n${lineas}`;
+      return (
+        `🎁 *Premios de ${titulo}:*\n${lineas}` +
+        (sorteo ? this.infoFechasRifa(sorteo) : '')
+      );
     });
     await responder(
       `${bloques.join('\n\n')}\n\n` +
@@ -1203,7 +1215,9 @@ export class WhatsappBotService {
       (ctx.verificado == true ? `🪪 DNI verificado: *${ctx.nombre}*\n` : '') +
       `✅ ¡Listo, ${(ctx.nombre ?? '').split(' ')[0]}! Reservé tus ` +
       `*${cantidad}* ticket${cantidad === 1 ? '' : 's'} para ` +
-      `*${sorteo.titulo}* 🎟️\n\n`;
+      `*${sorteo.titulo}* 🎟️` +
+      this.infoFechasRifa(sorteo) +
+      '\n\n';
     await responder(
       cabecera +
         (await this.instruccionesPago(empresaId, {
@@ -1594,6 +1608,44 @@ export class WhatsappBotService {
     return ctx.compraId
       ? { compraId: ctx.compraId as string, empresaId }
       : { id: ctx.participanteId as string, empresaId };
+  }
+
+  /** dd/mm/yyyy en hora de Lima (UTC-5). */
+  private fechaLima(d?: Date | null): string | null {
+    if (!d) return null;
+    const l = new Date(d.getTime() - 5 * 3600000);
+    const p = (n: number) => n.toString().padStart(2, '0');
+    return `${p(l.getUTCDate())}/${p(l.getUTCMonth() + 1)}/${l.getUTCFullYear()}`;
+  }
+
+  /**
+   * Fechas de la RIFA para el cliente: venta de tickets hasta X y fecha
+   * del juego. La fecha del sorteo solo se muestra si es HOY o futura
+   * (los sorteos viejos tienen el default de creación — sería ruido).
+   */
+  private infoFechasRifa(s: {
+    tipo: TipoSorteo;
+    fechaSorteo?: Date | null;
+    ventaHasta?: Date | null;
+  }): string {
+    if (s.tipo !== TipoSorteo.SORTEO) return '';
+    const partes: string[] = [];
+    const hasta = this.fechaLima(s.ventaHasta ?? null);
+    if (hasta) partes.push(`🎟️ Tickets a la venta hasta el *${hasta}*`);
+    if (s.fechaSorteo) {
+      const hoyLima = new Date(Date.now() - 5 * 3600000);
+      const inicioHoy = Date.UTC(
+        hoyLima.getUTCFullYear(),
+        hoyLima.getUTCMonth(),
+        hoyLima.getUTCDate(),
+      );
+      if (s.fechaSorteo.getTime() - 5 * 3600000 >= inicioHoy) {
+        partes.push(
+          `📅 El sorteo se juega el *${this.fechaLima(s.fechaSorteo)}*`,
+        );
+      }
+    }
+    return partes.length ? `\n${partes.join('\n')}` : '';
   }
 
   /** "Ticket #N" (sorteo) / "Participación #N" (dinámica: no hay ticket). */

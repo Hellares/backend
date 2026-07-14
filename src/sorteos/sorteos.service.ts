@@ -64,6 +64,8 @@ export class SorteosService {
         canal: dto.canal,
         tipo: dto.tipo,
         fechaSorteo: dto.fechaSorteo ? new Date(dto.fechaSorteo) : undefined,
+        ventaDesde: dto.ventaDesde ? new Date(dto.ventaDesde) : undefined,
+        ventaHasta: dto.ventaHasta ? new Date(dto.ventaHasta) : undefined,
         precioParticipacion: dto.precioParticipacion,
         creadoPorId: usuarioId,
       },
@@ -229,6 +231,8 @@ export class SorteosService {
         ...(reabre && { reabierto: true }),
         sedeId: dto.sedeId,
         fechaSorteo: dto.fechaSorteo ? new Date(dto.fechaSorteo) : undefined,
+        ventaDesde: dto.ventaDesde ? new Date(dto.ventaDesde) : undefined,
+        ventaHasta: dto.ventaHasta ? new Date(dto.ventaHasta) : undefined,
         precioParticipacion: dto.precioParticipacion,
       },
     });
