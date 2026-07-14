@@ -467,9 +467,21 @@ export class WhatsappBotService {
           );
           return irA('REGALO_DNI', { ...s.ctx, soloRecoge: true });
         }
+        if (msg === '4') {
+          // Regalo/encargo COMPLETO: otra persona Y otra dirección
+          // (puede ser otra ciudad). Tras el DNI se captura la dirección
+          // con atajo "misma" — ver continuarConRecibe/PART_CIUDAD.
+          await responder(
+            '🎁 ¡Buen detalle! Envíame el *DNI* de quien recibirá el ' +
+              'paquete (8 dígitos) — sus nombres salen solos. La agencia ' +
+              'pedirá ese DNI para entregarlo 🪪',
+          );
+          return irA('REGALO_DNI', { ...s.ctx, regaloDireccion: true });
+        }
         await responder(
-          'Responde *1* (misma dirección), *2* (cambiarla) o *3* (la ' +
-            'recogerá otra persona) 🙂',
+          'Responde *1* (misma dirección), *2* (cambiarla), *3* (la misma ' +
+            'pero recoge otra persona) o *4* (para otra persona en otra ' +
+            'dirección) 🙂',
         );
         return;
       }
@@ -477,6 +489,27 @@ export class WhatsappBotService {
       case 'PART_CIUDAD': {
         if (!s.ctx.participanteId || !s.ctx.sorteoId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        // Atajo de la opción 4 (regalo/encargo): "1 = misma dirección" —
+        // la dirección guardada se queda, solo se actualiza quién recibe.
+        if (msg === '1' && s.ctx.regaloDireccion && s.ctx.recibeNombre) {
+          await this.prisma.sorteoParticipante.updateMany({
+            where: { id: s.ctx.participanteId, empresaId },
+            data: {
+              recibeNombre: s.ctx.recibeNombre ?? null,
+              recibeDni: s.ctx.recibeDni ?? null,
+            },
+          });
+          await this.sincronizarPremioDeParticipacion(
+            empresaId,
+            s.ctx.participanteId,
+          );
+          await responder(
+            `🎁 ¡Listo! El paquete lo recogerá *${s.ctx.recibeNombre}* ` +
+              'en la misma dirección.\n\n' +
+              (await this.cierreFlujo(empresaId, s.ctx)),
+          );
+          return irA('MENU', {});
         }
         if (msg === '-') {
           await responder(
@@ -907,7 +940,8 @@ export class WhatsappBotService {
         '¿La usamos?\n' +
         '*1* — Sí, es la misma ✅\n' +
         '*2* — Cambiarla\n' +
-        '*3* — La misma, pero el paquete lo recogerá OTRA persona 👤';
+        '*3* — La misma, pero el paquete lo recogerá OTRA persona 👤\n' +
+        '*4* — Es para OTRA persona en OTRA dirección (regalo/encargo) 🎁';
       estado = 'CONFIRMAR_ENVIO';
     } else {
       texto =
@@ -1209,6 +1243,32 @@ export class WhatsappBotService {
         `${intro}\n\n` + (await this.cierreFlujo(empresaId, ctx)),
       );
       return irA('MENU', {});
+    }
+    // Opción 4 de CONFIRMAR_ENVIO (regalo/encargo con otra dirección):
+    // el participante YA tiene una dirección guardada — ofrecerla como
+    // atajo por si al final es la misma.
+    if (ctx.regaloDireccion && ctx.participanteId) {
+      const p = await this.prisma.sorteoParticipante.findFirst({
+        where: { id: ctx.participanteId, empresaId },
+        select: {
+          agenciaNombre: true,
+          destinoProvincia: true,
+          destinoDepartamento: true,
+          agenciaDireccion: true,
+        },
+      });
+      if (p?.agenciaNombre) {
+        const destino = [p.destinoProvincia, p.destinoDepartamento]
+          .filter(Boolean)
+          .join(', ');
+        await responder(
+          `${intro}\n\n📍 ¿A qué *ciudad* se lo enviamos? (ej. TRUJILLO)\n` +
+            `*1* — A la misma dirección (*${p.agenciaNombre}*` +
+            `${destino ? ` a ${destino}` : ''}` +
+            `${p.agenciaDireccion ? `, sucursal ${p.agenciaDireccion}` : ''})`,
+        );
+        return irA('PART_CIUDAD', ctx);
+      }
     }
     await responder(
       `${intro}\n\n📍 ¿A qué *ciudad* se lo enviamos? (ej. TRUJILLO)`,
