@@ -87,8 +87,10 @@ function modelo(db: FakeDb, tabla: () => Row[], defaults: Row = {}) {
     findUnique: async ({ where }: any) => buscar(where)[0] ?? null,
     findFirst: async ({ where, orderBy, include }: any) =>
       conInclude(ordenar(buscar(where), orderBy)[0] ?? null, include, db),
-    findMany: async ({ where, orderBy }: any) =>
-      ordenar(buscar(where), orderBy),
+    findMany: async ({ where, orderBy, include }: any) =>
+      ordenar(buscar(where), orderBy).map(
+        (r) => conInclude(r, include, db) as Row,
+      ),
     count: async ({ where }: any) => buscar(where).length,
     create: async ({ data }: any) => {
       const row = {
@@ -645,6 +647,113 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[0]).toContain('DINAMICA B'); // no lo registra en la cerrada
     expect(sim.db.participantes).toHaveLength(0);
     sim.imprimir('16. Paso a medias con sorteo cerrado');
+  });
+
+  it('17. varias participaciones: elige CUÁL actualizar y solo esa cambia', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo();
+    const base = {
+      empresaId: EMPRESA,
+      sorteoId: s.id,
+      celular: CEL,
+      dni: '44881122',
+      nombre: 'ROSA MARIA TORRES DIAZ',
+      estado: EstadoParticipanteSorteo.ACTIVO,
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TRUJILLO',
+      destinoDepartamento: 'LA LIBERTAD',
+      agenciaDireccion: 'AV ESPAÑA 123',
+      recibeNombre: null,
+      recibeDni: null,
+      pagadorNombre: null,
+      pagadorCelular: null,
+      actualizadoEn: new Date(),
+    };
+    sim.db.participantes.push(
+      { ...base, id: 'j1', numeroTicket: 1, creadoEn: new Date(Date.now() - 2000) },
+      { ...base, id: 'j2', numeroTicket: 2, creadoEn: new Date(Date.now() - 1000) },
+    );
+    // auto-premio de la jugada 2 (dinámica): debe heredar el cambio.
+    sim.db.premios.push({
+      id: 'pj2',
+      empresaId: EMPRESA,
+      sorteoId: s.id,
+      participanteId: 'j2',
+      estado: EstadoPremioSorteo.REGISTRADO,
+      ganadorDni: '44881122',
+      ganadorNombre: 'ROSA MARIA TORRES DIAZ',
+      ganadorCelular: CEL,
+      descripcion: 'CANASTA',
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TRUJILLO',
+      destinoDepartamento: 'LA LIBERTAD',
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+
+    let r = await sim.cliente(CEL, '2');
+    expect(r[0]).toContain('Tienes *2* envíos conmigo');
+    // Dinámica: NO se habla de "ticket", son participaciones.
+    expect(r[0]).toContain('*1* — 🎟️ Participación #1');
+    expect(r[0]).toContain('*2* — 🎟️ Participación #2');
+    expect(r[0]).not.toContain('Ticket');
+    expect(r[0]).not.toContain('🏆'); // premio ligado a j2 NO se duplica
+
+    r = await sim.cliente(CEL, '2'); // elige la participación #2
+    expect(r[0]).toContain('actualicemos el envío de tu participación *#2*');
+
+    r = await sim.cliente(CEL, '1'); // recojo yo
+    r = await sim.cliente(CEL, 'Lima');
+    r = await sim.cliente(CEL, 'Lima');
+    r = await sim.cliente(CEL, 'Suc Miraflores');
+    expect(r[0]).toContain('¡Datos de envío guardados!');
+
+    const j1 = sim.db.participantes.find((x) => x.id === 'j1')!;
+    const j2 = sim.db.participantes.find((x) => x.id === 'j2')!;
+    expect(j1.destinoProvincia).toBe('TRUJILLO'); // intacta
+    expect(j2.destinoProvincia).toBe('LIMA'); // solo esta cambió
+    expect(sim.db.premios[0].destinoProvincia).toBe('LIMA'); // heredó
+    sim.imprimir('17. Elegir participación específica');
+  });
+
+  it('18. cambiar solo QUIÉN RECOGE de una jugada (atajo misma dirección)', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo();
+    sim.db.participantes.push({
+      id: 'j1',
+      empresaId: EMPRESA,
+      sorteoId: s.id,
+      celular: CEL,
+      dni: '44881122',
+      nombre: 'ROSA MARIA TORRES DIAZ',
+      estado: EstadoParticipanteSorteo.ACTIVO,
+      numeroTicket: 1,
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TRUJILLO',
+      destinoDepartamento: 'LA LIBERTAD',
+      agenciaDireccion: 'AV ESPAÑA 123',
+      recibeNombre: null,
+      recibeDni: null,
+      pagadorNombre: null,
+      pagadorCelular: null,
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+
+    let r = await sim.cliente(CEL, '2'); // un solo ítem → directo
+    expect(r[0]).toContain('actualicemos el envío de tu participación *#1*');
+
+    r = await sim.cliente(CEL, '2'); // recogerá otra persona
+    r = await sim.cliente(CEL, '70112233');
+    expect(r[0]).toContain('*1* — A la misma dirección');
+
+    r = await sim.cliente(CEL, '1');
+    expect(r[0]).toContain('lo recogerá *LUCIA RAMOS VEGA* en la misma dirección');
+
+    const j1 = sim.db.participantes[0];
+    expect(j1.recibeNombre).toBe('LUCIA RAMOS VEGA');
+    expect(j1.agenciaDireccion).toBe('AV ESPAÑA 123'); // no se retipeó
+    sim.imprimir('18. Cambiar quién recoge con atajo');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).

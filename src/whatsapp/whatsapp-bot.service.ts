@@ -292,6 +292,29 @@ export class WhatsappBotService {
         );
       }
 
+      case 'ELIGIENDO_ENVIO': {
+        // Varios premios/participaciones: eligió cuál actualizar.
+        const items: { premioId?: string; participanteId?: string }[] =
+          s.ctx.items ?? [];
+        if (items.length === 0) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        const idx = parseInt(msg, 10) - 1;
+        if (isNaN(idx) || idx < 0 || idx >= items.length) {
+          await responder(
+            'No entendí 🙈 responde solo con el número de la lista (o *menu*).',
+          );
+          return;
+        }
+        return this.arrancarActualizacionEnvio(
+          empresaId,
+          items[idx],
+          s.ctx.agencia ?? s.agencia,
+          responder,
+          irA,
+        );
+      }
+
       case 'ESPERANDO_NOMBRE': {
         // Fallback: solo se llega aquí si BD y RENIEC no resolvieron
         // el nombre del DNI.
@@ -774,7 +797,9 @@ export class WhatsappBotService {
           await responder(
             WhatsappBotService.MSG_DNI_RECOGE,
           );
-          return irA('REGALO_DNI', s.ctx);
+          // regaloDireccion: si la participación ya tiene dirección, tras
+          // el DNI se ofrece el atajo "1 = misma" (no re-tipearla).
+          return irA('REGALO_DNI', { ...s.ctx, regaloDireccion: true });
         }
         await responder(
           'Responde *1* si lo recoges tú, o *2* si irá otra persona 🎁',
@@ -1174,15 +1199,15 @@ export class WhatsappBotService {
     const monto = sorteo?.precioParticipacion
       ? `S/ ${Number(sorteo.precioParticipacion).toFixed(2)}`
       : null;
+    const esDinamica = sorteo?.tipo === TipoSorteo.DINAMICA;
     if (!monto) {
       // Sorteo sin precio: no hay monto que yapear — se coordina a mano.
       return (
         '💰 *Siguiente paso — el pago:*\n' +
         `Coordina el pago de tu participación por este chat${numeroPago ? ` (Yape: *${numeroPago}*)` : ''}.\n` +
-        'Cuando lo validemos te confirmaremos tu *número de ticket* 🎟️'
+        `Cuando lo validemos te confirmaremos tu ${esDinamica ? '*participación*' : '*número de ticket*'} 🎟️`
       );
     }
-    const esDinamica = sorteo?.tipo === TipoSorteo.DINAMICA;
     const plantilla = esDinamica
       ? cfg?.plantillaPagoDinamica?.trim() || PLANTILLA_PAGO_DINAMICA_DEFAULT
       : cfg?.plantillaPagoSorteo?.trim() || PLANTILLA_PAGO_SORTEO_DEFAULT;
@@ -1273,6 +1298,40 @@ export class WhatsappBotService {
     return irA('REPARTICIPAR', { sorteoId, previoId: previo.id });
   }
 
+  /** "Ticket #N" (sorteo) / "Participación #N" (dinámica: no hay ticket). */
+  private etiquetaJugada(
+    numeroTicket: number | null,
+    tipo: TipoSorteo,
+  ): string {
+    if (numeroTicket == null) return 'Pago por validar';
+    return tipo === TipoSorteo.DINAMICA
+      ? `Participación #${numeroTicket}`
+      : `Ticket #${numeroTicket}`;
+  }
+
+  /** "SHALOM → TRUJILLO, LA LIBERTAD · 🎁 recibe X" o "sin datos de envío". */
+  private resumenEnvio(x: {
+    agenciaNombre: string | null;
+    destinoProvincia: string | null;
+    destinoDepartamento: string | null;
+    recibeNombre?: string | null;
+  }): string {
+    if (!x.agenciaNombre) return 'sin datos de envío';
+    const destino = [x.destinoProvincia, x.destinoDepartamento]
+      .filter(Boolean)
+      .join(', ');
+    return (
+      `${x.agenciaNombre}${destino ? ` → ${destino}` : ''}` +
+      (x.recibeNombre ? ` · 🎁 recibe ${x.recibeNombre.split(' ')[0]}` : '')
+    );
+  }
+
+  /**
+   * Opción 2 del menú: junta los PREMIOS pendientes sueltos y TODAS las
+   * participaciones de sorteos abiertos. Con un solo ítem arranca
+   * directo; con varios el cliente elige CUÁL registrar/actualizar
+   * (jugadas distintas pueden ir a lugares o personas distintas).
+   */
   private async iniciarFlujoGanador(
     empresaId: string,
     celular: string,
@@ -1280,20 +1339,100 @@ export class WhatsappBotService {
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
-    // El premio se busca por los últimos 9 dígitos del remitente (los
-    // celulares se guardan con o sin el 51).
+    // Se busca por los últimos 9 dígitos del remitente (los celulares
+    // se guardan con o sin el 51).
     const last9 = celular.slice(-9);
-    const premio = await this.prisma.sorteoPremio.findFirst({
-      where: {
-        empresaId,
-        estado: {
-          in: [EstadoPremioSorteo.REGISTRADO, EstadoPremioSorteo.PREPARANDO],
+    const [premios, participaciones] = await Promise.all([
+      this.prisma.sorteoPremio.findMany({
+        where: {
+          empresaId,
+          estado: {
+            in: [EstadoPremioSorteo.REGISTRADO, EstadoPremioSorteo.PREPARANDO],
+          },
+          ganadorCelular: { contains: last9 },
         },
-        ganadorCelular: { contains: last9 },
-      },
-      orderBy: { creadoEn: 'desc' },
-    });
-    if (premio) {
+        orderBy: { creadoEn: 'asc' },
+      }),
+      this.prisma.sorteoParticipante.findMany({
+        where: {
+          empresaId,
+          celular: { contains: last9 },
+          estado: { not: EstadoParticipanteSorteo.RECHAZADO },
+          sorteo: { estado: EstadoSorteo.ABIERTO, reabierto: false },
+        },
+        orderBy: { creadoEn: 'asc' },
+        include: { sorteo: { select: { titulo: true, tipo: true } } },
+      }),
+    ]);
+    // Un premio ligado a una participación listada se gestiona POR la
+    // participación (sincronizarPremioDeParticipacion lo hereda) — no
+    // se duplica en la lista. Quedan "sueltos" los premios manuales y
+    // los de sorteos ya cerrados (se envían igual).
+    const idsPart = new Set(participaciones.map((p) => p.id));
+    const items: { premioId?: string; participanteId?: string; etiqueta: string }[] = [
+      ...premios
+        .filter((x) => !x.participanteId || !idsPart.has(x.participanteId))
+        .map((x) => ({
+          premioId: x.id,
+          etiqueta: `🏆 ${x.descripcion} · ${this.resumenEnvio(x)}`,
+        })),
+      ...participaciones.map((p) => ({
+        participanteId: p.id,
+        etiqueta:
+          `🎟️ ${this.etiquetaJugada(p.numeroTicket, (p as any).sorteo.tipo)}` +
+          ` · ${(p as any).sorteo.titulo} · ${this.resumenEnvio(p)}`,
+      })),
+    ];
+    if (items.length === 0) {
+      await responder(
+        'No encontré un premio ni una participación asociada a este número 🤔\n' +
+          'Elige la opción *3* para hablar con un asesor.',
+      );
+      return irA('MENU', {});
+    }
+    if (items.length > 1) {
+      const lista = items
+        .map((x, i) => `*${i + 1}* — ${x.etiqueta}`)
+        .join('\n');
+      await responder(
+        `📦 Tienes *${items.length}* envíos conmigo. ¿Cuál quieres ` +
+          `registrar o actualizar? Responde con el número:\n${lista}`,
+      );
+      return irA('ELIGIENDO_ENVIO', { items, agencia });
+    }
+    return this.arrancarActualizacionEnvio(
+      empresaId,
+      items[0],
+      agencia,
+      responder,
+      irA,
+    );
+  }
+
+  /** Arranca quién-recoge/dirección para un premio suelto o una participación. */
+  private async arrancarActualizacionEnvio(
+    empresaId: string,
+    item: { premioId?: string; participanteId?: string },
+    agencia: string,
+    responder: (t: string) => Promise<any>,
+    irA: (e: string, c?: any) => Promise<void>,
+  ) {
+    if (item.premioId) {
+      const premio = await this.prisma.sorteoPremio.findFirst({
+        where: {
+          id: item.premioId,
+          empresaId,
+          estado: {
+            in: [EstadoPremioSorteo.REGISTRADO, EstadoPremioSorteo.PREPARANDO],
+          },
+        },
+      });
+      if (!premio) {
+        await responder(
+          'Tu premio ya fue despachado o no está disponible — coordina con la tienda (opción *3*).',
+        );
+        return irA('MENU', {});
+      }
       await responder(
         `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
           `Tu premio: *${premio.descripcion}*.\n\n` +
@@ -1307,36 +1446,36 @@ export class WhatsappBotService {
         agencia,
       });
     }
-
-    // Sin premio pendiente: ¿es participante de un sorteo abierto? Sus
-    // datos quedan en su registro y el auto-premio los usa al validar.
     const participante = await this.prisma.sorteoParticipante.findFirst({
-      where: {
-        empresaId,
-        celular: { contains: last9 },
-        estado: { not: EstadoParticipanteSorteo.RECHAZADO },
-        sorteo: { estado: EstadoSorteo.ABIERTO, reabierto: false },
-      },
-      orderBy: { creadoEn: 'desc' },
-      include: { sorteo: { select: { titulo: true } } },
+      where: { id: item.participanteId, empresaId },
+      include: { sorteo: { select: { titulo: true, tipo: true } } },
     });
     if (!participante) {
       await responder(
-        'No encontré un premio ni una participación asociada a este número 🤔\n' +
-          'Elige la opción *3* para hablar con un asesor.',
+        'Se perdió el contexto 🙈 escribe *menu* y volvemos a empezar.',
       );
       return irA('MENU', {});
     }
+    const verbo = participante.agenciaNombre ? 'actualicemos' : 'registremos';
+    const esDinamica =
+      (participante as any).sorteo.tipo === TipoSorteo.DINAMICA;
+    const cual =
+      participante.numeroTicket != null
+        ? `tu ${esDinamica ? 'participación' : 'ticket'} *#${participante.numeroTicket}*`
+        : 'tu participación';
     await responder(
-      `📦 ${participante.nombre.split(' ')[0]}, registremos tus datos de ` +
-        `envío para *${participante.sorteo.titulo}* — los envíos se hacen ` +
-        `por *${agencia}*.\n\n` +
+      `📦 ${participante.nombre.split(' ')[0]}, ${verbo} el envío de ` +
+        `${cual} en *${(participante as any).sorteo.titulo}* — los envíos ` +
+        `se hacen por *${agencia}*.\n\n` +
         '¿Quién *recogerá* el paquete en la agencia?\n' +
         '*1* — Yo mismo\n' +
         '*2* — Otra persona (regalo o encargo) 🎁',
     );
     return irA('GANADOR_QUIEN', {
       participanteId: participante.id,
+      // sorteoId es requisito de los pasos PART_* (guard + reset por
+      // cierre) — sin él, el flujo de regalo moría en el menú.
+      sorteoId: participante.sorteoId,
       agencia,
     });
   }
@@ -1458,6 +1597,11 @@ export class WhatsappBotService {
         data: datosEnvio,
       });
       if (p && count > 0) {
+        // El auto-premio de ESTA participación hereda el envío nuevo.
+        await this.sincronizarPremioDeParticipacion(
+          empresaId,
+          ctx.participanteId,
+        );
         this.realtime.notifySorteoCambiado({
           empresaId,
           sorteoId: p.sorteoId,
