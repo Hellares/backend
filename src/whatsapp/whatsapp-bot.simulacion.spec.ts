@@ -855,6 +855,41 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('20. "0" desde un paso');
   });
 
+  it('21. editar una jugada YA VALIDADA no vuelve a pedir el pago', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo();
+    sim.db.participantes.push({
+      id: 'jv1',
+      empresaId: EMPRESA,
+      sorteoId: s.id,
+      celular: CEL,
+      dni: '44881122',
+      nombre: 'ROSA MARIA TORRES DIAZ',
+      estado: EstadoParticipanteSorteo.ACTIVO, // pago YA validado
+      numeroTicket: 1,
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TRUJILLO',
+      destinoDepartamento: 'LA LIBERTAD',
+      agenciaDireccion: 'AV ESPAÑA 123',
+      recibeNombre: null,
+      recibeDni: null,
+      pagadorNombre: null,
+      pagadorCelular: null,
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+
+    await sim.cliente(CEL, '2'); // cambiar datos → directo (único ítem)
+    await sim.cliente(CEL, '2'); // recogerá otra persona
+    await sim.cliente(CEL, '70112233');
+    const r = await sim.cliente(CEL, '1'); // misma dirección
+    expect(r[0]).toContain('lo recogerá *LUCIA RAMOS VEGA*');
+    expect(r[0]).not.toContain('Yapea'); // NO re-pide el pago
+    expect(r[0]).not.toContain('pago');
+    expect(r[0]).toContain('premio esté en camino'); // dinámica ACTIVO
+    sim.imprimir('21. Editar jugada validada (sin re-pago)');
+  });
+
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
   async function registrarConDireccion(sim: Simulador) {
     const s = sim.db.sorteos[0] ?? sim.crearSorteo();

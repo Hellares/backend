@@ -671,7 +671,7 @@ export class WhatsappBotService {
                 : '') +
               (await this.cierreFlujo(empresaId, s.ctx)) +
               '\n\n(cuando tengas tus datos de envío, escribe *2* en el ' +
-              'menú para registrarlos 📦)',
+              'menú y los completamos 📦)',
           );
           return irA('MENU', {});
         }
@@ -898,7 +898,7 @@ export class WhatsappBotService {
       `${saludo}\n\n` +
         'Responde con el número:\n' +
         `${opcion1}\n` +
-        '*2* — Registrar/cambiar mis datos de envío 📦\n' +
+        '*2* — Cambiar mis datos de envío 📦\n' +
         '*3* — Hablar con un asesor',
     );
     return irA('MENU', {});
@@ -999,9 +999,22 @@ export class WhatsappBotService {
    * de pago; después (postActivacion) → despedida.
    */
   private async cierreFlujo(empresaId: string, ctx: any): Promise<string> {
-    if (ctx.postActivacion) {
-      // Sin "¡Listo!" propio: cada caller ya abre celebrando.
-      return 'Te avisaremos por aquí cuando tu premio esté en camino 🚚';
+    // Sin "¡Listo!" propio: cada caller ya abre celebrando.
+    const despedida =
+      'Te avisaremos por aquí cuando tu premio esté en camino 🚚';
+    if (ctx.postActivacion) return despedida;
+    // Editar el envío de una jugada YA VALIDADA (opción 2 del menú) no
+    // debe volver a pedir el pago — se decide por el estado REAL.
+    if (ctx.participanteId) {
+      const p = await this.prisma.sorteoParticipante.findFirst({
+        where: { id: ctx.participanteId, empresaId },
+        include: { sorteo: { select: { tipo: true } } },
+      });
+      if (p?.estado === EstadoParticipanteSorteo.ACTIVO) {
+        return (p as any).sorteo?.tipo === TipoSorteo.DINAMICA
+          ? despedida
+          : '¡Mucha suerte en el sorteo! 🍀';
+      }
     }
     return this.instruccionesPago(empresaId, ctx);
   }
