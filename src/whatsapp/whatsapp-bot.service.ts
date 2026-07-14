@@ -955,9 +955,17 @@ export class WhatsappBotService {
       }),
       this.prisma.integracionWhatsapp.findUnique({
         where: { empresaId },
-        select: { plantillaPagoSorteo: true, plantillaPagoDinamica: true },
+        select: {
+          plantillaPagoSorteo: true,
+          plantillaPagoDinamica: true,
+          numero: true,
+        },
       }),
     ]);
+    // Número para yapear: el de la integración Yape si está configurado;
+    // si no, el celular con el que la empresa vinculó su WhatsApp (QR).
+    const numeroPago =
+      yape?.celular?.trim() || this.celularLocal(cfg?.numero) || null;
     const monto = sorteo?.precioParticipacion
       ? `S/ ${Number(sorteo.precioParticipacion).toFixed(2)}`
       : null;
@@ -965,7 +973,7 @@ export class WhatsappBotService {
       // Sorteo sin precio: no hay monto que yapear — se coordina a mano.
       return (
         '💰 *Siguiente paso — el pago:*\n' +
-        `Coordina el pago de tu participación por este chat${yape?.celular ? ` (Yape: *${yape.celular}*)` : ''}.\n` +
+        `Coordina el pago de tu participación por este chat${numeroPago ? ` (Yape: *${numeroPago}*)` : ''}.\n` +
         'Cuando lo validemos te confirmaremos tu *número de ticket* 🎟️'
       );
     }
@@ -975,11 +983,23 @@ export class WhatsappBotService {
       : cfg?.plantillaPagoSorteo?.trim() || PLANTILLA_PAGO_SORTEO_DEFAULT;
     return renderPlantilla(plantilla, {
       monto,
-      numero: yape?.celular?.trim() || 'número de la empresa',
+      numero: numeroPago || 'número de la empresa',
       empresa: plantilla.includes('{empresa}')
         ? await this.nombreEmpresa(empresaId)
         : '',
     });
+  }
+
+  /**
+   * Celular local de 9 dígitos a partir del número vinculado por WhatsApp
+   * (Evolution lo guarda como 51XXXXXXXXX). Null si no hay o no es peruano.
+   */
+  private celularLocal(numero?: string | null): string | null {
+    const digits = (numero ?? '').replace(/\D/g, '');
+    if (digits.length === 9 && digits.startsWith('9')) return digits;
+    if (digits.length === 11 && digits.startsWith('519'))
+      return digits.slice(2);
+    return null;
   }
 
   /** Nombre COMERCIAL de la empresa (fallback a la razón social). */
