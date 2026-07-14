@@ -63,8 +63,9 @@ export class WhatsappBotService {
     const empresaId = cfg.empresaId;
 
     // Bot activo solo con sorteos abiertos (si no, el chat es 100% humano).
+    // Los REABIERTOS no cuentan: son regularizaciones internas del app.
     const sorteos = await this.prisma.sorteo.findMany({
-      where: { empresaId, estado: EstadoSorteo.ABIERTO },
+      where: { empresaId, estado: EstadoSorteo.ABIERTO, reabierto: false },
       orderBy: { creadoEn: 'desc' },
       select: { id: true, titulo: true, tipo: true, precioParticipacion: true },
     });
@@ -721,7 +722,12 @@ export class WhatsappBotService {
     irA: (e: string, c?: any) => Promise<void>,
   ) {
     const sorteo = await this.prisma.sorteo.findFirst({
-      where: { id: ctx.sorteoId, empresaId, estado: EstadoSorteo.ABIERTO },
+      where: {
+        id: ctx.sorteoId,
+        empresaId,
+        estado: EstadoSorteo.ABIERTO,
+        reabierto: false,
+      },
     });
     if (!sorteo) {
       await responder('Ese sorteo ya se cerró 🙈 escribe *menu* para ver los activos.');
@@ -834,9 +840,14 @@ export class WhatsappBotService {
     if (!cfg || !cfg.habilitado || cfg.estado !== 'CONECTADO') return false;
     const p = await this.prisma.sorteoParticipante.findFirst({
       where: { id: participanteId, empresaId },
-      include: { sorteo: { select: { titulo: true, tipo: true } } },
+      include: {
+        sorteo: { select: { titulo: true, tipo: true, reabierto: true } },
+      },
     });
     if (!p) return false;
+    // Sorteo REABIERTO = regularización interna: el bot no escribe nada
+    // (el participante ya fue atendido en su momento).
+    if (p.sorteo.reabierto) return false;
 
     const agencia =
       cfg.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT;
@@ -1123,7 +1134,7 @@ export class WhatsappBotService {
         empresaId,
         celular: { contains: last9 },
         estado: { not: EstadoParticipanteSorteo.RECHAZADO },
-        sorteo: { estado: EstadoSorteo.ABIERTO },
+        sorteo: { estado: EstadoSorteo.ABIERTO, reabierto: false },
       },
       orderBy: { creadoEn: 'desc' },
       include: { sorteo: { select: { titulo: true } } },

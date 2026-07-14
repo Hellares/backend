@@ -54,6 +54,10 @@ model Sorteo {
   canal       CanalSorteo  @default(OTRO)
   fechaSorteo DateTime     @default(now())
   estado      EstadoSorteo @default(ABIERTO)
+  // true = se reabrió tras cerrarse (solo para REGULARIZAR en el app):
+  // el bot de WhatsApp lo ignora por completo — no lo ofrece en el menú
+  // ni notifica activaciones de sus participantes.
+  reabierto   Boolean      @default(false)
   // Precio de la participación ("jugada") — default para cada ganador
   // registrado; la suma de las participaciones registradas es lo
   // recaudado del sorteo. Imagen promocional via Archivo (SORTEO).

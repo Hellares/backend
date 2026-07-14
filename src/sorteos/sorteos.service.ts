@@ -155,7 +155,12 @@ export class SorteosService {
     sorteoId: string,
     dto: UpdateSorteoDto,
   ) {
-    await this.assertSorteo(empresaId, sorteoId);
+    const actual = await this.assertSorteo(empresaId, sorteoId);
+    // Reabrir (CERRADO → ABIERTO) es solo para REGULARIZAR en el app:
+    // queda marcado y el bot de WhatsApp lo ignora por completo.
+    const reabre =
+      dto.estado === EstadoSorteo.ABIERTO &&
+      actual.estado === EstadoSorteo.CERRADO;
     return this.prisma.sorteo.update({
       where: { id: sorteoId },
       data: {
@@ -164,6 +169,7 @@ export class SorteosService {
         canal: dto.canal,
         tipo: dto.tipo,
         estado: dto.estado,
+        ...(reabre && { reabierto: true }),
         sedeId: dto.sedeId,
         fechaSorteo: dto.fechaSorteo ? new Date(dto.fechaSorteo) : undefined,
         precioParticipacion: dto.precioParticipacion,
