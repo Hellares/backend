@@ -365,19 +365,16 @@ export class WhatsappBotService {
       case 'REGALO_DNI': {
         // Quien RECOGE se identifica por DNI: el nombre oficial sale de
         // la BD o RENIEC (Factiliza) — igual que el registro del jugador.
+        // El DNI es OBLIGATORIO: la agencia lo pide para entregar.
         if (!s.ctx.participanteId && !s.ctx.premioId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
-        }
-        if (msg === '-') {
-          await responder(
-            '👤 Escríbeme entonces el *nombre completo* de quien recogerá:',
-          );
-          return irA('REGALO_NOMBRE', { ...s.ctx, recibeDni: null });
         }
         const dni = msg.replace(/\D/g, '');
         if (dni.length !== 8) {
           await responder(
-            'El DNI debe tener *8 dígitos* — o responde *-* si no lo sabes.',
+            '🪪 Necesito el *DNI* de quien recogerá (8 dígitos) — la ' +
+              'agencia lo pide para entregar el paquete, sin él no ' +
+              'podríamos enviarlo a su nombre.',
           );
           return;
         }
@@ -385,7 +382,8 @@ export class WhatsappBotService {
         if (nombre == null) {
           await responder(
             'No pudimos validar ese DNI automáticamente 🙈 ' +
-              'escríbeme el *nombre completo* de quien recogerá:',
+              'escríbeme el *nombre completo* de quien recogerá ' +
+              `(quedará registrado con el DNI ${dni}):`,
           );
           return irA('REGALO_NOMBRE', { ...s.ctx, recibeDni: dni });
         }
@@ -398,9 +396,17 @@ export class WhatsappBotService {
       }
 
       case 'REGALO_NOMBRE': {
-        // Fallback: solo si no dio DNI o BD/RENIEC no resolvieron.
+        // Fallback: solo cuando BD/RENIEC no resolvieron el DNI — que ya
+        // es obligatorio y viene en ctx (el nombre se registra con él).
         if (!s.ctx.participanteId && !s.ctx.premioId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (!s.ctx.recibeDni) {
+          // Conversación vieja sin DNI (o estado huérfano): pedirlo.
+          await responder(
+            '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos):',
+          );
+          return irA('REGALO_DNI', s.ctx);
         }
         if (msg.length < 5 || !msg.includes(' ')) {
           await responder(
@@ -437,7 +443,8 @@ export class WhatsappBotService {
         if (msg === '3') {
           await responder(
             '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
-              '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
+              '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
+              'entregar el paquete 🪪',
           );
           return irA('REGALO_DNI', { ...s.ctx, soloRecoge: true });
         }
@@ -557,7 +564,8 @@ export class WhatsappBotService {
         if (msg === '2') {
           await responder(
             '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
-              '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
+              '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
+              'entregar el paquete 🪪',
           );
           // soloRecoge: la dirección YA está guardada — al terminar solo
           // se actualiza quién recibe.
@@ -587,7 +595,8 @@ export class WhatsappBotService {
         if (msg === '2') {
           await responder(
             '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
-              '— sus nombres salen solos.\nResponde *-* si no lo sabes.',
+              '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
+              'entregar el paquete 🪪',
           );
           return irA('REGALO_DNI', s.ctx);
         }
