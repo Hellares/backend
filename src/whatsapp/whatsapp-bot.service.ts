@@ -128,9 +128,9 @@ export class WhatsappBotService {
       estado = 'MENU';
     } else if (estado === 'ASESOR') {
       // Silencio: un humano está atendiendo este chat. PERO una opción
-      // del menú ('1'/'2'/'3') reactiva al bot de inmediato — terminó
-      // de hablar con el asesor y quiere participar/registrar envío.
-      if (['1', '2', '3'].includes(msg)) {
+      // del menú reactiva al bot de inmediato — terminó de hablar con
+      // el asesor y quiere participar/registrar envío/ver premios.
+      if (['1', '2', '3', '4'].includes(msg)) {
         estado = 'MENU';
       } else if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) {
         return;
@@ -170,7 +170,7 @@ export class WhatsappBotService {
     if (
       estado === 'MENU' &&
       !esComandoMenu &&
-      !['1', '2', '3'].includes(msg)
+      !['1', '2', '3', '4'].includes(msg)
     ) {
       const yaParticipa = await this.prisma.sorteoParticipante.findFirst({
         where: {
@@ -282,6 +282,16 @@ export class WhatsappBotService {
               '(escribe *menu* si quieres volver al menú del bot)',
           );
           return irA('ASESOR');
+        }
+        if (msg === '4') {
+          return this.verPremios(
+            instanceName,
+            empresaId,
+            celular,
+            s.sorteos,
+            responder,
+            irA,
+          );
         }
         return this.mostrarMenu(s.sorteos, responder, irA);
       }
@@ -946,13 +956,92 @@ export class WhatsappBotService {
       saludo = `¡Hola! 👋 ¡Tenemos ${sorteos.length} sorteos activos! 🎉`;
       opcion1 = '*1* — Participar en un sorteo';
     }
+    // "Ver los premios" solo si hay catálogo registrado (rifas).
+    const hayPremios =
+      (await this.prisma.sorteoPremioCatalogo.count({
+        where: { sorteoId: { in: sorteos.map((x: any) => x.id) } },
+      })) > 0;
     await responder(
       `${saludo}\n\n` +
         'Responde con el número:\n' +
         `${opcion1}\n` +
         '*2* — Cambiar mis datos de envío 📦\n' +
-        '*3* — Hablar con un asesor',
+        '*3* — Hablar con un asesor' +
+        (hayPremios ? '\n*4* — Ver los premios 🎁' : ''),
     );
+    return irA('MENU', {});
+  }
+
+  /**
+   * Opción 4: envía por WhatsApp los premios REGISTRADOS en el catálogo
+   * de las rifas abiertas — primero el listado en texto y luego la FOTO
+   * de cada premio que la tenga (subida por la empresa en el app).
+   */
+  private async verPremios(
+    instanceName: string,
+    empresaId: string,
+    celular: string,
+    sorteos: { id: string; titulo: string }[],
+    responder: (t: string) => Promise<any>,
+    irA: (e: string, c?: any) => Promise<void>,
+  ) {
+    const items = await this.prisma.sorteoPremioCatalogo.findMany({
+      where: { sorteoId: { in: sorteos.map((x) => x.id) } },
+      orderBy: { creadoEn: 'asc' },
+    });
+    if (items.length === 0) {
+      await responder(
+        'Aún no publicamos los premios — muy pronto los anunciamos por aquí 🎁',
+      );
+      return irA('MENU', {});
+    }
+    // Listado en texto (agrupado por sorteo si hay varios).
+    const porSorteo = new Map<string, typeof items>();
+    for (const it of items) {
+      if (!porSorteo.has(it.sorteoId)) porSorteo.set(it.sorteoId, [] as any);
+      porSorteo.get(it.sorteoId)!.push(it);
+    }
+    const bloques = [...porSorteo.entries()].map(([sorteoId, lista]) => {
+      const titulo =
+        sorteos.find((x) => x.id === sorteoId)?.titulo ?? 'el sorteo';
+      const lineas = lista
+        .map(
+          (it) =>
+            `• ${it.cantidad > 1 ? `${it.cantidad}× ` : ''}${it.descripcion}`,
+        )
+        .join('\n');
+      return `🎁 *Premios de ${titulo}:*\n${lineas}`;
+    });
+    await responder(
+      `${bloques.join('\n\n')}\n\n` +
+        'Mientras más tickets tengas, más chances de ganar 🍀 ' +
+        'Escribe *1* para participar.',
+    );
+    // Fotos de los premios (solo las registradas en el catálogo).
+    const imagenes = await this.prisma.archivo.findMany({
+      where: {
+        entidadTipo: 'SORTEO_PREMIO_CATALOGO',
+        entidadId: { in: items.map((x) => x.id) },
+      },
+      orderBy: { creadoEn: 'desc' },
+      select: { url: true, entidadId: true },
+    });
+    for (const it of items) {
+      const img = imagenes.find((a) => a.entidadId === it.id);
+      if (!img) continue;
+      await this.evolution
+        .sendImage({
+          instanceName,
+          number: celular,
+          mediaUrl: img.url,
+          caption: `${it.cantidad > 1 ? `${it.cantidad}× ` : ''}${it.descripcion}`,
+        })
+        .catch((e) =>
+          this.logger.warn(
+            `Foto de premio ${it.id} no se pudo enviar: ${(e as Error).message}`,
+          ),
+        );
+    }
     return irA('MENU', {});
   }
 

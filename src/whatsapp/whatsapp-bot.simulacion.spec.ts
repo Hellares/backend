@@ -25,6 +25,8 @@ class FakeDb {
   sorteos: Row[] = [];
   participantes: Row[] = [];
   premios: Row[] = [];
+  catalogoPremios: Row[] = [];
+  archivos: Row[] = [];
   conversaciones: Row[] = [];
   personas: Row[] = [];
 }
@@ -200,6 +202,8 @@ class Simulador {
         agenciaDireccion: null,
       }),
       sorteoPremio: modelo(this.db, () => this.db.premios),
+      sorteoPremioCatalogo: modelo(this.db, () => this.db.catalogoPremios),
+      archivo: modelo(this.db, () => this.db.archivos),
       conversacionWhatsapp: modelo(this.db, () => this.db.conversaciones, {
         estado: 'MENU',
         contexto: null,
@@ -211,7 +215,9 @@ class Simulador {
       sendText: async (a: any) => {
         this.enviados.push(a);
       },
-      sendImage: async () => undefined,
+      sendImage: async (a: any) => {
+        this.enviados.push({ ...a, text: `📷 [imagen] ${a.caption ?? ''}` });
+      },
     } as any;
     const consultas = {
       consultarDni: async (dni: string) => {
@@ -1002,6 +1008,62 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(nuevas).toHaveLength(5);
     expect(nuevas.every((x) => x.agenciaNombre === 'SHALOM')).toBe(true);
     sim.imprimir('23. Comprar más tickets');
+  });
+
+  it('24. opción 4 "Ver los premios": listado + fotos del catálogo', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'GRAN RIFA',
+      precioParticipacion: 1,
+    });
+    sim.db.catalogoPremios.push(
+      {
+        id: 'cat1',
+        empresaId: EMPRESA,
+        sorteoId: s.id,
+        descripcion: 'S/ 500 EN EFECTIVO',
+        cantidad: 3,
+        creadoEn: new Date(Date.now() - 2000),
+        actualizadoEn: new Date(),
+      },
+      {
+        id: 'cat2',
+        empresaId: EMPRESA,
+        sorteoId: s.id,
+        descripcion: 'CELULAR SAMSUNG A15',
+        cantidad: 1,
+        creadoEn: new Date(Date.now() - 1000),
+        actualizadoEn: new Date(),
+      },
+    );
+    // Solo el celular tiene foto registrada.
+    sim.db.archivos.push({
+      id: 'img1',
+      entidadTipo: 'SORTEO_PREMIO_CATALOGO',
+      entidadId: 'cat2',
+      url: 'https://cdn.test/celular.jpg',
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+
+    let r = await sim.cliente(CEL, 'hola');
+    expect(r[0]).toContain('*4* — Ver los premios 🎁');
+
+    r = await sim.cliente(CEL, '4');
+    expect(r[0]).toContain('🎁 *Premios de GRAN RIFA:*');
+    expect(r[0]).toContain('• 3× S/ 500 EN EFECTIVO');
+    expect(r[0]).toContain('• CELULAR SAMSUNG A15');
+    // La foto llega como imagen aparte, con su descripción de caption.
+    expect(r[1]).toContain('📷 [imagen] CELULAR SAMSUNG A15');
+    expect(r).toHaveLength(2); // el premio sin foto NO manda imagen
+
+    // Sin catálogo registrado (dinámica), el menú NO ofrece la opción 4.
+    const sim2 = new Simulador();
+    sim2.crearSorteo();
+    const r2 = await sim2.cliente(CEL, 'hola');
+    expect(r2[0]).not.toContain('Ver los premios');
+    sim.imprimir('24. Ver los premios (listado + foto)');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
