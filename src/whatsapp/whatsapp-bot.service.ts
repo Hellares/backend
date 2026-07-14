@@ -11,6 +11,8 @@ import { ConsultasExternasService } from '../consultas-externas/consultas-extern
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { EvolutionApiService } from './evolution-api.service';
 import {
+  PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT,
+  PLANTILLA_CONFIRMACION_SORTEO_DEFAULT,
   PLANTILLA_PAGO_DINAMICA_DEFAULT,
   PLANTILLA_PAGO_SORTEO_DEFAULT,
   renderPlantilla,
@@ -842,15 +844,29 @@ export class WhatsappBotService {
     if (!cfg || !cfg.habilitado || cfg.estado !== 'CONECTADO') return false;
     const p = await this.prisma.sorteoParticipante.findFirst({
       where: { id: participanteId, empresaId },
-      include: { sorteo: { select: { titulo: true } } },
+      include: { sorteo: { select: { titulo: true, tipo: true } } },
     });
     if (!p) return false;
 
     const agencia =
       cfg.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT;
+    // Cabecera configurable por tipo (plantillaConfirmacion*); el cuerpo
+    // (datos de envío) lo arma el bot según lo que ya tenga guardado.
+    const plantilla =
+      p.sorteo.tipo === TipoSorteo.DINAMICA
+        ? cfg.plantillaConfirmacionDinamica?.trim() ||
+          PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT
+        : cfg.plantillaConfirmacionSorteo?.trim() ||
+          PLANTILLA_CONFIRMACION_SORTEO_DEFAULT;
     const base =
-      `🎟️ ¡Pago confirmado, ${p.nombre.split(' ')[0]}! Ya estás participando en ` +
-      `*${p.sorteo.titulo}* con el ticket *#${p.numeroTicket}*. ¡Mucha suerte! 🍀\n\n`;
+      renderPlantilla(plantilla, {
+        nombre: p.nombre.split(' ')[0],
+        titulo: p.sorteo.titulo,
+        ticket: p.numeroTicket != null ? `#${p.numeroTicket}` : '',
+        empresa: plantilla.includes('{empresa}')
+          ? await this.nombreEmpresa(empresaId)
+          : '',
+      }) + '\n\n';
     const ctx = {
       participanteId: p.id,
       sorteoId: p.sorteoId,

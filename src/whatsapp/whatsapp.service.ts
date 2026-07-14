@@ -16,6 +16,8 @@ import { EvolutionApiService } from './evolution-api.service';
 import { WhatsappBotService } from './whatsapp-bot.service';
 import { UpdateWhatsappDto } from './dto/whatsapp.dto';
 import {
+  PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT,
+  PLANTILLA_CONFIRMACION_SORTEO_DEFAULT,
   PLANTILLA_PAGO_DINAMICA_DEFAULT,
   PLANTILLA_PAGO_SORTEO_DEFAULT,
   renderPlantilla,
@@ -195,6 +197,12 @@ export class WhatsappService {
       plantillaPagoSorteoDefault: PLANTILLA_PAGO_SORTEO_DEFAULT,
       plantillaPagoDinamica: cfg?.plantillaPagoDinamica ?? null,
       plantillaPagoDinamicaDefault: PLANTILLA_PAGO_DINAMICA_DEFAULT,
+      plantillaConfirmacionSorteo: cfg?.plantillaConfirmacionSorteo ?? null,
+      plantillaConfirmacionSorteoDefault: PLANTILLA_CONFIRMACION_SORTEO_DEFAULT,
+      plantillaConfirmacionDinamica:
+        cfg?.plantillaConfirmacionDinamica ?? null,
+      plantillaConfirmacionDinamicaDefault:
+        PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT,
       agenciaEnvio: cfg?.agenciaEnvio ?? 'SHALOM',
       conectadoEn: cfg?.conectadoEn ?? null,
       actualizadoEn: cfg?.actualizadoEn ?? null,
@@ -217,6 +225,10 @@ export class WhatsappService {
         plantillaPremio: dto.plantillaPremio?.trim() || null,
         plantillaPagoSorteo: dto.plantillaPagoSorteo?.trim() || null,
         plantillaPagoDinamica: dto.plantillaPagoDinamica?.trim() || null,
+        plantillaConfirmacionSorteo:
+          dto.plantillaConfirmacionSorteo?.trim() || null,
+        plantillaConfirmacionDinamica:
+          dto.plantillaConfirmacionDinamica?.trim() || null,
         // '' o undefined → default SHALOM (columna NOT NULL).
         ...(dto.agenciaEnvio?.trim() && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase(),
@@ -232,6 +244,14 @@ export class WhatsappService {
         }),
         ...(dto.plantillaPagoDinamica !== undefined && {
           plantillaPagoDinamica: dto.plantillaPagoDinamica.trim() || null,
+        }),
+        ...(dto.plantillaConfirmacionSorteo !== undefined && {
+          plantillaConfirmacionSorteo:
+            dto.plantillaConfirmacionSorteo.trim() || null,
+        }),
+        ...(dto.plantillaConfirmacionDinamica !== undefined && {
+          plantillaConfirmacionDinamica:
+            dto.plantillaConfirmacionDinamica.trim() || null,
         }),
         ...(dto.agenciaEnvio !== undefined && {
           agenciaEnvio: dto.agenciaEnvio.trim().toUpperCase() || 'SHALOM',

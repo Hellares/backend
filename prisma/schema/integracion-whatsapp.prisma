@@ -26,6 +26,10 @@ model IntegracionWhatsapp {
   // {empresa}. Misma regla de líneas vacías.
   plantillaPagoSorteo   String? @db.Text
   plantillaPagoDinamica String? @db.Text
+  // Cabecera del mensaje de confirmación al VALIDAR el pago, por tipo
+  // (null = default). Variables: {nombre} {titulo} {ticket} {empresa}.
+  plantillaConfirmacionSorteo   String? @db.Text
+  plantillaConfirmacionDinamica String? @db.Text
   // Agencia con la que la empresa hace TODOS los envíos: el bot la
   // informa ("los envíos se hacen por X") y no pregunta cuál.
   agenciaEnvio    String    @default("SHALOM")

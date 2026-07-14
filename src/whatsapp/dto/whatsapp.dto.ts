@@ -35,6 +35,26 @@ export class UpdateWhatsappDto {
 
   @ApiPropertyOptional({
     description:
+      'Cabecera de la confirmación al validar el pago (SORTEOS). ' +
+      'Variables: {nombre} {titulo} {ticket} {empresa}. Vacía = default.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  plantillaConfirmacionSorteo?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Cabecera de la confirmación al validar el pago (DINÁMICAS). ' +
+      'Variables: {nombre} {titulo} {ticket} {empresa}. Vacía = default.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  plantillaConfirmacionDinamica?: string;
+
+  @ApiPropertyOptional({
+    description:
       'Agencia con la que la empresa hace TODOS los envíos — el bot la ' +
       "informa y no pregunta. '' = volver al default (SHALOM).",
     example: 'SHALOM',

@@ -38,3 +38,17 @@ export const PLANTILLA_PAGO_DINAMICA_DEFAULT = [
   'Yapea *{monto}* al *{numero}* y envía tu captura por este chat.',
   'Lo validamos y te confirmamos tu participación 🎟️',
 ].join('\n');
+
+/**
+ * Cabeceras del mensaje de CONFIRMACIÓN al validar el pago (el cuerpo —
+ * datos de envío — lo arma el bot). Variables: {nombre} = primer nombre
+ * del participante, {titulo} = nombre del sorteo/dinámica, {ticket} =
+ * número de ticket (#N), {empresa} = nombre comercial.
+ */
+export const PLANTILLA_CONFIRMACION_SORTEO_DEFAULT =
+  '🎟️ ¡Pago confirmado, {nombre}! Ya estás participando en *{titulo}* ' +
+  'con el ticket *{ticket}*. ¡Mucha suerte! 🍀';
+
+export const PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT =
+  '🎟️ ¡Pago confirmado, {nombre}! Ya estás participando en *{titulo}*. ' +
+  '¡Mucha suerte! 🍀';
