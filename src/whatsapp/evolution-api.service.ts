@@ -175,20 +175,23 @@ export class EvolutionApiService {
 
   /**
    * Imagen + caption a un número (formato 51XXXXXXXXX, no necesita estar
-   * agendado). `media` acepta URL pública — Evolution la descarga.
+   * agendado). `media` acepta URL pública (Evolution la descarga) o
+   * base64 directo (imágenes generadas en el backend).
    */
   async sendImage(args: {
     instanceName: string;
     number: string;
-    mediaUrl: string;
+    mediaUrl?: string;
+    base64?: string;
     caption: string;
     fileName?: string;
+    mimetype?: string;
   }) {
     return this.request('POST', `/message/sendMedia/${args.instanceName}`, {
       number: args.number,
       mediatype: 'image',
-      mimetype: 'image/jpeg',
-      media: args.mediaUrl,
+      mimetype: args.mimetype ?? 'image/jpeg',
+      media: args.base64 ?? args.mediaUrl,
       fileName: args.fileName ?? 'ticket-envio.jpg',
       caption: args.caption,
     });

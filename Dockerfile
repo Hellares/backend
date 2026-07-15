@@ -45,12 +45,16 @@ RUN npm prune --production
 # ------------------------------------
 FROM node:20-alpine AS production
 
-# Instalar dependencias del sistema y librerías de PostgreSQL
+# Instalar dependencias del sistema y librerías de PostgreSQL.
+# fontconfig + ttf-dejavu: sharp rasteriza SVG con TEXTO (cartillas de
+# bingo como imagen) — sin fuentes el texto sale en blanco.
 RUN apk add --no-cache \
     openssl \
     libc6-compat \
     wget \
-    postgresql-libs
+    postgresql-libs \
+    fontconfig \
+    ttf-dejavu
 
 # Crear usuario no-root para seguridad
 RUN addgroup -g 1001 -S nodejs && \

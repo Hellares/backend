@@ -12,6 +12,7 @@ import { ConsultasExternasService } from '../consultas-externas/consultas-extern
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { EvolutionApiService } from './evolution-api.service';
 import { generarCartillasPdf } from './cartilla-pdf.util';
+import { generarCartillaPng } from './cartilla-imagen.util';
 import {
   PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT,
   PLANTILLA_CONFIRMACION_SORTEO_DEFAULT,
@@ -43,6 +44,10 @@ export class WhatsappBotService {
 
   /// Tope de tickets por compra en sorteos clásicos (anti "quiero 99999").
   private static readonly MAX_TICKETS_COMPRA = 100;
+
+  /// Hasta cuántas cartillas de bingo se envían como IMAGEN inline
+  /// (más de eso → un solo PDF, sin metralleta de mensajes).
+  private static readonly MAX_CARTILLAS_IMAGEN = 5;
 
   /// Fallback si la empresa no configuró su agencia (IntegracionWhatsapp
   /// .agenciaEnvio): el bot la informa y no pregunta cuál.
@@ -1443,46 +1448,102 @@ export class WhatsappBotService {
           grid: f.cartilla as number[][],
         }));
       if (cartillas.length > 0) {
-        try {
-          const base64 = await generarCartillasPdf({
-            sorteoTitulo: p.sorteo.titulo,
-            empresaNombre: await this.nombreEmpresa(empresaId),
+        const empresaNombre = await this.nombreEmpresa(empresaId);
+        // HÍBRIDO: pocas cartillas → IMÁGENES inline (mejor experiencia
+        // en el live); compras grandes → un solo PDF (sin metralleta de
+        // mensajes, imprimible). Fallback en cadena: imagen→PDF→texto.
+        let enviado = false;
+        if (
+          cartillas.length <= WhatsappBotService.MAX_CARTILLAS_IMAGEN
+        ) {
+          enviado = await this.enviarCartillasImagen(
+            cfg.instanceName,
+            p.celular,
+            p.sorteo.titulo,
+            empresaNombre,
             cartillas,
-          });
-          await this.evolution.sendDocument({
-            instanceName: cfg.instanceName,
-            number: p.celular,
-            base64,
-            fileName: 'cartillas-bingo.pdf',
-            caption:
-              `🎱 Tus ${cartillas.length} cartilla${cartillas.length === 1 ? '' : 's'} ` +
-              `de *${p.sorteo.titulo}* — ábrelas, márcalas o imprímelas. ¡Suerte! 🍀`,
-          });
-        } catch (e) {
-          this.logger.warn(
-            `PDF de cartillas falló (${(e as Error).message}) — fallback texto`,
           );
-          const bloques = cartillas.map((c) =>
-            this.textoCartilla(c.numero, c.grid),
-          );
-          for (let i = 0; i < bloques.length; i += 3) {
-            await this.evolution
-              .sendText({
-                instanceName: cfg.instanceName,
-                number: p.celular,
-                text: bloques.slice(i, i + 3).join('\n\n'),
-              })
-              .catch((err) =>
-                this.logger.warn(
-                  `Cartillas bingo no enviadas: ${(err as Error).message}`,
-                ),
-              );
+        }
+        if (!enviado) {
+          try {
+            const base64 = await generarCartillasPdf({
+              sorteoTitulo: p.sorteo.titulo,
+              empresaNombre,
+              cartillas,
+            });
+            await this.evolution.sendDocument({
+              instanceName: cfg.instanceName,
+              number: p.celular,
+              base64,
+              fileName: 'cartillas-bingo.pdf',
+              caption:
+                `🎱 Tus ${cartillas.length} cartilla${cartillas.length === 1 ? '' : 's'} ` +
+                `de *${p.sorteo.titulo}* — ábrelas, márcalas o imprímelas. ¡Suerte! 🍀`,
+            });
+          } catch (e) {
+            this.logger.warn(
+              `PDF de cartillas falló (${(e as Error).message}) — fallback texto`,
+            );
+            const bloques = cartillas.map((c) =>
+              this.textoCartilla(c.numero, c.grid),
+            );
+            for (let i = 0; i < bloques.length; i += 3) {
+              await this.evolution
+                .sendText({
+                  instanceName: cfg.instanceName,
+                  number: p.celular,
+                  text: bloques.slice(i, i + 3).join('\n\n'),
+                })
+                .catch((err) =>
+                  this.logger.warn(
+                    `Cartillas bingo no enviadas: ${(err as Error).message}`,
+                  ),
+                );
+            }
           }
         }
       }
     }
     await this.guardarConversacion(empresaId, p.celular, estado, ctx);
     return true;
+  }
+
+  /**
+   * Cartillas como IMÁGENES inline (compras chicas): una por mensaje,
+   * con su caption. true si TODAS salieron; false = usar el PDF.
+   */
+  private async enviarCartillasImagen(
+    instanceName: string,
+    celular: string,
+    sorteoTitulo: string,
+    empresaNombre: string,
+    cartillas: { numero: number | null; nombre: string; grid: number[][] }[],
+  ): Promise<boolean> {
+    try {
+      for (const c of cartillas) {
+        const base64 = await generarCartillaPng({
+          sorteoTitulo,
+          empresaNombre,
+          numero: c.numero,
+          nombre: c.nombre,
+          grid: c.grid,
+        });
+        await this.evolution.sendImage({
+          instanceName,
+          number: celular,
+          base64,
+          mimetype: 'image/png',
+          fileName: `cartilla-${c.numero ?? 'bingo'}.png`,
+          caption: `🎱 Cartilla *#${c.numero ?? '—'}* — ${sorteoTitulo}`,
+        });
+      }
+      return true;
+    } catch (e) {
+      this.logger.warn(
+        `Cartillas como imagen fallaron (${(e as Error).message}) — se usa PDF`,
+      );
+      return false;
+    }
   }
 
   /** Cartilla 5×5 como texto monospace de WhatsApp (** = centro LIBRE). */

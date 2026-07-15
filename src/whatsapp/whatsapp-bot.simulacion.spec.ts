@@ -1143,13 +1143,31 @@ describe('Simulación E2E del bot de sorteos', () => {
 
     r = await sim.cliente(CEL, '1'); // yapeo yo
 
-    // La empresa valida → confirmación con rango + PDF con las 2 cartillas.
+    // La empresa valida → confirmación con rango + 2 IMÁGENES inline
+    // (compra chica ≤5: mejor experiencia que el PDF).
     r = await sim.validar(sim.db.participantes[0].id);
     expect(r[0]).toContain('*#1 al #2*');
-    const pdf = r.find((m) => m.includes('[PDF cartillas-bingo.pdf]'));
+    expect(r.some((m) => m.includes('📷 [imagen] 🎱 Cartilla *#1*'))).toBe(
+      true,
+    );
+    expect(r.some((m) => m.includes('📷 [imagen] 🎱 Cartilla *#2*'))).toBe(
+      true,
+    );
+
+    // Compra GRANDE (>5): un solo PDF, sin metralleta de imágenes.
+    const CEL2 = '51900333444';
+    await sim.cliente(CEL2, '1');
+    await sim.cliente(CEL2, '40556677');
+    await sim.cliente(CEL2, '8');
+    await sim.cliente(CEL2, '1');
+    const r2 = await sim.validar(
+      sim.db.participantes.find((x) => x.celular === CEL2)!.id,
+    );
+    const pdf = r2.find((m) => m.includes('[PDF cartillas-bingo.pdf]'));
     expect(pdf).toBeDefined();
-    expect(pdf).toContain('Tus 2 cartillas de *GRAN BINGO*');
-    sim.imprimir('26. Bingo: compra y envío de cartillas (PDF)');
+    expect(pdf).toContain('Tus 8 cartillas de *GRAN BINGO*');
+    expect(r2.some((m) => m.includes('📷 [imagen]'))).toBe(false);
+    sim.imprimir('26. Bingo: cartillas como imagen (≤5) o PDF (>5)');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
