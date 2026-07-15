@@ -359,6 +359,18 @@ export class WhatsappService {
   }
 
   /**
+   * Al adjudicarse un premio (jugar rifa/bingo o registro manual): el
+   * bot felicita al ganador y arranca el flujo de dirección (físico) o
+   * de número de Yape (efectivo). Best-effort.
+   */
+  async notificarPremioGanado(
+    empresaId: string,
+    premioId: string,
+  ): Promise<boolean> {
+    return this.bot.notificarPremioGanado(empresaId, premioId);
+  }
+
+  /**
    * Texto simple al número indicado desde el WhatsApp de la empresa
    * (best-effort). true si salió.
    */

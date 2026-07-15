@@ -49,6 +49,21 @@ export class WhatsappBotService {
   /// (más de eso → un solo PDF, sin metralleta de mensajes).
   private static readonly MAX_CARTILLAS_IMAGEN = 5;
 
+  /// Pasos del flujo de PREMIO de un ganador (ctx.premioId): son los
+  /// únicos que el bot atiende SIN sorteos abiertos — el modo jugar
+  /// opera con el sorteo cerrado.
+  private static readonly ESTADOS_PREMIO = [
+    'GANADOR_YAPE',
+    'GANADOR_YAPE_NUMERO',
+    'GANADOR_CONFIRMA',
+    'GANADOR_QUIEN',
+    'GANADOR_CIUDAD',
+    'GANADOR_DEPARTAMENTO',
+    'GANADOR_DIRECCION',
+    'REGALO_DNI',
+    'REGALO_NOMBRE',
+  ];
+
   /// Fallback si la empresa no configuró su agencia (IntegracionWhatsapp
   /// .agenciaEnvio): el bot la informa y no pregunta cuál.
   private static readonly AGENCIA_DEFAULT = 'SHALOM';
@@ -76,7 +91,16 @@ export class WhatsappBotService {
     '*0* — Volver al menú';
 
   /// Qué sigue después del pago (según si ya hay dirección previa).
-  private static avisoDireccion(confirma: boolean): string {
+  private static avisoDireccion(confirma: boolean, tipo?: TipoSorteo): string {
+    // SORTEO/BINGO: la dirección se pide SOLO SI GANA — aquí solo se
+    // anuncia la confirmación de tickets/cartillas.
+    if (tipo === TipoSorteo.SORTEO || tipo === TipoSorteo.BINGO) {
+      return (
+        '🎟️ Cuando validemos tu pago te confirmamos tus ' +
+        (tipo === TipoSorteo.BINGO ? 'cartillas' : 'tickets') +
+        ' por aquí.'
+      );
+    }
     return (
       '📦 Cuando validemos tu pago te pediremos ' +
       (confirma ? 'confirmar tu dirección de envío.' : 'los datos de envío.')
@@ -116,7 +140,23 @@ export class WhatsappBotService {
         ventaHasta: true,
       },
     });
-    if (sorteos.length === 0) return;
+    const sinSorteos = sorteos.length === 0;
+    if (sinSorteos) {
+      // EXCEPCIÓN: un GANADOR a mitad del flujo de su premio (dirección
+      // o número de Yape) se atiende aunque no haya sorteos abiertos —
+      // se juega justamente con el sorteo CERRADO. Todo lo demás, humano.
+      const convGanador = await this.prisma.conversacionWhatsapp.findUnique({
+        where: { empresaId_celular: { empresaId, celular } },
+      });
+      const ctxGanador: any = convGanador?.contexto ?? {};
+      if (
+        !convGanador ||
+        !ctxGanador.premioId ||
+        !WhatsappBotService.ESTADOS_PREMIO.includes(convGanador.estado)
+      ) {
+        return;
+      }
+    }
 
     // OJO: NO upsert con update:{} — bumpeaba actualizadoEn en cada
     // mensaje y los timeouts (asesor 12h, paso 30min, menú 1h) nunca
@@ -220,6 +260,11 @@ export class WhatsappBotService {
         if (!cicloCerrado) return;
       }
     }
+
+    // Sin sorteos abiertos solo se atiende el flujo de premio: si el
+    // paso cayó a MENU (comando 0/menu o caducó) no hay menú que
+    // ofrecer — silencio, el chat vuelve a ser humano.
+    if (sinSorteos && estado === 'MENU') return;
 
     try {
       await this.manejarPaso(cfg.instanceName, empresaId, celular, msg, {
@@ -534,7 +579,10 @@ export class WhatsappBotService {
           // Paga él mismo: nombre y número ya los tenemos.
           await responder(
             '✅ ¡Listo! Esperamos tu yape 🙌\n\n' +
-              WhatsappBotService.avisoDireccion(s.ctx.confirmaDireccion),
+              WhatsappBotService.avisoDireccion(
+                s.ctx.confirmaDireccion,
+                s.sorteos.find((x) => x.id === s.ctx.sorteoId)?.tipo,
+              ),
           );
           return irA('MENU', {});
         }
@@ -590,7 +638,10 @@ export class WhatsappBotService {
         await responder(
           `✅ Anotado: *${pagadorNombre}* yapeará desde el ` +
             `*${s.ctx.pagadorCelular}*.\n\n` +
-            WhatsappBotService.avisoDireccion(s.ctx.confirmaDireccion),
+            WhatsappBotService.avisoDireccion(
+              s.ctx.confirmaDireccion,
+              s.sorteos.find((x) => x.id === s.ctx.sorteoId)?.tipo,
+            ),
         );
         return irA('MENU', {});
       }
@@ -941,6 +992,87 @@ export class WhatsappBotService {
           responder,
           irA,
         );
+      }
+
+      // Ganador con dirección YA registrada (la dio antes con la opción
+      // 2): confirmarla o cambiarla. Ctx solo premioId — sobrevive el
+      // cierre del sorteo (el premio pendiente se gestiona igual).
+      case 'GANADOR_CONFIRMA': {
+        if (!s.ctx.premioId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg === '1') {
+          await responder(
+            '📦 ¡Listo! Tu premio saldrá a la dirección registrada.\n' +
+              'Te enviaremos el ticket de envío por aquí cuando lo despachemos 🚚',
+          );
+          return irA('MENU', {});
+        }
+        if (msg === '2') {
+          await responder(WhatsappBotService.MSG_QUIEN_RECOGE);
+          return irA('GANADOR_QUIEN', {
+            premioId: s.ctx.premioId,
+            agencia: s.ctx.agencia,
+          });
+        }
+        await responder(
+          'Responde *1* para usar esa dirección, *2* para cambiarla ' +
+            'o *0* para el menú.',
+        );
+        return;
+      }
+
+      // Premio en EFECTIVO 💸: confirmar a qué número se le yapea.
+      case 'GANADOR_YAPE': {
+        if (!s.ctx.premioId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg === '1') {
+          return this.guardarAbonoPremio(
+            empresaId,
+            celular.slice(-9),
+            s.ctx,
+            responder,
+            irA,
+          );
+        }
+        if (msg === '2') {
+          await responder(
+            '💳 ¿A qué *número* te yapeamos? (9 dígitos, ej. 987654321)',
+          );
+          return irA('GANADOR_YAPE_NUMERO', s.ctx);
+        }
+        // Atajo: mandó el número directo.
+        const directo = msg.replace(/\D/g, '');
+        if (directo.length === 9 && directo.startsWith('9')) {
+          return this.guardarAbonoPremio(
+            empresaId,
+            directo,
+            s.ctx,
+            responder,
+            irA,
+          );
+        }
+        await responder(
+          'Responde *1* para el abono a este número, *2* para indicar ' +
+            'otro o *0* para el menú.',
+        );
+        return;
+      }
+
+      case 'GANADOR_YAPE_NUMERO': {
+        if (!s.ctx.premioId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        const num = msg.replace(/\D/g, '');
+        if (num.length !== 9 || !num.startsWith('9')) {
+          await responder(
+            'Ese no parece un celular 🙈 deben ser *9 dígitos* ' +
+              '(ej. 987654321) — inténtalo de nuevo (o *0* para el menú):',
+          );
+          return;
+        }
+        return this.guardarAbonoPremio(empresaId, num, s.ctx, responder, irA);
       }
 
       default:
@@ -1398,7 +1530,17 @@ export class WhatsappBotService {
 
     let texto: string;
     let estado: string;
-    if (p.agenciaNombre) {
+    if (p.sorteo.tipo !== TipoSorteo.DINAMICA) {
+      // SORTEO y BINGO: la dirección se pide SOLO SI GANA (el bot le
+      // escribe al adjudicarse el premio — notificarPremioGanado). La
+      // compra queda corta: confirmación y suerte.
+      texto =
+        base +
+        (p.sorteo.tipo === TipoSorteo.BINGO
+          ? '¡Mucha suerte en el bingo! 🍀 Si ganas, te escribimos por aquí para coordinar tu premio 🎁'
+          : '¡Mucha suerte en el sorteo! 🍀 Si ganas, te escribimos por aquí para coordinar tu premio 🎁');
+      estado = 'MENU';
+    } else if (p.agenciaNombre) {
       const destino = [p.destinoProvincia, p.destinoDepartamento]
         .filter(Boolean)
         .join(', ');
@@ -1505,6 +1647,103 @@ export class WhatsappBotService {
       }
     }
     await this.guardarConversacion(empresaId, p.celular, estado, ctx);
+    return true;
+  }
+
+  /**
+   * ¡GANASTE! — al adjudicarse un premio (modo JUGAR o registro manual
+   * en SORTEO/BINGO) el bot le escribe al ganador y arranca el flujo:
+   * EFECTIVO → confirmar el número de Yape del abono; físico → datos de
+   * envío (confirmar la dirección que ya dio, o capturarla). El ctx va
+   * SOLO con premioId (sin sorteoId): el flujo sobrevive el cierre del
+   * sorteo — se juega justamente con el sorteo CERRADO.
+   */
+  async notificarPremioGanado(
+    empresaId: string,
+    premioId: string,
+  ): Promise<boolean> {
+    if (!this.evolution.disponible) return false;
+    const cfg = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId },
+    });
+    if (!cfg || !cfg.habilitado || cfg.estado !== 'CONECTADO') return false;
+    const premio = await this.prisma.sorteoPremio.findFirst({
+      where: { id: premioId, empresaId },
+      include: {
+        sorteo: { select: { titulo: true, tipo: true, reabierto: true } },
+      },
+    });
+    if (!premio || premio.sorteo.reabierto) return false;
+
+    // Celular: el de la participación ganadora (formato 51X…); premios
+    // manuales sin participación usan el snapshot del registro.
+    const part = premio.participanteId
+      ? await this.prisma.sorteoParticipante.findFirst({
+          where: { id: premio.participanteId, empresaId },
+          select: { celular: true, numeroTicket: true },
+        })
+      : null;
+    const soloDigitos = premio.ganadorCelular?.replace(/\D/g, '') ?? '';
+    const celular =
+      part?.celular ??
+      (soloDigitos.length >= 9 ? `51${soloDigitos.slice(-9)}` : null);
+    if (!celular) return false;
+
+    const etiqueta =
+      premio.sorteo.tipo === TipoSorteo.BINGO ? 'cartilla' : 'ticket';
+    const conTicket =
+      part?.numeroTicket != null
+        ? ` con tu ${etiqueta} *#${part.numeroTicket}*`
+        : '';
+    const cabecera =
+      `🎉 ¡FELICIDADES ${premio.ganadorNombre.split(' ')[0]}! 🎉\n` +
+      `¡GANASTE${conTicket} en *${premio.sorteo.titulo}*!\n` +
+      `🏆 Tu premio: *${premio.descripcion}*\n\n`;
+
+    let texto: string;
+    let estado: string;
+    let ctx: any;
+    if (premio.esEfectivo) {
+      texto =
+        cabecera +
+        '💸 Es un premio en *EFECTIVO* — te lo yapeamos.\n' +
+        `¿Te hacemos el abono al número desde el que escribes (*${celular.slice(-9)}*)?\n` +
+        '*1* — Sí, a este número ✅\n' +
+        '*2* — A otro número';
+      estado = 'GANADOR_YAPE';
+      ctx = { premioId: premio.id };
+    } else {
+      const agencia =
+        cfg.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT;
+      if (premio.agenciaNombre) {
+        const destino = [premio.destinoProvincia, premio.destinoDepartamento]
+          .filter(Boolean)
+          .join(', ');
+        texto =
+          cabecera +
+          `📦 Tenemos esta dirección para el envío: *${premio.agenciaNombre}*` +
+          `${destino ? ` a *${destino}*` : ''}` +
+          `${premio.agenciaDireccion ? ` (sucursal *${premio.agenciaDireccion}*)` : ''}.\n` +
+          '¿La usamos?\n' +
+          '*1* — Sí, es la misma ✅\n' +
+          '*2* — Cambiarla\n' +
+          '*0* — Volver al menú';
+        estado = 'GANADOR_CONFIRMA';
+      } else {
+        texto =
+          cabecera +
+          `📦 Para enviártelo (va por *${agencia}*):\n` +
+          WhatsappBotService.MSG_QUIEN_RECOGE;
+        estado = 'GANADOR_QUIEN';
+      }
+      ctx = { premioId: premio.id, agencia };
+    }
+    await this.evolution.sendText({
+      instanceName: cfg.instanceName,
+      number: celular,
+      text: texto,
+    });
+    await this.guardarConversacion(empresaId, celular, estado, ctx);
     return true;
   }
 
@@ -2211,6 +2450,55 @@ export class WhatsappBotService {
       `📦 ¡Listo! Tu premio te llegará por *${ctx.agencia}*` +
         (destino ? ` a *${destino}*` : '') +
         '.\nTe enviaremos el ticket de envío por aquí cuando lo despachemos 🚚',
+    );
+    return irA('MENU', {});
+  }
+
+  /**
+   * Guarda el número de Yape confirmado para un premio en EFECTIVO
+   * (abonoNumero) — solo mientras el premio esté pendiente.
+   */
+  private async guardarAbonoPremio(
+    empresaId: string,
+    numero: string,
+    ctx: any,
+    responder: (t: string) => Promise<any>,
+    irA: (e: string, c?: any) => Promise<void>,
+  ) {
+    // GUARD anti Prisma-undefined: sin premioId el findFirst matchearía
+    // un premio arbitrario de la empresa.
+    if (!ctx.premioId) {
+      await responder(
+        'Se perdió el contexto 🙈 escribe *menu* y volvemos a empezar.',
+      );
+      return irA('MENU', {});
+    }
+    const premio = await this.prisma.sorteoPremio.findFirst({
+      where: {
+        id: ctx.premioId,
+        empresaId,
+        estado: {
+          in: [EstadoPremioSorteo.REGISTRADO, EstadoPremioSorteo.PREPARANDO],
+        },
+      },
+    });
+    if (!premio) {
+      await responder(
+        'Tu premio ya fue gestionado o no está disponible — coordina con la tienda (opción *3*).',
+      );
+      return irA('MENU', {});
+    }
+    await this.prisma.sorteoPremio.update({
+      where: { id: premio.id },
+      data: { abonoNumero: numero },
+    });
+    this.realtime.notifySorteoCambiado({
+      empresaId,
+      sorteoId: premio.sorteoId,
+    });
+    await responder(
+      `💸 ¡Listo! Te yapearemos *${premio.descripcion}* al *${numero}*.\n` +
+        'Te confirmamos por aquí apenas hagamos el abono ✅',
     );
     return irA('MENU', {});
   }

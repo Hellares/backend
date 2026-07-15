@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -226,6 +227,15 @@ export class RegistrarPremioDto {
   @IsString()
   catalogoId?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Premio en EFECTIVO: se yapea al ganador — sin envío por agencia; ' +
+      'el bot le pide confirmar su número de abono',
+  })
+  @IsOptional()
+  @IsBoolean()
+  esEfectivo?: boolean;
+
   @ApiPropertyOptional({ enum: ModalidadEntregaPremio })
   @IsOptional()
   @IsEnum(ModalidadEntregaPremio)
@@ -371,6 +381,15 @@ export class CrearPremioCatalogoDto {
   @IsInt()
   @Min(1)
   cantidad?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Premio en EFECTIVO: se yapea al ganador (el bot le confirma su ' +
+      'número de abono en vez de pedirle dirección de agencia)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  esEfectivo?: boolean;
 }
 
 export class ActualizarPremioCatalogoDto {
@@ -387,6 +406,11 @@ export class ActualizarPremioCatalogoDto {
   @IsInt()
   @Min(1)
   cantidad?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  esEfectivo?: boolean;
 }
 
 /** BINGO: cantar una bolilla (1-75). */

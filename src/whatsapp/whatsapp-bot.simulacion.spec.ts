@@ -334,6 +334,52 @@ class Simulador {
     return nuevos;
   }
 
+  /** La empresa JUEGA: el ticket/cartilla #N gana un premio (como
+   *  jugarTicket del backend) y el bot le escribe al ganador. */
+  async jugar(
+    sorteoId: string,
+    numeroTicket: number,
+    over: Row = {},
+  ): Promise<string[]> {
+    const t = this.db.participantes.find(
+      (x) => x.sorteoId === sorteoId && x.numeroTicket === numeroTicket,
+    )!;
+    const esEfectivo = over.esEfectivo ?? false;
+    // Como jugarTicket: en EFECTIVO no se arrastran datos de agencia.
+    const conAgencia = !esEfectivo && !!t.agenciaNombre;
+    const premio: Row = {
+      id: `premio_${++this.db.seq}`,
+      empresaId: EMPRESA,
+      sorteoId,
+      participanteId: t.id,
+      ganadorNombre: t.nombre,
+      ganadorDni: t.dni,
+      ganadorCelular: t.celular.slice(-9),
+      descripcion: 'PREMIO',
+      esEfectivo,
+      abonoNumero: null,
+      estado: EstadoPremioSorteo.REGISTRADO,
+      agenciaNombre: conAgencia ? t.agenciaNombre : null,
+      destinoDepartamento: conAgencia ? t.destinoDepartamento : null,
+      destinoProvincia: conAgencia ? t.destinoProvincia : null,
+      agenciaDireccion: conAgencia ? t.agenciaDireccion : null,
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+      ...over,
+    };
+    this.db.premios.push(premio);
+    this.transcript.push(
+      `  🏪 [la empresa JUEGA: #${numeroTicket} gana "${premio.descripcion}"]`,
+    );
+    const antes = this.enviados.length;
+    await this.bot.notificarPremioGanado(EMPRESA, premio.id);
+    const nuevos = this.enviados.slice(antes).map((m) => m.text);
+    for (const n of nuevos) {
+      this.transcript.push('  🤖 ' + n.split('\n').join('\n     '));
+    }
+    return nuevos;
+  }
+
   imprimir(titulo: string) {
     // eslint-disable-next-line no-console
     console.log(`\n═══ ${titulo} ═══\n${this.transcript.join('\n')}`);
@@ -1168,6 +1214,129 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(pdf).toContain('Tus 8 cartillas de *GRAN BINGO*');
     expect(r2.some((m) => m.includes('📷 [imagen]'))).toBe(false);
     sim.imprimir('26. Bingo: cartillas como imagen (≤5) o PDF (>5)');
+  });
+
+  it('27. rifa: al comprar NO se pide dirección; al GANAR premio físico sí', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'GRAN RIFA',
+      precioParticipacion: 1,
+    });
+
+    await sim.cliente(CEL, '1');
+    await sim.cliente(CEL, '44881122');
+    await sim.cliente(CEL, '3'); // 3 tickets
+    let r = await sim.cliente(CEL, '1'); // yapeo yo
+    // Ya no promete pedir la dirección: solo la confirmación de tickets.
+    expect(r[0]).toContain('te confirmamos tus tickets');
+    expect(r[0]).not.toContain('datos de envío');
+
+    // Al validar: suerte y NADA de dirección (se pide solo si gana).
+    r = await sim.validar(sim.db.participantes[0].id);
+    expect(r[0]).toContain('*#1 al #3*');
+    expect(r[0]).toContain('¡Mucha suerte en el sorteo!');
+    expect(r[0]).not.toContain('ciudad');
+    expect(r[0]).not.toContain('dirección para tu envío');
+
+    // Se cierra la venta y SE JUEGA: el ticket #2 gana un premio FÍSICO.
+    s.estado = EstadoSorteo.CERRADO;
+    r = await sim.jugar(s.id, 2, { descripcion: 'CELULAR SAMSUNG A15' });
+    expect(r[0]).toContain('¡FELICIDADES ROSA!');
+    expect(r[0]).toContain('con tu ticket *#2*');
+    expect(r[0]).toContain('CELULAR SAMSUNG A15');
+    expect(r[0]).toContain('¿Quién *recogerá* el paquete');
+
+    // Flujo de envío del ganador (sobrevive el sorteo CERRADO).
+    r = await sim.cliente(CEL, '1'); // recojo yo
+    expect(r[0]).toContain('¿A qué *ciudad*');
+    r = await sim.cliente(CEL, 'TRUJILLO');
+    r = await sim.cliente(CEL, 'LA LIBERTAD');
+    r = await sim.cliente(CEL, 'AV ESPAÑA 123');
+    expect(r[0]).toContain('Tu premio te llegará por *SHALOM*');
+
+    const premio = sim.db.premios[0];
+    expect(premio.agenciaNombre).toBe('SHALOM');
+    expect(premio.destinoProvincia).toBe('TRUJILLO');
+    expect(premio.destinoDepartamento).toBe('LA LIBERTAD');
+    sim.imprimir('27. Rifa: dirección SOLO al ganar (premio físico)');
+  });
+
+  it('28. premio en EFECTIVO: confirma el número de Yape (mismo u otro)', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'GRAN RIFA',
+      precioParticipacion: 1,
+    });
+    await sim.cliente(CEL, '1');
+    await sim.cliente(CEL, '44881122');
+    await sim.cliente(CEL, '2');
+    await sim.cliente(CEL, '1');
+    await sim.validar(sim.db.participantes[0].id);
+    s.estado = EstadoSorteo.CERRADO;
+
+    // Ticket #1 gana EFECTIVO → el bot pide confirmar el número.
+    let r = await sim.jugar(s.id, 1, {
+      descripcion: 'S/ 500 EN EFECTIVO',
+      esEfectivo: true,
+    });
+    expect(r[0]).toContain('EFECTIVO');
+    expect(r[0]).toContain(`(*${CEL.slice(-9)}*)`);
+    expect(r[0]).toContain('*2* — A otro número');
+    expect(r[0]).not.toContain('ciudad');
+
+    // "1" = a este mismo número.
+    r = await sim.cliente(CEL, '1');
+    expect(r[0]).toContain(`al *${CEL.slice(-9)}*`);
+    expect(sim.db.premios[0].abonoNumero).toBe(CEL.slice(-9));
+
+    // Ticket #2 gana otro EFECTIVO → "2" = otro número (con retry).
+    r = await sim.jugar(s.id, 2, {
+      descripcion: 'S/ 200 EN EFECTIVO',
+      esEfectivo: true,
+    });
+    r = await sim.cliente(CEL, '2');
+    expect(r[0]).toContain('¿A qué *número* te yapeamos?');
+    r = await sim.cliente(CEL, '123'); // inválido
+    expect(r[0]).toContain('9 dígitos');
+    r = await sim.cliente(CEL, '944556677');
+    expect(r[0]).toContain('al *944556677*');
+    expect(sim.db.premios[1].abonoNumero).toBe('944556677');
+    sim.imprimir('28. Premio en efectivo: confirmación del Yape');
+  });
+
+  it('29. ganador con dirección YA dada: confirmarla; bingo habla de cartillas', async () => {
+    const sim = new Simulador();
+    const s = sim.crearSorteo({
+      tipo: TipoSorteo.BINGO,
+      titulo: 'GRAN BINGO',
+      precioParticipacion: 5,
+    });
+    await sim.cliente(CEL, '1');
+    await sim.cliente(CEL, '44881122');
+    await sim.cliente(CEL, '1'); // 1 cartilla
+    let r = await sim.cliente(CEL, '1'); // yapeo yo
+    expect(r[0]).toContain('te confirmamos tus cartillas');
+    await sim.validar(sim.db.participantes[0].id);
+
+    // El jugador dejó su dirección por la opción 2 antes del cierre.
+    Object.assign(sim.db.participantes[0], {
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TARAPOTO',
+      destinoDepartamento: 'SAN MARTIN',
+      agenciaDireccion: null,
+    });
+    s.estado = EstadoSorteo.CERRADO;
+
+    r = await sim.jugar(s.id, 1, { descripcion: 'CANASTA GIGANTE' });
+    expect(r[0]).toContain('con tu cartilla *#1*');
+    expect(r[0]).toContain('*SHALOM* a *TARAPOTO, SAN MARTIN*');
+    expect(r[0]).toContain('*1* — Sí, es la misma');
+
+    r = await sim.cliente(CEL, '1');
+    expect(r[0]).toContain('a la dirección registrada');
+    sim.imprimir('29. Ganador confirma dirección ya registrada (bingo)');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).

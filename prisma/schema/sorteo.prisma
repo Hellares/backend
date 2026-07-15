@@ -192,6 +192,11 @@ model SorteoPremio {
   // entrega en agencia usan estos datos como destinatario.
   recibeNombre String?
   recibeDni    String?
+  // Premio en EFECTIVO 💸: no hay envio por agencia — se le yapea al
+  // ganador. abonoNumero = numero que el ganador confirmo con el bot
+  // (null = aun no confirma; default su celular de WhatsApp).
+  esEfectivo  Boolean @default(false)
+  abonoNumero String?
   // Ticket enviado por WhatsApp automático al ganador (chip en la card).
   whatsappEnviadoEn DateTime?
 
@@ -228,6 +233,9 @@ model SorteoPremioCatalogo {
   sorteoId    String
   descripcion String
   cantidad    Int    @default(1)
+  // true = premio en EFECTIVO (se yapea, sin envio por agencia); el bot
+  // le pide al ganador confirmar su numero en vez de la direccion.
+  esEfectivo  Boolean @default(false)
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

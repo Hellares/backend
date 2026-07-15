@@ -252,7 +252,7 @@ export class SorteosService {
     usuarioId: string,
     sorteoId: string,
     dto: RegistrarPremioDto,
-    opts?: { permitirCerrado?: boolean },
+    opts?: { permitirCerrado?: boolean; notificarGanador?: boolean },
   ) {
     const sorteo = await this.assertSorteo(empresaId, sorteoId);
     // El modo JUGAR (rifa con ánfora) opera justamente con el sorteo
@@ -391,6 +391,9 @@ export class SorteosService {
           participanteId: dto.participanteId,
           recibeNombre: dto.recibeNombre,
           recibeDni: dto.recibeDni,
+          // EFECTIVO 💸: sin envío por agencia — el bot le confirma al
+          // ganador su número de abono (abonoNumero queda null hasta eso).
+          esEfectivo: dto.esEfectivo ?? false,
           ganadorId: ganadorId!,
           ganadorDni: dto.ganadorDni,
           ganadorNombre: dto.ganadorNombre,
@@ -421,6 +424,22 @@ export class SorteosService {
       cuerpoBase: dto.descripcion,
       action: 'ganado',
     });
+    // WhatsApp al ganador (best-effort): "¡GANASTE!" + arranca el flujo
+    // de dirección (físico) o de número de Yape (efectivo). Solo SORTEO
+    // y BINGO — en DINÁMICA la activación ya atendió al jugador; el
+    // auto-premio pasa notificarGanador=false por si acaso.
+    if (
+      opts?.notificarGanador !== false &&
+      sorteo.tipo !== TipoSorteo.DINAMICA
+    ) {
+      await this.whatsapp
+        .notificarPremioGanado(empresaId, premio.id)
+        .catch((e) =>
+          this.logger.warn(
+            `WhatsApp ganador premio ${premio.id}: ${(e as Error).message}`,
+          ),
+        );
+    }
     // Refresco instantáneo del detalle en otros devices.
     this.realtime.notifySorteoCambiado({ empresaId, sorteoId });
 
@@ -896,10 +915,12 @@ export class SorteosService {
         destinoDepartamento: participante.destinoDepartamento ?? undefined,
         destinoProvincia: participante.destinoProvincia ?? undefined,
         agenciaDireccion: participante.agenciaDireccion ?? undefined,
+        // (sin notificar: la confirmación de activación ya le habló)
         montoParticipacion: participante.sorteo.precioParticipacion
           ? Number(participante.sorteo.precioParticipacion)
           : undefined,
-      } as RegistrarPremioDto);
+      } as RegistrarPremioDto,
+      { notificarGanador: false });
       this.logger.log(
         `Premio automático de dinámica creado (DNI ${participante.dni}, sorteo ${participante.sorteo.id})`,
       );
@@ -1096,7 +1117,7 @@ export class SorteosService {
   async crearPremioCatalogo(
     empresaId: string,
     sorteoId: string,
-    dto: { descripcion: string; cantidad?: number },
+    dto: { descripcion: string; cantidad?: number; esEfectivo?: boolean },
   ) {
     await this.assertSorteo(empresaId, sorteoId);
     const item = await this.prisma.sorteoPremioCatalogo.create({
@@ -1105,6 +1126,7 @@ export class SorteosService {
         sorteoId,
         descripcion: dto.descripcion.trim().toUpperCase(),
         cantidad: dto.cantidad ?? 1,
+        esEfectivo: dto.esEfectivo ?? false,
       },
     });
     this.realtime.notifySorteoCambiado({ empresaId, sorteoId });
@@ -1114,7 +1136,7 @@ export class SorteosService {
   async actualizarPremioCatalogo(
     empresaId: string,
     catalogoId: string,
-    dto: { descripcion?: string; cantidad?: number },
+    dto: { descripcion?: string; cantidad?: number; esEfectivo?: boolean },
   ) {
     const item = await this.prisma.sorteoPremioCatalogo.findFirst({
       where: { id: catalogoId, empresaId },
@@ -1135,6 +1157,7 @@ export class SorteosService {
           descripcion: dto.descripcion.trim().toUpperCase(),
         }),
         ...(dto.cantidad != null && { cantidad: dto.cantidad }),
+        ...(dto.esEfectivo != null && { esEfectivo: dto.esEfectivo }),
       },
     });
     this.realtime.notifySorteoCambiado({ empresaId, sorteoId: item.sorteoId });
@@ -1261,7 +1284,9 @@ export class SorteosService {
       });
     }
 
-    const conAgencia = !!ticket.agenciaNombre?.trim();
+    // EFECTIVO 💸: sin datos de agencia — el bot le confirma al ganador
+    // el número de Yape en vez de la dirección.
+    const conAgencia = !catalogo.esEfectivo && !!ticket.agenciaNombre?.trim();
     const premio = await this.registrarPremio(
       empresaId,
       usuarioId,
@@ -1269,6 +1294,7 @@ export class SorteosService {
       {
         participanteId: ticket.id,
         catalogoId: catalogo.id,
+        esEfectivo: catalogo.esEfectivo,
         recibeNombre: ticket.recibeNombre ?? undefined,
         recibeDni: ticket.recibeDni ?? undefined,
         ganadorDni: ticket.dni,
@@ -1278,10 +1304,16 @@ export class SorteosService {
         modalidad: conAgencia
           ? ModalidadEntregaPremio.ENVIO_AGENCIA
           : ModalidadEntregaPremio.RETIRO_TIENDA,
-        agenciaNombre: ticket.agenciaNombre ?? undefined,
-        destinoDepartamento: ticket.destinoDepartamento ?? undefined,
-        destinoProvincia: ticket.destinoProvincia ?? undefined,
-        agenciaDireccion: ticket.agenciaDireccion ?? undefined,
+        agenciaNombre: conAgencia ? ticket.agenciaNombre! : undefined,
+        destinoDepartamento: conAgencia
+          ? (ticket.destinoDepartamento ?? undefined)
+          : undefined,
+        destinoProvincia: conAgencia
+          ? (ticket.destinoProvincia ?? undefined)
+          : undefined,
+        agenciaDireccion: conAgencia
+          ? (ticket.agenciaDireccion ?? undefined)
+          : undefined,
         montoParticipacion: 0,
       } as RegistrarPremioDto,
       { permitirCerrado: true },
