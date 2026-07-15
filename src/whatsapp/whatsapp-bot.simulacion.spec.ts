@@ -218,6 +218,12 @@ class Simulador {
       sendImage: async (a: any) => {
         this.enviados.push({ ...a, text: `📷 [imagen] ${a.caption ?? ''}` });
       },
+      sendDocument: async (a: any) => {
+        this.enviados.push({
+          ...a,
+          text: `📄 [PDF ${a.fileName}] ${a.caption ?? ''}`,
+        });
+      },
     } as any;
     const consultas = {
       consultarDni: async (dni: string) => {
@@ -1137,13 +1143,13 @@ describe('Simulación E2E del bot de sorteos', () => {
 
     r = await sim.cliente(CEL, '1'); // yapeo yo
 
-    // La empresa valida → confirmación con rango + las 2 CARTILLAS.
+    // La empresa valida → confirmación con rango + PDF con las 2 cartillas.
     r = await sim.validar(sim.db.participantes[0].id);
     expect(r[0]).toContain('*#1 al #2*');
-    expect(r.some((m) => m.includes('CARTILLA #1'))).toBe(true);
-    expect(r.some((m) => m.includes('CARTILLA #2'))).toBe(true);
-    expect(r.some((m) => m.includes('B   I   N   G   O'))).toBe(true);
-    sim.imprimir('26. Bingo: compra y envío de cartillas');
+    const pdf = r.find((m) => m.includes('[PDF cartillas-bingo.pdf]'));
+    expect(pdf).toBeDefined();
+    expect(pdf).toContain('Tus 2 cartillas de *GRAN BINGO*');
+    sim.imprimir('26. Bingo: compra y envío de cartillas (PDF)');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).

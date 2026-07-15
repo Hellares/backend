@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { EvolutionApiService } from './evolution-api.service';
+import { generarCartillasPdf } from './cartilla-pdf.util';
 import {
   PLANTILLA_CONFIRMACION_DINAMICA_DEFAULT,
   PLANTILLA_CONFIRMACION_SORTEO_DEFAULT,
@@ -1421,8 +1422,8 @@ export class WhatsappBotService {
       number: p.celular,
       text: texto,
     });
-    // BINGO: enviarle sus CARTILLAS (grilla B-I-N-G-O) — en bloques de
-    // 3 por mensaje para no spamear compras grandes.
+    // BINGO: enviarle sus CARTILLAS como PDF (una por página — se ven,
+    // se marcan o se imprimen). Fallback: texto monospace.
     if ((p.sorteo as any).tipo === TipoSorteo.BINGO) {
       const filasCartilla = await this.prisma.sorteoParticipante.findMany({
         where: p.compraId
@@ -1434,23 +1435,50 @@ export class WhatsappBotService {
           : { id: p.id, empresaId },
         orderBy: { numeroTicket: 'asc' },
       });
-      const bloques = filasCartilla
+      const cartillas = filasCartilla
         .filter((f) => Array.isArray(f.cartilla))
-        .map((f) =>
-          this.textoCartilla(f.numeroTicket, f.cartilla as number[][]),
-        );
-      for (let i = 0; i < bloques.length; i += 3) {
-        await this.evolution
-          .sendText({
+        .map((f) => ({
+          numero: f.numeroTicket,
+          nombre: f.nombre,
+          grid: f.cartilla as number[][],
+        }));
+      if (cartillas.length > 0) {
+        try {
+          const base64 = await generarCartillasPdf({
+            sorteoTitulo: p.sorteo.titulo,
+            empresaNombre: await this.nombreEmpresa(empresaId),
+            cartillas,
+          });
+          await this.evolution.sendDocument({
             instanceName: cfg.instanceName,
             number: p.celular,
-            text: bloques.slice(i, i + 3).join('\n\n'),
-          })
-          .catch((e) =>
-            this.logger.warn(
-              `Cartillas bingo no enviadas: ${(e as Error).message}`,
-            ),
+            base64,
+            fileName: 'cartillas-bingo.pdf',
+            caption:
+              `🎱 Tus ${cartillas.length} cartilla${cartillas.length === 1 ? '' : 's'} ` +
+              `de *${p.sorteo.titulo}* — ábrelas, márcalas o imprímelas. ¡Suerte! 🍀`,
+          });
+        } catch (e) {
+          this.logger.warn(
+            `PDF de cartillas falló (${(e as Error).message}) — fallback texto`,
           );
+          const bloques = cartillas.map((c) =>
+            this.textoCartilla(c.numero, c.grid),
+          );
+          for (let i = 0; i < bloques.length; i += 3) {
+            await this.evolution
+              .sendText({
+                instanceName: cfg.instanceName,
+                number: p.celular,
+                text: bloques.slice(i, i + 3).join('\n\n'),
+              })
+              .catch((err) =>
+                this.logger.warn(
+                  `Cartillas bingo no enviadas: ${(err as Error).message}`,
+                ),
+              );
+          }
+        }
       }
     }
     await this.guardarConversacion(empresaId, p.celular, estado, ctx);

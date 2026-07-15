@@ -194,6 +194,28 @@ export class EvolutionApiService {
     });
   }
 
+  /**
+   * Documento (PDF) a un número. `media` acepta base64 directo — no
+   * necesita URL pública (Evolution lo sube a WhatsApp).
+   */
+  async sendDocument(args: {
+    instanceName: string;
+    number: string;
+    base64: string;
+    fileName: string;
+    caption?: string;
+    mimetype?: string;
+  }) {
+    return this.request('POST', `/message/sendMedia/${args.instanceName}`, {
+      number: args.number,
+      mediatype: 'document',
+      mimetype: args.mimetype ?? 'application/pdf',
+      media: args.base64,
+      fileName: args.fileName,
+      caption: args.caption ?? '',
+    });
+  }
+
   /** Mensaje de texto simple. */
   async sendText(args: {
     instanceName: string;
