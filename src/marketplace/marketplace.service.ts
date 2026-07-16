@@ -678,7 +678,33 @@ export class MarketplaceService {
 
     const categorias = await this.getCategorias();
 
-    return { ofertas, masVendidos, masVistos, categorias };
+    return { ofertas, masVendidos, masVistos, categorias, cortina: await this._getCortina() };
+  }
+
+  /**
+   * Cortina del marketplace: cuando el super admin la activa (syncronize-admin
+   * → Configuración del Sistema), el app tapa toda la sección de productos
+   * con este mensaje. Se entrega junto al home para no sumar un request.
+   */
+  private async _getCortina() {
+    try {
+      const config = await this.prisma.configuracionSistema.findFirst({
+        select: {
+          marketplaceCortinaActiva: true,
+          marketplaceCortinaTitulo: true,
+          marketplaceCortinaMensaje: true,
+        },
+      });
+      return {
+        activa: config?.marketplaceCortinaActiva ?? false,
+        titulo: config?.marketplaceCortinaTitulo ?? null,
+        mensaje: config?.marketplaceCortinaMensaje ?? null,
+      };
+    } catch {
+      // Si la migración aún no corrió (ventana deploy→migrate) el home no
+      // debe caerse: cortina desactivada por defecto.
+      return { activa: false, titulo: null, mensaje: null };
+    }
   }
 
   /**

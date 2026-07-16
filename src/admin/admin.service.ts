@@ -1314,6 +1314,7 @@ export class AdminService {
       'diasGracia', 'diasTrialNuevas', 'planDefaultId',
       'modoMantenimiento', 'mensajeMantenimiento',
       'whatsappSoporte', 'emailSoporte', 'mensajeBienvenida',
+      'marketplaceCortinaActiva', 'marketplaceCortinaTitulo', 'marketplaceCortinaMensaje',
       'nombreSistema', 'logoUrl',
     ];
 

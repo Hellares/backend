@@ -25,6 +25,13 @@ model ConfiguracionSistema {
   emailSoporte         String? @default("soporte@syncronize.net.pe")
   mensajeBienvenida    String? @default("Bienvenido a Syncronize")
 
+  // === MARKETPLACE ===
+  // Cortina que tapa TODA la sección de productos del marketplace
+  // (home + búsqueda + grid) cuando el admin la activa.
+  marketplaceCortinaActiva  Boolean @default(false)
+  marketplaceCortinaTitulo  String? @default("Marketplace en mantenimiento")
+  marketplaceCortinaMensaje String? @default("Estamos preparando novedades. Vuelve pronto.")
+
   // === BRANDING ===
   nombreSistema String? @default("Syncronize")
   logoUrl       String?
