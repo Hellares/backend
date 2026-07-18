@@ -1339,6 +1339,62 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('29. Ganador confirma dirección ya registrada (bingo)');
   });
 
+  it('30. premio PREPARANDO: con dirección ya NO se cambia; sin dirección aún se captura', async () => {
+    const premioBase = {
+      empresaId: EMPRESA,
+      participanteId: null,
+      estado: EstadoPremioSorteo.PREPARANDO,
+      ganadorDni: '44881122',
+      ganadorNombre: 'ROSA MARIA TORRES DIAZ',
+      ganadorCelular: CEL,
+      descripcion: 'LICUADORA OSTER',
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    };
+
+    // A) PREPARANDO con dirección registrada → cambio bloqueado (la
+    // tienda ya arma el paquete; el rótulo pudo salir impreso).
+    const sim = new Simulador();
+    const s = sim.crearSorteo({ tipo: TipoSorteo.SORTEO, titulo: 'SORTEO 29' });
+    sim.db.premios.push({
+      ...premioBase,
+      id: 'premioPrep',
+      sorteoId: s.id,
+      modalidad: 'ENVIO_AGENCIA',
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'TARAPOTO',
+      destinoDepartamento: 'SAN MARTIN',
+      agenciaDireccion: null,
+    });
+    let r = await sim.cliente(CEL, '2');
+    expect(r[0]).toContain('ya está siendo preparado');
+    expect(sim.db.premios[0].destinoProvincia).toBe('TARAPOTO'); // intacto
+
+    // B) PREPARANDO pero SIN dirección (ganador respondió tarde el
+    // "¡GANASTE!") → la PRIMERA captura sigue permitida.
+    const sim2 = new Simulador();
+    const s2 = sim2.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'SORTEO 30',
+    });
+    sim2.db.premios.push({
+      ...premioBase,
+      id: 'premioPrepSinDir',
+      sorteoId: s2.id,
+      agenciaNombre: null,
+    });
+    r = await sim2.cliente(CEL, '2');
+    expect(r[0]).toContain('¡Felicidades ROSA!');
+    r = await sim2.cliente(CEL, '1'); // recojo yo
+    r = await sim2.cliente(CEL, 'Tarapoto');
+    r = await sim2.cliente(CEL, 'San Martin');
+    r = await sim2.cliente(CEL, '-');
+    expect(r[0]).toContain('Tu premio te llegará por *SHALOM*');
+    expect(sim2.db.premios[0].agenciaNombre).toBe('SHALOM');
+    sim.imprimir('30A. Premio PREPARANDO con dirección: bloqueado');
+    sim2.imprimir('30B. Premio PREPARANDO sin dirección: primera captura');
+  });
+
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
   async function registrarConDireccion(sim: Simulador) {
     const s = sim.db.sorteos[0] ?? sim.crearSorteo();

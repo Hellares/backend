@@ -68,6 +68,25 @@ export class WhatsappBotService {
   /// .agenciaEnvio): el bot la informa y no pregunta cuál.
   private static readonly AGENCIA_DEFAULT = 'SHALOM';
 
+  /// Cambio de envío de un PREMIO vetado (regla 07-18, alineada con
+  /// elegirAgenciaMiPremio del app): desde PREPARANDO la tienda ya arma
+  /// el paquete (y pudo imprimir el rótulo) — solo se admite la PRIMERA
+  /// captura (premio aún sin agencia), para no dejar mudo al ganador
+  /// que responde tarde el "¡GANASTE!".
+  private static premioNoAdmiteCambioEnvio(premio: {
+    estado: EstadoPremioSorteo;
+    agenciaNombre: string | null;
+  }): boolean {
+    return (
+      premio.estado === EstadoPremioSorteo.PREPARANDO &&
+      !!premio.agenciaNombre
+    );
+  }
+
+  private static readonly MSG_PREMIO_EN_PREPARACION =
+    '📦 Tu premio ya está siendo preparado con la dirección registrada ' +
+    '— para cambiarla coordina con la tienda (opción *3*).';
+
   /// Prompt compartido para pedir el DNI del que recoge (la agencia lo
   /// exige para entregar) — un solo texto para que no diverja.
   private static readonly MSG_DNI_RECOGE =
@@ -1009,6 +1028,18 @@ export class WhatsappBotService {
           return irA('MENU', {});
         }
         if (msg === '2') {
+          // Desde PREPARANDO ya no se cambia — avisar AQUÍ, no después
+          // de hacerle tipear ciudad y departamento.
+          const premio = await this.prisma.sorteoPremio.findFirst({
+            where: { id: s.ctx.premioId, empresaId },
+          });
+          if (
+            premio &&
+            WhatsappBotService.premioNoAdmiteCambioEnvio(premio)
+          ) {
+            await responder(WhatsappBotService.MSG_PREMIO_EN_PREPARACION);
+            return irA('MENU', {});
+          }
           await responder(WhatsappBotService.MSG_QUIEN_RECOGE);
           return irA('GANADOR_QUIEN', {
             premioId: s.ctx.premioId,
@@ -2223,6 +2254,10 @@ export class WhatsappBotService {
         );
         return irA('MENU', {});
       }
+      if (WhatsappBotService.premioNoAdmiteCambioEnvio(premio)) {
+        await responder(WhatsappBotService.MSG_PREMIO_EN_PREPARACION);
+        return irA('MENU', {});
+      }
       await responder(
         `🏆 ¡Felicidades ${premio.ganadorNombre.split(' ')[0]}! ` +
           `Tu premio: *${premio.descripcion}*.\n\n` +
@@ -2413,8 +2448,10 @@ export class WhatsappBotService {
       return irA('MENU', {});
     }
 
-    // Caso ganador con premio: mismo guard que elegirAgenciaMiPremio
-    // (solo antes del despacho).
+    // Caso ganador con premio — alineado con elegirAgenciaMiPremio del
+    // app: cambios solo en REGISTRADO; en PREPARANDO únicamente la
+    // PRIMERA captura. Los entry-points ya avisan; esto es el cinturón
+    // (el estado del premio pudo cambiar a mitad de la conversación).
     const premio = await this.prisma.sorteoPremio.findFirst({
       where: {
         id: ctx.premioId,
@@ -2428,6 +2465,10 @@ export class WhatsappBotService {
       await responder(
         'Tu premio ya fue despachado o no está disponible — coordina con la tienda (opción *3*).',
       );
+      return irA('MENU', {});
+    }
+    if (WhatsappBotService.premioNoAdmiteCambioEnvio(premio)) {
+      await responder(WhatsappBotService.MSG_PREMIO_EN_PREPARACION);
       return irA('MENU', {});
     }
     await this.prisma.sorteoPremio.update({
