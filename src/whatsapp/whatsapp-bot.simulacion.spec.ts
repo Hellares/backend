@@ -513,6 +513,9 @@ describe('Simulación E2E del bot de sorteos', () => {
 
     const nueva = sim.db.participantes[1];
     expect(nueva.agenciaNombre).toBe('SHALOM'); // copiada en silencio
+    // Copia silenciosa ≠ confirmada: el chip solo sale cuando el
+    // cliente responde (opción 1 / dirección nueva / regalo).
+    expect(nueva.direccionConfirmadaEn).toBeFalsy();
     sim.imprimir('5. Re-participación');
   });
 
@@ -558,6 +561,7 @@ describe('Simulación E2E del bot de sorteos', () => {
 
     expect(p.agenciaNombre).toBe('SHALOM');
     expect(p.destinoProvincia).toBe('TRUJILLO');
+    expect(p.direccionConfirmadaEn).toBeTruthy(); // la tipeó él mismo
     // el premio auto-creado heredó la dirección
     expect(sim.db.premios[0].agenciaNombre).toBe('SHALOM');
     sim.imprimir('6. Validación sin dirección previa');
@@ -573,6 +577,8 @@ describe('Simulación E2E del bot de sorteos', () => {
 
     r = await sim.cliente(CEL, '1');
     expect(r[0]).toContain('¡Perfecto, mismo envío!');
+    // Confirmó "es la misma" → sello para el chip de la card.
+    expect(p.direccionConfirmadaEn).toBeTruthy();
     sim.imprimir('7. Confirmación: opción 1 (misma dirección)');
   });
 

@@ -764,6 +764,16 @@ export class WhatsappBotService {
         }
         // Recurrente: sus datos previos ya quedaron copiados al registro.
         if (msg === '1') {
+          // Confirmó "es la misma" → sello para el chip "Dirección
+          // confirmada" de la card (la copia silenciosa no lo lleva).
+          await this.prisma.sorteoParticipante.updateMany({
+            where: this.whereParticipacion(empresaId, s.ctx),
+            data: { direccionConfirmadaEn: new Date() },
+          });
+          this.realtime.notifySorteoCambiado({
+            empresaId,
+            sorteoId: s.ctx.sorteoId,
+          });
           await responder(
             '✅ ¡Perfecto, mismo envío!\n\n' +
               (await this.cierreFlujo(empresaId, s.ctx)),
@@ -811,6 +821,8 @@ export class WhatsappBotService {
             data: {
               recibeNombre: s.ctx.recibeNombre ?? null,
               recibeDni: s.ctx.recibeDni ?? null,
+              // "A la misma dirección" = la confirmó.
+              direccionConfirmadaEn: new Date(),
             },
           });
           await this.sincronizarPremioDeParticipacion(
@@ -908,6 +920,8 @@ export class WhatsappBotService {
             // REGALO: quien recibe (null = el propio jugador).
             recibeNombre: s.ctx.recibeNombre ?? null,
             recibeDni: s.ctx.recibeDni ?? null,
+            // La tipeó él mismo → confirmada.
+            direccionConfirmadaEn: new Date(),
           },
         });
         // Dinámica post-activación: el premio ya existe → copiarle la
@@ -2387,6 +2401,8 @@ export class WhatsappBotService {
         data: {
           recibeNombre: ctx.recibeNombre ?? null,
           recibeDni: ctx.recibeDni ?? null,
+          // "La misma dirección, recoge otro" = dirección confirmada.
+          direccionConfirmadaEn: new Date(),
         },
       });
       await this.sincronizarPremioDeParticipacion(
@@ -2480,7 +2496,8 @@ export class WhatsappBotService {
       });
       const { count } = await this.prisma.sorteoParticipante.updateMany({
         where: { id: ctx.participanteId, empresaId },
-        data: datosEnvio,
+        // La dio él mismo (opción 2 del menú) → confirmada.
+        data: { ...datosEnvio, direccionConfirmadaEn: new Date() },
       });
       if (p && count > 0) {
         // El auto-premio de ESTA participación hereda el envío nuevo.
@@ -2538,7 +2555,7 @@ export class WhatsappBotService {
     if (premio.ganadorDni) {
       await this.prisma.sorteoParticipante.updateMany({
         where: { sorteoId: premio.sorteoId, dni: premio.ganadorDni },
-        data: datosEnvio,
+        data: { ...datosEnvio, direccionConfirmadaEn: new Date() },
       });
     }
     await responder(

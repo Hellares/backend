@@ -134,6 +134,11 @@ model SorteoParticipante {
   destinoDepartamento String?
   destinoProvincia    String?
   agenciaDireccion    String?
+  // El CLIENTE confirmo/dio su direccion con el bot (opcion "1 - es la
+  // misma", direccion nueva tipeada, regalo, etc.). null = la direccion
+  // solo fue COPIADA de una jugada anterior (sin confirmar) o no hay.
+  // Chip "Direccion confirmada" en la card del participante.
+  direccionConfirmadaEn DateTime?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
