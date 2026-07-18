@@ -22,6 +22,7 @@ import { StorageService } from '../storage/storage.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ClientesService } from '../clientes/clientes.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
+import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import {
   CambiarEstadoPremioDto,
@@ -50,6 +51,7 @@ export class SorteosService {
     private readonly whatsapp: WhatsappService,
     private readonly clientes: ClientesService,
     private readonly consultasExternas: ConsultasExternasService,
+    private readonly integracionYape: IntegracionYapeService,
   ) {}
 
   // ── Sorteos (empresa) ────────────────────────────────────────────────
@@ -723,6 +725,123 @@ export class SorteosService {
   }
 
   // ── Participantes (captados por el bot de WhatsApp) ─────────────────
+
+  /**
+   * ¿El nombre de la notificación de Yape/Plin corresponde a esta
+   * persona? Yape manda el nombre PARCIAL ("SEBASTIANA C." = nombres +
+   * inicial del apellido); Plin a veces completo. Regla: cada token del
+   * sender debe calzar EN ORDEN contra las palabras del nombre completo
+   * — palabra exacta, o inicial (1 letra) que coincida con el comienzo.
+   */
+  static nombreCoincideYape(
+    sender: string | null | undefined,
+    nombreCompleto: string | null | undefined,
+  ): boolean {
+    if (!sender || !nombreCompleto) return false;
+    const norm = (s: string) =>
+      s
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toUpperCase()
+        .replace(/[^A-ZÑ ]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const st = norm(sender).split(' ').filter(Boolean);
+    const ct = norm(nombreCompleto).split(' ').filter(Boolean);
+    if (st.length === 0 || ct.length === 0) return false;
+    // El primer token del sender debe ser una PALABRA completa del
+    // nombre (evita que la sola inicial "S." matchee a cualquiera).
+    if (st.every((t) => t.length === 1)) return false;
+    let i = 0;
+    for (const t of st) {
+      if (t.length === 1) {
+        // INICIAL: debe calzar con la palabra INMEDIATA (Yape pone la
+        // inicial del PRIMER apellido) — si saltara palabras, "R."
+        // matchearía el apellido materno de otra persona.
+        if (i >= ct.length || !ct[i].startsWith(t)) return false;
+        i++;
+        continue;
+      }
+      // Palabra completa: puede saltar (p.ej. segundo nombre omitido).
+      let ok = false;
+      while (i < ct.length) {
+        const w = ct[i++];
+        if (w === t) {
+          ok = true;
+          break;
+        }
+      }
+      if (!ok) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Sugerencias de pago Yape/Plin para la cola de validación: cruza los
+   * pagos RECIBIDOS recientes de api-yape (sin charge — los yapes
+   * "sueltos" de sorteos) contra los participantes PENDIENTE_PAGO por
+   * NOMBRE (el del jugador o el del pagador que capturó el bot) y marca
+   * si el monto calza con lo esperado (tickets × precio). La decisión
+   * sigue siendo de la empresa — esto solo le ahorra mirar el celular.
+   */
+  async sugerirPagosYape(empresaId: string) {
+    const pendientes = await this.prisma.sorteoParticipante.findMany({
+      where: {
+        empresaId,
+        estado: EstadoParticipanteSorteo.PENDIENTE_PAGO,
+        sorteo: { estado: EstadoSorteo.ABIERTO, reabierto: false },
+      },
+      orderBy: { creadoEn: 'desc' },
+      include: { sorteo: { select: { precioParticipacion: true } } },
+    });
+    if (pendientes.length === 0) return { sugerencias: [] };
+    const pagos = await this.integracionYape.listarPagosRecientes(empresaId);
+    if (pagos.length === 0) return { sugerencias: [] };
+
+    // Tamaño de cada COMPRA (n tickets = un solo pago por n × precio).
+    const tamCompra = new Map<string, number>();
+    for (const p of pendientes) {
+      if (p.compraId) {
+        tamCompra.set(p.compraId, (tamCompra.get(p.compraId) ?? 0) + 1);
+      }
+    }
+
+    const vistos = new Set<string>();
+    const sugerencias: any[] = [];
+    for (const p of pendientes) {
+      const clave = p.compraId ?? p.id;
+      if (vistos.has(clave)) continue;
+      const candidatos = pagos.filter(
+        (pg) =>
+          SorteosService.nombreCoincideYape(pg.senderName, p.nombre) ||
+          SorteosService.nombreCoincideYape(pg.senderName, p.pagadorNombre),
+      );
+      if (candidatos.length === 0) continue;
+      vistos.add(clave);
+      const n = p.compraId ? (tamCompra.get(p.compraId) ?? 1) : 1;
+      const precio = p.sorteo.precioParticipacion
+        ? Number(p.sorteo.precioParticipacion)
+        : null;
+      const esperado = precio != null ? precio * n : null;
+      // Preferir el pago cuyo monto calza EXACTO con lo esperado.
+      const mejor =
+        candidatos.find(
+          (c) => esperado != null && Math.abs(c.amount - esperado) < 0.005,
+        ) ?? candidatos[0];
+      sugerencias.push({
+        participanteId: p.id,
+        compraId: p.compraId ?? null,
+        senderName: mejor.senderName,
+        amount: mejor.amount,
+        provider: mejor.provider,
+        receivedAt: mejor.receivedAt,
+        montoEsperado: esperado,
+        montoCoincide:
+          esperado != null && Math.abs(mejor.amount - esperado) < 0.005,
+      });
+    }
+    return { sugerencias };
+  }
 
   /**
    * Cola global: participantes con pago por validar de todos los

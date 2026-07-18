@@ -113,6 +113,63 @@ export class IntegracionYapeService {
   }
 
   /**
+   * Pagos RECIBIDOS recientes que NO matchearon ningún charge (status
+   * "received" en api-yape) — son los yapes "sueltos": participaciones
+   * de sorteos, pagos espontáneos. Se usan para sugerir el match por
+   * nombre en la cola de validación. Resiliente: [] si la integración
+   * no aplica o api-yape no responde.
+   */
+  async listarPagosRecientes(
+    empresaId: string,
+    opts?: { horas?: number },
+  ): Promise<
+    {
+      id: string;
+      senderName: string | null;
+      amount: number;
+      provider: string | null;
+      receivedAt: string;
+    }[]
+  > {
+    const cfg = await this.prisma.integracionYape.findUnique({
+      where: { empresaId },
+    });
+    if (!cfg || !cfg.habilitado) return [];
+    try {
+      const res = await fetch(
+        `${cfg.apiBaseUrl}/api/payments?limit=100&status=received`,
+        {
+          headers: { 'x-api-key': cfg.accountApiKey },
+          signal: AbortSignal.timeout(8000),
+        },
+      );
+      if (!res.ok) {
+        this.logger.warn(`api-yape /payments respondió ${res.status}`);
+        return [];
+      }
+      const data: any = await res.json();
+      const corte = Date.now() - (opts?.horas ?? 24) * 3600_000;
+      return ((data?.payments ?? []) as any[])
+        .filter((p) => {
+          const t = new Date(p.receivedAt ?? p.createdAt ?? 0).getTime();
+          return Number.isFinite(t) && t >= corte;
+        })
+        .map((p) => ({
+          id: String(p.id),
+          senderName: p.senderName ?? null,
+          amount: Number(p.amount ?? 0),
+          provider: p.provider ?? null,
+          receivedAt: String(p.receivedAt ?? p.createdAt ?? ''),
+        }));
+    } catch (e) {
+      this.logger.warn(
+        `api-yape no disponible al listar pagos: ${(e as Error).message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
    * Verifica la firma HMAC del webhook entrante con el secret de la empresa
    * dueña de la cuenta api-yape (resuelta por payload.account.id). Devuelve la
    * empresa + el payload, o null si la cuenta no está mapeada. Lanza

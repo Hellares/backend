@@ -6,6 +6,7 @@ import { StorageModule } from '../storage/storage.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { ClientesModule } from '../clientes/clientes.module';
 import { ConsultasExternasModule } from '../consultas-externas/consultas-externas.module';
+import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
 import { SorteosService } from './sorteos.service';
 import {
   MisPremiosController,
@@ -21,6 +22,7 @@ import {
     WhatsappModule,
     ClientesModule,
     ConsultasExternasModule,
+    IntegracionYapeModule,
   ],
   controllers: [SorteosEmpresaController, MisPremiosController],
   providers: [SorteosService],

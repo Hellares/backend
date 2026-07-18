@@ -189,6 +189,18 @@ export class SorteosEmpresaController {
     );
   }
 
+  // OJO: ruta estática ANTES de ':id' (Nest matchea en orden).
+  @Get('pagos-yape/sugerencias')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({
+    summary:
+      'Sugerencias de match Yape/Plin → participantes pendientes (por nombre + monto)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async sugerenciasPagosYape(@Headers('x-tenant-id') empresaId: string) {
+    return this.service.sugerirPagosYape(empresaId);
+  }
+
   @Get('ganadores/ultima-entrega')
   @RequiresPermission(Permission.MANAGE_VENTAS)
   @ApiOperation({
