@@ -358,6 +358,25 @@ export class WhatsappBotService {
     switch (s.estado) {
       case 'MENU': {
         if (msg === '1') {
+          // ¿El menú que VIO sigue vigente? Si la empresa cerró un
+          // sorteo y abrió otro entre el menú y su "1", registrarlo
+          // directo lo metería a un juego que NO eligió — avisar y
+          // reofrecer el menú actualizado (pasó con dos dinámicas).
+          const ofrecidos: string[] = Array.isArray(s.ctx?.ofrecidos)
+            ? s.ctx.ofrecidos
+            : [];
+          const abiertos = s.sorteos.map((x) => x.id);
+          const listaCambio =
+            ofrecidos.length > 0 &&
+            (abiertos.length !== ofrecidos.length ||
+              abiertos.some((id) => !ofrecidos.includes(id)));
+          if (listaCambio) {
+            await responder(
+              '🔄 ¡Ojo! Los sorteos activos cambiaron desde el último ' +
+                'menú — este es el vigente:',
+            );
+            return this.mostrarMenu(s.sorteos, responder, irA);
+          }
           if (s.sorteos.length === 1) {
             return this.iniciarRegistro(
               empresaId,
@@ -366,6 +385,7 @@ export class WhatsappBotService {
               s.agencia,
               responder,
               irA,
+              s.sorteos[0].titulo,
             );
           }
           const lista = s.sorteos
@@ -424,6 +444,7 @@ export class WhatsappBotService {
           s.agencia,
           responder,
           irA,
+          s.sorteos.find((x) => x.id === ids[idx])?.titulo ?? null,
         );
       }
 
@@ -1161,7 +1182,7 @@ export class WhatsappBotService {
   // ── Pasos compuestos ─────────────────────────────────────────────────
 
   private async mostrarMenu(
-    sorteos: { titulo: string; tipo: TipoSorteo }[],
+    sorteos: { id: string; titulo: string; tipo: TipoSorteo }[],
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
@@ -1221,7 +1242,9 @@ export class WhatsappBotService {
         '*3* — Hablar con un asesor' +
         (hayPremios ? '\n*4* — Ver los premios 🎁' : ''),
     );
-    return irA('MENU', {});
+    // Memoria de QUÉ se ofreció: si al responder "1" la lista ya cambió
+    // (cerraron/abrieron sorteos), el bot reofrece en vez de registrar.
+    return irA('MENU', { ofrecidos: sorteos.map((x) => x.id) });
   }
 
   /**
@@ -1307,6 +1330,9 @@ export class WhatsappBotService {
     agencia: string,
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
+    // Título del sorteo: SIEMPRE decirle a cuál está entrando (que
+    // nunca se registre a ciegas — ver carrera del menú desactualizado).
+    titulo?: string | null,
   ) {
     // ¿Este número ya está registrado en el sorteo? → ofrecer otra
     // participación (compra múltiple de tickets).
@@ -1318,7 +1344,9 @@ export class WhatsappBotService {
       return this.ofrecerReparticipacion(sorteoId, previo, responder, irA);
     }
     await responder(
-      '¡Buenísimo! 🎉 Para registrarte envíame tu *DNI* (8 dígitos):',
+      '¡Buenísimo! 🎉 ' +
+        (titulo ? `Estás participando en *${titulo}*.\n` : '') +
+        'Para registrarte envíame tu *DNI* (8 dígitos):',
     );
     return irA('ESPERANDO_DNI', { sorteoId, agencia });
   }

@@ -1435,6 +1435,29 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('31. Links del LIVE');
   });
 
+  it('32. cerró la dinámica del menú y abrió OTRA: el "1" reofrece el menú, no registra a ciegas', async () => {
+    const sim = new Simulador();
+    const vieja = sim.crearSorteo({ titulo: 'DINAMICA VIEJA' });
+
+    let r = await sim.cliente(CEL, 'hola');
+    expect(r[0]).toContain('DINAMICA VIEJA');
+
+    // Entre el menú y su "1": la empresa cierra la vieja y abre otra.
+    vieja.estado = EstadoSorteo.CERRADO;
+    sim.crearSorteo({ titulo: 'G KG H' });
+
+    r = await sim.cliente(CEL, '1');
+    expect(r.join('\n')).toContain('cambiaron desde el último menú');
+    expect(r.join('\n')).toContain('G KG H');
+    expect(r.join('\n')).not.toContain('envíame tu *DNI*'); // NO registró
+
+    // Con el menú fresco sí — y el registro DICE en cuál está entrando.
+    r = await sim.cliente(CEL, '1');
+    expect(r[0]).toContain('Estás participando en *G KG H*');
+    expect(r[0]).toContain('envíame tu *DNI*');
+    sim.imprimir('32. Menú desactualizado no registra a ciegas');
+  });
+
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
   async function registrarConDireccion(sim: Simulador) {
     const s = sim.db.sorteos[0] ?? sim.crearSorteo();
