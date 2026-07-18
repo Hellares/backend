@@ -316,13 +316,24 @@ export class ClientesService {
         },
       });
 
+      // Usuario.telefono es @unique: si el número YA es de otra cuenta
+      // (dos familiares comparten WhatsApp — pasó con el auto-premio de
+      // dinámicas), el usuario nace SIN teléfono (su login es el DNI);
+      // la Persona sí lo conserva para contacto.
+      const telefonoOcupado = telefono
+        ? await tx.usuario.findUnique({
+            where: { telefono },
+            select: { id: true },
+          })
+        : null;
+
       // 2. Crear Usuario con contraseña temporal = DNI
       const passwordHash = await bcrypt.hash(dni, 12);
       const usuario = await tx.usuario.create({
         data: {
           personaId: persona.id,
           email: email || null,
-          telefono: telefono,
+          telefono: telefonoOcupado ? null : telefono,
           passwordHash,
           emailVerificado: email ? false : true, // Si no tiene email, marcar como verificado
           telefonoVerificado: false,
@@ -395,11 +406,19 @@ export class ClientesService {
     return await this.prisma.$transaction(async (tx) => {
       const passwordHash = await bcrypt.hash(dni, 12);
 
+      // Mismo guard que crearClienteCompleto: telefono @unique en Usuario.
+      const telefonoOcupado = persona.telefono
+        ? await tx.usuario.findUnique({
+            where: { telefono: persona.telefono },
+            select: { id: true },
+          })
+        : null;
+
       const usuario = await tx.usuario.create({
         data: {
           personaId: persona.id,
           email: persona.email || null,
-          telefono: persona.telefono,
+          telefono: telefonoOcupado ? null : persona.telefono,
           passwordHash,
           emailVerificado: persona.email ? false : true,
           telefonoVerificado: false,

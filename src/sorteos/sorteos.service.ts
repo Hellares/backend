@@ -930,8 +930,13 @@ export class SorteosService {
       );
       return true;
     } catch (e) {
+      // Los errores de Prisma (p.ej. P2002 unique) pueden venir con
+      // message vacío — loguear también code/nombre para no debuggear
+      // a ciegas.
+      const err = e as Error & { code?: string };
       this.logger.warn(
-        `Premio automático de dinámica falló (DNI ${participante.dni}): ${(e as Error).message}`,
+        `Premio automático de dinámica falló (DNI ${participante.dni}): ` +
+          (err.message || err.code || err.name || String(e)),
       );
       return false;
     }
