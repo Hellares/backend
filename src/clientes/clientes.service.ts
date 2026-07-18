@@ -1363,7 +1363,8 @@ export class ClientesService {
       apellidos: persona.apellidos ?? '',
       nombreCompleto: `${persona.nombres} ${persona.apellidos ?? ''}`.trim(),
       direccion: persona.direccion ?? undefined,
-      origen: datos.origen ?? 'INTERNO',
+      // Este flujo es DNI-only (consultarDni nunca devuelve MIGRACIONES).
+      origen: datos.origen === 'RENIEC' ? 'RENIEC' : 'INTERNO',
     };
   }
 }

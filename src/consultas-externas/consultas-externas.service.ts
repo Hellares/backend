@@ -325,6 +325,127 @@ export class ConsultasExternasService {
     );
   }
 
+  /**
+   * Consulta un Carné de Extranjería (9 dígitos): BD interna primero
+   * (el CE vive en Persona.dni, distinguido por longitud), luego
+   * Migraciones vía Factiliza `/cee/info/`. OJO: a diferencia del DNI,
+   * la API solo devuelve nombres/apellidos — sin dirección ni ubigeo.
+   */
+  async consultarCee(cee: string): Promise<ConsultaDniResponseDto> {
+    if (!/^\d{9}$/.test(cee)) {
+      throw new BadRequestException('El CE debe tener exactamente 9 dígitos numéricos');
+    }
+
+    const personaInterna = await this.prisma.persona.findUnique({
+      where: { dni: cee },
+      include: {
+        usuario: { select: { id: true } },
+      },
+    });
+
+    if (personaInterna) {
+      this.logger.info('CE encontrado en base de datos interna', { cee });
+
+      const apellidos = personaInterna.apellidos || '';
+      const partes = apellidos.split(' ');
+      const apellidoPaterno = partes[0] || '';
+      const apellidoMaterno = partes.slice(1).join(' ') || '';
+
+      const direccion = personaInterna.direccion || '';
+      const departamento = personaInterna.departamento || '';
+      const provincia = personaInterna.provincia || '';
+      const distrito = personaInterna.distrito || '';
+      const partesDir = [direccion, departamento, provincia, distrito].filter(Boolean);
+
+      return {
+        dni: personaInterna.dni!,
+        nombres: personaInterna.nombres || '',
+        apellidoPaterno,
+        apellidoMaterno,
+        nombreCompleto: `${apellidoPaterno} ${apellidoMaterno}, ${personaInterna.nombres || ''}`.trim(),
+        departamento,
+        provincia,
+        distrito,
+        direccion,
+        direccionCompleta: partesDir.join(', '),
+        ubigeo: '',
+        telefono: personaInterna.telefono || undefined,
+        email: personaInterna.email || undefined,
+        origen: 'INTERNO',
+        existeEnSistema: true,
+        personaId: personaInterna.id,
+        tieneUsuario: !!personaInterna.usuario,
+      };
+    }
+
+    if (!this.apiToken) {
+      throw new ServiceUnavailableException('El servicio de consulta CE no está configurado. Contacte al administrador.');
+    }
+
+    const cacheKey = `consulta:cee:${cee}`;
+
+    return this.cache.getOrSet<ConsultaDniResponseDto>(
+      cacheKey,
+      async () => {
+        this.logger.info('Consultando CE en API externa', { cee });
+
+        try {
+          const response = await fetch(`${this.apiUrl}/cee/info/${cee}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${this.apiToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (!response.ok) {
+            this.logger.warn('Error en consulta CE - HTTP error', { cee, status: response.status });
+            throw new BadRequestException(`No se pudo consultar el CE ${cee}. Verifique que sea un CE vigente.`);
+          }
+
+          const body = await response.json();
+
+          if (!body.success || body.status !== 200 || !body.data) {
+            this.logger.warn('Error en consulta CE - API response invalid', { cee, body });
+            throw new BadRequestException(`No se encontraron datos para el CE ${cee}`);
+          }
+
+          const data = body.data;
+          const nombres = data.nombres ?? '';
+          const apellidoPaterno = data.apellido_paterno ?? '';
+          const apellidoMaterno = data.apellido_materno ?? '';
+
+          const result: ConsultaDniResponseDto = {
+            dni: data.numero ?? cee,
+            nombres,
+            apellidoPaterno,
+            apellidoMaterno,
+            nombreCompleto: `${apellidoPaterno} ${apellidoMaterno}, ${nombres}`.trim(),
+            departamento: '',
+            provincia: '',
+            distrito: '',
+            direccion: '',
+            direccionCompleta: '',
+            ubigeo: '',
+            origen: 'MIGRACIONES',
+            existeEnSistema: false,
+          };
+
+          this.logger.info('Consulta CE exitosa', { cee, nombreCompleto: result.nombreCompleto });
+
+          return result;
+        } catch (error) {
+          if (error instanceof BadRequestException) {
+            throw error;
+          }
+          this.logger.error(`Error al consultar API Factiliza - CE: ${cee}`, error.stack);
+          throw new ServiceUnavailableException('No se pudo conectar con el servicio de consulta de Migraciones. Intente nuevamente.');
+        }
+      },
+      this.CACHE_TTL,
+    );
+  }
+
   async consultarTipoCambio(): Promise<TipoCambioResponseDto> {
     if (!this.apiToken) {
       throw new ServiceUnavailableException('El servicio de tipo de cambio no está configurado.');

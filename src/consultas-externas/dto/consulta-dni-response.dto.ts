@@ -40,8 +40,11 @@ export class ConsultaDniResponseDto {
   @ApiPropertyOptional({ example: 'juan@example.com' })
   email?: string;
 
-  @ApiPropertyOptional({ example: 'INTERNO', enum: ['INTERNO', 'RENIEC'] })
-  origen?: 'INTERNO' | 'RENIEC';
+  @ApiPropertyOptional({
+    example: 'INTERNO',
+    enum: ['INTERNO', 'RENIEC', 'MIGRACIONES'],
+  })
+  origen?: 'INTERNO' | 'RENIEC' | 'MIGRACIONES';
 
   @ApiPropertyOptional({ example: true })
   existeEnSistema?: boolean;

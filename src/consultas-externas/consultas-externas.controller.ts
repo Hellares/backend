@@ -58,6 +58,20 @@ export class ConsultasExternasController {
     return this.consultasService.consultarDni(dni);
   }
 
+  // Mismo criterio que /dni: público + throttled (el form de registro
+  // de un extranjero también necesita autocompletar sin sesión).
+  @Get('cee/:cee')
+  @UseGuards(ThrottlerGuard)
+  @ApiOperation({ summary: 'Consultar Carné de Extranjería (Migraciones)' })
+  @ApiParam({ name: 'cee', description: 'CE de 9 dígitos', example: '001077238' })
+  @ApiResponse({ status: 200, description: 'Datos de la persona (sin dirección)', type: ConsultaDniResponseDto })
+  @ApiResponse({ status: 400, description: 'CE inválido o no encontrado' })
+  @ApiResponse({ status: 429, description: 'Demasiadas consultas. Intenta más tarde.' })
+  @ApiResponse({ status: 503, description: 'Servicio de consulta no disponible' })
+  async consultarCee(@Param('cee') cee: string): Promise<ConsultaDniResponseDto> {
+    return this.consultasService.consultarCee(cee);
+  }
+
   @Get('licencia/:dni')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Consultar licencia de conducir por DNI' })
