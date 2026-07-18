@@ -777,6 +777,27 @@ export class SorteosService {
   }
 
   /**
+   * Match de nombres en AMBAS direcciones: el sender de Yape puede
+   * traer MENOS palabras que el registro ("Sebastiana C." vs nombre
+   * RENIEC completo) o MÁS (Yape manda "James Johel Torres Ledezma" y
+   * el bot guardó el pagador tipeado "James Torres Ledezma" — caso real
+   * que dejó una participación sin auto-validar). El sentido inverso
+   * exige ≥2 palabras registradas para no matchear por un solo nombre
+   * de pila.
+   */
+  static nombresCoinciden(
+    sender: string | null | undefined,
+    registrado: string | null | undefined,
+  ): boolean {
+    if (SorteosService.nombreCoincideYape(sender, registrado)) return true;
+    const palabras = (registrado ?? '').trim().split(/\s+/).filter(Boolean);
+    return (
+      palabras.length >= 2 &&
+      SorteosService.nombreCoincideYape(registrado, sender)
+    );
+  }
+
+  /**
    * Sugerencias de pago Yape/Plin para la cola de validación: cruza los
    * pagos RECIBIDOS recientes de api-yape (sin charge — los yapes
    * "sueltos" de sorteos) contra los participantes PENDIENTE_PAGO por
@@ -821,8 +842,8 @@ export class SorteosService {
         const ts = new Date(pg.receivedAt).getTime();
         if (!Number.isFinite(ts) || ts < desde) return false;
         return (
-          SorteosService.nombreCoincideYape(pg.senderName, p.nombre) ||
-          SorteosService.nombreCoincideYape(pg.senderName, p.pagadorNombre)
+          SorteosService.nombresCoinciden(pg.senderName, p.nombre) ||
+          SorteosService.nombresCoinciden(pg.senderName, p.pagadorNombre)
         );
       });
       if (candidatos.length === 0) continue;
@@ -904,8 +925,8 @@ export class SorteosService {
         continue;
       }
       const nombreOk =
-        SorteosService.nombreCoincideYape(pago.senderName, p.nombre) ||
-        SorteosService.nombreCoincideYape(pago.senderName, p.pagadorNombre);
+        SorteosService.nombresCoinciden(pago.senderName, p.nombre) ||
+        SorteosService.nombresCoinciden(pago.senderName, p.pagadorNombre);
       if (!nombreOk) continue;
       const precio = p.sorteo.precioParticipacion
         ? Number(p.sorteo.precioParticipacion)
