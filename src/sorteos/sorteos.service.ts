@@ -11,6 +11,7 @@ import {
   EstadoSorteo,
   ModalidadEntregaPremio,
   Prisma,
+  Rol,
   TipoMovimientoStock,
   TipoSorteo,
   TipoNotificacion,
@@ -969,10 +970,16 @@ export class SorteosService {
       return { accion: 'ambiguo' };
     }
 
-    // registradoPor exige un Usuario real (FK): el rol activo más
-    // antiguo de la empresa (normalmente el dueño/admin).
+    // registradoPor exige un Usuario real (FK): el rol STAFF activo más
+    // antiguo de la empresa (normalmente el dueño/admin). Los CLIENTES
+    // también viven en EmpresaUsuarioRol — jamás deben ser el validador.
     const admin = await this.prisma.empresaUsuarioRol.findFirst({
-      where: { empresaId, isActive: true, deletedAt: null },
+      where: {
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+        rol: { not: Rol.CLIENTE },
+      },
       orderBy: { creadoEn: 'asc' },
       select: { usuarioId: true },
     });

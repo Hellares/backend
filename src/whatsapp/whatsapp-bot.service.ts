@@ -830,10 +830,9 @@ export class WhatsappBotService {
           );
           return irA('PAGO_NUMERO', { ...s.ctx, anticipado: true });
         }
-        await responder(
-          'Responde *1* si el yape lo hiciste tú, *2* si lo hizo otra ' +
-            'persona (o *0* para el menú).',
-        );
+        // Texto libre (lo más probable: la CAPTURA del yape que acaba de
+        // mencionar): no estorbar — 1/2/menu siguen activos y la marca
+        // de anticipado ya quedó puesta.
         return;
       }
 
