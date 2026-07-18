@@ -122,9 +122,9 @@ export class WhatsappBotService {
   /// Prompt compartido para pedir el DNI del que recoge (la agencia lo
   /// exige para entregar) — un solo texto para que no diverja.
   private static readonly MSG_DNI_RECOGE =
-    '👤 Envíame el *DNI* de quien recogerá el paquete (8 dígitos) ' +
-    '— sus nombres salen solos. La agencia pedirá ese DNI para ' +
-    'entregar el paquete 🪪';
+    '👤 Envíame el *DNI* (8 dígitos) o *CE* (9) de quien recogerá el ' +
+    'paquete — sus nombres salen solos. La agencia pedirá ese ' +
+    'documento para entregar el paquete 🪪';
 
   /// Pregunta tras las instrucciones de pago: a veces el yape lo hace
   /// un tercero y la empresa necesita saberlo para cuadrar el pago.
@@ -500,10 +500,13 @@ export class WhatsappBotService {
         if (!s.ctx.sorteoId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
+        // DNI (8 dígitos) o CE de extranjería (9) — mismo flujo: la BD y
+        // RENIEC/Migraciones resuelven el nombre; fallback manual.
         const dni = msg.replace(/\D/g, '');
-        if (dni.length !== 8) {
+        if (dni.length !== 8 && dni.length !== 9) {
           await responder(
-            'Ese no parece un DNI 🙈 deben ser *8 dígitos* (ej. 44881122) ' +
+            'Ese no parece un documento 🙈 envíame tu *DNI* (8 dígitos, ' +
+              'ej. 44881122) o tu *Carné de Extranjería* (9 dígitos) ' +
               '— inténtalo de nuevo (o *0* para el menú):',
           );
           return;
@@ -727,10 +730,10 @@ export class WhatsappBotService {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
         const dni = msg.replace(/\D/g, '');
-        if (dni.length !== 8) {
+        if (dni.length !== 8 && dni.length !== 9) {
           await responder(
-            '🪪 Necesito el *DNI* de quien recogerá — deben ser *8 ' +
-              'dígitos* (ej. 44881122). La agencia lo pide para entregar ' +
+            '🪪 Necesito el *DNI* (8 dígitos, ej. 44881122) o *CE* (9) ' +
+              'de quien recogerá — la agencia lo pide para entregar ' +
               'el paquete. Inténtalo de nuevo (o *0* para el menú):',
           );
           return;
@@ -1346,7 +1349,8 @@ export class WhatsappBotService {
     await responder(
       '¡Buenísimo! 🎉 ' +
         (titulo ? `Estás participando en *${titulo}*.\n` : '') +
-        'Para registrarte envíame tu *DNI* (8 dígitos):',
+        'Para registrarte envíame tu *DNI* (8 dígitos) — ' +
+        'extranjeros: su *CE* (9 dígitos):',
     );
     return irA('ESPERANDO_DNI', { sorteoId, agencia });
   }
@@ -2644,9 +2648,10 @@ export class WhatsappBotService {
   }
 
   /**
-   * Nombre oficial del DNI: primero la BD (Persona de un cliente ya
-   * registrado), luego RENIEC (consultas-externas). null si ninguna
-   * fuente responde — el bot pide el nombre a mano como fallback.
+   * Nombre oficial del documento: primero la BD (Persona de un cliente
+   * ya registrado — el CE también vive en Persona.dni), luego RENIEC
+   * (DNI de 8) o Migraciones (CE de 9). null si ninguna fuente responde
+   * — el bot pide el nombre a mano como fallback.
    */
   private async resolverNombrePorDni(dni: string): Promise<string | null> {
     const persona = await this.prisma.persona.findUnique({
@@ -2658,11 +2663,14 @@ export class WhatsappBotService {
       if (full) return full.toUpperCase();
     }
     try {
-      const reniec = await this.consultasExternas.consultarDni(dni);
+      const datos =
+        dni.length === 9
+          ? await this.consultasExternas.consultarCee(dni)
+          : await this.consultasExternas.consultarDni(dni);
       const full = [
-        reniec?.nombres,
-        reniec?.apellidoPaterno,
-        reniec?.apellidoMaterno,
+        datos?.nombres,
+        datos?.apellidoPaterno,
+        datos?.apellidoMaterno,
       ]
         .filter(Boolean)
         .join(' ')

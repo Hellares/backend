@@ -173,6 +173,15 @@ const RENIEC: Record<string, any> = {
   },
 };
 
+/** CEs (9 dígitos) que "Migraciones" (Factiliza fake) sí resuelve. */
+const CEE: Record<string, any> = {
+  '001077238': {
+    nombres: 'AMELIA',
+    apellidoPaterno: 'ROJAS',
+    apellidoMaterno: 'DUARTE',
+  },
+};
+
 class Simulador {
   db = new FakeDb();
   enviados: { number: string; text: string }[] = [];
@@ -229,6 +238,10 @@ class Simulador {
       consultarDni: async (dni: string) => {
         if (!RENIEC[dni]) throw new Error('DNI no encontrado');
         return RENIEC[dni];
+      },
+      consultarCee: async (cee: string) => {
+        if (!CEE[cee]) throw new Error('CE no encontrado');
+        return CEE[cee];
       },
     } as any;
     const realtime = { notifySorteoCambiado: () => undefined } as any;
@@ -588,7 +601,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     await sim.validar(p.id);
 
     let r = await sim.cliente(CEL, '3');
-    expect(r[0]).toContain('Envíame el *DNI* de quien recogerá');
+    expect(r[0]).toContain('de quien recogerá el paquete');
 
     r = await sim.cliente(CEL, '40556677');
     expect(r[0]).toContain('Recogerá: *JUAN CARLOS PEREZ RIOS* (DNI 40556677) ✅');
@@ -1456,6 +1469,39 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[0]).toContain('Estás participando en *G KG H*');
     expect(r[0]).toContain('envíame tu *DNI*');
     sim.imprimir('32. Menú desactualizado no registra a ciegas');
+  });
+
+  it('33. extranjero participa con CE (9 dígitos): Migraciones resuelve; CE desconocido pide nombre', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'RIFA CE',
+      precioParticipacion: 10,
+    });
+
+    await sim.cliente(CEL, '1');
+    let r = await sim.cliente(CEL, '12345'); // ni DNI ni CE
+    expect(r[0]).toContain('Carné de Extranjería');
+
+    r = await sim.cliente(CEL, '001077238'); // CE en "Migraciones"
+    expect(r[0]).toContain('*AMELIA ROJAS DUARTE*');
+    expect(r[0]).toContain('¿Cuántos tickets');
+
+    // CE que Migraciones NO resuelve → nombre manual (mismo fallback
+    // que el DNI).
+    const cel2 = '51911222333';
+    await sim.cliente(cel2, '1');
+    r = await sim.cliente(cel2, '000000001');
+    expect(r[0]).toContain('escríbeme tu *nombre completo*');
+    r = await sim.cliente(cel2, 'JOHN SMITH');
+    expect(r[0]).toContain('¿Cuántos tickets');
+    r = await sim.cliente(cel2, '1'); // 1 ticket → recién se crea la fila
+    expect(
+      sim.db.participantes.some(
+        (p) => p.dni === '000000001' && p.nombre === 'JOHN SMITH',
+      ),
+    ).toBe(true);
+    sim.imprimir('33. Participación con CE de extranjería');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).

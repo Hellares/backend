@@ -673,15 +673,17 @@ export class SorteosService {
     let nombres = '';
     let apellidos = '';
     try {
-      const reniec = await this.consultasExternas.consultarDni(
-        participante.dni,
-      );
-      nombres = reniec.nombres ?? '';
-      apellidos = [reniec.apellidoPaterno, reniec.apellidoMaterno]
+      // DNI (8) → RENIEC; CE de extranjería (9) → Migraciones.
+      const datos =
+        participante.dni.length === 9
+          ? await this.consultasExternas.consultarCee(participante.dni)
+          : await this.consultasExternas.consultarDni(participante.dni);
+      nombres = datos.nombres ?? '';
+      apellidos = [datos.apellidoPaterno, datos.apellidoMaterno]
         .filter(Boolean)
         .join(' ');
     } catch {
-      // RENIEC caído — usamos lo que capturó el bot.
+      // RENIEC/Migraciones caído — usamos lo que capturó el bot.
     }
     if (!nombres || !apellidos) {
       const partes = participante.nombre.trim().split(/\s+/);
