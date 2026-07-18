@@ -61,6 +61,10 @@ model Sorteo {
   ventaHasta  DateTime?
   // BINGO: bolillas cantadas en orden (array de ints 1-75).
   bolillas    Json?
+  // Links del LIVE (el creador los pega al arrancar la transmisión):
+  // [{plataforma: 'FACEBOOK'|'TIKTOK'|..., url}] — el bot los comparte
+  // para que el participante entre directo sin buscar.
+  liveLinks   Json?
   estado      EstadoSorteo @default(ABIERTO)
   // true = se reabrió tras cerrarse (solo para REGULARIZAR en el app):
   // el bot de WhatsApp lo ignora por completo — no lo ofrece en el menú

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -11,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -80,6 +82,21 @@ export class CreateSorteoDto {
   precioParticipacion?: number;
 }
 
+/** Link de la transmisión EN VIVO del sorteo (Facebook, TikTok, etc.). */
+export class LiveLinkDto {
+  @ApiProperty({ example: 'FACEBOOK' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  plataforma: string;
+
+  @ApiProperty({ example: 'https://fb.watch/abc123' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  url: string;
+}
+
 export class UpdateSorteoDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -133,6 +150,17 @@ export class UpdateSorteoDto {
   @IsNumber()
   @Min(0)
   precioParticipacion?: number;
+
+  @ApiPropertyOptional({
+    type: [LiveLinkDto],
+    description:
+      'Links del LIVE (Facebook/TikTok/etc.) — el bot los comparte. Array vacío = quitarlos.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => LiveLinkDto)
+  liveLinks?: LiveLinkDto[];
 }
 
 export class RegistrarPremioDto {

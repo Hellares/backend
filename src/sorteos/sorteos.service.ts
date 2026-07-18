@@ -234,6 +234,10 @@ export class SorteosService {
         ventaDesde: dto.ventaDesde ? new Date(dto.ventaDesde) : undefined,
         ventaHasta: dto.ventaHasta ? new Date(dto.ventaHasta) : undefined,
         precioParticipacion: dto.precioParticipacion,
+        // undefined = no tocar; [] = quitar los links del live.
+        ...(dto.liveLinks !== undefined && {
+          liveLinks: dto.liveLinks as unknown as Prisma.InputJsonValue,
+        }),
       },
     });
   }

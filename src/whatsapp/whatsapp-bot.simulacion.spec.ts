@@ -1395,6 +1395,40 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim2.imprimir('30B. Premio PREPARANDO sin dirección: primera captura');
   });
 
+  it('31. LIVE: el bot comparte los links del sorteo (menú y confirmación)', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo({
+      tipo: TipoSorteo.SORTEO,
+      titulo: 'GRAN RIFA',
+      liveLinks: [
+        { plataforma: 'FACEBOOK', url: 'https://fb.watch/rifa123' },
+        { plataforma: 'TIKTOK', url: 'https://tiktok.com/@tienda/live' },
+      ],
+    });
+
+    // Menú: el saludo trae el bloque EN VIVO con ambos links.
+    let r = await sim.cliente(CEL, 'hola');
+    expect(r[0]).toContain('EN VIVO');
+    expect(r[0]).toContain('▶️ Facebook: https://fb.watch/rifa123');
+    expect(r[0]).toContain('▶️ TikTok: https://tiktok.com/@tienda/live');
+
+    // Compra normal → al VALIDAR el pago la confirmación invita al live.
+    await sim.cliente(CEL, '1');
+    await sim.cliente(CEL, '44881122');
+    await sim.cliente(CEL, '2'); // 2 tickets
+    r = await sim.cliente(CEL, '1'); // yapeo yo mismo
+    const msgs = await sim.validar(sim.db.participantes[0].id);
+    expect(msgs.join('\n')).toContain('Síguelo EN VIVO');
+    expect(msgs.join('\n')).toContain('https://fb.watch/rifa123');
+
+    // Sorteo SIN links: el menú no muestra el bloque.
+    const sim2 = new Simulador();
+    sim2.crearSorteo({ tipo: TipoSorteo.SORTEO, titulo: 'SIN LIVE' });
+    r = await sim2.cliente(CEL, 'hola');
+    expect(r[0]).not.toContain('EN VIVO');
+    sim.imprimir('31. Links del LIVE');
+  });
+
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
   async function registrarConDireccion(sim: Simulador) {
     const s = sim.db.sorteos[0] ?? sim.crearSorteo();

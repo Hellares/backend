@@ -87,6 +87,38 @@ export class WhatsappBotService {
     '📦 Tu premio ya está siendo preparado con la dirección registrada ' +
     '— para cambiarla coordina con la tienda (opción *3*).';
 
+  /// Nombre bonito de la plataforma del live ("TIKTOK" → "TikTok").
+  private static readonly PLATAFORMA_LIVE: Record<string, string> = {
+    FACEBOOK: 'Facebook',
+    TIKTOK: 'TikTok',
+    INSTAGRAM: 'Instagram',
+    YOUTUBE: 'YouTube',
+    KICK: 'Kick',
+  };
+
+  /// Bloque "🔴 EN VIVO" con los links que el creador pegó en el sorteo
+  /// (Sorteo.liveLinks) — '' si no hay. El cliente entra directo sin
+  /// buscar la transmisión.
+  private static textoLive(
+    sorteo: { liveLinks?: unknown } | null | undefined,
+    intro = 'Míralo EN VIVO',
+  ): string {
+    const links = Array.isArray(sorteo?.liveLinks)
+      ? (sorteo!.liveLinks as any[])
+      : [];
+    const filas = links
+      .filter((l) => typeof l?.url === 'string' && l.url.trim())
+      .map((l) => {
+        const key = String(l.plataforma ?? '').trim().toUpperCase();
+        const nombre =
+          WhatsappBotService.PLATAFORMA_LIVE[key] ||
+          (key ? key.charAt(0) + key.slice(1).toLowerCase() : 'Live');
+        return `▶️ ${nombre}: ${l.url.trim()}`;
+      });
+    if (filas.length === 0) return '';
+    return `\n\n🔴 *${intro}:*\n${filas.join('\n')}`;
+  }
+
   /// Prompt compartido para pedir el DNI del que recoge (la agencia lo
   /// exige para entregar) — un solo texto para que no diverja.
   private static readonly MSG_DNI_RECOGE =
@@ -157,6 +189,7 @@ export class WhatsappBotService {
         precioParticipacion: true,
         fechaSorteo: true,
         ventaHasta: true,
+        liveLinks: true,
       },
     });
     const sinSorteos = sorteos.length === 0;
@@ -1148,13 +1181,26 @@ export class WhatsappBotService {
       saludo = `¡Hola! 👋 ¡Tenemos ${sorteos.length} sorteos activos! 🎉`;
       opcion1 = '*1* — Participar en un sorteo';
     }
+    // Links del LIVE: con un solo sorteo el bloque va directo; con
+    // varios, cada bloque lleva el título para saber cuál es cuál.
+    let live = '';
+    if (sorteos.length === 1) {
+      live = WhatsappBotService.textoLive(sorteos[0] as any);
+    } else {
+      for (const x of sorteos) {
+        live += WhatsappBotService.textoLive(
+          x as any,
+          `${(x as any).titulo} EN VIVO`,
+        );
+      }
+    }
     // "Ver los premios" solo si hay catálogo registrado (rifas).
     const hayPremios =
       (await this.prisma.sorteoPremioCatalogo.count({
         where: { sorteoId: { in: sorteos.map((x: any) => x.id) } },
       })) > 0;
     await responder(
-      `${saludo}\n\n` +
+      `${saludo}${live}\n\n` +
         'Responde con el número:\n' +
         `${opcion1}\n` +
         '*2* — Cambiar mis datos de envío 📦\n' +
@@ -1503,7 +1549,14 @@ export class WhatsappBotService {
     const p = await this.prisma.sorteoParticipante.findFirst({
       where: { id: participanteId, empresaId },
       include: {
-        sorteo: { select: { titulo: true, tipo: true, reabierto: true } },
+        sorteo: {
+          select: {
+            titulo: true,
+            tipo: true,
+            reabierto: true,
+            liveLinks: true,
+          },
+        },
       },
     });
     if (!p) return false;
@@ -1569,7 +1622,8 @@ export class WhatsappBotService {
         base +
         (p.sorteo.tipo === TipoSorteo.BINGO
           ? '¡Mucha suerte en el bingo! 🍀 Si ganas, te escribimos por aquí para coordinar tu premio 🎁'
-          : '¡Mucha suerte en el sorteo! 🍀 Si ganas, te escribimos por aquí para coordinar tu premio 🎁');
+          : '¡Mucha suerte en el sorteo! 🍀 Si ganas, te escribimos por aquí para coordinar tu premio 🎁') +
+        WhatsappBotService.textoLive(p.sorteo, 'Síguelo EN VIVO');
       estado = 'MENU';
     } else if (p.agenciaNombre) {
       const destino = [p.destinoProvincia, p.destinoDepartamento]
