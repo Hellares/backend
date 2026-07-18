@@ -986,7 +986,7 @@ export class SorteosService {
           'Tu premio ya fue despachado — coordina el cambio con la tienda',
       });
     }
-    return this.prisma.sorteoPremio.update({
+    const actualizado = await this.prisma.sorteoPremio.update({
       where: { id: premioId },
       data: {
         modalidad: 'ENVIO_AGENCIA',
@@ -996,6 +996,13 @@ export class SorteosService {
         agenciaDireccion: dto.agenciaDireccion,
       },
     });
+    // La empresa ve la agencia elegida sin refrescar a mano (mismo
+    // notify que editarEntregaPremio).
+    this.realtime.notifySorteoCambiado({
+      empresaId: premio.empresaId,
+      sorteoId: premio.sorteoId,
+    });
+    return actualizado;
   }
 
   async miPremioDetalle(usuarioId: string, premioId: string) {
