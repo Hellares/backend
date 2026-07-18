@@ -392,7 +392,7 @@ export class MisPremiosController {
   @Patch('mis-premios/:id/agencia')
   @ApiOperation({
     summary:
-      'El ganador indica su agencia de recojo (solo antes del despacho)',
+      'El ganador indica su agencia de recojo (solo mientras el premio está REGISTRADO)',
   })
   async elegirAgencia(
     @CurrentUser('sub') usuarioId: string,

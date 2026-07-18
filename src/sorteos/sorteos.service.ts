@@ -976,14 +976,16 @@ export class SorteosService {
       where: { id: premioId, ganadorId: usuarioId },
     });
     if (!premio) throw new NotFoundException('Premio no encontrado');
-    if (
-      premio.estado !== EstadoPremioSorteo.REGISTRADO &&
-      premio.estado !== EstadoPremioSorteo.PREPARANDO
-    ) {
+    // Solo mientras está REGISTRADO: desde PREPARANDO la tienda ya está
+    // armando el paquete y el cambio se coordina con ella (la empresa sí
+    // puede seguir corrigiendo vía editarEntregaPremio).
+    if (premio.estado !== EstadoPremioSorteo.REGISTRADO) {
       throw new ConflictException({
-        code: 'PREMIO_YA_DESPACHADO',
+        code: 'PREMIO_YA_EN_PROCESO',
         message:
-          'Tu premio ya fue despachado — coordina el cambio con la tienda',
+          premio.estado === EstadoPremioSorteo.PREPARANDO
+            ? 'Tu premio ya está siendo preparado — coordina el cambio con la tienda'
+            : 'Tu premio ya fue despachado — coordina el cambio con la tienda',
       });
     }
     const actualizado = await this.prisma.sorteoPremio.update({
