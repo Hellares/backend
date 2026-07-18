@@ -11,13 +11,18 @@ import {
 
 export class CreateClienteDto {
   @ApiProperty({
-    description: 'DNI del cliente (8 dígitos, obligatorio)',
+    description:
+      'Documento del cliente: DNI (8 dígitos) o Carné de Extranjería (9 dígitos)',
     example: '12345678',
   })
   @IsString()
-  @IsNotEmpty({ message: 'El DNI es obligatorio' })
-  @Length(8, 8, { message: 'El DNI debe tener exactamente 8 dígitos' })
-  @Matches(/^\d{8}$/, { message: 'El DNI debe contener solo números' })
+  @IsNotEmpty({ message: 'El documento es obligatorio' })
+  @Length(8, 9, {
+    message: 'El documento debe tener 8 dígitos (DNI) o 9 (CE)',
+  })
+  @Matches(/^\d{8,9}$/, {
+    message: 'El documento debe contener solo números: DNI (8) o CE (9)',
+  })
   dni: string;
 
   @ApiProperty({

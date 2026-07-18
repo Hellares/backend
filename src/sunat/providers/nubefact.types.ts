@@ -1,10 +1,10 @@
 // ── Constantes de negocio ──
 
 /** Longitudes de documentos SUNAT */
-export const DOC_LENGTH = { RUC: 11, DNI: 8 } as const;
+export const DOC_LENGTH = { RUC: 11, DNI: 8, CE: 9 } as const;
 
 /** Código tipo documento SUNAT */
-export const TIPO_DOC_SUNAT = { RUC: '6', DNI: '1', VARIOS: '-' } as const;
+export const TIPO_DOC_SUNAT = { RUC: '6', DNI: '1', CE: '4', VARIOS: '-' } as const;
 
 /** Series BETA de Nubefact (entorno demo) */
 export const SERIE_BETA = { FACTURA: 'FFF1', BOLETA: 'BBB1' } as const;

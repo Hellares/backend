@@ -3,7 +3,7 @@
 export const SYNCROFACT_TIMEOUT_MS = 30_000;
 
 /** Longitudes de documentos SUNAT */
-export const DOC_LENGTH = { RUC: 11, DNI: 8 } as const;
+export const DOC_LENGTH = { RUC: 11, DNI: 8, CE: 9 } as const;
 
 /** Códigos SUNAT tipo de documento de identidad (sin mapeo, son directos) */
 export const TIPO_DOC_SUNAT = {

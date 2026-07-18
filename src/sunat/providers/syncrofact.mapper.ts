@@ -374,6 +374,7 @@ export class SyncrofactMapper {
     const doc = (numeroDocumento || '').trim();
     if (doc.length === DOC_LENGTH.RUC) return TIPO_DOC_SUNAT.RUC;
     if (doc.length === DOC_LENGTH.DNI) return TIPO_DOC_SUNAT.DNI;
+    if (doc.length === DOC_LENGTH.CE) return TIPO_DOC_SUNAT.CE;
     if (doc.length === 0) return TIPO_DOC_SUNAT.OTROS;
     // Mapear códigos internos a los de Syncrofact si aplica
     if (tipoDocumento === '6' || tipoDocumento === 'RUC') return TIPO_DOC_SUNAT.RUC;

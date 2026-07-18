@@ -1774,7 +1774,14 @@ export class VentaService {
               serie,
               correlativo: correlativo.padStart(8, '0'),
               codigoGenerado,
-              tipoDocumento: dto.tipoDocumentoCliente || (tipoComprobante === 'FACTURA' ? '6' : '1'),
+              // Sin tipo explícito se deriva por longitud: 9 dígitos = CE (4).
+              tipoDocumento:
+                dto.tipoDocumentoCliente ||
+                (tipoComprobante === 'FACTURA'
+                  ? '6'
+                  : dto.documentoCliente?.length === 9
+                    ? '4'
+                    : '1'),
               numeroDocumento: dto.documentoCliente,
               nombreCliente: dto.nombreCliente || 'CLIENTE VARIOS',
               direccionCliente: dto.direccionCliente,
@@ -2123,7 +2130,11 @@ export class VentaService {
         codigoGenerado,
         tipoDocumento:
           p.cliente.tipoDocumentoCliente ||
-          (p.tipoComprobante === 'FACTURA' ? '6' : '1'),
+          (p.tipoComprobante === 'FACTURA'
+            ? '6'
+            : p.cliente.documentoCliente?.length === 9
+              ? '4'
+              : '1'),
         numeroDocumento: p.cliente.documentoCliente,
         nombreCliente: p.cliente.nombreCliente || 'CLIENTE VARIOS',
         direccionCliente: p.cliente.direccionCliente,
