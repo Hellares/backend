@@ -83,6 +83,25 @@ export class WhatsappBotService {
     );
   }
 
+  /// Respuesta de UNA frase corta (ciudad/departamento). La gente a
+  /// veces pega su BLOQUE completo de datos (nombre + DNI + celular +
+  /// dirección en varias líneas — pasó en prod: todo terminó guardado
+  /// como "ciudad" y salió impreso en el rótulo). null = re-preguntar.
+  private static campoCorto(msg: string, max = 40): string | null {
+    const t = msg.trim();
+    if (t.length < 3 || t.length > max || /[\r\n]/.test(t)) return null;
+    return t.toUpperCase();
+  }
+
+  /// "-", "no", "no sé", "ninguna"… = NO tiene el dato. El bot pide "-"
+  /// pero la gente responde "NO" (pasó en prod: la sucursal quedó "NO"
+  /// y el rótulo decía "SHALOM - NO").
+  private static sinDato(msg: string): boolean {
+    return /^(-+|no|nose|no\s*se|no\s*sé|no\s*lo\s*se|no\s*lo\s*sé|ninguna?|nada|na)\s*[.!]*$/i.test(
+      msg.trim(),
+    );
+  }
+
   private static readonly MSG_PREMIO_EN_PREPARACION =
     '📦 Tu premio ya está siendo preparado con la dirección registrada ' +
     '— para cambiarla coordina con la tienda (opción *3*).';
@@ -895,16 +914,16 @@ export class WhatsappBotService {
           );
           return irA('MENU', {});
         }
-        if (msg.length < 3) {
+        const ciudad = WhatsappBotService.campoCorto(msg);
+        if (!ciudad) {
           await responder(
-            '¿A qué *ciudad* enviaríamos el paquete? (ej. TRUJILLO)' +
+            '📍 Solo el nombre de la *ciudad* por favor (ej. TRUJILLO)' +
               (s.ctx.regaloDireccion && s.ctx.recibeNombre
                 ? '\n*1* — A la misma dirección'
                 : ' — o responde *-* para omitir'),
           );
           return;
         }
-        const ciudad = msg.toUpperCase();
         await responder(
           `📍 ¿En qué *departamento* está ${ciudad}? (ej. LA LIBERTAD)`,
         );
@@ -912,8 +931,11 @@ export class WhatsappBotService {
       }
 
       case 'PART_DEPARTAMENTO': {
-        if (msg.length < 3) {
-          await responder('¿En qué *departamento*? (ej. LA LIBERTAD)');
+        const departamento = WhatsappBotService.campoCorto(msg);
+        if (!departamento) {
+          await responder(
+            '📍 Solo el *departamento* por favor (ej. LA LIBERTAD)',
+          );
           return;
         }
         await responder(
@@ -923,7 +945,7 @@ export class WhatsappBotService {
         );
         return irA('PART_DIRECCION', {
           ...s.ctx,
-          departamento: msg.toUpperCase(),
+          departamento,
         });
       }
 
@@ -933,7 +955,9 @@ export class WhatsappBotService {
         if (!s.ctx.participanteId) {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
-        const direccion = msg === '-' ? null : msg.toUpperCase();
+        const direccion = WhatsappBotService.sinDato(msg)
+          ? null
+          : msg.replace(/\s+/g, ' ').trim().toUpperCase().slice(0, 80);
         await this.prisma.sorteoParticipante.updateMany({
           where: this.whereParticipacion(empresaId, s.ctx),
           data: {
@@ -1044,13 +1068,13 @@ export class WhatsappBotService {
       }
 
       case 'GANADOR_CIUDAD': {
-        if (msg.length < 3) {
+        const ciudad = WhatsappBotService.campoCorto(msg);
+        if (!ciudad) {
           await responder(
-            '¿A qué *ciudad* lo enviamos? (ej. TRUJILLO)',
+            '📍 Solo el nombre de la *ciudad* por favor (ej. TRUJILLO)',
           );
           return;
         }
-        const ciudad = msg.toUpperCase();
         await responder(
           `📍 ¿En qué *departamento* está ${ciudad}? (ej. LA LIBERTAD)`,
         );
@@ -1058,8 +1082,11 @@ export class WhatsappBotService {
       }
 
       case 'GANADOR_DEPARTAMENTO': {
-        if (msg.length < 3) {
-          await responder('¿En qué *departamento*? (ej. LA LIBERTAD)');
+        const departamento = WhatsappBotService.campoCorto(msg);
+        if (!departamento) {
+          await responder(
+            '📍 Solo el *departamento* por favor (ej. LA LIBERTAD)',
+          );
           return;
         }
         await responder(
@@ -1069,12 +1096,14 @@ export class WhatsappBotService {
         );
         return irA('GANADOR_DIRECCION', {
           ...s.ctx,
-          departamento: msg.toUpperCase(),
+          departamento,
         });
       }
 
       case 'GANADOR_DIRECCION': {
-        const direccion = msg === '-' ? null : msg.toUpperCase();
+        const direccion = WhatsappBotService.sinDato(msg)
+          ? null
+          : msg.replace(/\s+/g, ' ').trim().toUpperCase().slice(0, 80);
         return this.guardarAgenciaGanador(
           empresaId,
           celular,

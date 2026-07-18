@@ -1504,6 +1504,38 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('33. Participación con CE de extranjería');
   });
 
+  it('34. bloque pegado como "ciudad" se rechaza; sucursal "no" = sin dato (caso JAHAIRA prod)', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo(); // dinámica
+    await sim.cliente(CEL, '1');
+    await sim.cliente(CEL, '44881122');
+    await sim.cliente(CEL, '1'); // yapea él mismo
+    const p = sim.db.participantes[0];
+    await sim.validar(p.id); // → pide ciudad
+
+    // Pega su BLOQUE completo de datos (varias líneas) como "ciudad".
+    let r = await sim.cliente(
+      CEL,
+      'JAHIRA CARDENAS. BENANCIO.\n74663933\n907351430\nPUCALLPA FEDERICO BASADRE KILOMETRO7.500',
+    );
+    expect(r[0]).toContain('Solo el nombre de la *ciudad*');
+    expect(p.destinoProvincia ?? null).toBeNull(); // NO se guardó el bloque
+
+    r = await sim.cliente(CEL, 'Pucallpa');
+    expect(r[0]).toContain('¿En qué *departamento* está PUCALLPA?');
+
+    r = await sim.cliente(CEL, 'Ucayali');
+    expect(r[0]).toContain('en esa ciudad?');
+
+    // "NO" a la sucursal = no la sabe (antes quedaba literal "NO").
+    r = await sim.cliente(CEL, 'NO');
+    expect(r[0]).toContain('¿Quién *recogerá* el paquete');
+    expect(p.destinoProvincia).toBe('PUCALLPA');
+    expect(p.destinoDepartamento).toBe('UCAYALI');
+    expect(p.agenciaDireccion).toBeNull();
+    sim.imprimir('34. Bloque pegado + sucursal NO');
+  });
+
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
   async function registrarConDireccion(sim: Simulador) {
     const s = sim.db.sorteos[0] ?? sim.crearSorteo();
