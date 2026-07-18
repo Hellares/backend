@@ -697,7 +697,8 @@ export class WhatsappBotService {
           // Se marca la participación para que el chip del admin
           // considere pagos anteriores al registro — la validación es
           // SIEMPRE manual (nunca auto: cualquiera vio el monto en el
-          // live y podría reclamarlo).
+          // live y podría reclamarlo). Falta saber QUIÉN hizo ese yape
+          // (si fue un tercero, sin su nombre el pago es invisible).
           await this.prisma.sorteoParticipante.updateMany({
             where: this.whereParticipacion(empresaId, s.ctx),
             data: { yapeAnticipadoEn: new Date() },
@@ -706,44 +707,12 @@ export class WhatsappBotService {
             empresaId,
             sorteoId: s.ctx.sorteoId,
           });
-          // Feedback inmediato: ¿ya se ve un yape que calce?
-          const part = await this.prisma.sorteoParticipante.findFirst({
-            where: { id: s.ctx.participanteId, empresaId },
-            include: {
-              sorteo: { select: { precioParticipacion: true } },
-            },
-          });
-          let visto: string | null = null;
-          if (part) {
-            const n = s.ctx.compraId
-              ? await this.prisma.sorteoParticipante.count({
-                  where: { compraId: s.ctx.compraId, empresaId },
-                })
-              : 1;
-            const esperado = part.sorteo.precioParticipacion
-              ? Number(part.sorteo.precioParticipacion) * n
-              : null;
-            const pagos =
-              await this.integracionYape.listarPagosRecientes(empresaId);
-            const hallado = pagos.find(
-              (pg) =>
-                nombresCoinciden(pg.senderName, part.nombre) &&
-                (esperado == null ||
-                  Math.abs(pg.amount - esperado) < 0.005),
-            );
-            if (hallado) {
-              visto = `S/ ${hallado.amount.toFixed(2)} a nombre de *${hallado.senderName}*`;
-            }
-          }
           await responder(
-            visto
-              ? `✅ ¡Encontré tu yape de ${visto}! La tienda lo verificará ` +
-                  'y te confirmamos por aquí 🙏'
-              : '👌 Anotado — buscaré tu yape (si lo hiciste hace poco ' +
-                  'puede demorar unos minutos en llegar). La tienda lo ' +
-                  'verificará y te confirmamos por aquí 🙏',
+            '💳 ¿Quién hizo ese yape?\n' +
+              '*1* — Yo mismo\n' +
+              '*2* — Otra persona (desde otro número)',
           );
-          return irA('MENU', {});
+          return irA('PAGO_ANTICIPADO_QUIEN', s.ctx);
         }
         // Texto libre (la captura del yape, una consulta): no estorbar —
         // 1/2/menu siguen activos y el paso caduca solo.
@@ -822,6 +791,20 @@ export class WhatsappBotService {
             sorteoId: s.ctx.sorteoId,
           });
         }
+        // Yape ANTICIPADO de un tercero: con el pagador ya guardado,
+        // buscar el pago y dar feedback (validación manual del admin).
+        if (s.ctx.anticipado) {
+          await responder(
+            `✅ Anotado: el yape lo hizo *${pagadorNombre}* desde el ` +
+              `*${s.ctx.pagadorCelular}*.`,
+          );
+          return this.feedbackYapeAnticipado(
+            empresaId,
+            s.ctx,
+            responder,
+            irA,
+          );
+        }
         await responder(
           `✅ Anotado: *${pagadorNombre}* yapeará desde el ` +
             `*${s.ctx.pagadorCelular}*.\n\n` +
@@ -831,6 +814,27 @@ export class WhatsappBotService {
             ),
         );
         return irA('MENU', {});
+      }
+
+      // "Yape en el aire" (opción 3): ¿quién hizo ese yape ya realizado?
+      case 'PAGO_ANTICIPADO_QUIEN': {
+        if (!s.ctx.participanteId) {
+          return this.mostrarMenu(s.sorteos, responder, irA);
+        }
+        if (msg === '1') {
+          return this.feedbackYapeAnticipado(empresaId, s.ctx, responder, irA);
+        }
+        if (msg === '2') {
+          await responder(
+            '💳 ¿Desde qué *número* hicieron el yape? (9 dígitos)',
+          );
+          return irA('PAGO_NUMERO', { ...s.ctx, anticipado: true });
+        }
+        await responder(
+          'Responde *1* si el yape lo hiciste tú, *2* si lo hizo otra ' +
+            'persona (o *0* para el menú).',
+        );
+        return;
       }
 
       case 'REGALO_DNI': {
@@ -2727,6 +2731,55 @@ export class WhatsappBotService {
       `📦 ¡Listo! Tu premio te llegará por *${ctx.agencia}*` +
         (destino ? ` a *${destino}*` : '') +
         '.\nTe enviaremos el ticket de envío por aquí cuando lo despachemos 🚚',
+    );
+    return irA('MENU', {});
+  }
+
+  /**
+   * "Yape en el aire": busca un pago RECIBIDO (ventana 24h de api-yape)
+   * que calce con el participante o su pagador — por nombre y monto
+   * esperado — y da feedback honesto. NUNCA valida: eso lo hace la
+   * empresa desde el app (chip "⚠️ previo al registro").
+   */
+  private async feedbackYapeAnticipado(
+    empresaId: string,
+    ctx: any,
+    responder: (t: string) => Promise<any>,
+    irA: (e: string, c?: any) => Promise<void>,
+  ) {
+    const part = await this.prisma.sorteoParticipante.findFirst({
+      where: { id: ctx.participanteId, empresaId },
+      include: { sorteo: { select: { precioParticipacion: true } } },
+    });
+    let visto: string | null = null;
+    if (part) {
+      const n = ctx.compraId
+        ? await this.prisma.sorteoParticipante.count({
+            where: { compraId: ctx.compraId, empresaId },
+          })
+        : 1;
+      const esperado = part.sorteo.precioParticipacion
+        ? Number(part.sorteo.precioParticipacion) * n
+        : null;
+      const pagos =
+        await this.integracionYape.listarPagosRecientes(empresaId);
+      const hallado = pagos.find(
+        (pg) =>
+          (nombresCoinciden(pg.senderName, part.nombre) ||
+            nombresCoinciden(pg.senderName, part.pagadorNombre)) &&
+          (esperado == null || Math.abs(pg.amount - esperado) < 0.005),
+      );
+      if (hallado) {
+        visto = `S/ ${hallado.amount.toFixed(2)} a nombre de *${hallado.senderName}*`;
+      }
+    }
+    await responder(
+      visto
+        ? `✅ ¡Encontré tu yape de ${visto}! La tienda lo verificará y ` +
+            'te confirmamos por aquí 🙏'
+        : '👌 Anotado — buscaré tu yape (si lo hicieron hace poco puede ' +
+            'demorar unos minutos en llegar). La tienda lo verificará y ' +
+            'te confirmamos por aquí 🙏',
     );
     return irA('MENU', {});
   }

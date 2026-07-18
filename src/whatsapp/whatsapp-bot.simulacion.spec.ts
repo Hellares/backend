@@ -1560,10 +1560,10 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('34. Bloque pegado + sucursal NO');
   });
 
-  it('35. "ya yapeé antes de registrarme" (yape en el aire): marca + feedback, validación MANUAL', async () => {
+  it('35. "ya yapeé antes de registrarme" (yape en el aire): pregunta QUIÉN pagó; validación MANUAL', async () => {
     const sim = new Simulador();
     sim.crearSorteo({ precioParticipacion: 20 });
-    // El yape llegó ANTES de que hablara con el bot.
+    // El yape llegó ANTES de que hablara con el bot (pagó ella misma).
     sim.pagosYape.push({
       id: 'pre-1',
       senderName: 'Rosa Maria T.',
@@ -1577,22 +1577,40 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[0]).toContain('*3* — Ya hice el yape antes de registrarme');
 
     r = await sim.cliente(CEL, '3');
+    expect(r[0]).toContain('¿Quién hizo ese yape?');
+    r = await sim.cliente(CEL, '1'); // lo hice yo
     expect(r[0]).toContain('¡Encontré tu yape de S/ 20.00');
     expect(r[0]).toContain('La tienda lo verificará'); // manual, no auto
     const p = sim.db.participantes[0];
     expect(p.yapeAnticipadoEn).toBeTruthy();
     expect(p.estado).toBe(EstadoParticipanteSorteo.PENDIENTE_PAGO); // NO auto-validado
 
-    // Sin yape visible aún: respuesta honesta y misma marca.
+    // TERCERO pagó antes (caso real Sebastiana/James): el yape es de
+    // OTRO nombre — recién con el pagador registrado por DNI se ve.
     const cel2 = '51966777888';
+    sim.pagosYape.push({
+      id: 'pre-2',
+      senderName: 'Juan Carlos Perez Rios',
+      amount: 20,
+      provider: 'yape',
+      receivedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    });
     await sim.cliente(cel2, '1');
-    await sim.cliente(cel2, '40556677');
+    await sim.cliente(cel2, '70112233'); // LUCIA RAMOS VEGA
     r = await sim.cliente(cel2, '3');
-    expect(r[0]).toContain('buscaré tu yape');
-    expect(
-      sim.db.participantes.find((x) => x.celular === cel2)!.yapeAnticipadoEn,
-    ).toBeTruthy();
-    sim.imprimir('35. Yape en el aire (anticipado)');
+    expect(r[0]).toContain('¿Quién hizo ese yape?');
+    r = await sim.cliente(cel2, '2'); // lo hizo otra persona
+    expect(r[0]).toContain('¿Desde qué *número* hicieron el yape?');
+    r = await sim.cliente(cel2, '912345678');
+    r = await sim.cliente(cel2, '40556677'); // DNI del pagador → oficial
+    const textos = r.join('\n');
+    expect(textos).toContain('el yape lo hizo *JUAN CARLOS PEREZ RIOS*');
+    expect(textos).toContain('¡Encontré tu yape de S/ 20.00 a nombre de *Juan Carlos Perez Rios*');
+    const p2 = sim.db.participantes.find((x) => x.celular === cel2)!;
+    expect(p2.yapeAnticipadoEn).toBeTruthy();
+    expect(p2.pagadorNombre).toBe('JUAN CARLOS PEREZ RIOS');
+    expect(p2.estado).toBe(EstadoParticipanteSorteo.PENDIENTE_PAGO);
+    sim.imprimir('35. Yape en el aire (yo mismo + tercero)');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).
