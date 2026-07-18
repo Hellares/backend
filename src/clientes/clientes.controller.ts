@@ -150,9 +150,9 @@ export class ClientesController {
   @Get('por-dni/:dni')
   @RequiresPermission(Permission.MANAGE_CLIENTS)
   @ApiOperation({
-    summary: 'Buscar (o crear) cliente por DNI usando RENIEC/cache',
+    summary: 'Buscar (o crear) cliente por DNI (8, RENIEC) o CE (9, Migraciones)',
     description:
-      'Resuelve los datos de la persona vía consulta interna o RENIEC, hace upsert de la Persona y de su EmpresaPersona como cliente, y devuelve el clienteEmpresaId listo para vincular a una venta. Idempotente.',
+      'Resuelve los datos de la persona vía consulta interna, RENIEC (DNI de 8 dígitos) o Migraciones (CE de 9), hace upsert de la Persona y de su EmpresaPersona como cliente, y devuelve el clienteEmpresaId listo para vincular a una venta. Idempotente.',
   })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async getClienteByDni(
@@ -166,7 +166,7 @@ export class ClientesController {
     apellidos: string;
     nombreCompleto: string;
     direccion?: string;
-    origen: 'INTERNO' | 'RENIEC';
+    origen: 'INTERNO' | 'RENIEC' | 'MIGRACIONES';
   }> {
     return this.clientesService.getOrCreateByDni(empresaId, dni);
   }

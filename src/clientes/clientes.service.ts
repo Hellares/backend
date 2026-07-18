@@ -1254,16 +1254,18 @@ export class ClientesService {
   }
 
   /**
-   * Busca o crea un cliente por DNI usando consulta interna o RENIEC.
+   * Busca o crea un cliente por DNI (8 dígitos, RENIEC) o CE (9 dígitos,
+   * Migraciones) usando consulta interna o el proveedor externo.
    *
    * Flujo:
-   *  1) Llama a `consultarDni` que ya unifica BD interna + RENIEC con caché.
+   *  1) Llama a `consultarDni`/`consultarCee` (BD interna + externo, caché).
    *  2) Si la Persona existe, la reusa; si no, la crea con los datos resueltos.
    *  3) Hace upsert de EmpresaPersona (rol CLIENTE) para vincularla a la empresa.
    *  4) Reactiva si previamente fue soft-deleted.
    *
    * Idempotente: misma persona + misma empresa siempre devuelve el mismo
-   * `clienteEmpresaId`. Usado por Venta Rápida cuando el cajero ingresa un DNI.
+   * `clienteEmpresaId`. Usado por Venta Rápida cuando el cajero ingresa
+   * el documento.
    */
   async getOrCreateByDni(empresaId: string, dni: string): Promise<{
     clienteEmpresaId: string;
@@ -1273,18 +1275,21 @@ export class ClientesService {
     apellidos: string;
     nombreCompleto: string;
     direccion?: string;
-    origen: 'INTERNO' | 'RENIEC';
+    origen: 'INTERNO' | 'RENIEC' | 'MIGRACIONES';
   }> {
     const dniLimpio = (dni ?? '').trim();
-    if (!/^\d{8}$/.test(dniLimpio)) {
-      throw new BadRequestException('El DNI debe tener exactamente 8 dígitos numéricos');
+    const esCe = /^\d{9}$/.test(dniLimpio);
+    if (!/^\d{8}$/.test(dniLimpio) && !esCe) {
+      throw new BadRequestException('El documento debe tener 8 dígitos (DNI) o 9 (CE)');
     }
     if (dniLimpio === '00000000') {
       throw new BadRequestException('Para cliente sin documento usar el endpoint /clientes/generico');
     }
 
-    // 1) Resolver datos de la persona (interno → RENIEC)
-    const datos = await this.consultasExternas.consultarDni(dniLimpio);
+    // 1) Resolver datos de la persona (interno → RENIEC/Migraciones)
+    const datos = esCe
+      ? await this.consultasExternas.consultarCee(dniLimpio)
+      : await this.consultasExternas.consultarDni(dniLimpio);
     const apellidos = `${datos.apellidoPaterno} ${datos.apellidoMaterno}`.trim();
 
     // Solo notificar realtime si esta llamada CREÓ o reactivó algo —
@@ -1363,8 +1368,7 @@ export class ClientesService {
       apellidos: persona.apellidos ?? '',
       nombreCompleto: `${persona.nombres} ${persona.apellidos ?? ''}`.trim(),
       direccion: persona.direccion ?? undefined,
-      // Este flujo es DNI-only (consultarDni nunca devuelve MIGRACIONES).
-      origen: datos.origen === 'RENIEC' ? 'RENIEC' : 'INTERNO',
+      origen: datos.origen ?? 'INTERNO',
     };
   }
 }
