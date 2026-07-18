@@ -434,7 +434,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('1. Registro nuevo (yapea él mismo)');
   });
 
-  it('2. yapea OTRA persona: número inválido → válido → nombre → guardado', async () => {
+  it('2. yapea OTRA persona: DNI del pagador → nombre oficial; sin DNI → nombre a mano', async () => {
     const sim = new Simulador();
     sim.crearSorteo();
     await sim.cliente(CEL, '1');
@@ -447,15 +447,27 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[0]).toContain('9 dígitos');
 
     r = await sim.cliente(CEL, '912345678');
-    expect(r[0]).toContain('a nombre de *quién*');
+    expect(r[0]).toContain('DNI');
+    expect(r[0]).toContain('nombre completo');
 
-    r = await sim.cliente(CEL, 'Maria Fernanda Lopez');
-    expect(r[0]).toContain('*MARIA FERNANDA LOPEZ* yapeará desde el *912345678*');
-
+    // DNI del pagador → nombre OFICIAL desde RENIEC (mejor match Yape).
+    r = await sim.cliente(CEL, '40556677');
+    expect(r[0]).toContain('*JUAN CARLOS PEREZ RIOS* yapeará desde el *912345678*');
     const p = sim.db.participantes[0];
-    expect(p.pagadorNombre).toBe('MARIA FERNANDA LOPEZ');
+    expect(p.pagadorNombre).toBe('JUAN CARLOS PEREZ RIOS');
     expect(p.pagadorCelular).toBe('912345678');
-    sim.imprimir('2. Yapea otra persona');
+
+    // Camino manual: otro registro donde NO sabe el DNI del pagador.
+    const cel2 = '51933444555';
+    await sim.cliente(cel2, '1');
+    await sim.cliente(cel2, '70112233');
+    await sim.cliente(cel2, '2');
+    await sim.cliente(cel2, '955666777');
+    r = await sim.cliente(cel2, '00000000'); // DNI que RENIEC no resuelve
+    expect(r[0]).toContain('No pudimos validar');
+    r = await sim.cliente(cel2, 'Maria Fernanda Lopez');
+    expect(r[0]).toContain('*MARIA FERNANDA LOPEZ* yapeará desde el *955666777*');
+    sim.imprimir('2. Yapea otra persona (DNI oficial + fallback manual)');
   });
 
   it('3. en la pregunta del yape, la captura/texto libre NO estorba', async () => {

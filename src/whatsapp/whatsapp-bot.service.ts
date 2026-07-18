@@ -704,7 +704,11 @@ export class WhatsappBotService {
           );
           return;
         }
-        await responder('¿Y a nombre de *quién* está esa cuenta Yape?');
+        await responder(
+          '🪪 Envíame el *DNI* (8 dígitos) o *CE* (9) de quien hará el ' +
+            'yape — sus nombres salen solos.\n' +
+            'Si no lo sabes, escríbeme su *nombre completo*:',
+        );
         return irA('PAGO_NOMBRE', { ...s.ctx, pagadorCelular: cel });
       }
 
@@ -712,11 +716,41 @@ export class WhatsappBotService {
         if (!s.ctx.participanteId || !s.ctx.pagadorCelular) {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
-        if (msg.length < 3) {
-          await responder('¿A nombre de *quién* está esa cuenta Yape?');
+        // DNI/CE del pagador → nombre OFICIAL (BD → RENIEC/Migraciones):
+        // mejora muchísimo el match automático del yape (el nombre
+        // tipeado casi nunca calza letra a letra con el titular).
+        let pagadorNombre: string;
+        const digitos = msg.replace(/\D/g, '');
+        const esSoloDigitos = /^[\d\s.\-]+$/.test(msg.trim());
+        if (esSoloDigitos && (digitos.length === 8 || digitos.length === 9)) {
+          const oficial = await this.resolverNombrePorDni(digitos);
+          if (!oficial) {
+            await responder(
+              'No pudimos validar ese documento 🙈 escríbeme el ' +
+                '*nombre completo* de quien hará el yape:',
+            );
+            return;
+          }
+          pagadorNombre = oficial;
+        } else if (esSoloDigitos) {
+          await responder(
+            'Ese documento no parece válido 🙈 envíame el *DNI* ' +
+              '(8 dígitos) o *CE* (9) de quien yapeará — o escríbeme ' +
+              'su *nombre completo*:',
+          );
           return;
+        } else {
+          // Nombre a mano (no sabe el DNI): una sola línea, sin blobs.
+          const manual = msg.replace(/\s+/g, ' ').trim();
+          if (manual.length < 3) {
+            await responder(
+              '¿A nombre de *quién* está esa cuenta Yape? ' +
+                '(nombre completo — o envíame su DNI y sale solo)',
+            );
+            return;
+          }
+          pagadorNombre = manual.toUpperCase().slice(0, 60);
         }
-        const pagadorNombre = msg.toUpperCase();
         // Compra de tickets: el pagador aplica a TODAS las filas.
         await this.prisma.sorteoParticipante.updateMany({
           where: s.ctx.compraId
