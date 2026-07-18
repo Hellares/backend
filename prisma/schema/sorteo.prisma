@@ -144,6 +144,9 @@ model SorteoParticipante {
   // pagos anteriores al registro para esta participacion — pero NUNCA
   // se auto-valida (seguridad: cualquiera pudo ver el monto en el live).
   yapeAnticipadoEn DateTime?
+  // Pago de api-yape CONSUMIDO por esta participacion al validarla
+  // (auto o manual): un mismo yape no puede validar dos participaciones.
+  yapePaymentId String?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
@@ -155,6 +158,7 @@ model SorteoParticipante {
   @@index([sorteoId, dni])
   @@index([empresaId, celular])
   @@index([sorteoId, estado])
+  @@index([empresaId, yapePaymentId])
   @@index([compraId])
 }
 

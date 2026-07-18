@@ -732,6 +732,79 @@ export class SorteosService {
   static nombreCoincideYape = nombreCoincideYape;
   static nombresCoinciden = nombresCoinciden;
 
+  /** Ids de pagos api-yape YA consumidos por alguna participación. */
+  private async pagosYapeUsados(empresaId: string): Promise<Set<string>> {
+    const filas = await this.prisma.sorteoParticipante.findMany({
+      where: { empresaId, yapePaymentId: { not: null } },
+      select: { yapePaymentId: true },
+    });
+    return new Set(
+      filas
+        .map((f) => f.yapePaymentId)
+        .filter((id): id is string => !!id),
+    );
+  }
+
+  /**
+   * Al VALIDAR una participación (auto o manual), vincula el pago Yape
+   * que le calza (nombre/pagador + monto, respetando la ventana del
+   * anticipado) y lo marca CONSUMIDO — el mismo yape no puede validar
+   * ni sugerirse en otra participación. Best-effort: sin pago que
+   * calce, no pasa nada.
+   */
+  private async vincularPagoYape(empresaId: string, participanteId: string) {
+    try {
+      const p = await this.prisma.sorteoParticipante.findFirst({
+        where: { id: participanteId, empresaId },
+        include: { sorteo: { select: { precioParticipacion: true } } },
+      });
+      if (!p || p.yapePaymentId) return;
+      const pagos =
+        await this.integracionYape.listarPagosRecientes(empresaId);
+      if (pagos.length === 0) return;
+      const usados = await this.pagosYapeUsados(empresaId);
+      const n = p.compraId
+        ? await this.prisma.sorteoParticipante.count({
+            where: { compraId: p.compraId, empresaId },
+          })
+        : 1;
+      const precio = p.sorteo.precioParticipacion
+        ? Number(p.sorteo.precioParticipacion)
+        : null;
+      const esperado = precio != null ? precio * n : null;
+      const desde = p.yapeAnticipadoEn
+        ? 0
+        : p.creadoEn.getTime() - 5 * 60_000;
+      const candidatos = pagos.filter((pg) => {
+        if (usados.has(pg.id)) return false;
+        const ts = new Date(pg.receivedAt).getTime();
+        if (!Number.isFinite(ts) || ts < desde) return false;
+        return (
+          nombresCoinciden(pg.senderName, p.nombre) ||
+          nombresCoinciden(pg.senderName, p.pagadorNombre)
+        );
+      });
+      if (candidatos.length === 0) return;
+      const mejor =
+        candidatos.find(
+          (c) => esperado != null && Math.abs(c.amount - esperado) < 0.005,
+        ) ?? candidatos[0];
+      await this.prisma.sorteoParticipante.updateMany({
+        where: p.compraId
+          ? { compraId: p.compraId, empresaId }
+          : { id: p.id, empresaId },
+        data: { yapePaymentId: mejor.id },
+      });
+      this.logger.log(
+        `💸 Pago Yape ${mejor.id} (S/ ${mejor.amount} de "${mejor.senderName}") CONSUMIDO por participación ${p.id}`,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `vincularPagoYape falló (participante ${participanteId}): ${(e as Error).message}`,
+      );
+    }
+  }
+
   /**
    * Sugerencias de pago Yape/Plin para la cola de validación: cruza los
    * pagos RECIBIDOS recientes de api-yape (sin charge — los yapes
@@ -751,7 +824,11 @@ export class SorteosService {
       include: { sorteo: { select: { precioParticipacion: true } } },
     });
     if (pendientes.length === 0) return { sugerencias: [] };
-    const pagos = await this.integracionYape.listarPagosRecientes(empresaId);
+    const pagosTodos =
+      await this.integracionYape.listarPagosRecientes(empresaId);
+    // Pagos ya CONSUMIDOS por otra participación: fuera del tablero.
+    const usados = await this.pagosYapeUsados(empresaId);
+    const pagos = pagosTodos.filter((pg) => !usados.has(pg.id));
     if (pagos.length === 0) return { sugerencias: [] };
 
     // Tamaño de cada COMPRA (n tickets = un solo pago por n × precio).
@@ -827,6 +904,7 @@ export class SorteosService {
   async autoValidarPorPagoYape(
     empresaId: string,
     pago: {
+      id?: string | null;
       senderName?: string | null;
       amount?: number | null;
       receivedAt?: string | null;
@@ -835,6 +913,11 @@ export class SorteosService {
     const monto = Number(pago?.amount ?? 0);
     if (!pago?.senderName || !(monto > 0)) {
       return { accion: 'pago-sin-datos' };
+    }
+    // Replay/duplicado: un pago ya consumido jamás valida otra vez.
+    if (pago.id) {
+      const usados = await this.pagosYapeUsados(empresaId);
+      if (usados.has(pago.id)) return { accion: 'pago-ya-usado' };
     }
     const pendientes = await this.prisma.sorteoParticipante.findMany({
       where: {
@@ -1017,6 +1100,12 @@ export class SorteosService {
       (await this.prisma.sorteoParticipante.findFirst({
         where: { id: participante.id },
       })) ?? participante;
+
+    // Al ACTIVAR: consumir el pago Yape que le calza (si hay) — un
+    // mismo yape no valida dos participaciones. Best-effort.
+    if (estado === EstadoParticipanteSorteo.ACTIVO) {
+      await this.vincularPagoYape(empresaId, participante.id);
+    }
 
     // Confirmación por WhatsApp + pedido de datos de envío (el bot deja
     // la conversación en el paso correspondiente). Best-effort.
