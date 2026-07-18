@@ -8,6 +8,7 @@ import { VentaModule } from '../venta/venta.module';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { PedidoMarketplaceModule } from '../pedido-marketplace/pedido-marketplace.module';
 import { CotizacionModule } from '../cotizacion/cotizacion.module';
+import { SorteosModule } from '../sorteos/sorteos.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { CotizacionModule } from '../cotizacion/cotizacion.module';
     NotificacionModule,
     PedidoMarketplaceModule,
     CotizacionModule,
+    SorteosModule,
   ],
   controllers: [WebhooksController],
   providers: [WebhooksService],

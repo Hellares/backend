@@ -853,6 +853,99 @@ export class SorteosService {
   }
 
   /**
+   * AUTO-VALIDACIÓN por Yape (webhook `payment.received` de api-yape):
+   * si el pago calza por NOMBRE (jugador o pagador del bot) y MONTO
+   * EXACTO (tickets × precio) con UNA SOLA participación pendiente y es
+   * POSTERIOR a su registro, se valida sola — ticket asignado y
+   * confirmación del bot, sin tocar el app. Ambiguo, sin precio o monto
+   * distinto → no toca nada (queda el chip de sugerencia y la empresa
+   * decide a mano).
+   */
+  async autoValidarPorPagoYape(
+    empresaId: string,
+    pago: {
+      senderName?: string | null;
+      amount?: number | null;
+      receivedAt?: string | null;
+    },
+  ) {
+    const monto = Number(pago?.amount ?? 0);
+    if (!pago?.senderName || !(monto > 0)) {
+      return { accion: 'pago-sin-datos' };
+    }
+    const pendientes = await this.prisma.sorteoParticipante.findMany({
+      where: {
+        empresaId,
+        estado: EstadoParticipanteSorteo.PENDIENTE_PAGO,
+        sorteo: { estado: EstadoSorteo.ABIERTO, reabierto: false },
+      },
+      orderBy: { creadoEn: 'desc' },
+      include: { sorteo: { select: { precioParticipacion: true } } },
+    });
+    if (pendientes.length === 0) return { accion: 'sin-pendientes' };
+
+    const ts = pago.receivedAt
+      ? new Date(pago.receivedAt).getTime()
+      : Date.now();
+    const tamCompra = new Map<string, number>();
+    for (const p of pendientes) {
+      if (p.compraId) {
+        tamCompra.set(p.compraId, (tamCompra.get(p.compraId) ?? 0) + 1);
+      }
+    }
+    const vistos = new Set<string>();
+    const matches: typeof pendientes = [];
+    for (const p of pendientes) {
+      const clave = p.compraId ?? p.id;
+      if (vistos.has(clave)) continue;
+      vistos.add(clave);
+      // El pago debe ser POSTERIOR al registro (flujo registrarse→pagar).
+      if (!Number.isFinite(ts) || ts < p.creadoEn.getTime() - 5 * 60_000) {
+        continue;
+      }
+      const nombreOk =
+        SorteosService.nombreCoincideYape(pago.senderName, p.nombre) ||
+        SorteosService.nombreCoincideYape(pago.senderName, p.pagadorNombre);
+      if (!nombreOk) continue;
+      const precio = p.sorteo.precioParticipacion
+        ? Number(p.sorteo.precioParticipacion)
+        : null;
+      if (precio == null) continue; // sin precio no hay monto esperado
+      const n = p.compraId ? (tamCompra.get(p.compraId) ?? 1) : 1;
+      if (Math.abs(monto - precio * n) >= 0.005) continue;
+      matches.push(p);
+    }
+    if (matches.length === 0) return { accion: 'sin-match-exacto' };
+    if (matches.length > 1) {
+      this.logger.log(
+        `Auto-validación Yape ambigua (${matches.length} pendientes calzan con "${pago.senderName}" S/ ${monto}) — la empresa decide`,
+      );
+      return { accion: 'ambiguo' };
+    }
+
+    // registradoPor exige un Usuario real (FK): el rol activo más
+    // antiguo de la empresa (normalmente el dueño/admin).
+    const admin = await this.prisma.empresaUsuarioRol.findFirst({
+      where: { empresaId, isActive: true, deletedAt: null },
+      orderBy: { creadoEn: 'asc' },
+      select: { usuarioId: true },
+    });
+    if (!admin) return { accion: 'sin-usuario-validador' };
+
+    const p = matches[0];
+    await this.cambiarEstadoParticipante(
+      empresaId,
+      admin.usuarioId,
+      p.id,
+      EstadoParticipanteSorteo.ACTIVO,
+    );
+    this.logger.log(
+      `✅ Participante ${p.id} (${p.nombre}) AUTO-VALIDADO por Yape de S/ ${monto} de "${pago.senderName}"`,
+    );
+    return { accion: 'participante-auto-validado', participanteId: p.id };
+  }
+
+  /**
    * Cola global: participantes con pago por validar de todos los
    * sorteos/dinámicas ABIERTOS de la empresa.
    */

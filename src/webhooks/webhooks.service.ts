@@ -8,6 +8,7 @@ import { VentaService } from '../venta/venta.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { PedidoMarketplaceEmpresaService } from '../pedido-marketplace/pedido-marketplace-empresa.service';
 import { CotizacionService } from '../cotizacion/cotizacion.service';
+import { SorteosService } from '../sorteos/sorteos.service';
 
 /**
  * Payload estándar de Syncrofact (documentacion/webhooks.md).
@@ -97,6 +98,7 @@ export class WebhooksService {
     private readonly realtime: RealtimeInvalidationService,
     private readonly pedidoMarketplaceEmpresa: PedidoMarketplaceEmpresaService,
     private readonly cotizacionService: CotizacionService,
+    private readonly sorteosService: SorteosService,
   ) {
     this.logger = loggerService;
     this.logger.setContext('WebhooksService');
@@ -112,6 +114,18 @@ export class WebhooksService {
     const verif = await this.integracionYape.verificarWebhook(rawBody, firma);
     if (!verif) return { ok: true, accion: 'cuenta-no-mapeada' };
     const { empresaId, payload } = verif;
+
+    // Pago RECIBIDO sin charge (yape "suelto" — participaciones de
+    // sorteos): si calza por nombre + monto exacto con UNA participación
+    // pendiente, se AUTO-VALIDA (ticket + confirmación del bot).
+    if (payload?.event === 'payment.received') {
+      const res = await this.sorteosService.autoValidarPorPagoYape(
+        empresaId,
+        payload?.payment ?? {},
+      );
+      this.logger.log(`Webhook payment.received → ${res.accion}`);
+      return { ok: true, ...res };
+    }
 
     if (payload?.event !== 'payment.confirmed') {
       return { ok: true, accion: 'evento-ignorado' };

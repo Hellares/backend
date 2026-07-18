@@ -18,6 +18,7 @@ describe('WebhooksService.procesarPagoYape', () => {
   let realtime: any;
   let pedidoEmpresa: any;
   let cotizacionService: any;
+  let sorteosService: any;
   let service: WebhooksService;
 
   const logger = {
@@ -60,6 +61,11 @@ describe('WebhooksService.procesarPagoYape', () => {
         .fn()
         .mockResolvedValue({ accion: 'adelanto-registrado', cotizacionId: 'cot-1' }),
     };
+    sorteosService = {
+      autoValidarPorPagoYape: jest
+        .fn()
+        .mockResolvedValue({ accion: 'sin-pendientes' }),
+    };
     service = new WebhooksService(
       prisma,
       logger as any,
@@ -68,6 +74,7 @@ describe('WebhooksService.procesarPagoYape', () => {
       realtime,
       pedidoEmpresa,
       cotizacionService,
+      sorteosService,
     );
   });
 
@@ -274,6 +281,29 @@ describe('WebhooksService.procesarPagoYape', () => {
     expect(r).toMatchObject({ accion: 'cuenta-no-mapeada' });
     expect(prisma.venta.findFirst).not.toHaveBeenCalled();
     expect(ventaService.procesarPago).not.toHaveBeenCalled();
+  });
+
+  it('evento payment.received → auto-validación de participaciones de sorteo', async () => {
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: {
+          provider: 'yape',
+          senderName: 'Rosa T.',
+          amount: 20,
+          receivedAt: '2026-07-18T20:00:00.000Z',
+        },
+      }),
+    );
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+
+    expect(sorteosService.autoValidarPorPagoYape).toHaveBeenCalledWith(
+      'emp-1',
+      expect.objectContaining({ senderName: 'Rosa T.', amount: 20 }),
+    );
+    expect(r).toMatchObject({ ok: true, accion: 'sin-pendientes' });
   });
 
   it('evento que no es payment.confirmed → ignorado', async () => {
