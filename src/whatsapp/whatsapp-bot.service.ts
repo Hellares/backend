@@ -1092,6 +1092,22 @@ export class WhatsappBotService {
           return this.mostrarMenu(s.sorteos, responder, irA);
         }
         if (msg === '1') {
+          // Confirmó la dirección de su premio → sello en su registro de
+          // participante (chip "Dirección confirmada" en la card).
+          const premio = await this.prisma.sorteoPremio.findFirst({
+            where: { id: s.ctx.premioId, empresaId },
+            select: { sorteoId: true, ganadorDni: true },
+          });
+          if (premio?.ganadorDni) {
+            await this.prisma.sorteoParticipante.updateMany({
+              where: { sorteoId: premio.sorteoId, dni: premio.ganadorDni },
+              data: { direccionConfirmadaEn: new Date() },
+            });
+            this.realtime.notifySorteoCambiado({
+              empresaId,
+              sorteoId: premio.sorteoId,
+            });
+          }
           await responder(
             '📦 ¡Listo! Tu premio saldrá a la dirección registrada.\n' +
               'Te enviaremos el ticket de envío por aquí cuando lo despachemos 🚚',
