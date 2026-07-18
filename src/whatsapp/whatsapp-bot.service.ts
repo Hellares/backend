@@ -1205,35 +1205,31 @@ export class WhatsappBotService {
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
   ) {
-    // Una dinámica no es un "sorteo" para el cliente: se saluda con su
-    // propio nombre ("¡Tenemos *CANASTAZO* activo! 😄").
-    const todasDinamicas = sorteos.every(
-      (x) => x.tipo === TipoSorteo.DINAMICA,
-    );
+    // Todo se saluda como EVENTO (sorteo/bingo/dinámica por igual —
+    // pedido del user): "¡Tenemos el evento *CAJASOO* activo!"; con
+    // varios, "¡Tenemos *2 eventos* activos!". El resto del flujo igual.
     let saludo: string;
     let opcion1: string;
-    if (sorteos.length === 1 && todasDinamicas) {
-      saludo = `¡Hola! ¡Tenemos *${sorteos[0].titulo}* activo! 😄`;
-      opcion1 = `*1* — Participar en el ${sorteos[0].titulo}`;
-    } else if (
-      sorteos.length === 1 &&
-      (sorteos[0] as any).tipo === TipoSorteo.BINGO
-    ) {
-      saludo =
-        `¡Hola! 🎱 ¡Tenemos el bingo *${sorteos[0].titulo}* activo!` +
-        this.infoFechasRifa(sorteos[0] as any);
-      opcion1 = '*1* — Comprar cartillas del bingo';
-    } else if (sorteos.length === 1) {
-      saludo =
-        `¡Hola! 👋 ¡Tenemos el sorteo *${sorteos[0].titulo}* activo! 🎉` +
-        this.infoFechasRifa(sorteos[0] as any);
-      opcion1 = '*1* — Participar en el sorteo';
-    } else if (todasDinamicas) {
-      saludo = `¡Hola! ¡Tenemos ${sorteos.length} dinámicas activas! 😄`;
-      opcion1 = '*1* — Participar en una dinámica';
+    if (sorteos.length === 1) {
+      const s0 = sorteos[0] as any;
+      if (s0.tipo === TipoSorteo.DINAMICA) {
+        saludo = `¡Hola! ¡Tenemos el evento *${s0.titulo}* activo! 😄`;
+        opcion1 = `*1* — Participar en el ${s0.titulo}`;
+      } else if (s0.tipo === TipoSorteo.BINGO) {
+        saludo =
+          `¡Hola! 🎱 ¡Tenemos el evento *${s0.titulo}* activo!` +
+          this.infoFechasRifa(s0);
+        opcion1 = '*1* — Comprar cartillas del bingo';
+      } else {
+        saludo =
+          `¡Hola! 👋 ¡Tenemos el evento *${s0.titulo}* activo! 🎉` +
+          this.infoFechasRifa(s0);
+        opcion1 = '*1* — Participar en el sorteo';
+      }
     } else {
-      saludo = `¡Hola! 👋 ¡Tenemos ${sorteos.length} sorteos activos! 🎉`;
-      opcion1 = '*1* — Participar en un sorteo';
+      saludo =
+        `¡Hola! 👋 ¡Tenemos *${sorteos.length} eventos* activos! 🎉`;
+      opcion1 = '*1* — Participar en un evento';
     }
     // Links del LIVE: con un solo sorteo el bloque va directo; con
     // varios, cada bloque lleva el título para saber cuál es cuál.

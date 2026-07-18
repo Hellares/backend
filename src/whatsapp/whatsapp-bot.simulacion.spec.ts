@@ -413,7 +413,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.crearSorteo();
 
     let r = await sim.cliente(CEL, 'hola');
-    expect(r[0]).toContain('¡Tenemos *CANASTAZO* activo!');
+    expect(r[0]).toContain('¡Tenemos el evento *CANASTAZO* activo!');
     expect(r[0]).toContain('*1* — Participar en el CANASTAZO');
 
     r = await sim.cliente(CEL, '1');
@@ -967,7 +967,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     await sim.cliente(CEL, '44881122');
     // Está en la pregunta del yape → 0 = menú.
     const r = await sim.cliente(CEL, '0');
-    expect(r[0]).toContain('¡Tenemos *CANASTAZO* activo!');
+    expect(r[0]).toContain('¡Tenemos el evento *CANASTAZO* activo!');
     sim.imprimir('20. "0" desde un paso');
   });
 
@@ -1163,7 +1163,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     });
 
     let r = await sim.cliente(CEL, 'hola');
-    expect(r[0]).toContain('¡Tenemos 2 sorteos activos!');
+    expect(r[0]).toContain('¡Tenemos *2 eventos* activos!');
 
     r = await sim.cliente(CEL, '1');
     expect(r[0]).toContain('¿En cuál quieres participar?');
@@ -1195,7 +1195,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     });
 
     let r = await sim.cliente(CEL, 'hola');
-    expect(r[0]).toContain('¡Tenemos el bingo *GRAN BINGO* activo!');
+    expect(r[0]).toContain('¡Tenemos el evento *GRAN BINGO* activo!');
     expect(r[0]).toContain('*1* — Comprar cartillas del bingo');
 
     r = await sim.cliente(CEL, '1');
