@@ -23,6 +23,7 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ClientesService } from '../clientes/clientes.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
+import { nombreCoincideYape, nombresCoinciden } from './nombre-match.util';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import {
   CambiarEstadoPremioDto,
@@ -726,76 +727,10 @@ export class SorteosService {
 
   // ── Participantes (captados por el bot de WhatsApp) ─────────────────
 
-  /**
-   * ¿El nombre de la notificación de Yape/Plin corresponde a esta
-   * persona? Yape manda el nombre PARCIAL ("SEBASTIANA C." = nombres +
-   * inicial del apellido); Plin a veces completo. Regla: cada token del
-   * sender debe calzar EN ORDEN contra las palabras del nombre completo
-   * — palabra exacta, o inicial (1 letra) que coincida con el comienzo.
-   */
-  static nombreCoincideYape(
-    sender: string | null | undefined,
-    nombreCompleto: string | null | undefined,
-  ): boolean {
-    if (!sender || !nombreCompleto) return false;
-    const norm = (s: string) =>
-      s
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .toUpperCase()
-        .replace(/[^A-ZÑ ]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    const st = norm(sender).split(' ').filter(Boolean);
-    const ct = norm(nombreCompleto).split(' ').filter(Boolean);
-    if (st.length === 0 || ct.length === 0) return false;
-    // El primer token del sender debe ser una PALABRA completa del
-    // nombre (evita que la sola inicial "S." matchee a cualquiera).
-    if (st.every((t) => t.length === 1)) return false;
-    let i = 0;
-    for (const t of st) {
-      if (t.length === 1) {
-        // INICIAL: debe calzar con la palabra INMEDIATA (Yape pone la
-        // inicial del PRIMER apellido) — si saltara palabras, "R."
-        // matchearía el apellido materno de otra persona.
-        if (i >= ct.length || !ct[i].startsWith(t)) return false;
-        i++;
-        continue;
-      }
-      // Palabra completa: puede saltar (p.ej. segundo nombre omitido).
-      let ok = false;
-      while (i < ct.length) {
-        const w = ct[i++];
-        if (w === t) {
-          ok = true;
-          break;
-        }
-      }
-      if (!ok) return false;
-    }
-    return true;
-  }
-
-  /**
-   * Match de nombres en AMBAS direcciones: el sender de Yape puede
-   * traer MENOS palabras que el registro ("Sebastiana C." vs nombre
-   * RENIEC completo) o MÁS (Yape manda "James Johel Torres Ledezma" y
-   * el bot guardó el pagador tipeado "James Torres Ledezma" — caso real
-   * que dejó una participación sin auto-validar). El sentido inverso
-   * exige ≥2 palabras registradas para no matchear por un solo nombre
-   * de pila.
-   */
-  static nombresCoinciden(
-    sender: string | null | undefined,
-    registrado: string | null | undefined,
-  ): boolean {
-    if (SorteosService.nombreCoincideYape(sender, registrado)) return true;
-    const palabras = (registrado ?? '').trim().split(/\s+/).filter(Boolean);
-    return (
-      palabras.length >= 2 &&
-      SorteosService.nombreCoincideYape(registrado, sender)
-    );
-  }
+  // Matcher de nombres compartido con el bot — vive en
+  // nombre-match.util.ts (sin dependencias, evita ciclos de import).
+  static nombreCoincideYape = nombreCoincideYape;
+  static nombresCoinciden = nombresCoinciden;
 
   /**
    * Sugerencias de pago Yape/Plin para la cola de validación: cruza los
@@ -834,10 +769,13 @@ export class SorteosService {
       if (vistos.has(clave)) continue;
       // Solo pagos POSTERIORES al registro de ESTA participación (el
       // flujo es registrarse → pagar): sin esto, un yape viejo de la
-      // misma persona se sugería en cada participación nueva (falso
-      // "recibí un yape" apenas se registraba). 5 min de tolerancia por
-      // desfase de relojes del celular lector.
-      const desde = p.creadoEn.getTime() - 5 * 60_000;
+      // misma persona se sugería en cada participación nueva. 5 min de
+      // tolerancia por desfase de relojes. EXCEPCIÓN: si el cliente
+      // declaró "ya yapeé antes de registrarme" (yapeAnticipadoEn), se
+      // consideran también los pagos previos de la ventana de 24h.
+      const desde = p.yapeAnticipadoEn
+        ? 0
+        : p.creadoEn.getTime() - 5 * 60_000;
       const candidatos = pagos.filter((pg) => {
         const ts = new Date(pg.receivedAt).getTime();
         if (!Number.isFinite(ts) || ts < desde) return false;
@@ -868,6 +806,10 @@ export class SorteosService {
         montoEsperado: esperado,
         montoCoincide:
           esperado != null && Math.abs(mejor.amount - esperado) < 0.005,
+        // Yape ANTERIOR al registro ("yape en el aire" declarado): el
+        // admin lo ve marcado — estos jamás se auto-validan.
+        anticipado:
+          new Date(mejor.receivedAt).getTime() < p.creadoEn.getTime(),
       });
     }
     return { sugerencias };

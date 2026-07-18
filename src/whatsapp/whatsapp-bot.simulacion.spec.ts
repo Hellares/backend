@@ -188,6 +188,9 @@ class Simulador {
   transcript: string[] = [];
   bot: WhatsappBotService;
 
+  /// Pagos "recibidos" en el api-yape fake (para el yape anticipado).
+  pagosYape: { id: string; senderName: string; amount: number; provider: string; receivedAt: string }[] = [];
+
   constructor() {
     const prisma = {
       empresa: modelo(this.db, () => this.db.empresas),
@@ -245,7 +248,16 @@ class Simulador {
       },
     } as any;
     const realtime = { notifySorteoCambiado: () => undefined } as any;
-    this.bot = new WhatsappBotService(prisma, evolution, consultas, realtime);
+    const integracionYape = {
+      listarPagosRecientes: async () => this.pagosYape,
+    } as any;
+    this.bot = new WhatsappBotService(
+      prisma,
+      evolution,
+      consultas,
+      realtime,
+      integracionYape,
+    );
 
     this.db.empresas.push({ id: EMPRESA, nombre: 'IMPORTACIONES PRUEBA SAC' });
     this.db.integracionesWhatsapp.push({
@@ -1546,6 +1558,41 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(p.destinoDepartamento).toBe('UCAYALI');
     expect(p.agenciaDireccion).toBeNull();
     sim.imprimir('34. Bloque pegado + sucursal NO');
+  });
+
+  it('35. "ya yapeé antes de registrarme" (yape en el aire): marca + feedback, validación MANUAL', async () => {
+    const sim = new Simulador();
+    sim.crearSorteo({ precioParticipacion: 20 });
+    // El yape llegó ANTES de que hablara con el bot.
+    sim.pagosYape.push({
+      id: 'pre-1',
+      senderName: 'Rosa Maria T.',
+      amount: 20,
+      provider: 'yape',
+      receivedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+    });
+
+    await sim.cliente(CEL, '1');
+    let r = await sim.cliente(CEL, '44881122');
+    expect(r[0]).toContain('*3* — Ya hice el yape antes de registrarme');
+
+    r = await sim.cliente(CEL, '3');
+    expect(r[0]).toContain('¡Encontré tu yape de S/ 20.00');
+    expect(r[0]).toContain('La tienda lo verificará'); // manual, no auto
+    const p = sim.db.participantes[0];
+    expect(p.yapeAnticipadoEn).toBeTruthy();
+    expect(p.estado).toBe(EstadoParticipanteSorteo.PENDIENTE_PAGO); // NO auto-validado
+
+    // Sin yape visible aún: respuesta honesta y misma marca.
+    const cel2 = '51966777888';
+    await sim.cliente(cel2, '1');
+    await sim.cliente(cel2, '40556677');
+    r = await sim.cliente(cel2, '3');
+    expect(r[0]).toContain('buscaré tu yape');
+    expect(
+      sim.db.participantes.find((x) => x.celular === cel2)!.yapeAnticipadoEn,
+    ).toBeTruthy();
+    sim.imprimir('35. Yape en el aire (anticipado)');
   });
 
   // Helper: registra a ROSA con dirección previa copiada (recurrente).

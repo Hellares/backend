@@ -10,6 +10,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
+import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
+import { nombresCoinciden } from '../sorteos/nombre-match.util';
 import { EvolutionApiService } from './evolution-api.service';
 import { generarCartillasPdf } from './cartilla-pdf.util';
 import { generarCartillaPng } from './cartilla-imagen.util';
@@ -146,11 +148,13 @@ export class WhatsappBotService {
     'documento para entregar el paquete 🪪';
 
   /// Pregunta tras las instrucciones de pago: a veces el yape lo hace
-  /// un tercero y la empresa necesita saberlo para cuadrar el pago.
+  /// un tercero (cuadrar el pago) o YA lo hizo viendo el live antes de
+  /// registrarse ("yape en el aire" — validación manual del admin).
   private static readonly MSG_QUIEN_YAPEA =
     '\n\n💳 ¿Quién hará el *yape*?\n' +
     '*1* — Yo mismo\n' +
     '*2* — Otra persona (desde otro número)\n' +
+    '*3* — Ya hice el yape antes de registrarme ✋\n' +
     '*0* — Volver al menú';
 
   /// Pregunta compartida de quién recoge el paquete en la agencia.
@@ -182,6 +186,7 @@ export class WhatsappBotService {
     private readonly evolution: EvolutionApiService,
     private readonly consultasExternas: ConsultasExternasService,
     private readonly realtime: RealtimeInvalidationService,
+    private readonly integracionYape: IntegracionYapeService,
   ) {}
 
   /** Punto de entrada desde el webhook MESSAGES_UPSERT. */
@@ -686,6 +691,59 @@ export class WhatsappBotService {
             '💳 ¿Desde qué *número* harán el yape? (9 dígitos)',
           );
           return irA('PAGO_NUMERO', s.ctx);
+        }
+        if (msg === '3') {
+          // "Yape en el aire": yapeó viendo el live ANTES de registrarse.
+          // Se marca la participación para que el chip del admin
+          // considere pagos anteriores al registro — la validación es
+          // SIEMPRE manual (nunca auto: cualquiera vio el monto en el
+          // live y podría reclamarlo).
+          await this.prisma.sorteoParticipante.updateMany({
+            where: this.whereParticipacion(empresaId, s.ctx),
+            data: { yapeAnticipadoEn: new Date() },
+          });
+          this.realtime.notifySorteoCambiado({
+            empresaId,
+            sorteoId: s.ctx.sorteoId,
+          });
+          // Feedback inmediato: ¿ya se ve un yape que calce?
+          const part = await this.prisma.sorteoParticipante.findFirst({
+            where: { id: s.ctx.participanteId, empresaId },
+            include: {
+              sorteo: { select: { precioParticipacion: true } },
+            },
+          });
+          let visto: string | null = null;
+          if (part) {
+            const n = s.ctx.compraId
+              ? await this.prisma.sorteoParticipante.count({
+                  where: { compraId: s.ctx.compraId, empresaId },
+                })
+              : 1;
+            const esperado = part.sorteo.precioParticipacion
+              ? Number(part.sorteo.precioParticipacion) * n
+              : null;
+            const pagos =
+              await this.integracionYape.listarPagosRecientes(empresaId);
+            const hallado = pagos.find(
+              (pg) =>
+                nombresCoinciden(pg.senderName, part.nombre) &&
+                (esperado == null ||
+                  Math.abs(pg.amount - esperado) < 0.005),
+            );
+            if (hallado) {
+              visto = `S/ ${hallado.amount.toFixed(2)} a nombre de *${hallado.senderName}*`;
+            }
+          }
+          await responder(
+            visto
+              ? `✅ ¡Encontré tu yape de ${visto}! La tienda lo verificará ` +
+                  'y te confirmamos por aquí 🙏'
+              : '👌 Anotado — buscaré tu yape (si lo hiciste hace poco ' +
+                  'puede demorar unos minutos en llegar). La tienda lo ' +
+                  'verificará y te confirmamos por aquí 🙏',
+          );
+          return irA('MENU', {});
         }
         // Texto libre (la captura del yape, una consulta): no estorbar —
         // 1/2/menu siguen activos y el paso caduca solo.

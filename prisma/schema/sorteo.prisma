@@ -139,6 +139,11 @@ model SorteoParticipante {
   // solo fue COPIADA de una jugada anterior (sin confirmar) o no hay.
   // Chip "Direccion confirmada" en la card del participante.
   direccionConfirmadaEn DateTime?
+  // "Yape en el aire": el cliente declaro (opcion 3 del bot) que YA
+  // yapeo ANTES de registrarse. Las sugerencias del admin consideran
+  // pagos anteriores al registro para esta participacion — pero NUNCA
+  // se auto-valida (seguridad: cualquiera pudo ver el monto en el live).
+  yapeAnticipadoEn DateTime?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

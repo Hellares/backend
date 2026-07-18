@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { ConsultasExternasModule } from '../consultas-externas/consultas-externas.module';
 import { NotificacionModule } from '../notificacion/notificacion.module';
+import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
 import { EvolutionApiService } from './evolution-api.service';
 import { WhatsappBotService } from './whatsapp-bot.service';
 import { WhatsappService } from './whatsapp.service';
@@ -12,7 +13,13 @@ import {
 } from './whatsapp.controller';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ConsultasExternasModule, NotificacionModule],
+  imports: [
+    PrismaModule,
+    AuthModule,
+    ConsultasExternasModule,
+    NotificacionModule,
+    IntegracionYapeModule,
+  ],
   controllers: [WhatsappEmpresaController, WhatsappWebhookController],
   providers: [WhatsappService, EvolutionApiService, WhatsappBotService],
   exports: [WhatsappService],
