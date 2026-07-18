@@ -811,11 +811,20 @@ export class SorteosService {
     for (const p of pendientes) {
       const clave = p.compraId ?? p.id;
       if (vistos.has(clave)) continue;
-      const candidatos = pagos.filter(
-        (pg) =>
+      // Solo pagos POSTERIORES al registro de ESTA participación (el
+      // flujo es registrarse → pagar): sin esto, un yape viejo de la
+      // misma persona se sugería en cada participación nueva (falso
+      // "recibí un yape" apenas se registraba). 5 min de tolerancia por
+      // desfase de relojes del celular lector.
+      const desde = p.creadoEn.getTime() - 5 * 60_000;
+      const candidatos = pagos.filter((pg) => {
+        const ts = new Date(pg.receivedAt).getTime();
+        if (!Number.isFinite(ts) || ts < desde) return false;
+        return (
           SorteosService.nombreCoincideYape(pg.senderName, p.nombre) ||
-          SorteosService.nombreCoincideYape(pg.senderName, p.pagadorNombre),
-      );
+          SorteosService.nombreCoincideYape(pg.senderName, p.pagadorNombre)
+        );
+      });
       if (candidatos.length === 0) continue;
       vistos.add(clave);
       const n = p.compraId ? (tamCompra.get(p.compraId) ?? 1) : 1;
