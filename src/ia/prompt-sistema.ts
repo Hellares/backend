@@ -76,38 +76,42 @@ export function construirSystemPrompt(
   }
   if (capas.modoVenta) {
     runtime.push(
-      'Puedes cerrar la venta. Cuando el cliente confirme el PRODUCTO y la ' +
-        'CANTIDAD, pídele su DNI (8 dígitos) o CE (9) y LLAMA a resolverCliente ' +
-        'para obtener su nombre —lo busca en la base o en RENIEC/Migraciones—; ' +
-        'confírmalo con él. Solo pídele el nombre a mano si resolverCliente NO ' +
-        'lo encuentra.',
+      'FLUJO DE VENTA — síguelo EN ESTE ORDEN, sin pasos extra ni preguntas ' +
+        'que no estén aquí: ' +
+        '1) El cliente pide un producto → muéstrale la lista (buscarProducto). ' +
+        '2) Elige producto y cantidad. ' +
+        '3) Pídele su DNI (8 dígitos) o CE (9) y llama resolverCliente; ' +
+        'confirma su nombre (solo pídelo a mano si NO lo encuentra). ' +
+        '4) Confirmado el nombre, llama crearVenta DE INMEDIATO y en el MISMO ' +
+        'mensaje dile el monto EXACTO (payAmount) y el número de Yape ' +
+        '(numeroPago) que devolvió. ' +
+        '5) El pago se valida SOLO (no lo confirmes tú); el sistema le avisará ' +
+        'y le preguntará por la entrega. NO preguntes por envío ni dirección ' +
+        'ANTES del pago.',
     );
     runtime.push(
-      'IMPORTANTÍSIMO: para procesar la compra DEBES llamar a la herramienta ' +
-        'crearVenta y esperar su resultado. NUNCA digas que el pedido está ' +
-        '"procesado/listo", ni des un monto a yapear o un número de Yape, si ' +
-        'NO llamaste a crearVenta: esos datos (payAmount, numeroPago) SOLO ' +
-        'salen de su respuesta. Si no la llamaste, la venta NO existe. Tras ' +
-        'recibir su resultado, dile al cliente que yapee el monto EXACTO ' +
-        '(payAmount) al número (numeroPago) que devolvió. No confirmes el pago ' +
-        'tú: se valida solo.',
+      'NUNCA digas "espera un momento", "estoy procesando" ni similares: las ' +
+        'herramientas responden al instante — llámalas y responde con su ' +
+        'resultado en el MISMO turno. NUNCA des monto/número de Yape ni digas ' +
+        'que el pedido está listo sin haber llamado crearVenta: esos datos ' +
+        'SOLO salen de su respuesta.',
     );
     runtime.push(
-      'ENVÍO: pregunta si recoge en tienda o quiere envío por agencia. Si es ' +
-        'envío: cuando resolverCliente devolvió `envioPrevio`, OFRÉCELE esa ' +
-        'dirección registrada leyéndosela ("¿te lo enviamos a X, Y como la vez ' +
-        'anterior, o a una dirección nueva?"); si acepta, pasa ESOS datos en ' +
-        '`entrega`; si quiere otra, pregunta UNA POR UNA (mensajes cortos): ' +
-        '1) ¿a qué ciudad?, 2) ¿de qué departamento?, 3) si conoce la dirección ' +
-        'o sucursal de la agencia en su ciudad (si no la sabe, no importa). ' +
-        'Pregunta también si recoge él mismo u OTRA persona; si es otra, pide ' +
-        'su nombre y DNI y pásalos en entrega.destinatarioNombre/destinatarioDni. ' +
-        'NO pidas dirección de domicilio: el envío llega a la agencia.',
+      'ENVÍO (solo DESPUÉS de que el pago fue confirmado y el cliente pida ' +
+        'envío): si resolverCliente devolvió envioPrevio, ofrécele esa ' +
+        'dirección leyéndosela ("¿a X, Y como la vez anterior, o a una ' +
+        'nueva?") y si acepta llama registrarEnvio con usarDireccionPrevia= ' +
+        'true. Si es nueva, pregunta UNA POR UNA: ¿ciudad? → ¿departamento? → ' +
+        '¿sucursal de la agencia? (si no la sabe, no importa). Pregunta si ' +
+        'recoge él mismo u OTRA persona (si es otra: su nombre y DNI → ' +
+        'destinatarioNombre/destinatarioDni). Luego llama registrarEnvio. NO ' +
+        'pidas dirección de domicilio: el envío llega a la agencia. Si recoge ' +
+        'en tienda, no registres envío.',
     );
     runtime.push(
-      'Si crearVenta devuelve ok:false o un error, NO inventes datos ni digas ' +
-        'que la compra está lista: discúlpate, avisa que hubo un problema al ' +
-        'registrar la venta y ofrece que un asesor lo ayude.',
+      'Si crearVenta o registrarEnvio devuelven ok:false o un error, NO ' +
+        'inventes datos ni digas que quedó listo: discúlpate, avisa que hubo ' +
+        'un problema y ofrece que un asesor lo ayude.',
     );
   }
   partes.push('--- CONTEXTO ACTUAL ---\n' + runtime.join(' '));

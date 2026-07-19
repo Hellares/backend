@@ -13,6 +13,7 @@ import { crearBuscarProductoTool } from './tools/buscar-producto.tool';
 import { crearVerDetalleTool } from './tools/ver-detalle.tool';
 import { crearResolverClienteTool } from './tools/resolver-cliente.tool';
 import { crearCrearVentaTool } from './tools/crear-venta.tool';
+import { crearRegistrarEnvioTool } from './tools/registrar-envio.tool';
 import { ContextoTool, CatalogoItem } from './tools/tool.types';
 
 /** Resultado de atender un mensaje. Si el agente está apagado para la empresa
@@ -151,7 +152,10 @@ export class IaAgenteService {
       crearResolverClienteTool(this.prisma, this.consultas),
     );
     if (cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape) {
-      ejecutor.registrar(crearCrearVentaTool(this.prisma, this.venta));
+      ejecutor.registrar(
+        crearCrearVentaTool(this.prisma, this.venta),
+        crearRegistrarEnvioTool(this.prisma, this.venta),
+      );
     }
     return ejecutor;
   }

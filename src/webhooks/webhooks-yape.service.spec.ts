@@ -47,7 +47,13 @@ describe('WebhooksService.procesarPagoYape', () => {
 
   beforeEach(() => {
     integracionYape = { verificarWebhook: jest.fn() };
-    prisma = { venta: { findFirst: jest.fn() } };
+    prisma = {
+      venta: { findFirst: jest.fn() },
+      conversacionWhatsapp: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+    };
     ventaService = {
       procesarPago: jest.fn().mockResolvedValue({ estado: EstadoVenta.PAGADA_COMPLETA }),
     };

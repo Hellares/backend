@@ -240,20 +240,56 @@ export class WebhooksService {
       this.realtime.notifyVentaPagada({ empresaId, ventaId });
 
       // Confirmación al CLIENTE por WhatsApp (ventas ONLINE con celular — las
-      // del agente IA): "pago validado, tu compra se está preparando".
-      // Best-effort: si el WhatsApp de la empresa no está conectado, no rompe.
+      // del agente IA): "pago validado, tu compra se está preparando" + la
+      // pregunta de ENTREGA (el envío se registra DESPUÉS del pago, como en
+      // sorteos). El mensaje se guarda en el historial del agente para que
+      // entienda la respuesta ("envío"/"recojo"). Best-effort: nunca rompe.
       if (venta.canalVenta === 'ONLINE' && venta.telefonoCliente) {
-        const envio = venta.conEnvio
-          ? '\n📦 Te avisaremos cuando salga hacia tu agencia.'
-          : '';
+        const celularCliente = venta.telefonoCliente;
+        const pregunta = venta.conEnvio
+          ? '📦 Te avisaremos cuando salga hacia tu agencia.'
+          : '📦 ¿La recoges en tienda o te la enviamos por agencia? ' +
+            'Escríbeme *recojo* o *envío*.';
+        const texto =
+          `✅ ¡Tu pago fue confirmado! Recibimos S/ ${Number(venta.total).toFixed(2)}.\n` +
+          `🧾 Tu compra *${venta.codigo}* ya se está preparando.\n` +
+          `${pregunta}\n¡Gracias por tu compra! 🙌`;
         this.whatsapp
-          .enviarTexto(
-            empresaId,
-            venta.telefonoCliente,
-            `✅ ¡Tu pago fue confirmado! Recibimos S/ ${Number(venta.total).toFixed(2)}.\n` +
-              `🧾 Tu compra *${venta.codigo}* ya se está preparando.${envio}\n` +
-              '¡Gracias por tu compra! 🙌',
-          )
+          .enviarTexto(empresaId, celularCliente, texto)
+          .then(async (enviado) => {
+            if (!enviado) return;
+            // Anexar al historial del agente (contexto para el próximo turno).
+            const conv = await this.prisma.conversacionWhatsapp.findUnique({
+              where: {
+                empresaId_celular: { empresaId, celular: celularCliente },
+              },
+            });
+            const ctxConv: any = conv?.contexto ?? {};
+            const hist = Array.isArray(ctxConv.historialIa)
+              ? ctxConv.historialIa
+              : [];
+            await this.prisma.conversacionWhatsapp.upsert({
+              where: {
+                empresaId_celular: { empresaId, celular: celularCliente },
+              },
+              create: {
+                empresaId,
+                celular: celularCliente,
+                estado: 'IA',
+                contexto: { historialIa: [{ rol: 'assistant', texto }] },
+              },
+              update: {
+                estado: 'IA',
+                contexto: {
+                  ...ctxConv,
+                  historialIa: [
+                    ...hist,
+                    { rol: 'assistant', texto },
+                  ].slice(-12),
+                },
+              },
+            });
+          })
           .catch((e: Error) =>
             this.logger.warn(
               `Confirmación WhatsApp de venta ${ventaId}: ${e.message}`,
