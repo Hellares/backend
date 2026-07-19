@@ -211,12 +211,28 @@ export function crearCrearVentaTool(
         .cobroYape(ctx.empresaId, ventaId)
         .catch(() => null);
 
+      // 5) Número al que el cliente yapea (para decírselo): el de pago del
+      //    WhatsApp, si no el de IntegracionYape.
+      const wpp = await prisma.integracionWhatsapp.findUnique({
+        where: { empresaId: ctx.empresaId },
+        select: { numeroPago: true },
+      });
+      let numeroPago = wpp?.numeroPago ?? null;
+      if (!numeroPago) {
+        const iy = await prisma.integracionYape.findUnique({
+          where: { empresaId: ctx.empresaId },
+          select: { celular: true },
+        });
+        numeroPago = iy?.celular ?? null;
+      }
+
       return {
         ok: true,
         ventaId,
         total: Number(venta?.total ?? venta?.venta?.total ?? 0),
         yapeHabilitado: cobro?.habilitado ?? false,
         payAmount: cobro?.payAmount ?? null,
+        numeroPago,
       };
     },
   };

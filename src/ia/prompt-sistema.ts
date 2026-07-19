@@ -30,6 +30,8 @@ export interface CapasPrompt {
   clienteNombre?: string | null;
   /** El sistema ya envió el saludo de bienvenida → el agente no debe re-saludar. */
   saludoYaEnviado?: boolean;
+  /** Modo VENDE: el agente puede cerrar la venta y cobrar por Yape. */
+  modoVenta?: boolean;
 }
 
 export function construirSystemPrompt(
@@ -59,6 +61,14 @@ export function construirSystemPrompt(
     runtime.push(
       'El sistema YA envió el saludo de bienvenida: NO saludes ni te ' +
         'presentes de nuevo, responde directo a lo que pide el cliente.',
+    );
+  }
+  if (capas.modoVenta) {
+    runtime.push(
+      'Puedes cerrar la venta: cuando el cliente confirme el PRODUCTO y la ' +
+        'CANTIDAD, pídele su nombre (y su DNI si quiere boleta), llama a ' +
+        'crearVenta y dile que yapee el monto EXACTO que devuelve al número ' +
+        'que te indique la herramienta. No confirmes el pago tú: se valida solo.',
     );
   }
   partes.push('--- CONTEXTO ACTUAL ---\n' + runtime.join(' '));

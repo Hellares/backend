@@ -168,6 +168,7 @@ export class IaAgenteService {
       personalidad,
       empresaNombre: empresa?.nombre ?? null,
       saludoYaEnviado: omitirSaludo,
+      modoVenta: cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape,
     });
   }
 }
