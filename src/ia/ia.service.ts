@@ -13,7 +13,7 @@ import { crearBuscarProductoTool } from './tools/buscar-producto.tool';
 import { crearVerDetalleTool } from './tools/ver-detalle.tool';
 import { crearResolverClienteTool } from './tools/resolver-cliente.tool';
 import { crearCrearVentaTool } from './tools/crear-venta.tool';
-import { ContextoTool } from './tools/tool.types';
+import { ContextoTool, CatalogoItem } from './tools/tool.types';
 
 /** Resultado de atender un mensaje. Si el agente está apagado para la empresa
  *  (`habilitado=false`), `atendido=false` → el bot NO responde (fallback humano). */
@@ -24,6 +24,8 @@ export interface ResultadoAtencion {
   /** Saludo configurado por la empresa (para el primer mensaje del bot). */
   mensajeBienvenida?: string | null;
   resultado?: ResultadoConversacion;
+  /** Catálogo mostrado (id+variante) — el bot lo persiste para el próximo turno. */
+  catalogo?: CatalogoItem[];
 }
 
 /**
@@ -59,6 +61,8 @@ export class IaAgenteService {
     omitirSaludo?: boolean;
     /** Título del sorteo/evento activo (si hay) → el agente redirige a participar. */
     sorteoActivo?: string | null;
+    /** Catálogo mostrado en turnos previos (para resolver ids en crearVenta). */
+    catalogoPrevio?: CatalogoItem[];
   }): Promise<ResultadoAtencion> {
     const cfg = await this.prisma.integracionAgenteIA.findUnique({
       where: { empresaId: params.empresaId },
@@ -71,6 +75,7 @@ export class IaAgenteService {
       empresaId: params.empresaId,
       sedeId: params.sedeId ?? null,
       celular: params.celular ?? null,
+      catalogoReciente: params.catalogoPrevio ? [...params.catalogoPrevio] : [],
     };
 
     const provider = this.resolverProvider(cfg);
@@ -94,6 +99,7 @@ export class IaAgenteService {
       atendido: true,
       mensajeBienvenida: cfg.mensajeBienvenida,
       resultado,
+      catalogo: ctx.catalogoReciente,
     };
   }
 

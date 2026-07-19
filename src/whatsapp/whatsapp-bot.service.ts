@@ -3022,6 +3022,10 @@ export class WhatsappBotService {
       rol: h.rol,
       bloques: [{ tipo: 'texto', texto: h.texto }],
     }));
+    // Catálogo mostrado en turnos previos → crearVenta resuelve el id real.
+    const catalogoPrevio = Array.isArray(ctxPrevio.catalogoIa)
+      ? ctxPrevio.catalogoIa
+      : [];
 
     // Saludo de bienvenida: solo en el PRIMER turno (sin historial). Se envía
     // ANTES de la respuesta del agente y se le avisa al agente que no re-salude.
@@ -3058,6 +3062,7 @@ export class WhatsappBotService {
         historialPrevio,
         omitirSaludo: esPrimerTurno && !!bienvenida,
         sorteoActivo: sorteoActivo ?? null,
+        catalogoPrevio,
       });
     } catch (e) {
       this.logger.warn(`Agente IA (${celular}): ${(e as Error).message}`);
@@ -3080,6 +3085,7 @@ export class WhatsappBotService {
     await this.guardarConversacion(empresaId, celular, 'IA', {
       ...ctxPrevio,
       historialIa: nuevoHist,
+      catalogoIa: r.catalogo ?? catalogoPrevio,
     });
     return true;
   }

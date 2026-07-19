@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
-import { stockDisponible } from './stock.util';
+import { stockDisponible, recordarCatalogo } from './stock.util';
 
 /**
  * Tool `verDetalle` — detalle completo de UN producto: descripción,
@@ -91,6 +91,16 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
         orderBy: { orden: 'asc' },
         select: { url: true, urlThumbnail: true },
       });
+
+      // Recordar el producto y sus variantes (id+varianteId) para crearVenta.
+      recordarCatalogo(ctx, [
+        { id: p.id, varianteId: null, nombre: p.nombre },
+        ...p.variantes.map((v) => ({
+          id: p.id,
+          varianteId: v.id,
+          nombre: `${p.nombre} ${v.nombre}`.trim(),
+        })),
+      ]);
 
       return {
         ok: true,

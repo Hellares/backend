@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
-import { stockDisponible } from './stock.util';
+import { stockDisponible, recordarCatalogo } from './stock.util';
 
 /** Palabras vacías que no aportan a la búsqueda (no deben ampliar el OR). */
 const STOPWORDS = new Set([
@@ -178,7 +178,17 @@ export function crearBuscarProductoTool(
         if (items.length >= MAX_RESULTADOS) break;
       }
 
-      return { ok: true, productos: items.slice(0, MAX_RESULTADOS) };
+      const salida = items.slice(0, MAX_RESULTADOS);
+      // Recordar id+varianteId de lo mostrado → crearVenta lo resuelve luego.
+      recordarCatalogo(
+        ctx,
+        salida.map((p) => ({
+          id: p.id as string,
+          varianteId: (p.varianteId as string | undefined) ?? null,
+          nombre: p.nombre as string,
+        })),
+      );
+      return { ok: true, productos: salida };
     },
   };
 }

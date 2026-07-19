@@ -138,11 +138,32 @@ export function crearCrearVentaTool(
       };
 
       for (const it of items) {
-        const rawProdId = String(it?.productoId ?? '').trim();
+        let rawProdId = String(it?.productoId ?? '').trim();
         let varianteId = it?.varianteId ? String(it.varianteId).trim() : null;
         const cantidad = Number(it?.cantidad ?? 0);
         if (!rawProdId || !(cantidad > 0)) {
           return log({ ok: false, motivo: 'ITEM_INVALIDO' });
+        }
+
+        // PRIMERO: resolver contra el CATÁLOGO ya mostrado en la conversación
+        // (buscarProducto/verDetalle lo llenaron). Así, aunque el LLM mande el
+        // nombre ("LAPICERO") o un id parcial, lo mapeamos al id+variante REAL.
+        const cat = ctx.catalogoReciente ?? [];
+        const low = rawProdId.toLowerCase();
+        let hit =
+          cat.find((c) => c.id === rawProdId) ||
+          cat.find((c) => c.nombre.toLowerCase() === low);
+        if (!hit && low.length >= 3) {
+          const parciales = cat.filter(
+            (c) =>
+              c.nombre.toLowerCase().includes(low) ||
+              low.includes(c.nombre.toLowerCase()),
+          );
+          if (parciales.length === 1) hit = parciales[0];
+        }
+        if (hit) {
+          rawProdId = hit.id;
+          if (!varianteId && hit.varianteId) varianteId = hit.varianteId;
         }
 
         // Resolver el PRODUCTO: por id; si el LLM mandó el NOMBRE (Haiku no

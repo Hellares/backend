@@ -9,12 +9,25 @@
  * El LLM propone; el backend dispone.
  */
 
+/** Un producto/variante que el agente ya mostró en la conversación. */
+export interface CatalogoItem {
+  id: string; // productoId real
+  varianteId?: string | null;
+  nombre: string; // nombre mostrado (producto o "producto variante")
+}
+
 /** Contexto inyectado por el ejecutor — jamás proviene del LLM. */
 export interface ContextoTool {
   empresaId: string;
   sedeId?: string | null;
   celular?: string | null; // remitente de WhatsApp (para ownership)
   conversacionId?: string | null; // idempotencia en escrituras
+  /**
+   * Catálogo mostrado en la conversación (buscarProducto/verDetalle lo llenan,
+   * crearVenta lo lee para resolver el id real aunque el LLM mande el nombre).
+   * Array MUTABLE compartido en el turno; el bot lo persiste entre turnos.
+   */
+  catalogoReciente?: CatalogoItem[];
 }
 
 /**
