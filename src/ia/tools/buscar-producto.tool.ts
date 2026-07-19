@@ -17,9 +17,14 @@ import { stockDisponible } from './stock.util';
  *
  * Recibe un PrismaClient (compatible con PrismaService de Nest, que lo
  * extiende) para que el spike corra standalone y el módulo real lo inyecte.
+ * `maxResultados` sale de la config por empresa (IntegracionAgenteIA.
+ * maxProductosMostrar); por defecto 5.
  */
-export function crearBuscarProductoTool(prisma: PrismaClient): DefinicionTool {
-  const MAX_RESULTADOS = 5;
+export function crearBuscarProductoTool(
+  prisma: PrismaClient,
+  maxResultados = 5,
+): DefinicionTool {
+  const MAX_RESULTADOS = maxResultados > 0 ? maxResultados : 5;
 
   return {
     nombre: 'buscarProducto',

@@ -20,6 +20,7 @@ import { AnthropicProvider } from './provider/anthropic.provider';
 import { EjecutorTools } from './ejecutor-tools';
 import { AgenteService } from './agente.service';
 import { construirSystemPrompt } from './prompt-sistema';
+import { IaAgenteService } from './ia.service';
 
 // Contexto de prueba: empresa BETA (TORRES LEDEZMA, 341 productos). En el
 // módulo real llega del webhook de WhatsApp.
@@ -69,6 +70,53 @@ async function main() {
       );
       return;
     }
+    if (process.argv[2] === '--config') {
+      // ── Modo CONFIG: prueba el cableado config→runtime vía IaAgenteService ──
+      // Hace upsert de la config de la empresa beta y llama atender(). Prueba
+      // el gate `habilitado`, la personalidad (Capa B) y el tope de productos.
+      // VentaService va stub: en SOLO_CONSULTA nunca se invoca.
+      const onOff = process.argv[3] === 'off' ? false : true;
+      const mensaje = process.argv.slice(4).join(' ') || 'muéstrame peluches';
+      await prisma.integracionAgenteIA.upsert({
+        where: { empresaId: EMPRESA_ID },
+        create: {
+          empresaId: EMPRESA_ID,
+          habilitado: onOff,
+          nombreAgente: 'Sofía',
+          promptPersonalidad:
+            'Responde MUY breve. Trata de tú. Termina siempre con una pregunta.',
+          modo: 'SOLO_CONSULTA',
+          maxProductosMostrar: 3,
+        },
+        update: { habilitado: onOff },
+      });
+
+      const ia = new IaAgenteService(prisma as any, {} as any);
+      console.log(`\n⚙️  config: habilitado=${onOff}, tope=3, nombre=Sofía`);
+      console.log(`👤 ${mensaje}\n`);
+      const r = await ia.atender({
+        empresaId: EMPRESA_ID,
+        sedeId: SEDE_ID,
+        mensaje,
+      });
+      if (!r.atendido) {
+        console.log(`🚫 atendido=false (motivo: ${r.motivo}) → el bot no responde`);
+        return;
+      }
+      for (const t of r.resultado!.trazas) {
+        for (const tl of t.tools) {
+          const prods = (tl.resultado as any)?.productos?.length ?? 0;
+          console.log(
+            `   🔧 ${tl.nombre}(${JSON.stringify(tl.args)}) → ${prods} productos`,
+          );
+        }
+      }
+      console.log(
+        `\n🤖 ${r.resultado!.texto}\n   (${r.resultado!.iteraciones} iteración/es)`,
+      );
+      return;
+    }
+
     if (!esChat) {
       // ── Modo TOOL: buscarProducto (sin LLM) ──
       const query = arg ?? 'peluche';

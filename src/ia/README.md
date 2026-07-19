@@ -394,16 +394,28 @@ AppModule):
   Datasource `getAgenteIa`/`updateAgenteIa`.
 - ⚠️ Falta: `IA_KEY_SECRET` en el `.env` (beta y prod) y un flujo de aprobación
   del super admin (endpoint que hace la llamada de prueba y setea
-  `proveedorAprobado=true`). `IaAgenteService.atender` todavía usa el
-  provider/env global — falta cablearlo a esta config (habilitado, modo,
-  personalidad, BYOK).
+  `proveedorAprobado=true`).
+
+**Cableado config → runtime YA hecho** (`ia.service.ts`, tsc OK, probado en beta):
+`atender()` resuelve `IntegracionAgenteIA` y a partir de ella:
+- **gate**: sin config o `habilitado=false` → `{atendido:false, motivo}` (el bot
+  no responde / cae a humano).
+- **provider (BYOK)**: propio APROBADO con key → descifra (`descifrarSecreto`) y
+  usa ese tipo/modelo; si falla (tipo no soportado, key ilegible, falta
+  `IA_KEY_SECRET`) degrada al global — nunca bloquea.
+- **tools por modo**: lectura siempre; `crearVenta` SOLO si `modo=VENDE &&
+  puedeCobrarYape`.
+- **prompt Capa B**: nombreAgente + promptPersonalidad + horario + (si
+  `escalarAHumano=false`) "no derives a humano". Capa C con el nombre de la empresa.
+- **tope**: `maxProductosMostrar` → `crearBuscarProductoTool(prisma, tope)`.
+Probado con el runner: `--config on "..."` (atiende, tope 3, personalidad Sofía)
+y `--config off "..."` (atendido=false, DESHABILITADO).
 
 **Próximos pasos:**
-1. **Con la API key** → cerrar Fase 0: `--chat "quiero un peluche de stitch"`.
-2. **Cablear config → runtime**: `IaAgenteService.atender` lee `IntegracionAgenteIA`
-   (habilitado, modo→tools, personalidad→Capa B, BYOK→provider).
-3. **Enganche al bot** (F1): registrar `IaModule` en AppModule + rama en el bot
-   de WhatsApp que detecta intención de compra y llama `IaAgenteService.atender`.
-4. **Probar `crearVenta`** dentro del contexto NestJS (crea venta real → hacerlo
+1. **Enganche al bot** (F1): registrar `IaModule` en AppModule + rama en el bot
+   de WhatsApp que detecta intención de compra y llama `IaAgenteService.atender`
+   (respeta `atendido=false` para no pisar el flujo humano).
+2. **Probar `crearVenta`** dentro del contexto NestJS (crea venta real → hacerlo
    en beta con cuidado y anular después). Falta: creación en `resolverCliente`
    (ClientesService) + idempotencia por conversación.
+3. **Aprobación BYOK** (super admin) + `IA_KEY_SECRET` en los envs.
