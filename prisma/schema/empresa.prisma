@@ -2,6 +2,7 @@ model Empresa {
   id          String       @id @default(cuid())
   integracionYape IntegracionYape? // config de validación de pagos Yape/Plin (api-yape)
   integracionWhatsapp IntegracionWhatsapp? // WhatsApp vinculado vía Evolution API (notificaciones)
+  integracionAgenteIa IntegracionAgenteIA? // config del agente IA vendedor por WhatsApp
   caracteristicas EmpresaCaracteristica[] // features premium habilitadas (gating)
   bannerMarketplace BannerMarketplace? // banner promocional en el home del marketplace
   solicitudesBanner SolicitudBannerMarketplace[] // packs de días solicitados

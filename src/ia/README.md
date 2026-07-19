@@ -367,10 +367,43 @@ npx ts-node -r dotenv/config src/ia/spike.runner.ts --cliente <doc>    # cliente
 npx ts-node -r dotenv/config src/ia/spike.runner.ts --chat "..."       # loop (KEY)
 ```
 
-**Dos vías para continuar:**
-- **Con la API key** → cerrar Fase 0: correr `--chat "quiero un peluche de
-  stitch"` y ver el loop en vivo (traduce intención → tools → responde).
-- **Sin la key** → armar el **módulo NestJS** (`IaModule`) que inyecta
-  `PrismaService` + `ClientesService` + `VentaService`. Ahí las tools de
-  ESCRITURA envuelven los servicios reales: `crearVenta` (reserva stock +
-  charge Yape) y la creación en `resolverCliente`. Es el puente a la Fase 2.
+**Módulo NestJS YA armado** (`28b5bb7`, tsc OK):
+- `ia.module.ts` (`IaModule`) — imports `PrismaModule` + `VentaModule`, exporta
+  `IaAgenteService`. **Aún NO registrado en AppModule** (el enganche al bot es F1).
+- `ia.service.ts` (`IaAgenteService`) — inyecta `PrismaService` + `VentaService`,
+  construye el ejecutor con las 4 tools + corre el loop. `atender({empresaId,
+  sedeId, celular, mensaje})`. TODO: config por empresa + BYOK.
+- `tools/crear-venta.tool.ts` — la tool crítica de F2. Reusa el flujo real:
+  `VentaService.crearVentaYapeDiferida` (crea venta + reserva stock) + `cobroYape`
+  (charge con `payAmount`). Precio DEL SISTEMA, stock validado, vendedor=staff,
+  pertenencia al tenant, errores como datos. Canal `ONLINE` (el enum CanalVenta
+  no tiene WhatsApp; se marca en observaciones — a futuro migrar un valor propio).
+
+**Módulo de configuración YA armado** (`src/ia-config/`, tsc OK, registrado en
+AppModule):
+- Modelo Prisma `IntegracionAgenteIA` + enum `ModoAgenteIA` (migración aditiva
+  `20260719120000_integracion_agente_ia`, pendiente de aplicar en beta/prod).
+- `ia-config.service.ts` — get/upsert por empresa. Guard admin (SUPER_ADMIN /
+  EMPRESA_ADMIN). La API key del proveedor propio se **cifra** (AES-256-GCM,
+  `crypto-key.util.ts`, clave `IA_KEY_SECRET`) y se enmascara al leer. Cambiar
+  proveedor/modelo/key **resetea `proveedorAprobado=false`** (re-aprobación).
+- `ia-config.controller.ts` — `GET/PUT /empresas/:id/agente-ia`
+  (`@RequiresPermission(MANAGE_SETTINGS)`).
+- Flutter: `agente_ia_config_page.dart` (drawer "Agente IA (WhatsApp)", ruta
+  `/empresa/agente-ia`) — personalidad, alcance SOLO_CONSULTA/VENDE, BYOK.
+  Datasource `getAgenteIa`/`updateAgenteIa`.
+- ⚠️ Falta: `IA_KEY_SECRET` en el `.env` (beta y prod) y un flujo de aprobación
+  del super admin (endpoint que hace la llamada de prueba y setea
+  `proveedorAprobado=true`). `IaAgenteService.atender` todavía usa el
+  provider/env global — falta cablearlo a esta config (habilitado, modo,
+  personalidad, BYOK).
+
+**Próximos pasos:**
+1. **Con la API key** → cerrar Fase 0: `--chat "quiero un peluche de stitch"`.
+2. **Cablear config → runtime**: `IaAgenteService.atender` lee `IntegracionAgenteIA`
+   (habilitado, modo→tools, personalidad→Capa B, BYOK→provider).
+3. **Enganche al bot** (F1): registrar `IaModule` en AppModule + rama en el bot
+   de WhatsApp que detecta intención de compra y llama `IaAgenteService.atender`.
+4. **Probar `crearVenta`** dentro del contexto NestJS (crea venta real → hacerlo
+   en beta con cuidado y anular después). Falta: creación en `resolverCliente`
+   (ClientesService) + idempotencia por conversación.

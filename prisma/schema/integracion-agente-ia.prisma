@@ -1,0 +1,47 @@
+/// Configuración del agente IA vendedor por WhatsApp, una por empresa.
+/// Filosofía: "la IA conversa, el código determinístico cobra". Aquí vive SOLO
+/// la parte editable por la empresa (personalidad, alcance) y el control del
+/// super admin (proveedor BYOK, límites). Ver backend/src/ia/README.md.
+model IntegracionAgenteIA {
+  id         String  @id @default(cuid())
+  empresaId  String  @unique
+  habilitado Boolean @default(false) // switch maestro / kill switch
+
+  // — Personalidad (editable por la EMPRESA — Capa B del prompt) —
+  nombreAgente       String? // "Sofía", "asistente de JAYLI"
+  promptPersonalidad String? @db.Text // tono/estilo — TOPE ~500 chars (se valida en el DTO)
+  mensajeBienvenida  String?
+
+  // — Alcance (switches → definen qué tools recibe el agente) —
+  modo            ModoAgenteIA @default(SOLO_CONSULTA)
+  puedeCobrarYape Boolean      @default(false)
+
+  // — Convivencia / fallback —
+  escalarAHumano Boolean @default(true)
+  horarioTexto   String?
+
+  // — Proveedor propio de la empresa (BYOK), opcional — ver README §9.1 —
+  proveedorPropio   Boolean @default(false)
+  proveedorTipo     String? // "claude" | "openai" | "gemini"
+  proveedorModelo   String? // el modelo específico que trae
+  proveedorApiKey   String? // ENCRIPTADA en reposo (nunca plaintext)
+  proveedorAprobado Boolean @default(false) // lo aprueba el super admin con un test real
+
+  // — Control del SUPER ADMIN (no la empresa) —
+  modeloProveedor     String? // modelo global por defecto cuando no hay proveedor propio
+  maxProductosMostrar Int     @default(5)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@map("integracion_agente_ia")
+}
+
+/// Alcance del agente: solo responde consultas de catálogo, o además vende
+/// (registra la venta y genera el cobro Yape). Define qué tools recibe.
+enum ModoAgenteIA {
+  SOLO_CONSULTA
+  VENDE
+}
