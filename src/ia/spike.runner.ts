@@ -15,6 +15,7 @@ import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { crearBuscarProductoTool } from './tools/buscar-producto.tool';
 import { crearVerDetalleTool } from './tools/ver-detalle.tool';
+import { crearResolverClienteTool } from './tools/resolver-cliente.tool';
 import { AnthropicProvider } from './provider/anthropic.provider';
 import { EjecutorTools } from './ejecutor-tools';
 import { AgenteService } from './agente.service';
@@ -48,6 +49,7 @@ async function main() {
   const ctx = { empresaId: EMPRESA_ID, sedeId: SEDE_ID };
   const buscar = crearBuscarProductoTool(prisma);
   const detalle = crearVerDetalleTool(prisma);
+  const cliente = crearResolverClienteTool(prisma);
   try {
     if (process.argv[2] === '--detalle') {
       // ── Modo VER DETALLE (sin LLM) ──
@@ -55,6 +57,15 @@ async function main() {
       console.log(`\n🔧 ${detalle.nombre}("${productoId}")\n`);
       console.log(
         JSON.stringify(await detalle.ejecutar({ productoId }, ctx), null, 2),
+      );
+      return;
+    }
+    if (process.argv[2] === '--cliente') {
+      // ── Modo RESOLVER CLIENTE (sin LLM) ──
+      const documento = process.argv[3] ?? '';
+      console.log(`\n🔧 ${cliente.nombre}("${documento}")\n`);
+      console.log(
+        JSON.stringify(await cliente.ejecutar({ documento }, ctx), null, 2),
       );
       return;
     }
@@ -79,7 +90,7 @@ async function main() {
     }
     const mensaje = arg || 'quiero un peluche de stitch';
     const provider = new AnthropicProvider({ apiKey });
-    const ejecutor = new EjecutorTools().registrar(buscar, detalle);
+    const ejecutor = new EjecutorTools().registrar(buscar, detalle, cliente);
     const agente = new AgenteService(provider, ejecutor);
     const system = construirSystemPrompt(ctx, {
       empresaNombre: 'Importaciones JAYLI',
