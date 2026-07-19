@@ -30,6 +30,62 @@ export interface ConsultasLike {
  * agente puede confirmar el nombre y registrar la venta aunque sea cliente
  * nuevo. `consultas` es opcional (el spike corre sin el servicio externo).
  */
+/**
+ * Última dirección de envío conocida del cliente (por DNI o por su celular de
+ * WhatsApp): primero la de sus VENTAS (VentaEnvio), si no la de sus
+ * participaciones en SORTEOS — el bot de dinámicas ya reusa esa dirección.
+ */
+export async function buscarEnvioPrevio(
+  prisma: PrismaClient,
+  empresaId: string,
+  doc: string,
+  celular?: string | null,
+): Promise<Record<string, string | null> | null> {
+  const oCliente = [
+    { destinatarioDni: doc },
+    ...(celular ? [{ destinatarioCelular: celular }] : []),
+  ];
+  const ve = await prisma.ventaEnvio.findFirst({
+    where: { empresaId, OR: oCliente },
+    orderBy: { creadoEn: 'desc' },
+    select: {
+      agenciaNombre: true,
+      destinoProvincia: true,
+      destinoDepartamento: true,
+      agenciaDireccion: true,
+    },
+  });
+  if (ve && (ve.destinoProvincia || ve.agenciaDireccion)) {
+    return {
+      agencia: ve.agenciaNombre,
+      ciudad: ve.destinoProvincia,
+      departamento: ve.destinoDepartamento,
+      direccionAgencia: ve.agenciaDireccion,
+    };
+  }
+  const sp = await prisma.sorteoParticipante.findFirst({
+    where: {
+      empresaId,
+      OR: [{ dni: doc }, ...(celular ? [{ celular }] : [])],
+      destinoProvincia: { not: null },
+    },
+    orderBy: { actualizadoEn: 'desc' },
+    select: {
+      agenciaNombre: true,
+      destinoProvincia: true,
+      destinoDepartamento: true,
+      agenciaDireccion: true,
+    },
+  });
+  if (!sp) return null;
+  return {
+    agencia: sp.agenciaNombre,
+    ciudad: sp.destinoProvincia,
+    departamento: sp.destinoDepartamento,
+    direccionAgencia: sp.agenciaDireccion,
+  };
+}
+
 export function crearResolverClienteTool(
   prisma: PrismaClient,
   consultas?: ConsultasLike,
@@ -85,6 +141,14 @@ export function crearResolverClienteTool(
           nombreCompleto: `${persona.nombres} ${persona.apellidos ?? ''}`.trim(),
           yaEsClienteDeEstaEmpresa: !!clienteEmpresaId,
           tipoDoc,
+          // Última dirección de envío conocida (ventas o sorteos) para
+          // ofrecérsela: "¿enviamos a tu dirección registrada o a una nueva?".
+          envioPrevio: await buscarEnvioPrevio(
+            prisma,
+            ctx.empresaId,
+            doc,
+            ctx.celular,
+          ),
         };
       }
 
@@ -112,6 +176,13 @@ export function crearResolverClienteTool(
           fuente: doc.length === 9 ? 'MIGRACIONES' : 'RENIEC',
           tipoDoc,
           documento: doc,
+          // Puede tener dirección previa por sorteos aunque no sea cliente aún.
+          envioPrevio: await buscarEnvioPrevio(
+            prisma,
+            ctx.empresaId,
+            doc,
+            ctx.celular,
+          ),
         };
       } catch {
         // Factiliza no lo encontró (o no respondió).

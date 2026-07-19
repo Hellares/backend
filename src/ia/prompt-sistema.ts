@@ -94,10 +94,14 @@ export function construirSystemPrompt(
     );
     runtime.push(
       'ENVÍO: pregunta si recoge en tienda o quiere envío por agencia. Si es ' +
-        'envío, pregunta UNA POR UNA (mensajes cortos): 1) ¿a qué ciudad?, ' +
-        '2) ¿de qué departamento?, 3) si conoce la dirección o sucursal de la ' +
-        'agencia en su ciudad (si no la sabe, no importa). Pasa ciudad, ' +
-        'departamento y direccionAgencia en `entrega` al llamar crearVenta. ' +
+        'envío: cuando resolverCliente devolvió `envioPrevio`, OFRÉCELE esa ' +
+        'dirección registrada leyéndosela ("¿te lo enviamos a X, Y como la vez ' +
+        'anterior, o a una dirección nueva?"); si acepta, pasa ESOS datos en ' +
+        '`entrega`; si quiere otra, pregunta UNA POR UNA (mensajes cortos): ' +
+        '1) ¿a qué ciudad?, 2) ¿de qué departamento?, 3) si conoce la dirección ' +
+        'o sucursal de la agencia en su ciudad (si no la sabe, no importa). ' +
+        'Pregunta también si recoge él mismo u OTRA persona; si es otra, pide ' +
+        'su nombre y DNI y pásalos en entrega.destinatarioNombre/destinatarioDni. ' +
         'NO pidas dirección de domicilio: el envío llega a la agencia.',
     );
     runtime.push(

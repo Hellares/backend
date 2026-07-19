@@ -1,6 +1,7 @@
 import { PrismaClient, Rol, TipoAfectacionIgv } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
 import { stockDisponible } from './stock.util';
+import { buscarEnvioPrevio } from './resolver-cliente.tool';
 
 /**
  * Interfaz mínima de VentaService que necesita la tool (evita acoplarse al
@@ -103,6 +104,16 @@ export function crearCrearVentaTool(
               type: 'string',
               description:
                 'Dirección o sucursal de la agencia donde recogerá. Omite si no la sabe.',
+            },
+            destinatarioNombre: {
+              type: 'string',
+              description:
+                'SOLO si recoge OTRA persona (no el comprador): su nombre.',
+            },
+            destinatarioDni: {
+              type: 'string',
+              description:
+                'SOLO si recoge OTRA persona: su DNI (la agencia lo pide al entregar).',
             },
           },
         },
@@ -290,6 +301,8 @@ export function crearCrearVentaTool(
         ciudad?: string;
         departamento?: string;
         direccionAgencia?: string;
+        destinatarioNombre?: string;
+        destinatarioDni?: string;
       };
       // CLIENTE: con documento, el nombre OFICIAL y el vínculo salen de la BD
       // (Persona por dni), NUNCA del LLM — recorta/reformatea ("James Johel" en
@@ -379,15 +392,55 @@ export function crearCrearVentaTool(
           const t = (v ?? '').trim();
           return t.length >= 3 && t.length <= 60 ? t.toUpperCase() : undefined;
         };
+        // Sin ciudad/departamento nuevos → reusar la ÚLTIMA dirección conocida
+        // del cliente (ventas o sorteos), como hace el bot de dinámicas.
+        let ciudad = limpio(entrega.ciudad);
+        let departamento = limpio(entrega.departamento);
+        let direccionAgencia = limpio(entrega.direccionAgencia);
+        if (!ciudad && !departamento) {
+          const previo = await buscarEnvioPrevio(
+            prisma,
+            ctx.empresaId,
+            doc,
+            ctx.celular,
+          );
+          if (previo) {
+            ciudad = previo.ciudad ?? undefined;
+            departamento = previo.departamento ?? undefined;
+            direccionAgencia =
+              direccionAgencia ?? previo.direccionAgencia ?? undefined;
+          }
+        }
+
+        // DESTINATARIO: por defecto el comprador; si recoge OTRA persona, su
+        // nombre oficial sale de la BD por su DNI (o el nombre dictado).
+        let destNombre = nombreCliente;
+        let destDni: string | undefined = doc || undefined;
+        const otroDoc = String(entrega.destinatarioDni ?? '').replace(/\D/g, '');
+        const otroNombre = (entrega.destinatarioNombre ?? '').trim();
+        if (otroDoc.length === 8 || otroDoc.length === 9) {
+          const otra = await prisma.persona.findUnique({
+            where: { dni: otroDoc },
+            select: { nombres: true, apellidos: true },
+          });
+          destNombre = otra
+            ? `${otra.nombres} ${otra.apellidos ?? ''}`.trim()
+            : otroNombre || nombreCliente;
+          destDni = otroDoc;
+        } else if (otroNombre) {
+          destNombre = otroNombre.toUpperCase();
+          destDni = undefined;
+        }
+
         envioRegistrado = await ventaService
           .upsertEnvio(ventaId, ctx.empresaId, {
-            destinatarioNombre: nombreCliente,
-            destinatarioDni: doc || undefined,
+            destinatarioNombre: destNombre,
+            destinatarioDni: destDni,
             destinatarioCelular: ctx.celular ?? undefined,
             agenciaNombre: agencia,
-            destinoProvincia: limpio(entrega.ciudad),
-            destinoDepartamento: limpio(entrega.departamento),
-            agenciaDireccion: limpio(entrega.direccionAgencia),
+            destinoProvincia: ciudad,
+            destinoDepartamento: departamento,
+            agenciaDireccion: direccionAgencia,
           })
           .then(() => true)
           .catch(() => false);
