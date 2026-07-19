@@ -1,4 +1,4 @@
-import { PrismaClient, Rol } from '@prisma/client';
+import { PrismaClient, Rol, TipoAfectacionIgv } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
 import { stockDisponible } from './stock.util';
 
@@ -110,7 +110,7 @@ export function crearCrearVentaTool(
         // Producto (guard de pertenencia al tenant) + nombre.
         const prod = await prisma.producto.findFirst({
           where: { id: productoId, empresaId: ctx.empresaId, deletedAt: null },
-          select: { id: true, nombre: true },
+          select: { id: true, nombre: true, tipoAfectacionIgv: true },
         });
         if (!prod) {
           return { ok: false, motivo: 'PRODUCTO_NO_ENCONTRADO', productoId };
@@ -160,12 +160,26 @@ export function crearCrearVentaTool(
             disponible: disp,
           };
         }
+        // El precio del catálogo (ProductoStock.precio) es el precio final que
+        // paga el cliente → YA INCLUYE IGV. Se marca precioIncluyeIgv para que
+        // VentaService extraiga base+IGV en vez de sumarlo encima (bug: cobraba
+        // IGV doble). El % y la afectación salen del tipo del producto.
+        const gravado = prod.tipoAfectacionIgv === TipoAfectacionIgv.GRAVADO;
+        const tipoAfectacion =
+          prod.tipoAfectacionIgv === TipoAfectacionIgv.GRAVADO
+            ? '10'
+            : prod.tipoAfectacionIgv === TipoAfectacionIgv.EXONERADO
+              ? '20'
+              : '30';
         detalles.push({
           productoId,
           varianteId: varianteId ?? undefined,
           descripcion: nombre,
           cantidad,
           precioUnitario: Number(stock.precio), // ← DEL SISTEMA, no del LLM
+          precioIncluyeIgv: true,
+          porcentajeIGV: gravado ? 18 : 0,
+          tipoAfectacion,
         });
       }
 
