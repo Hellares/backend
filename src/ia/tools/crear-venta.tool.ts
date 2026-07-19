@@ -51,7 +51,12 @@ export function crearCrearVentaTool(
           items: {
             type: 'object',
             properties: {
-              productoId: { type: 'string' },
+              productoId: {
+                type: 'string',
+                description:
+                  'El campo "id" EXACTO del producto tal como lo devolvió ' +
+                  'buscarProducto (un código largo). Úsalo tal cual, no el nombre.',
+              },
               cantidad: { type: 'number' },
               varianteId: {
                 type: 'string',
@@ -111,65 +116,114 @@ export function crearCrearVentaTool(
       const items = Array.isArray(args.items) ? (args.items as any[]) : [];
       if (items.length === 0) return { ok: false, motivo: 'SIN_ITEMS' };
       const detalles: any[] = [];
+      // Incluye stock a nivel producto (varianteId null) + variantes con su stock.
+      const includeStock = {
+        stocksPorSede: {
+          where: {
+            sedeId: ctx.sedeId,
+            varianteId: null,
+            precio: { not: null },
+          },
+        },
+        variantes: {
+          where: { isActive: true, deletedAt: null },
+          select: {
+            id: true,
+            nombre: true,
+            stocksPorSede: {
+              where: { sedeId: ctx.sedeId, precio: { not: null } },
+            },
+          },
+        },
+      };
+
       for (const it of items) {
-        const productoId = String(it?.productoId ?? '');
-        const varianteId = it?.varianteId ? String(it.varianteId) : null;
+        const rawProdId = String(it?.productoId ?? '').trim();
+        let varianteId = it?.varianteId ? String(it.varianteId).trim() : null;
         const cantidad = Number(it?.cantidad ?? 0);
-        if (!productoId || !(cantidad > 0)) {
-          return { ok: false, motivo: 'ITEM_INVALIDO' };
-        }
-        // Producto (guard de pertenencia al tenant) + nombre.
-        const prod = await prisma.producto.findFirst({
-          where: { id: productoId, empresaId: ctx.empresaId, deletedAt: null },
-          select: { id: true, nombre: true, tipoAfectacionIgv: true },
-        });
-        if (!prod) {
-          return { ok: false, motivo: 'PRODUCTO_NO_ENCONTRADO', productoId };
+        if (!rawProdId || !(cantidad > 0)) {
+          return log({ ok: false, motivo: 'ITEM_INVALIDO' });
         }
 
-        // Stock/precio: el de la VARIANTE si viene (ramificado por varianteId,
-        // NUNCA AND productoId+varianteId), o el del producto si es simple.
-        let nombre = prod.nombre;
-        let stock;
-        if (varianteId) {
-          const variante = await prisma.productoVariante.findFirst({
+        // Resolver el PRODUCTO: por id; si el LLM mandó el NOMBRE (Haiku no
+        // siempre copia el id largo, ej. "LAPICERO"), se busca por nombre y se
+        // toma el ÚNICO con stock en la sede. Ambiguo/ninguno → error con opciones.
+        let prod: any = await prisma.producto.findFirst({
+          where: { id: rawProdId, empresaId: ctx.empresaId, deletedAt: null },
+          include: includeStock,
+        });
+        if (!prod) {
+          const cands = await prisma.producto.findMany({
             where: {
-              id: varianteId,
-              productoId,
               empresaId: ctx.empresaId,
-              isActive: true,
               deletedAt: null,
+              OR: [
+                { nombre: { contains: rawProdId, mode: 'insensitive' } },
+                { descripcion: { contains: rawProdId, mode: 'insensitive' } },
+              ],
             },
-            select: { id: true, nombre: true },
+            include: includeStock,
+            take: 8,
           });
-          if (!variante) {
-            return log({ ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId });
+          const conStock = cands.filter(
+            (c: any) =>
+              c.stocksPorSede.length > 0 ||
+              c.variantes.some((v: any) => v.stocksPorSede.length > 0),
+          );
+          if (conStock.length !== 1) {
+            return log({
+              ok: false,
+              motivo:
+                conStock.length === 0 ? 'PRODUCTO_NO_ENCONTRADO' : 'PRODUCTO_AMBIGUO',
+              productoId: rawProdId,
+              opciones: conStock
+                .slice(0, 5)
+                .map((c: any) => ({ id: c.id, nombre: c.nombre })),
+            });
           }
-          nombre = `${prod.nombre} ${variante.nombre}`.trim();
-          stock = await prisma.productoStock.findFirst({
-            where: { varianteId, sedeId: ctx.sedeId, precio: { not: null } },
-          });
+          prod = conStock[0];
+        }
+        const productoId = prod.id;
+
+        // Elegir la UNIDAD comprable: variante indicada; o producto simple con
+        // stock; o su única variante con stock (si hay varias → pedir cuál).
+        let nombre = prod.nombre;
+        let stock: any = null;
+        if (varianteId) {
+          const v = prod.variantes.find((x: any) => x.id === varianteId);
+          if (!v) return log({ ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId });
+          nombre = `${prod.nombre} ${v.nombre}`.trim();
+          stock = v.stocksPorSede.find((s: any) => s.precio != null) ?? null;
+        } else if (prod.stocksPorSede.length > 0) {
+          stock = prod.stocksPorSede[0];
         } else {
-          stock = await prisma.productoStock.findFirst({
-            where: {
+          const varsConStock = prod.variantes.filter(
+            (v: any) => v.stocksPorSede.length > 0,
+          );
+          if (varsConStock.length === 1) {
+            varianteId = varsConStock[0].id;
+            nombre = `${prod.nombre} ${varsConStock[0].nombre}`.trim();
+            stock = varsConStock[0].stocksPorSede[0];
+          } else if (varsConStock.length > 1) {
+            return log({
+              ok: false,
+              motivo: 'FALTA_VARIANTE',
               productoId,
-              varianteId: null,
-              sedeId: ctx.sedeId,
-              precio: { not: null },
-            },
-          });
+              variantes: varsConStock.map((v: any) => ({ id: v.id, nombre: v.nombre })),
+            });
+          }
         }
         if (!stock) {
           return log({ ok: false, motivo: 'SIN_STOCK_EN_SEDE', productoId });
         }
         const disp = Math.max(0, stockDisponible(stock));
         if (cantidad > disp) {
-          return {
+          return log({
             ok: false,
             motivo: 'STOCK_INSUFICIENTE',
             productoId,
             disponible: disp,
-          };
+          });
         }
         // El precio del catálogo (ProductoStock.precio) es el precio final que
         // paga el cliente → YA INCLUYE IGV. Se marca precioIncluyeIgv para que
@@ -200,11 +254,15 @@ export function crearCrearVentaTool(
         conEnvio?: boolean;
         direccion?: string;
       };
+      // clienteId solo si parece un id real (cuid ~25 chars): el LLM a veces
+      // inventa "1". Sin un id válido, la venta se registra por nombre+documento.
+      const clienteIdRaw = args.clienteId ? String(args.clienteId).trim() : '';
+      const clienteId = clienteIdRaw.length >= 20 ? clienteIdRaw : undefined;
       const dto = {
         canalVenta: 'ONLINE', // el enum no tiene WhatsApp; se marca en observaciones
         sedeId: ctx.sedeId,
         vendedorId: staff.usuarioId,
-        clienteId: args.clienteId ? String(args.clienteId) : undefined,
+        clienteId,
         nombreCliente: String(args.nombreCliente ?? 'CLIENTE'),
         documentoCliente: doc || undefined,
         tipoDocumentoCliente:
