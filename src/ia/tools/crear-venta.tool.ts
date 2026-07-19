@@ -215,6 +215,11 @@ export function crearCrearVentaTool(
           staff.usuarioId,
         );
       } catch (e) {
+        // Log visible en el backend para diagnosticar (el LLM solo ve el motivo).
+        console.error(
+          `[crearVenta] ERROR_VENTA empresa=${ctx.empresaId} ` +
+            `dto=${JSON.stringify(dto)} → ${(e as Error).message}`,
+        );
         return { ok: false, motivo: 'ERROR_VENTA', detalle: (e as Error).message };
       }
       const ventaId = venta?.id ?? venta?.venta?.id;

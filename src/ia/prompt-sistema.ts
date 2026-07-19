@@ -92,6 +92,11 @@ export function construirSystemPrompt(
         '(payAmount) al número (numeroPago) que devolvió. No confirmes el pago ' +
         'tú: se valida solo.',
     );
+    runtime.push(
+      'Si crearVenta devuelve ok:false o un error, NO inventes datos ni digas ' +
+        'que la compra está lista: discúlpate, avisa que hubo un problema al ' +
+        'registrar la venta y ofrece que un asesor lo ayude.',
+    );
   }
   partes.push('--- CONTEXTO ACTUAL ---\n' + runtime.join(' '));
 
