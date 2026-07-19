@@ -81,7 +81,18 @@ export function crearCrearVentaTool(
     },
 
     async ejecutar(args, ctx: ContextoTool): Promise<ResultadoTool> {
-      if (!ctx.sedeId) return { ok: false, motivo: 'SIN_SEDE' };
+      console.error(`[crearVenta] IN args=${JSON.stringify(args)}`);
+      // Log de diagnóstico: qué args mandó el LLM (¿incluyó varianteId?).
+      const log = (r: ResultadoTool): ResultadoTool => {
+        if (!r.ok) {
+          console.error(
+            `[crearVenta] FALLO motivo=${r.motivo} ` +
+              `args=${JSON.stringify(args)} extra=${JSON.stringify(r)}`,
+          );
+        }
+        return r;
+      };
+      if (!ctx.sedeId) return log({ ok: false, motivo: 'SIN_SEDE' });
 
       // 1) Vendedor: staff activo más antiguo (NUNCA un CLIENTE).
       const staff = await prisma.empresaUsuarioRol.findFirst({
@@ -132,7 +143,7 @@ export function crearCrearVentaTool(
             select: { id: true, nombre: true },
           });
           if (!variante) {
-            return { ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId };
+            return log({ ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId });
           }
           nombre = `${prod.nombre} ${variante.nombre}`.trim();
           stock = await prisma.productoStock.findFirst({
@@ -149,7 +160,7 @@ export function crearCrearVentaTool(
           });
         }
         if (!stock) {
-          return { ok: false, motivo: 'SIN_STOCK_EN_SEDE', productoId };
+          return log({ ok: false, motivo: 'SIN_STOCK_EN_SEDE', productoId });
         }
         const disp = Math.max(0, stockDisponible(stock));
         if (cantidad > disp) {
