@@ -35,7 +35,9 @@ COPY . .
 RUN DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" npx prisma generate
 
 # Build de la aplicación
-RUN npm run build
+# --max-old-space-size: el proyecto creció y `nest build` (type-check TS) supera
+# el heap por defecto de Node → OOM. El VPS tiene RAM de sobra, así que 4GB.
+RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 # Eliminar dependencias de desarrollo después del build
 RUN npm prune --production
