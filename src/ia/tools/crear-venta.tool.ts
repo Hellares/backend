@@ -12,7 +12,6 @@ export interface VentaServiceLike {
     dto: any,
     cajeroId: string,
   ): Promise<any>;
-  cobroYape(empresaId: string, ventaId: string, monto?: number): Promise<any>;
   upsertEnvio(
     id: string,
     empresaId: string,
@@ -29,13 +28,13 @@ export interface VentaServiceLike {
 }
 
 /**
- * Tool `crearVenta` (Fase 2) — la crítica: registra la venta del cliente y
- * genera el cobro Yape (charge con céntimos únicos), reusando el flujo
- * determinístico existente:
- *   1) VentaService.crearVentaYapeDiferida → crea la venta, RESERVA stock,
- *      no cobra ni emite comprobante hasta el pago.
- *   2) VentaService.cobroYape → genera el charge Yape y devuelve payAmount.
- * El cliente paga el monto exacto → la auto-validación (webhook) confirma.
+ * Tool `crearVenta` (Fase 2) — la crítica: registra la venta del cliente
+ * reusando el flujo determinístico existente:
+ *   VentaService.crearVentaYapeDiferida → crea la venta, RESERVA stock,
+ *   no cobra ni emite comprobante hasta el pago.
+ * El cliente paga el precio REDONDO desde SU cuenta Yape → el webhook
+ * payment.received lo auto-valida por NOMBRE + monto exacto (como en
+ * sorteos). Sin charges con céntimos: confundían al cliente.
  *
  * GUARDS: precio del sistema (NUNCA del LLM — ni está en el schema), stock
  * validado/reservado, pertenencia al tenant, vendedor = staff (no cliente).
@@ -326,10 +325,10 @@ export function crearCrearVentaTool(
       const ventaId = venta?.id ?? venta?.venta?.id;
       if (!ventaId) return { ok: false, motivo: 'VENTA_SIN_ID' };
 
-      // 4) Generar el cobro Yape (payAmount con céntimos únicos).
-      const cobro = await ventaService
-        .cobroYape(ctx.empresaId, ventaId)
-        .catch(() => null);
+      // 4) SIN charge de céntimos: el cliente paga el precio REDONDO y el
+      //    webhook payment.received lo auto-valida por NOMBRE + monto exacto
+      //    (como en sorteos). Los céntimos únicos confundían al cliente.
+      const totalVenta = Number(venta?.total ?? venta?.venta?.total ?? 0);
 
       // 5) Número al que el cliente yapea (para decírselo): el de pago del
       //    WhatsApp, si no el de IntegracionYape.
@@ -349,9 +348,10 @@ export function crearCrearVentaTool(
       return {
         ok: true,
         ventaId,
-        total: Number(venta?.total ?? venta?.venta?.total ?? 0),
-        yapeHabilitado: cobro?.habilitado ?? false,
-        payAmount: cobro?.payAmount ?? null,
+        total: totalVenta,
+        // El monto a yapear ES el precio normal (el webhook valida por nombre
+        // + monto exacto). Debe pagarse desde la cuenta Yape del comprador.
+        payAmount: totalVenta,
         numeroPago,
       };
     },

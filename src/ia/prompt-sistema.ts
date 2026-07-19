@@ -86,7 +86,10 @@ export function construirSystemPrompt(
         'si NO lo encuentra). ' +
         '4) Confirmado el nombre, llama crearVenta DE INMEDIATO y en el MISMO ' +
         'mensaje di a nombre de quién quedó la compra, el monto EXACTO ' +
-        '(payAmount) y el número de Yape (numeroPago) que devolvió. ' +
+        '(payAmount) y el número de Yape (numeroPago) que devolvió; aclárale ' +
+        'que el yape debe salir de SU PROPIA cuenta (el pago se valida por su ' +
+        'nombre) — si pagará otra persona, la validación será manual con un ' +
+        'asesor. ' +
         '5) El pago se valida SOLO (no lo confirmes tú); el sistema le avisará ' +
         'y le preguntará por la entrega. NO preguntes por envío ni dirección ' +
         'ANTES del pago.',

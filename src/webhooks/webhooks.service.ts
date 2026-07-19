@@ -10,6 +10,7 @@ import { PedidoMarketplaceEmpresaService } from '../pedido-marketplace/pedido-ma
 import { CotizacionService } from '../cotizacion/cotizacion.service';
 import { SorteosService } from '../sorteos/sorteos.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { nombresCoinciden } from '../sorteos/nombre-match.util';
 
 /**
  * Payload estándar de Syncrofact (documentacion/webhooks.md).
@@ -117,16 +118,27 @@ export class WebhooksService {
     if (!verif) return { ok: true, accion: 'cuenta-no-mapeada' };
     const { empresaId, payload } = verif;
 
-    // Pago RECIBIDO sin charge (yape "suelto" — participaciones de
-    // sorteos): si calza por nombre + monto exacto con UNA participación
-    // pendiente, se AUTO-VALIDA (ticket + confirmación del bot).
+    // Pago RECIBIDO sin charge (yape "suelto"): primero se intenta contra las
+    // participaciones de SORTEOS (nombre + monto exacto + única); si no
+    // validó, contra las VENTAS del agente IA (mismo criterio: el cliente
+    // paga el precio REDONDO y se matchea por su nombre — sin céntimos).
     if (payload?.event === 'payment.received') {
       const res = await this.sorteosService.autoValidarPorPagoYape(
         empresaId,
         payload?.payment ?? {},
       );
-      this.logger.log(`Webhook payment.received → ${res.accion}`);
-      return { ok: true, ...res };
+      if (res.accion === 'participante-auto-validado') {
+        this.logger.log(`Webhook payment.received → ${res.accion}`);
+        return { ok: true, ...res };
+      }
+      const resVenta = await this.autoValidarVentaPorPagoYape(
+        empresaId,
+        payload?.payment ?? {},
+      );
+      this.logger.log(
+        `Webhook payment.received → sorteo:${res.accion} venta:${resVenta.accion}`,
+      );
+      return { ok: true, ...resVenta };
     }
 
     if (payload?.event !== 'payment.confirmed') {
@@ -237,70 +249,161 @@ export class WebhooksService {
     const completa =
       (ventaActualizada as any)?.estado === EstadoVenta.PAGADA_COMPLETA;
     if (completa) {
-      this.realtime.notifyVentaPagada({ empresaId, ventaId });
-
-      // Confirmación al CLIENTE por WhatsApp (ventas ONLINE con celular — las
-      // del agente IA): "pago validado, tu compra se está preparando" + la
-      // pregunta de ENTREGA (el envío se registra DESPUÉS del pago, como en
-      // sorteos). El mensaje se guarda en el historial del agente para que
-      // entienda la respuesta ("envío"/"recojo"). Best-effort: nunca rompe.
-      if (venta.canalVenta === 'ONLINE' && venta.telefonoCliente) {
-        const celularCliente = venta.telefonoCliente;
-        const pregunta = venta.conEnvio
-          ? '📦 Te avisaremos cuando salga hacia tu agencia.'
-          : '📦 ¿La recoges en tienda o te la enviamos por agencia? ' +
-            'Escríbeme *recojo* o *envío*.';
-        const texto =
-          `✅ ¡Tu pago fue confirmado! Recibimos S/ ${Number(venta.total).toFixed(2)}.\n` +
-          `🧾 Tu compra *${venta.codigo}* ya se está preparando.\n` +
-          `${pregunta}\n¡Gracias por tu compra! 🙌`;
-        this.whatsapp
-          .enviarTexto(empresaId, celularCliente, texto)
-          .then(async (enviado) => {
-            if (!enviado) return;
-            // Anexar al historial del agente (contexto para el próximo turno).
-            const conv = await this.prisma.conversacionWhatsapp.findUnique({
-              where: {
-                empresaId_celular: { empresaId, celular: celularCliente },
-              },
-            });
-            const ctxConv: any = conv?.contexto ?? {};
-            const hist = Array.isArray(ctxConv.historialIa)
-              ? ctxConv.historialIa
-              : [];
-            await this.prisma.conversacionWhatsapp.upsert({
-              where: {
-                empresaId_celular: { empresaId, celular: celularCliente },
-              },
-              create: {
-                empresaId,
-                celular: celularCliente,
-                estado: 'IA',
-                contexto: { historialIa: [{ rol: 'assistant', texto }] },
-              },
-              update: {
-                estado: 'IA',
-                contexto: {
-                  ...ctxConv,
-                  historialIa: [
-                    ...hist,
-                    { rol: 'assistant', texto },
-                  ].slice(-12),
-                },
-              },
-            });
-          })
-          .catch((e: Error) =>
-            this.logger.warn(
-              `Confirmación WhatsApp de venta ${ventaId}: ${e.message}`,
-            ),
-          );
-      }
+      this.notificarVentaPagada(empresaId, venta);
     }
     return {
       ok: true,
       accion: completa ? 'pagada' : 'pago-parcial',
       ventaId,
+    };
+  }
+
+  /**
+   * Venta pagada COMPLETA: avisa a la app (FCM realtime) y al CLIENTE por
+   * WhatsApp (ventas ONLINE con celular — las del agente IA): "pago validado,
+   * tu compra se está preparando" + la pregunta de ENTREGA (el envío se
+   * registra DESPUÉS del pago, como en sorteos). El mensaje se guarda en el
+   * historial del agente para que entienda la respuesta ("envío"/"recojo").
+   * Best-effort: nunca rompe el webhook.
+   */
+  private notificarVentaPagada(
+    empresaId: string,
+    venta: {
+      id: string;
+      codigo: string;
+      total: any;
+      conEnvio: boolean;
+      canalVenta: string;
+      telefonoCliente: string | null;
+    },
+  ): void {
+    this.realtime.notifyVentaPagada({ empresaId, ventaId: venta.id });
+
+    if (venta.canalVenta !== 'ONLINE' || !venta.telefonoCliente) return;
+    const celularCliente = venta.telefonoCliente;
+    const pregunta = venta.conEnvio
+      ? '📦 Te avisaremos cuando salga hacia tu agencia.'
+      : '📦 ¿La recoges en tienda o te la enviamos por agencia? ' +
+        'Escríbeme *recojo* o *envío*.';
+    const texto =
+      `✅ ¡Tu pago fue confirmado! Recibimos S/ ${Number(venta.total).toFixed(2)}.\n` +
+      `🧾 Tu compra *${venta.codigo}* ya se está preparando.\n` +
+      `${pregunta}\n¡Gracias por tu compra! 🙌`;
+    this.whatsapp
+      .enviarTexto(empresaId, celularCliente, texto)
+      .then(async (enviado) => {
+        if (!enviado) return;
+        // Anexar al historial del agente (contexto para el próximo turno).
+        const conv = await this.prisma.conversacionWhatsapp.findUnique({
+          where: { empresaId_celular: { empresaId, celular: celularCliente } },
+        });
+        const ctxConv: any = conv?.contexto ?? {};
+        const hist = Array.isArray(ctxConv.historialIa)
+          ? ctxConv.historialIa
+          : [];
+        await this.prisma.conversacionWhatsapp.upsert({
+          where: { empresaId_celular: { empresaId, celular: celularCliente } },
+          create: {
+            empresaId,
+            celular: celularCliente,
+            estado: 'IA',
+            contexto: { historialIa: [{ rol: 'assistant', texto }] },
+          },
+          update: {
+            estado: 'IA',
+            contexto: {
+              ...ctxConv,
+              historialIa: [...hist, { rol: 'assistant', texto }].slice(-12),
+            },
+          },
+        });
+      })
+      .catch((e: Error) =>
+        this.logger.warn(
+          `Confirmación WhatsApp de venta ${venta.id}: ${e.message}`,
+        ),
+      );
+  }
+
+  /**
+   * Auto-validación de VENTAS del agente IA por pago Yape "suelto" (sin
+   * charge): el cliente paga el precio REDONDO y el match es como en sorteos
+   * — nombre del pagador (bidireccional) + monto exacto + candidata ÚNICA.
+   * Sin céntimos raros para el cliente. 0 o 2+ candidatas → validación manual.
+   */
+  private async autoValidarVentaPorPagoYape(
+    empresaId: string,
+    pago: {
+      id?: string | null;
+      senderName?: string | null;
+      amount?: number | null;
+      operationCode?: string | null;
+      provider?: string | null;
+    },
+  ): Promise<{ accion: string; ventaId?: string }> {
+    const monto = Number(pago?.amount ?? 0);
+    if (!pago?.senderName || !(monto > 0)) {
+      return { accion: 'venta-pago-sin-datos' };
+    }
+    const referencia = pago.operationCode || pago.id || undefined;
+
+    // Reintentos del webhook: si este pago ya se aplicó a una venta, no doble.
+    if (referencia) {
+      const usado = await this.prisma.pagoVenta.findFirst({
+        where: { referencia, venta: { empresaId } },
+        select: { id: true },
+      });
+      if (usado) return { accion: 'venta-pago-ya-usado' };
+    }
+
+    // Candidatas: ventas del agente (ONLINE con celular) pendientes de pago
+    // Yape diferido, recientes, con el MONTO EXACTO del pago.
+    const desde = new Date(Date.now() - 24 * 3600 * 1000);
+    const candidatas = await this.prisma.venta.findMany({
+      where: {
+        empresaId,
+        canalVenta: 'ONLINE',
+        estado: EstadoVenta.CONFIRMADA,
+        cobroDiferido: true,
+        telefonoCliente: { not: null },
+        creadoEn: { gte: desde },
+        total: monto,
+      },
+      include: { pagos: true },
+    });
+    const matches = candidatas.filter((v) =>
+      nombresCoinciden(pago.senderName!, v.nombreCliente),
+    );
+    if (matches.length === 0) return { accion: 'venta-sin-match' };
+    if (matches.length > 1) return { accion: 'venta-ambigua' };
+
+    const venta = matches[0];
+    const totalPagado = venta.pagos.reduce(
+      (s: number, p: { monto: any }) => s + Number(p.monto),
+      0,
+    );
+    const pendiente = Number(venta.total) - totalPagado;
+    if (pendiente <= 0) return { accion: 'venta-sin-saldo' };
+
+    const metodo =
+      pago.provider === 'plin' ? MetodoPagoVenta.PLIN : MetodoPagoVenta.YAPE;
+    const ventaActualizada = await this.ventaService.procesarPago(
+      venta.id,
+      empresaId,
+      {
+        metodoPago: metodo,
+        monto: Math.min(monto, pendiente),
+        referencia,
+      } as any,
+      venta.cajeroId ?? undefined,
+      { skipCajaValidacion: true },
+    );
+    const completa =
+      (ventaActualizada as any)?.estado === EstadoVenta.PAGADA_COMPLETA;
+    if (completa) this.notificarVentaPagada(empresaId, venta);
+    return {
+      accion: completa ? 'venta-auto-validada' : 'venta-pago-parcial',
+      ventaId: venta.id,
     };
   }
 

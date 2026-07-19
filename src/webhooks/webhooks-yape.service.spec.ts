@@ -48,7 +48,11 @@ describe('WebhooksService.procesarPagoYape', () => {
   beforeEach(() => {
     integracionYape = { verificarWebhook: jest.fn() };
     prisma = {
-      venta: { findFirst: jest.fn() },
+      venta: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      pagoVenta: { findFirst: jest.fn().mockResolvedValue(null) },
       conversacionWhatsapp: {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({}),
@@ -312,7 +316,72 @@ describe('WebhooksService.procesarPagoYape', () => {
       'emp-1',
       expect.objectContaining({ senderName: 'Rosa T.', amount: 20 }),
     );
-    expect(r).toMatchObject({ ok: true, accion: 'sin-pendientes' });
+    // Sin participación que valide → se intenta contra las VENTAS del agente
+    // (ninguna candidata en este caso).
+    expect(r).toMatchObject({ ok: true, accion: 'venta-sin-match' });
+  });
+
+  it('payment.received sin sorteo pero con VENTA del agente que calza por nombre+monto → auto-valida', async () => {
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: {
+          provider: 'yape',
+          senderName: 'James Johel Torres Ledezma',
+          amount: 2.5,
+          operationCode: 'OP-123',
+        },
+      }),
+    );
+    prisma.venta.findMany.mockResolvedValue([
+      {
+        id: 'venta-7',
+        codigo: 'VTA-1',
+        total: 2.5,
+        nombreCliente: 'JAMES JOHEL TORRES LEDEZMA',
+        canalVenta: 'ONLINE',
+        conEnvio: false,
+        telefonoCliente: '51982002969',
+        cajeroId: 'caj-1',
+        pagos: [],
+      },
+    ]);
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+    expect(ventaService.procesarPago).toHaveBeenCalledWith(
+      'venta-7',
+      'emp-1',
+      expect.objectContaining({ monto: 2.5, referencia: 'OP-123' }),
+      'caj-1',
+      { skipCajaValidacion: true },
+    );
+    expect(r).toMatchObject({ ok: true, accion: 'venta-auto-validada' });
+  });
+
+  it('payment.received con nombre que NO coincide → venta-sin-match (manual)', async () => {
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: { provider: 'yape', senderName: 'Otra Persona X', amount: 2.5 },
+      }),
+    );
+    prisma.venta.findMany.mockResolvedValue([
+      {
+        id: 'venta-7',
+        codigo: 'VTA-1',
+        total: 2.5,
+        nombreCliente: 'JAMES JOHEL TORRES LEDEZMA',
+        canalVenta: 'ONLINE',
+        conEnvio: false,
+        telefonoCliente: '51982002969',
+        cajeroId: 'caj-1',
+        pagos: [],
+      },
+    ]);
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+    expect(ventaService.procesarPago).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ ok: true, accion: 'venta-sin-match' });
   });
 
   it('evento que no es payment.confirmed → ignorado', async () => {
