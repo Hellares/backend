@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { IntegracionAgenteIA, ModoAgenteIA } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { VentaService } from '../venta/venta.service';
+import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { descifrarSecreto } from '../ia-config/crypto-key.util';
 import { AnthropicProvider } from './provider/anthropic.provider';
 import { AgenteIaProvider, MensajeAgente } from './provider/agente-ia.provider';
@@ -40,6 +41,7 @@ export class IaAgenteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly venta: VentaService,
+    private readonly consultas: ConsultasExternasService,
   ) {}
 
   /**
@@ -133,7 +135,7 @@ export class IaAgenteService {
     const ejecutor = new EjecutorTools().registrar(
       crearBuscarProductoTool(this.prisma, cfg.maxProductosMostrar),
       crearVerDetalleTool(this.prisma),
-      crearResolverClienteTool(this.prisma),
+      crearResolverClienteTool(this.prisma, this.consultas),
     );
     if (cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape) {
       ejecutor.registrar(crearCrearVentaTool(this.prisma, this.venta));

@@ -91,7 +91,7 @@ async function main() {
         update: { habilitado: onOff },
       });
 
-      const ia = new IaAgenteService(prisma as any, {} as any);
+      const ia = new IaAgenteService(prisma as any, {} as any, {} as any);
       console.log(`\n⚙️  config: habilitado=${onOff}, tope=3, nombre=Sofía`);
       console.log(`👤 ${mensaje}\n`);
       const r = await ia.atender({

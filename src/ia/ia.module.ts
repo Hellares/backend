@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { VentaModule } from '../venta/venta.module';
+import { ConsultasExternasModule } from '../consultas-externas/consultas-externas.module';
 import { IaAgenteService } from './ia.service';
 
 /**
@@ -12,7 +13,7 @@ import { IaAgenteService } from './ia.service';
  * Fase 1. Por ahora el módulo queda listo y verificado (tsc).
  */
 @Module({
-  imports: [PrismaModule, VentaModule],
+  imports: [PrismaModule, VentaModule, ConsultasExternasModule],
   providers: [IaAgenteService],
   exports: [IaAgenteService],
 })
