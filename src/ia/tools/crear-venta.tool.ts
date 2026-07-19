@@ -86,18 +86,7 @@ export function crearCrearVentaTool(
     },
 
     async ejecutar(args, ctx: ContextoTool): Promise<ResultadoTool> {
-      console.error(`[crearVenta] IN args=${JSON.stringify(args)}`);
-      // Log de diagnóstico: qué args mandó el LLM (¿incluyó varianteId?).
-      const log = (r: ResultadoTool): ResultadoTool => {
-        if (!r.ok) {
-          console.error(
-            `[crearVenta] FALLO motivo=${r.motivo} ` +
-              `args=${JSON.stringify(args)} extra=${JSON.stringify(r)}`,
-          );
-        }
-        return r;
-      };
-      if (!ctx.sedeId) return log({ ok: false, motivo: 'SIN_SEDE' });
+      if (!ctx.sedeId) return { ok: false, motivo: 'SIN_SEDE' };
 
       // 1) Vendedor: staff activo más antiguo (NUNCA un CLIENTE).
       const staff = await prisma.empresaUsuarioRol.findFirst({
@@ -142,7 +131,7 @@ export function crearCrearVentaTool(
         let varianteId = it?.varianteId ? String(it.varianteId).trim() : null;
         const cantidad = Number(it?.cantidad ?? 0);
         if (!rawProdId || !(cantidad > 0)) {
-          return log({ ok: false, motivo: 'ITEM_INVALIDO' });
+          return { ok: false, motivo: 'ITEM_INVALIDO' };
         }
 
         // PRIMERO: resolver contra el CATÁLOGO ya mostrado en la conversación
@@ -192,7 +181,7 @@ export function crearCrearVentaTool(
               c.variantes.some((v: any) => v.stocksPorSede.length > 0),
           );
           if (conStock.length !== 1) {
-            return log({
+            return {
               ok: false,
               motivo:
                 conStock.length === 0 ? 'PRODUCTO_NO_ENCONTRADO' : 'PRODUCTO_AMBIGUO',
@@ -200,7 +189,7 @@ export function crearCrearVentaTool(
               opciones: conStock
                 .slice(0, 5)
                 .map((c: any) => ({ id: c.id, nombre: c.nombre })),
-            });
+            };
           }
           prod = conStock[0];
         }
@@ -212,7 +201,7 @@ export function crearCrearVentaTool(
         let stock: any = null;
         if (varianteId) {
           const v = prod.variantes.find((x: any) => x.id === varianteId);
-          if (!v) return log({ ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId });
+          if (!v) return { ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId };
           nombre = `${prod.nombre} ${v.nombre}`.trim();
           stock = v.stocksPorSede.find((s: any) => s.precio != null) ?? null;
         } else if (prod.stocksPorSede.length > 0) {
@@ -226,25 +215,25 @@ export function crearCrearVentaTool(
             nombre = `${prod.nombre} ${varsConStock[0].nombre}`.trim();
             stock = varsConStock[0].stocksPorSede[0];
           } else if (varsConStock.length > 1) {
-            return log({
+            return {
               ok: false,
               motivo: 'FALTA_VARIANTE',
               productoId,
               variantes: varsConStock.map((v: any) => ({ id: v.id, nombre: v.nombre })),
-            });
+            };
           }
         }
         if (!stock) {
-          return log({ ok: false, motivo: 'SIN_STOCK_EN_SEDE', productoId });
+          return { ok: false, motivo: 'SIN_STOCK_EN_SEDE', productoId };
         }
         const disp = Math.max(0, stockDisponible(stock));
         if (cantidad > disp) {
-          return log({
+          return {
             ok: false,
             motivo: 'STOCK_INSUFICIENTE',
             productoId,
             disponible: disp,
-          });
+          };
         }
         // El precio del catálogo (ProductoStock.precio) es el precio final que
         // paga el cliente → YA INCLUYE IGV. Se marca precioIncluyeIgv para que
@@ -305,11 +294,6 @@ export function crearCrearVentaTool(
           staff.usuarioId,
         );
       } catch (e) {
-        // Log visible en el backend para diagnosticar (el LLM solo ve el motivo).
-        console.error(
-          `[crearVenta] ERROR_VENTA empresa=${ctx.empresaId} ` +
-            `dto=${JSON.stringify(dto)} → ${(e as Error).message}`,
-        );
         return { ok: false, motivo: 'ERROR_VENTA', detalle: (e as Error).message };
       }
       const ventaId = venta?.id ?? venta?.venta?.id;
