@@ -65,10 +65,13 @@ export function construirSystemPrompt(
   }
   if (capas.modoVenta) {
     runtime.push(
-      'Puedes cerrar la venta: cuando el cliente confirme el PRODUCTO y la ' +
-        'CANTIDAD, pídele su nombre (y su DNI si quiere boleta), llama a ' +
-        'crearVenta y dile que yapee el monto EXACTO que devuelve al número ' +
-        'que te indique la herramienta. No confirmes el pago tú: se valida solo.',
+      'Puedes cerrar la venta. Cuando el cliente confirme el PRODUCTO y la ' +
+        'CANTIDAD, pídele su DNI (8 dígitos) o CE (9) y LLAMA a resolverCliente ' +
+        'para obtener su nombre —lo busca en la base o en RENIEC/Migraciones—; ' +
+        'confírmalo con él. Solo pídele el nombre a mano si resolverCliente NO ' +
+        'lo encuentra. Luego llama a crearVenta y dile que yapee el monto EXACTO ' +
+        'que devuelve, al número que indica la herramienta. No confirmes el ' +
+        'pago tú: se valida solo.',
     );
   }
   partes.push('--- CONTEXTO ACTUAL ---\n' + runtime.join(' '));

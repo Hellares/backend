@@ -37,10 +37,12 @@ export function crearResolverClienteTool(
   return {
     nombre: 'resolverCliente',
     descripcion:
-      'Identifica al cliente por su DNI (8 dígitos) o CE de extranjería (9) ' +
-      'para registrar su compra. Primero busca en la base; si no está, consulta ' +
+      'Identifica al cliente por su DNI (8 dígitos) o CE de extranjería (9). ' +
+      'EN CUANTO el cliente te dé un DNI/CE, llama a esta herramienta ANTES de ' +
+      'pedirle el nombre: primero busca en la base y, si no está, consulta ' +
       'RENIEC/Migraciones y devuelve el nombre oficial (registrado=false) para ' +
-      'que lo confirmes con el cliente. No inventes el nombre.',
+      'que lo confirmes. Solo pide el nombre a mano si devuelve NO_ENCONTRADO. ' +
+      'No inventes el nombre.',
     parametros: {
       type: 'object',
       properties: {
