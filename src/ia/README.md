@@ -411,11 +411,23 @@ AppModule):
 Probado con el runner: `--config on "..."` (atiende, tope 3, personalidad Sofía)
 y `--config off "..."` (atendido=false, DESHABILITADO).
 
+**Enganche al bot YA hecho** (F1, `whatsapp-bot.service.ts`, simulador 38/38):
+`WhatsappBotService` inyecta `IaAgenteService` (vía `IaModule` en `WhatsappModule`).
+El agente entra donde el bot de sorteos HOY calla: **sin sorteos abiertos y no es
+flujo de premio** (antes `return` = 100% humano) → `atenderConAgenteIa()`.
+- Gate barato: sin `IntegracionAgenteIA.habilitado` → sigue humano (no invoca LLM).
+- Respeta el silencio de un asesor (estado ASESOR, 12 h).
+- Sede: la más antigua activa de la empresa (TODO: configurable, multi-sede).
+- Historial multi-turno en `ConversacionWhatsapp` (estado `IA`, `ctx.historialIa`
+  solo texto, últimos 12). Si reaparece un sorteo, `IA`→`MENU` (sorteos mandan).
+- Fallo del agente = degrada a humano (no rompe el chat).
+Simulador: escenarios 36 (responde + memoria de hilo), 37 (con sorteo abierto el
+bot manda, agente no se invoca), 38 (deshabilitado → silencio).
+
 **Próximos pasos:**
-1. **Enganche al bot** (F1): registrar `IaModule` en AppModule + rama en el bot
-   de WhatsApp que detecta intención de compra y llama `IaAgenteService.atender`
-   (respeta `atendido=false` para no pisar el flujo humano).
-2. **Probar `crearVenta`** dentro del contexto NestJS (crea venta real → hacerlo
+1. **Probar `crearVenta`** dentro del contexto NestJS (crea venta real → hacerlo
    en beta con cuidado y anular después). Falta: creación en `resolverCliente`
    (ClientesService) + idempotencia por conversación.
-3. **Aprobación BYOK** (super admin) + `IA_KEY_SECRET` en los envs.
+2. **Aprobación BYOK** (super admin) + `IA_KEY_SECRET` en los envs.
+3. **Sede configurable** por empresa (hoy = la más antigua) y coexistencia
+   agente↔sorteos (hoy el agente solo entra sin sorteos abiertos).

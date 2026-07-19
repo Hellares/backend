@@ -29,6 +29,8 @@ class FakeDb {
   archivos: Row[] = [];
   conversaciones: Row[] = [];
   personas: Row[] = [];
+  integracionesAgenteIa: Row[] = [];
+  sedes: Row[] = [];
 }
 
 function coincide(row: Row, where: Row, db: FakeDb): boolean {
@@ -188,6 +190,11 @@ class Simulador {
   transcript: string[] = [];
   bot: WhatsappBotService;
 
+  /// Enganche del agente IA (F1): si un escenario lo setea, el mock de
+  /// iaAgente.atender delega aquí. `iaLlamadas` registra cada invocación.
+  iaAtender?: (p: any) => Promise<any> | any;
+  iaLlamadas: any[] = [];
+
   /// Pagos "recibidos" en el api-yape fake (para el yape anticipado).
   pagosYape: { id: string; senderName: string; amount: number; provider: string; receivedAt: string }[] = [];
 
@@ -221,6 +228,8 @@ class Simulador {
         contexto: null,
       }),
       persona: modelo(this.db, () => this.db.personas),
+      integracionAgenteIA: modelo(this.db, () => this.db.integracionesAgenteIa),
+      sede: modelo(this.db, () => this.db.sedes),
     } as any;
     const evolution = {
       disponible: true,
@@ -251,12 +260,22 @@ class Simulador {
     const integracionYape = {
       listarPagosRecientes: async () => this.pagosYape,
     } as any;
+    // Agente IA: por defecto apagado (atendido=false = no interfiere con los
+    // escenarios de sorteos). Un escenario puede setear `this.iaAtender` para
+    // simular respuestas del agente y registrar con qué lo llamó el bot.
+    const iaAgente = {
+      atender: async (p: any) => {
+        this.iaLlamadas.push(p);
+        return this.iaAtender ? this.iaAtender(p) : { atendido: false };
+      },
+    } as any;
     this.bot = new WhatsappBotService(
       prisma,
       evolution,
       consultas,
       realtime,
       integracionYape,
+      iaAgente,
     );
 
     this.db.empresas.push({ id: EMPRESA, nombre: 'IMPORTACIONES PRUEBA SAC' });
@@ -297,6 +316,25 @@ class Simulador {
     };
     this.db.sorteos.push(s);
     return s;
+  }
+
+  /** Habilita el agente IA de ventas para la empresa (config + una sede). */
+  habilitarAgente(over: Row = {}): void {
+    if (!this.db.sedes.length) {
+      this.db.sedes.push({
+        id: 'sede1',
+        empresaId: EMPRESA,
+        isActive: true,
+        deletedAt: null,
+        creadoEn: new Date(),
+      });
+    }
+    this.db.integracionesAgenteIa.push({
+      id: 'ia1',
+      empresaId: EMPRESA,
+      habilitado: true,
+      ...over,
+    });
   }
 
   /** Envía un mensaje del cliente y registra la transcripción. */
@@ -1645,4 +1683,58 @@ describe('Simulación E2E del bot de sorteos', () => {
     )!;
     return { p };
   }
+
+  // ── AGENTE IA de ventas (F1) — enganche al bot ──
+
+  it('36. sin sorteos + agente IA habilitado: responde y recuerda el hilo', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.iaAtender = async (p: any) => ({
+      atendido: true,
+      resultado: {
+        texto: `Tenemos peluches 🧸 (turnos previos: ${p.historialPrevio?.length ?? 0})`,
+        iteraciones: 1,
+        trazas: [],
+      },
+    });
+
+    const r1 = await sim.cliente(CEL, 'hola, ¿qué peluches tienes?');
+    expect(r1[0]).toContain('Tenemos peluches');
+    // el bot lo llamó con la sede resuelta y SIN historial la 1ra vez
+    expect(sim.iaLlamadas[0].sedeId).toBe('sede1');
+    expect(sim.iaLlamadas[0].historialPrevio).toHaveLength(0);
+    // conversación persistida en estado IA
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('IA');
+
+    // segundo mensaje → llega con el historial del primero (2 turnos: user+assistant)
+    const r2 = await sim.cliente(CEL, 'el osito, ¿cuánto?');
+    expect(sim.iaLlamadas[1].historialPrevio).toHaveLength(2);
+    expect(r2[0]).toContain('turnos previos: 2');
+    sim.imprimir('36. Agente IA sin sorteos (con memoria de hilo)');
+  });
+
+  it('37. agente IA habilitado pero con sorteo ABIERTO: manda el bot de sorteos', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.crearSorteo({ titulo: 'DINAMICA X' });
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'NO DEBERÍA SALIR', iteraciones: 1, trazas: [] },
+    });
+
+    const r = await sim.cliente(CEL, 'hola');
+    expect(r[0]).toContain('DINAMICA X'); // menú de sorteos, no el agente
+    expect(sim.iaLlamadas).toHaveLength(0); // el agente ni se invoca
+    sim.imprimir('37. Con sorteo abierto, el agente no pisa');
+  });
+
+  it('38. sin sorteos y agente DESHABILITADO: silencio (chat humano)', async () => {
+    const sim = new Simulador();
+    // sin habilitarAgente() → no hay config → gate barato corta antes de llamar
+    const r = await sim.cliente(CEL, 'hola, ¿tienen algo?');
+    expect(r).toHaveLength(0);
+    expect(sim.iaLlamadas).toHaveLength(0);
+    sim.imprimir('38. Agente apagado → humano');
+  });
 });

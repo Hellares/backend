@@ -12,6 +12,8 @@ import { ConsultasExternasService } from '../consultas-externas/consultas-extern
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { nombresCoinciden } from '../sorteos/nombre-match.util';
+import { IaAgenteService } from '../ia/ia.service';
+import { MensajeAgente } from '../ia/provider/agente-ia.provider';
 import { EvolutionApiService } from './evolution-api.service';
 import { generarCartillasPdf } from './cartilla-pdf.util';
 import { generarCartillaPng } from './cartilla-imagen.util';
@@ -187,6 +189,7 @@ export class WhatsappBotService {
     private readonly consultasExternas: ConsultasExternasService,
     private readonly realtime: RealtimeInvalidationService,
     private readonly integracionYape: IntegracionYapeService,
+    private readonly iaAgente: IaAgenteService,
   ) {}
 
   /** Punto de entrada desde el webhook MESSAGES_UPSERT. */
@@ -230,6 +233,17 @@ export class WhatsappBotService {
         !ctxGanador.premioId ||
         !WhatsappBotService.ESTADOS_PREMIO.includes(convGanador.estado)
       ) {
+        // Sin sorteos abiertos y no es flujo de premio: en vez de callar
+        // (chat 100% humano), el AGENTE IA de ventas atiende SI la empresa
+        // lo habilitó. atender() trae el gate (habilitado/modo/BYOK); si
+        // devuelve atendido=false, el chat sigue siendo humano.
+        await this.atenderConAgenteIa(
+          instanceName,
+          empresaId,
+          celular,
+          texto,
+          convGanador,
+        );
         return;
       }
     }
@@ -266,6 +280,10 @@ export class WhatsappBotService {
       } else {
         estado = 'MENU';
       }
+    } else if (estado === 'IA') {
+      // Estado del agente IA de ventas: si aquí ya hay sorteos abiertos
+      // (llegamos hasta este punto), el flujo de sorteos manda → al menú.
+      estado = 'MENU';
     } else if (
       estado !== 'MENU' &&
       minutos > WhatsappBotService.TIMEOUT_PASO_MIN
@@ -2864,6 +2882,95 @@ export class WhatsappBotService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Enganche del AGENTE IA de ventas (F1). Se invoca cuando el bot de sorteos
+   * no tiene nada que atender (sin sorteos abiertos y no es flujo de premio):
+   * en vez de callar, el agente responde consultas de catálogo / ventas si la
+   * empresa lo habilitó. `atender()` ya trae el gate (habilitado, modo, BYOK);
+   * aquí solo resolvemos sede + historial y despachamos la respuesta.
+   *
+   * Convivencia: respeta el silencio de un asesor humano (estado ASESOR) y solo
+   * responde si `atendido=true`; de lo contrario el chat sigue siendo humano.
+   */
+  private async atenderConAgenteIa(
+    instanceName: string,
+    empresaId: string,
+    celular: string,
+    texto: string,
+    convPrevia: {
+      estado: string;
+      contexto: Prisma.JsonValue;
+      actualizadoEn: Date;
+    } | null,
+  ): Promise<void> {
+    const msg = texto.trim();
+    if (msg.length < 1) return;
+
+    // Gate barato ANTES de cualquier trabajo: sin agente configurado/habilitado
+    // el chat es humano. Evita resolver sede/historial para el caso común.
+    const cfgIa = await this.prisma.integracionAgenteIA.findUnique({
+      where: { empresaId },
+      select: { habilitado: true },
+    });
+    if (!cfgIa?.habilitado) return;
+
+    // Un asesor humano está atendiendo → silencio (mismo criterio que el bot).
+    if (convPrevia?.estado === 'ASESOR') {
+      const minutos =
+        (Date.now() - convPrevia.actualizadoEn.getTime()) / 60000;
+      if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) return;
+    }
+
+    // Sede desde la que vende el agente: la más antigua activa de la empresa.
+    // TODO: hacerla configurable en IntegracionAgenteIA (multi-sede).
+    const sede = await this.prisma.sede.findFirst({
+      where: { empresaId, isActive: true, deletedAt: null },
+      orderBy: { creadoEn: 'asc' },
+      select: { id: true },
+    });
+
+    // Historial compacto de la conversación con el agente (solo texto).
+    const ctxPrevio: any = convPrevia?.contexto ?? {};
+    const histTexto: { rol: 'user' | 'assistant'; texto: string }[] =
+      Array.isArray(ctxPrevio.historialIa) ? ctxPrevio.historialIa : [];
+    const historialPrevio: MensajeAgente[] = histTexto.map((h) => ({
+      rol: h.rol,
+      bloques: [{ tipo: 'texto', texto: h.texto }],
+    }));
+
+    let r;
+    try {
+      r = await this.iaAgente.atender({
+        empresaId,
+        sedeId: sede?.id ?? null,
+        celular,
+        mensaje: msg,
+        historialPrevio,
+      });
+    } catch (e) {
+      this.logger.warn(`Agente IA (${celular}): ${(e as Error).message}`);
+      return; // ante un fallo del agente, el chat sigue humano (no rompe)
+    }
+    if (!r.atendido || !r.resultado) return; // agente apagado → sigue humano
+
+    await this.evolution.sendText({
+      instanceName,
+      number: celular,
+      text: r.resultado.texto,
+    });
+
+    // Persistir el historial (últimos 12 turnos) bajo estado 'IA'.
+    const nuevoHist = [
+      ...histTexto,
+      { rol: 'user' as const, texto: msg },
+      { rol: 'assistant' as const, texto: r.resultado.texto },
+    ].slice(-12);
+    await this.guardarConversacion(empresaId, celular, 'IA', {
+      ...ctxPrevio,
+      historialIa: nuevoHist,
+    });
   }
 
   private async guardarConversacion(
