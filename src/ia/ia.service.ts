@@ -57,6 +57,8 @@ export class IaAgenteService {
     historialPrevio?: MensajeAgente[];
     /** El bot ya envió la bienvenida → el agente no debe re-saludar. */
     omitirSaludo?: boolean;
+    /** Título del sorteo/evento activo (si hay) → el agente redirige a participar. */
+    sorteoActivo?: string | null;
   }): Promise<ResultadoAtencion> {
     const cfg = await this.prisma.integracionAgenteIA.findUnique({
       where: { empresaId: params.empresaId },
@@ -74,7 +76,12 @@ export class IaAgenteService {
     const provider = this.resolverProvider(cfg);
     const ejecutor = this.construirEjecutor(cfg);
     const agente = new AgenteService(provider, ejecutor);
-    const system = await this.construirPrompt(ctx, cfg, params.omitirSaludo);
+    const system = await this.construirPrompt(
+      ctx,
+      cfg,
+      params.omitirSaludo,
+      params.sorteoActivo,
+    );
 
     const resultado = await agente.responder({
       system,
@@ -148,6 +155,7 @@ export class IaAgenteService {
     ctx: ContextoTool,
     cfg: IntegracionAgenteIA,
     omitirSaludo?: boolean,
+    sorteoActivo?: string | null,
   ): Promise<string> {
     const empresa = await this.prisma.empresa.findUnique({
       where: { id: cfg.empresaId },
@@ -171,6 +179,7 @@ export class IaAgenteService {
       empresaNombre: empresa?.nombre ?? null,
       saludoYaEnviado: omitirSaludo,
       modoVenta: cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape,
+      sorteoActivo: sorteoActivo ?? null,
     });
   }
 }

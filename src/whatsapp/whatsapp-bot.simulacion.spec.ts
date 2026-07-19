@@ -1745,6 +1745,45 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('38. Agente apagado → humano');
   });
 
+  it('40. convivencia: con sorteo ABIERTO, la consulta de producto va al agente', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.crearSorteo({ titulo: 'DINAMICA X' });
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'Tenemos lapiceros ✏️', iteraciones: 1, trazas: [] },
+    });
+
+    // Saludo → menú de sorteos (con la línea de productos); agente NO se invoca.
+    const r0 = await sim.cliente(CEL, 'hola');
+    expect(r0[0]).toContain('DINAMICA X');
+    expect(r0[0]).toContain('Escríbeme el producto');
+    expect(sim.iaLlamadas).toHaveLength(0);
+
+    // Consulta de producto (no es saludo ni número) → agente, que además sabe
+    // que hay un sorteo activo para poder redirigir.
+    const r1 = await sim.cliente(CEL, 'tienes lapiceros?');
+    expect(r1[r1.length - 1]).toContain('Tenemos lapiceros');
+    expect(sim.iaLlamadas).toHaveLength(1);
+    expect(sim.iaLlamadas[0].sorteoActivo).toBe('DINAMICA X');
+    sim.imprimir('40. Convivencia: consulta de producto con sorteo abierto');
+  });
+
+  it('41. convivencia: con sorteo abierto, "1" sigue yendo al sorteo (no al agente)', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.crearSorteo({ titulo: 'DINAMICA X' });
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'NO DEBERÍA', iteraciones: 1, trazas: [] },
+    });
+
+    await sim.cliente(CEL, 'hola'); // menú
+    await sim.cliente(CEL, '1'); // participar → flujo de sorteo
+    expect(sim.iaLlamadas).toHaveLength(0); // el agente NO se invoca
+    sim.imprimir('41. "1" con sorteo abierto → sorteo, no agente');
+  });
+
   it('39. saludo puro ("hola"): solo la bienvenida, sin llamar al LLM', async () => {
     const sim = new Simulador();
     sim.habilitarAgente();

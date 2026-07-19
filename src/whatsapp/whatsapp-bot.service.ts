@@ -268,6 +268,17 @@ export class WhatsappBotService {
       }
     }
 
+    // ¿La empresa tiene el agente IA de ventas activo? Con sorteos abiertos, el
+    // texto libre de compra lo atiende el agente (convivencia) y el menú ofrece
+    // la línea de productos. Una consulta barata; el bot de sorteos no cambia.
+    const agenteHabilitado =
+      (
+        await this.prisma.integracionAgenteIA.findUnique({
+          where: { empresaId },
+          select: { habilitado: true },
+        })
+      )?.habilitado ?? false;
+
     // OJO: NO upsert con update:{} — bumpeaba actualizadoEn en cada
     // mensaje y los timeouts (asesor 12h, paso 30min, menú 1h) nunca
     // vencían. Solo se escribe en los cambios reales de estado.
@@ -348,6 +359,27 @@ export class WhatsappBotService {
         select: { id: true },
       });
       if (yaParticipa) return;
+      // CONVIVENCIA con el agente IA: texto libre que NO es saludo (parece una
+      // consulta de producto) → lo atiende el agente de ventas, si está activo.
+      // Los saludos y las opciones numéricas siguen yendo al menú de sorteos.
+      if (agenteHabilitado && !WhatsappBotService.esSaludoSimple(msg)) {
+        const sorteoRef =
+          sorteos.length === 1
+            ? sorteos[0].titulo
+            : `${sorteos.length} eventos`;
+        if (
+          await this.atenderConAgenteIa(
+            instanceName,
+            empresaId,
+            celular,
+            texto,
+            conv,
+            sorteoRef,
+          )
+        ) {
+          return;
+        }
+      }
       const menuMostradoHaceUnRato =
         !esNuevo &&
         conv.contexto != null &&
@@ -387,6 +419,7 @@ export class WhatsappBotService {
         sorteos,
         agencia:
           cfg.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT,
+        agenteHabilitado,
       });
     } catch (e) {
       this.logger.warn(
@@ -410,6 +443,7 @@ export class WhatsappBotService {
         precioParticipacion: Prisma.Decimal | null;
       }[];
       agencia: string;
+      agenteHabilitado: boolean;
     },
   ) {
     const responder = (texto: string) =>
@@ -437,7 +471,7 @@ export class WhatsappBotService {
               '🔄 ¡Ojo! Los sorteos activos cambiaron desde el último ' +
                 'menú — este es el vigente:',
             );
-            return this.mostrarMenu(s.sorteos, responder, irA);
+            return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
           }
           if (s.sorteos.length === 1) {
             return this.iniciarRegistro(
@@ -487,7 +521,7 @@ export class WhatsappBotService {
             irA,
           );
         }
-        return this.mostrarMenu(s.sorteos, responder, irA);
+        return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
       }
 
       case 'ELIGIENDO_SORTEO': {
@@ -515,7 +549,7 @@ export class WhatsappBotService {
         const items: { premioId?: string; participanteId?: string }[] =
           s.ctx.items ?? [];
         if (items.length === 0) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         const idx = parseInt(msg, 10) - 1;
         if (isNaN(idx) || idx < 0 || idx >= items.length) {
@@ -540,7 +574,7 @@ export class WhatsappBotService {
         // → reset. OJO: Prisma IGNORA los undefined en where — sin esto
         // se registraría en un sorteo arbitrario.
         if (!s.ctx.sorteoId || !s.ctx.dni) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg.length < 5 || !msg.includes(' ')) {
           await responder(
@@ -560,7 +594,7 @@ export class WhatsappBotService {
 
       case 'ESPERANDO_DNI': {
         if (!s.ctx.sorteoId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         // DNI (8 dígitos) o CE de extranjería (9) — mismo flujo: la BD y
         // RENIEC/Migraciones resuelven el nombre; fallback manual.
@@ -613,13 +647,13 @@ export class WhatsappBotService {
         // una participación ARBITRARIA de la empresa (Prisma ignora
         // undefined en where).
         if (!s.ctx.previoId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg === '1') {
           const previo = await this.prisma.sorteoParticipante.findFirst({
             where: { id: s.ctx.previoId, empresaId },
           });
-          if (!previo) return this.mostrarMenu(s.sorteos, responder, irA);
+          if (!previo) return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
           // SORTEO/BINGO: comprar MÁS tickets/cartillas = preguntar cuántos.
           const sorteoPrevio = s.sorteos.find(
             (x) => x.id === previo.sorteoId,
@@ -685,7 +719,7 @@ export class WhatsappBotService {
       case 'CANTIDAD_TICKETS': {
         // Compra de tickets (tipo SORTEO): cuántos quiere este DNI.
         if (!s.ctx.sorteoId || !s.ctx.dni) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         const n = parseInt(msg.replace(/\D/g, ''), 10);
         if (
@@ -711,7 +745,7 @@ export class WhatsappBotService {
 
       case 'PAGO_QUIEN': {
         if (!s.ctx.participanteId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg === '1') {
           // Paga él mismo: nombre y número ya los tenemos.
@@ -759,7 +793,7 @@ export class WhatsappBotService {
 
       case 'PAGO_NUMERO': {
         if (!s.ctx.participanteId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         const cel = msg.replace(/\D/g, '');
         if (cel.length !== 9 || !cel.startsWith('9')) {
@@ -779,7 +813,7 @@ export class WhatsappBotService {
 
       case 'PAGO_NOMBRE': {
         if (!s.ctx.participanteId || !s.ctx.pagadorCelular) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         // DNI/CE del pagador → nombre OFICIAL (BD → RENIEC/Migraciones):
         // mejora muchísimo el match automático del yape (el nombre
@@ -857,7 +891,7 @@ export class WhatsappBotService {
       // "Yape en el aire" (opción 3): ¿quién hizo ese yape ya realizado?
       case 'PAGO_ANTICIPADO_QUIEN': {
         if (!s.ctx.participanteId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg === '1') {
           return this.feedbackYapeAnticipado(empresaId, s.ctx, responder, irA);
@@ -879,7 +913,7 @@ export class WhatsappBotService {
         // la BD o RENIEC (Factiliza) — igual que el registro del jugador.
         // El DNI es OBLIGATORIO: la agencia lo pide para entregar.
         if (!s.ctx.participanteId && !s.ctx.premioId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         const dni = msg.replace(/\D/g, '');
         if (dni.length !== 8 && dni.length !== 9) {
@@ -911,7 +945,7 @@ export class WhatsappBotService {
         // Fallback: solo cuando BD/RENIEC no resolvieron el DNI — que ya
         // es obligatorio y viene en ctx (el nombre se registra con él).
         if (!s.ctx.participanteId && !s.ctx.premioId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (!s.ctx.recibeDni) {
           // Conversación vieja sin DNI (o estado huérfano): pedirlo.
@@ -936,7 +970,7 @@ export class WhatsappBotService {
 
       case 'CONFIRMAR_ENVIO': {
         if (!s.ctx.participanteId || !s.ctx.sorteoId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         // Recurrente: sus datos previos ya quedaron copiados al registro.
         if (msg === '1') {
@@ -987,7 +1021,7 @@ export class WhatsappBotService {
 
       case 'PART_CIUDAD': {
         if (!s.ctx.participanteId || !s.ctx.sorteoId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         // Atajo de la opción 4 (regalo/encargo): "1 = misma dirección" —
         // la dirección guardada se queda, solo se actualiza quién recibe.
@@ -1086,7 +1120,7 @@ export class WhatsappBotService {
         // GUARD CRÍTICO: sin participanteId, el updateMany quedaría solo
         // con {empresaId} y pisaría el envío de TODOS los participantes.
         if (!s.ctx.participanteId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         const direccion = WhatsappBotService.sinDato(msg)
           ? null
@@ -1144,7 +1178,7 @@ export class WhatsappBotService {
 
       case 'PART_RECOGE': {
         if (!s.ctx.participanteId || !s.ctx.sorteoId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg === '1') {
           // Lo recoge el propio jugador (recibe* ya quedó null al
@@ -1172,7 +1206,7 @@ export class WhatsappBotService {
 
       case 'GANADOR_QUIEN': {
         if (!s.ctx.premioId && !s.ctx.participanteId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg === '1') {
           await responder(
@@ -1251,7 +1285,7 @@ export class WhatsappBotService {
       // cierre del sorteo (el premio pendiente se gestiona igual).
       case 'GANADOR_CONFIRMA': {
         if (!s.ctx.premioId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg === '1') {
           // Confirmó la dirección de su premio → sello en su registro de
@@ -1305,7 +1339,7 @@ export class WhatsappBotService {
       // Premio en EFECTIVO 💸: confirmar a qué número se le yapea.
       case 'GANADOR_YAPE': {
         if (!s.ctx.premioId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         if (msg === '1') {
           return this.guardarAbonoPremio(
@@ -1342,7 +1376,7 @@ export class WhatsappBotService {
 
       case 'GANADOR_YAPE_NUMERO': {
         if (!s.ctx.premioId) {
-          return this.mostrarMenu(s.sorteos, responder, irA);
+          return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
         }
         const num = msg.replace(/\D/g, '');
         if (num.length !== 9 || !num.startsWith('9')) {
@@ -1356,7 +1390,7 @@ export class WhatsappBotService {
       }
 
       default:
-        return this.mostrarMenu(s.sorteos, responder, irA);
+        return this.mostrarMenu(s.sorteos, responder, irA, s.agenteHabilitado);
     }
   }
 
@@ -1366,6 +1400,7 @@ export class WhatsappBotService {
     sorteos: { id: string; titulo: string; tipo: TipoSorteo }[],
     responder: (t: string) => Promise<any>,
     irA: (e: string, c?: any) => Promise<void>,
+    agenteHabilitado = false,
   ) {
     // Todo se saluda como EVENTO (sorteo/bingo/dinámica por igual —
     // pedido del user): "¡Tenemos el evento *CAJASOO* activo!"; con
@@ -1417,7 +1452,11 @@ export class WhatsappBotService {
         `${opcion1}\n` +
         '*2* — Cambiar mis datos de envío 📦\n' +
         '*3* — Hablar con un asesor' +
-        (hayPremios ? '\n*4* — Ver los premios 🎁' : ''),
+        (hayPremios ? '\n*4* — Ver los premios 🎁' : '') +
+        // Convivencia con el agente IA: invita a consultar el catálogo escribiendo.
+        (agenteHabilitado
+          ? '\n\n🛍️ ¿Buscas otra cosa? Escríbeme el producto (ej. "lapiceros") y te muestro.'
+          : ''),
     );
     // Memoria de QUÉ se ofreció: si al responder "1" la lista ya cambió
     // (cerraron/abrieron sorteos), el bot reofrece en vez de registrar.
@@ -2924,9 +2963,10 @@ export class WhatsappBotService {
       contexto: Prisma.JsonValue;
       actualizadoEn: Date;
     } | null,
-  ): Promise<void> {
+    sorteoActivo?: string | null,
+  ): Promise<boolean> {
     const msg = texto.trim();
-    if (msg.length < 1) return;
+    if (msg.length < 1) return false;
 
     // Gate barato ANTES de cualquier trabajo: sin agente configurado/habilitado
     // el chat es humano. Evita resolver sede/historial para el caso común.
@@ -2934,13 +2974,13 @@ export class WhatsappBotService {
       where: { empresaId },
       select: { habilitado: true, mensajeBienvenida: true },
     });
-    if (!cfgIa?.habilitado) return;
+    if (!cfgIa?.habilitado) return false;
 
     // Un asesor humano está atendiendo → silencio (mismo criterio que el bot).
     if (convPrevia?.estado === 'ASESOR') {
       const minutos =
         (Date.now() - convPrevia.actualizadoEn.getTime()) / 60000;
-      if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) return;
+      if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) return false;
     }
 
     // Sede desde la que vende el agente: la más antigua activa de la empresa.
@@ -2981,7 +3021,7 @@ export class WhatsappBotService {
             { rol: 'assistant' as const, texto: bienvenida },
           ].slice(-12),
         });
-        return;
+        return true;
       }
     }
 
@@ -2994,12 +3034,13 @@ export class WhatsappBotService {
         mensaje: msg,
         historialPrevio,
         omitirSaludo: esPrimerTurno && !!bienvenida,
+        sorteoActivo: sorteoActivo ?? null,
       });
     } catch (e) {
       this.logger.warn(`Agente IA (${celular}): ${(e as Error).message}`);
-      return; // ante un fallo del agente, el chat sigue humano (no rompe)
+      return false; // ante un fallo del agente, el chat sigue humano (no rompe)
     }
-    if (!r.atendido || !r.resultado) return; // agente apagado → sigue humano
+    if (!r.atendido || !r.resultado) return false; // agente apagado → sigue humano
 
     await this.evolution.sendText({
       instanceName,
@@ -3017,6 +3058,7 @@ export class WhatsappBotService {
       ...ctxPrevio,
       historialIa: nuevoHist,
     });
+    return true;
   }
 
   private async guardarConversacion(

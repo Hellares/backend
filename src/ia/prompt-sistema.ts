@@ -33,6 +33,8 @@ export interface CapasPrompt {
   saludoYaEnviado?: boolean;
   /** Modo VENDE: el agente puede cerrar la venta y cobrar por Yape. */
   modoVenta?: boolean;
+  /** Título del sorteo/evento activo (si hay) → el agente redirige a participar. */
+  sorteoActivo?: string | null;
 }
 
 export function construirSystemPrompt(
@@ -62,6 +64,14 @@ export function construirSystemPrompt(
     runtime.push(
       'El sistema YA envió el saludo de bienvenida: NO saludes ni te ' +
         'presentes de nuevo, responde directo a lo que pide el cliente.',
+    );
+  }
+  if (capas.sorteoActivo) {
+    runtime.push(
+      `Hay un sorteo/evento activo ("${capas.sorteoActivo}"). Tú SOLO atiendes ` +
+        'ventas de productos, NO gestionas el sorteo. Si el cliente quiere ' +
+        'participar, ver premios o pagar el sorteo, dile que responda *1* para ' +
+        'abrir el menú del sorteo.',
     );
   }
   if (capas.modoVenta) {
