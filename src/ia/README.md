@@ -347,14 +347,30 @@ Arrancamos con más capacidad de la que parecía.
 - Proveedor de IA elegido: **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`).
   Decisión BYOK: global + propio de empresa (§9.1). Modelo agnóstico igual.
 
-**Próximo paso — cerrar Fase 0 (necesita la API key):**
-1. `provider/agente-ia.provider.ts` — interfaz agnóstica (mensajes, tools, respuesta).
-2. `provider/anthropic.provider.ts` — implementación (fetch a la Messages API;
-   lee la key de env, ej. `IA_ANTHROPIC_API_KEY`).
-3. `agente.service.ts` — el LOOP: mensaje → LLM decide tool → ejecutor → resultado
-   → LLM responde. Con el prompt de sistema (Capa A: solo tools, no inventar).
-4. Correr el spike completo: `"quiero un peluche de stitch"` → el LLM traduce y
-   llama `buscarProducto` → responde al cliente con los productos reales.
+**Provider + loop YA construidos** (`3abb952`): interfaz agnóstica + formato
+neutro de mensajes, `AnthropicProvider` (Messages API vía fetch, key de env),
+`EjecutorTools`, `prompt-sistema.ts` (3 capas), `agente.service.ts` (el LOOP).
 
-Ejecutar la tool sola (sin LLM):
-`npx ts-node -r dotenv/config src/ia/spike.runner.ts "peluche"`
+**Tools de LECTURA construidas y probadas contra beta** (`d9d508b`, `206c652`):
+- `buscarProducto` — ILIKE nombre/desc, precio+stock, colapsa por producto.
+- `verDetalle` — detalle + imagen (url/thumbnail) + variantes. Guard de
+  pertenencia probado (id de otra empresa → NO_ENCONTRADO).
+- `resolverCliente` — DNI(8)/CE(9) → cliente registrado. Versión lectura del
+  spike; la CREACIÓN se conecta a ClientesService en el módulo NestJS.
+- `stock.util.ts` — cálculo de stock disponible compartido.
+
+Modos de prueba del runner (BETA por defecto):
+```
+npx ts-node -r dotenv/config src/ia/spike.runner.ts "peluche"          # buscar
+npx ts-node -r dotenv/config src/ia/spike.runner.ts --detalle <id>     # detalle
+npx ts-node -r dotenv/config src/ia/spike.runner.ts --cliente <doc>    # cliente
+npx ts-node -r dotenv/config src/ia/spike.runner.ts --chat "..."       # loop (KEY)
+```
+
+**Dos vías para continuar:**
+- **Con la API key** → cerrar Fase 0: correr `--chat "quiero un peluche de
+  stitch"` y ver el loop en vivo (traduce intención → tools → responde).
+- **Sin la key** → armar el **módulo NestJS** (`IaModule`) que inyecta
+  `PrismaService` + `ClientesService` + `VentaService`. Ahí las tools de
+  ESCRITURA envuelven los servicios reales: `crearVenta` (reserva stock +
+  charge Yape) y la creación en `resolverCliente`. Es el puente a la Fase 2.
