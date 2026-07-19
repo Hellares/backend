@@ -68,12 +68,14 @@ export function crearCrearVentaTool(
             required: ['productoId', 'cantidad'],
           },
         },
-        clienteId: {
-          type: 'string',
-          description: 'clienteEmpresaId devuelto por resolverCliente.',
-        },
         nombreCliente: { type: 'string' },
-        documentoCliente: { type: 'string', description: 'DNI (8) o CE (9).' },
+        documentoCliente: {
+          type: 'string',
+          description:
+            'DNI (8) o CE (9) que dio el cliente. SIEMPRE inclúyelo si lo ' +
+            'tienes: con él el sistema usa el nombre oficial y vincula al ' +
+            'cliente registrado.',
+        },
         entrega: {
           type: 'object',
           properties: {
@@ -264,16 +266,38 @@ export function crearCrearVentaTool(
         conEnvio?: boolean;
         direccion?: string;
       };
-      // clienteId solo si parece un id real (cuid ~25 chars): el LLM a veces
-      // inventa "1". Sin un id válido, la venta se registra por nombre+documento.
-      const clienteIdRaw = args.clienteId ? String(args.clienteId).trim() : '';
-      const clienteId = clienteIdRaw.length >= 20 ? clienteIdRaw : undefined;
+      // CLIENTE: con documento, el nombre OFICIAL y el vínculo salen de la BD
+      // (Persona por dni), NUNCA del LLM — recorta/reformatea ("James Johel" en
+      // vez de "JAMES JOHEL TORRES LEDEZMA") e inventa ids. Si la persona no
+      // está registrada, queda el nombre que confirmó la conversación
+      // (resolverCliente/Factiliza) como snapshot.
+      let nombreCliente = String(args.nombreCliente ?? 'CLIENTE');
+      let clienteId: string | undefined;
+      if (doc.length === 8 || doc.length === 9) {
+        const persona = await prisma.persona.findUnique({
+          where: { dni: doc },
+          select: {
+            nombres: true,
+            apellidos: true,
+            empresasAsociadas: {
+              where: { empresaId: ctx.empresaId, deletedAt: null },
+              select: { id: true },
+            },
+          },
+        });
+        if (persona) {
+          nombreCliente =
+            `${persona.nombres} ${persona.apellidos ?? ''}`.trim() ||
+            nombreCliente;
+          clienteId = persona.empresasAsociadas[0]?.id;
+        }
+      }
       const dto = {
         canalVenta: 'ONLINE', // el enum no tiene WhatsApp; se marca en observaciones
         sedeId: ctx.sedeId,
         vendedorId: staff.usuarioId,
         clienteId,
-        nombreCliente: String(args.nombreCliente ?? 'CLIENTE'),
+        nombreCliente,
         documentoCliente: doc || undefined,
         tipoDocumentoCliente:
           doc.length === 9 ? '4' : doc.length === 8 ? '1' : undefined,
