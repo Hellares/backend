@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
+import { stockDisponible } from './stock.util';
 
 /**
  * Tool `buscarProducto` — envuelve la búsqueda del catálogo (ILIKE en
@@ -19,24 +20,6 @@ import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
  */
 export function crearBuscarProductoTool(prisma: PrismaClient): DefinicionTool {
   const MAX_RESULTADOS = 5;
-
-  /** Stock realmente vendible de una fila ProductoStock. */
-  const disponible = (s: {
-    stockActual: number;
-    stockReservado: number;
-    stockReservadoVenta: number;
-    stockReservadoCombo: number;
-    stockReservadoCotizacion: number;
-    stockDanado: number;
-    stockEnGarantia: number;
-  }) =>
-    s.stockActual -
-    s.stockReservado -
-    s.stockReservadoVenta -
-    s.stockReservadoCombo -
-    s.stockReservadoCotizacion -
-    s.stockDanado -
-    s.stockEnGarantia;
 
   return {
     nombre: 'buscarProducto',
@@ -92,7 +75,7 @@ export function crearBuscarProductoTool(prisma: PrismaClient): DefinicionTool {
           if (stocks.length === 0) return null;
           const precios = stocks.map((s) => Number(s.precio));
           const stockTotal = stocks.reduce(
-            (a, s) => a + Math.max(0, disponible(s)),
+            (a, s) => a + Math.max(0, stockDisponible(s)),
             0,
           );
           const precioMin = Math.min(...precios);

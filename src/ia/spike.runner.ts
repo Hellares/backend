@@ -14,6 +14,7 @@ import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { crearBuscarProductoTool } from './tools/buscar-producto.tool';
+import { crearVerDetalleTool } from './tools/ver-detalle.tool';
 import { AnthropicProvider } from './provider/anthropic.provider';
 import { EjecutorTools } from './ejecutor-tools';
 import { AgenteService } from './agente.service';
@@ -46,9 +47,19 @@ async function main() {
   console.log(`🗄️  DB: ${db}`);
   const ctx = { empresaId: EMPRESA_ID, sedeId: SEDE_ID };
   const buscar = crearBuscarProductoTool(prisma);
+  const detalle = crearVerDetalleTool(prisma);
   try {
+    if (process.argv[2] === '--detalle') {
+      // ── Modo VER DETALLE (sin LLM) ──
+      const productoId = process.argv[3] ?? '';
+      console.log(`\n🔧 ${detalle.nombre}("${productoId}")\n`);
+      console.log(
+        JSON.stringify(await detalle.ejecutar({ productoId }, ctx), null, 2),
+      );
+      return;
+    }
     if (!esChat) {
-      // ── Modo TOOL (sin LLM) ──
+      // ── Modo TOOL: buscarProducto (sin LLM) ──
       const query = arg ?? 'peluche';
       console.log(`\n🔧 ${buscar.nombre}("${query}")\n`);
       console.log(
@@ -68,7 +79,7 @@ async function main() {
     }
     const mensaje = arg || 'quiero un peluche de stitch';
     const provider = new AnthropicProvider({ apiKey });
-    const ejecutor = new EjecutorTools().registrar(buscar);
+    const ejecutor = new EjecutorTools().registrar(buscar, detalle);
     const agente = new AgenteService(provider, ejecutor);
     const system = construirSystemPrompt(ctx, {
       empresaNombre: 'Importaciones JAYLI',
