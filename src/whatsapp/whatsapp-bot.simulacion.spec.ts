@@ -1691,6 +1691,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.habilitarAgente();
     sim.iaAtender = async (p: any) => ({
       atendido: true,
+      mensajeBienvenida: '¡Hola! Soy eSync ☠️',
       resultado: {
         texto: `Tenemos peluches 🧸 (turnos previos: ${p.historialPrevio?.length ?? 0})`,
         iteraciones: 1,
@@ -1699,7 +1700,10 @@ describe('Simulación E2E del bot de sorteos', () => {
     });
 
     const r1 = await sim.cliente(CEL, 'hola, ¿qué peluches tienes?');
-    expect(r1[0]).toContain('Tenemos peluches');
+    // PRIMER turno: saludo configurado + respuesta del agente (2 mensajes)
+    expect(r1).toHaveLength(2);
+    expect(r1[0]).toContain('Soy eSync');
+    expect(r1[1]).toContain('Tenemos peluches');
     // el bot lo llamó con la sede resuelta y SIN historial la 1ra vez
     expect(sim.iaLlamadas[0].sedeId).toBe('sede1');
     expect(sim.iaLlamadas[0].historialPrevio).toHaveLength(0);
@@ -1707,11 +1711,12 @@ describe('Simulación E2E del bot de sorteos', () => {
     const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
     expect(conv.estado).toBe('IA');
 
-    // segundo mensaje → llega con el historial del primero (2 turnos: user+assistant)
+    // SEGUNDO mensaje → SIN saludo (1 mensaje) y con el historial del primero
     const r2 = await sim.cliente(CEL, 'el osito, ¿cuánto?');
+    expect(r2).toHaveLength(1);
     expect(sim.iaLlamadas[1].historialPrevio).toHaveLength(2);
     expect(r2[0]).toContain('turnos previos: 2');
-    sim.imprimir('36. Agente IA sin sorteos (con memoria de hilo)');
+    sim.imprimir('36. Agente IA: saludo 1er turno + memoria de hilo');
   });
 
   it('37. agente IA habilitado pero con sorteo ABIERTO: manda el bot de sorteos', async () => {

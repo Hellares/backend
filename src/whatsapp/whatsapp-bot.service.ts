@@ -2955,6 +2955,16 @@ export class WhatsappBotService {
     }
     if (!r.atendido || !r.resultado) return; // agente apagado → sigue humano
 
+    // Primer turno de la conversación con el agente (sin historial): si la
+    // empresa configuró un saludo, se envía ANTES de la primera respuesta.
+    if (histTexto.length === 0 && r.mensajeBienvenida?.trim()) {
+      await this.evolution.sendText({
+        instanceName,
+        number: celular,
+        text: r.mensajeBienvenida.trim(),
+      });
+    }
+
     await this.evolution.sendText({
       instanceName,
       number: celular,
