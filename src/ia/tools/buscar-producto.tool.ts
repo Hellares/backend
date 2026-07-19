@@ -115,6 +115,8 @@ export function crearBuscarProductoTool(
           variantes: {
             where: { isActive: true, deletedAt: null },
             select: {
+              id: true,
+              nombre: true,
               stocksPorSede: {
                 where: {
                   precio: { not: null },
@@ -127,38 +129,56 @@ export function crearBuscarProductoTool(
         take: MAX_RESULTADOS * 4, // margen para descartar los sin stock/precio
       });
 
-      const items = productos
-        .map((p) => {
-          // Precio/stock = producto + TODAS sus variantes (cualquiera con stock).
-          const stocks = [
-            ...p.stocksPorSede,
-            ...p.variantes.flatMap((v) => v.stocksPorSede),
-          ].filter((s) => s.precio != null);
-          if (stocks.length === 0) return null;
-          const precios = stocks.map((s) => Number(s.precio));
-          const stockTotal = stocks.reduce(
-            (a, s) => a + Math.max(0, stockDisponible(s)),
-            0,
-          );
-          const precioMin = Math.min(...precios);
-          const precioMax = Math.max(...precios);
-          return {
+      // El cliente ve UNIDADES COMPRABLES, no la estructura interna: un producto
+      // con variantes se EXPANDE en un ítem por variante ("EDREDON Cristal",
+      // "EDREDON alianza lima"), cada uno con su precio y stock. Un producto
+      // simple = un solo ítem. crearVenta recibe productoId (+ varianteId).
+      const precioYStock = (
+        rows: { precio: unknown; [k: string]: unknown }[],
+      ) => {
+        const s = rows.filter((r) => r.precio != null);
+        if (s.length === 0) return null;
+        const stock = s.reduce((a, r) => a + Math.max(0, stockDisponible(r as any)), 0);
+        if (stock <= 0) return null;
+        const precios = s.map((r) => Number(r.precio));
+        const min = Math.min(...precios);
+        const max = Math.max(...precios);
+        return { precio: min === max ? min : { desde: min, hasta: max }, stock };
+      };
+
+      const items: Record<string, unknown>[] = [];
+      for (const p of productos) {
+        const desc = (p.descripcion ?? '').slice(0, 90);
+        const variantesConStock = p.variantes
+          .map((v) => ({ v, ps: precioYStock(v.stocksPorSede) }))
+          .filter((x): x is { v: (typeof p.variantes)[number]; ps: NonNullable<ReturnType<typeof precioYStock>> } => x.ps !== null);
+
+        if (variantesConStock.length > 0) {
+          for (const { v, ps } of variantesConStock) {
+            items.push({
+              id: p.id,
+              varianteId: v.id,
+              nombre: `${p.nombre} ${v.nombre}`.trim(),
+              descCorta: desc,
+              precio: ps.precio,
+              stockDisponible: ps.stock,
+            });
+          }
+        } else {
+          const ps = precioYStock(p.stocksPorSede);
+          if (!ps) continue;
+          items.push({
             id: p.id,
             nombre: p.nombre,
-            descCorta: (p.descripcion ?? '').slice(0, 90),
-            precio:
-              precioMin === precioMax
-                ? precioMin
-                : { desde: precioMin, hasta: precioMax },
-            stockDisponible: stockTotal,
-            tieneVariantes: p.variantes.length > 0,
-          };
-        })
-        .filter((x): x is NonNullable<typeof x> => x !== null)
-        .filter((x) => x.stockDisponible > 0)
-        .slice(0, MAX_RESULTADOS);
+            descCorta: desc,
+            precio: ps.precio,
+            stockDisponible: ps.stock,
+          });
+        }
+        if (items.length >= MAX_RESULTADOS) break;
+      }
 
-      return { ok: true, productos: items };
+      return { ok: true, productos: items.slice(0, MAX_RESULTADOS) };
     },
   };
 }
