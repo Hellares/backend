@@ -80,9 +80,17 @@ export function construirSystemPrompt(
         'CANTIDAD, pídele su DNI (8 dígitos) o CE (9) y LLAMA a resolverCliente ' +
         'para obtener su nombre —lo busca en la base o en RENIEC/Migraciones—; ' +
         'confírmalo con él. Solo pídele el nombre a mano si resolverCliente NO ' +
-        'lo encuentra. Luego llama a crearVenta y dile que yapee el monto EXACTO ' +
-        'que devuelve, al número que indica la herramienta. No confirmes el ' +
-        'pago tú: se valida solo.',
+        'lo encuentra.',
+    );
+    runtime.push(
+      'IMPORTANTÍSIMO: para procesar la compra DEBES llamar a la herramienta ' +
+        'crearVenta y esperar su resultado. NUNCA digas que el pedido está ' +
+        '"procesado/listo", ni des un monto a yapear o un número de Yape, si ' +
+        'NO llamaste a crearVenta: esos datos (payAmount, numeroPago) SOLO ' +
+        'salen de su respuesta. Si no la llamaste, la venta NO existe. Tras ' +
+        'recibir su resultado, dile al cliente que yapee el monto EXACTO ' +
+        '(payAmount) al número (numeroPago) que devolvió. No confirmes el pago ' +
+        'tú: se valida solo.',
     );
   }
   partes.push('--- CONTEXTO ACTUAL ---\n' + runtime.join(' '));

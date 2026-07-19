@@ -312,9 +312,11 @@ export class WhatsappBotService {
         estado = 'MENU';
       }
     } else if (estado === 'IA') {
-      // Estado del agente IA de ventas: si aquí ya hay sorteos abiertos
-      // (llegamos hasta este punto), el flujo de sorteos manda → al menú.
-      estado = 'MENU';
+      // Conversación con el agente IA de ventas EN CURSO: se mantiene pegajosa
+      // para no romper flujos multi-turno (p.ej. la cantidad "1" de una compra
+      // se iría al menú del sorteo). "menu"/"0"/"cancelar" ya la habrían sacado
+      // a MENU arriba. Tras 30 min de inactividad, vuelve al menú.
+      if (minutos > WhatsappBotService.TIMEOUT_PASO_MIN) estado = 'MENU';
     } else if (
       estado !== 'MENU' &&
       minutos > WhatsappBotService.TIMEOUT_PASO_MIN
@@ -338,6 +340,27 @@ export class WhatsappBotService {
       // de inmediato (sin throttle) — si no, respondería p.ej. su DNI
       // y recibiría silencio.
       resetPorCierre = true;
+    }
+
+    // Agente IA en curso (con sorteos abiertos): sigue el agente para NO romper
+    // el flujo multi-turno — incluidas respuestas numéricas (cantidad, etc.).
+    // Si el agente no atiende (deshabilitado), cae al menú de sorteos.
+    if (estado === 'IA') {
+      const sorteoRef =
+        sorteos.length === 1 ? sorteos[0].titulo : `${sorteos.length} eventos`;
+      if (
+        await this.atenderConAgenteIa(
+          instanceName,
+          empresaId,
+          celular,
+          texto,
+          conv,
+          sorteoRef,
+        )
+      ) {
+        return;
+      }
+      estado = 'MENU';
     }
 
     // Texto libre en MENU (no es comando ni opción): modo NO intrusivo.

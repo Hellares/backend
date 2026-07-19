@@ -1784,6 +1784,26 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('41. "1" con sorteo abierto → sorteo, no agente');
   });
 
+  it('42. convivencia: en flujo del agente, la cantidad "1" NO salta al sorteo', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.crearSorteo({ titulo: 'DINAMICA X' });
+    sim.iaAtender = async (p: any) => ({
+      atendido: true,
+      resultado: { texto: `ok:${p.mensaje}`, iteraciones: 1, trazas: [] },
+    });
+
+    await sim.cliente(CEL, 'quiero un lapicero'); // → agente, estado IA
+    const r = await sim.cliente(CEL, '1'); // cantidad → DEBE seguir en el agente
+    expect(sim.iaLlamadas).toHaveLength(2);
+    expect(sim.iaLlamadas[1].mensaje).toBe('1');
+    expect(r[r.length - 1]).toContain('ok:1');
+    // la conversación sigue en manos del agente
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('IA');
+    sim.imprimir('42. Flujo del agente: cantidad numérica no salta al sorteo');
+  });
+
   it('39. saludo puro ("hola"): solo la bienvenida, sin llamar al LLM', async () => {
     const sim = new Simulador();
     sim.habilitarAgente();
