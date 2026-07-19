@@ -89,11 +89,43 @@ export class IaAgenteService {
       params.sorteoActivo,
     );
 
+    // Guard anti-alucinación (solo VENDE): si la respuesta final trae un
+    // número de celular de 9 dígitos que NO es el numeroPago real ni el del
+    // cliente, es INVENTADO → se rechaza y se fuerza la corrección (llamar
+    // crearVenta de verdad). Haiku a veces fabrica el número pese al prompt.
+    let validarFinal: ((texto: string) => string | null) | undefined;
+    if (cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape) {
+      const blancos = new Set<string>();
+      const numeroPago = await this.resolverNumeroPago(params.empresaId);
+      if (numeroPago) blancos.add(numeroPago.replace(/\D/g, ''));
+      const cel = (params.celular ?? '').replace(/\D/g, '');
+      if (cel) {
+        blancos.add(cel);
+        blancos.add(cel.replace(/^51/, ''));
+      }
+      validarFinal = (texto: string) => {
+        const nums = texto.match(/\b9\d{8}\b/g) ?? [];
+        const falso = nums.find((n) => !blancos.has(n));
+        if (!falso) return null;
+        this.logger.warn(
+          `Agente inventó número ${falso} (empresa ${params.empresaId}) — corrigiendo`,
+        );
+        return (
+          `[SISTEMA] El número ${falso} que diste NO existe: lo inventaste. ` +
+          'NUNCA inventes números de Yape ni montos. Si aún no llamaste a ' +
+          'crearVenta en esta conversación, llámala AHORA: el monto (payAmount) ' +
+          'y el número (numeroPago) reales SOLO salen de su respuesta. Corrige ' +
+          'tu mensaje al cliente usando los datos reales.'
+        );
+      };
+    }
+
     const resultado = await agente.responder({
       system,
       mensajeCliente: params.mensaje,
       ctx,
       historialPrevio: params.historialPrevio,
+      validarFinal,
     });
 
     return {
@@ -158,6 +190,20 @@ export class IaAgenteService {
       );
     }
     return ejecutor;
+  }
+
+  /** Número Yape real de la empresa (WhatsApp.numeroPago → IntegracionYape). */
+  private async resolverNumeroPago(empresaId: string): Promise<string | null> {
+    const wpp = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId },
+      select: { numeroPago: true },
+    });
+    if (wpp?.numeroPago) return wpp.numeroPago;
+    const iy = await this.prisma.integracionYape.findUnique({
+      where: { empresaId },
+      select: { celular: true },
+    });
+    return iy?.celular ?? null;
   }
 
   /** System prompt: Capa A fija + Capa B (personalidad de la empresa) + Capa C. */

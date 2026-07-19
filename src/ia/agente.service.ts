@@ -40,10 +40,17 @@ export class AgenteService {
     /** Historial previo (para conversaciones multi-mensaje). */
     historialPrevio?: MensajeAgente[];
     maxIteraciones?: number;
+    /**
+     * Guard determinístico sobre la respuesta FINAL: si devuelve una
+     * instrucción (string), la respuesta se rechaza y se reinyecta al LLM
+     * para corregirla (una sola vez). null = respuesta válida.
+     */
+    validarFinal?: (texto: string) => string | null;
   }): Promise<ResultadoConversacion> {
     const tools = this.ejecutor.definiciones();
     const max = params.maxIteraciones ?? 6;
     const trazas: TrazaTurno[] = [];
+    let corregido = false;
 
     const historial: MensajeAgente[] = [
       ...(params.historialPrevio ?? []),
@@ -72,6 +79,21 @@ export class AgenteService {
 
       // Sin tools → el agente terminó su respuesta al cliente.
       if (usos.length === 0) {
+        // Guard determinístico: una respuesta inválida (ej. número de Yape
+        // inventado) se rechaza y se reinyecta para que el LLM la corrija
+        // llamando a las tools de verdad. Una sola corrección por turno.
+        if (params.validarFinal && !corregido) {
+          const nudge = params.validarFinal(textoTurno);
+          if (nudge) {
+            corregido = true;
+            trazas.push({ iteracion: i + 1, tools: [], texto: textoTurno });
+            historial.push({
+              rol: 'user',
+              bloques: [{ tipo: 'texto', texto: nudge }],
+            });
+            continue;
+          }
+        }
         trazas.push({ iteracion: i + 1, tools: [], texto: textoTurno });
         return { texto: textoTurno, iteraciones: i + 1, trazas };
       }
