@@ -2,6 +2,40 @@ import { PrismaClient } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
 import { stockDisponible } from './stock.util';
 
+/** Palabras vacías que no aportan a la búsqueda (no deben ampliar el OR). */
+const STOPWORDS = new Set([
+  'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'para', 'con',
+  'y', 'o', 'mi', 'tu', 'que', 'por', 'del', 'al', 'en', 'algo', 'tienes',
+  'tienen', 'tiene', 'hay', 'busco', 'quiero', 'necesito', 'me', 'se', 'su',
+  'sus', 'lo', 'sobre', 'tipo', 'clase',
+]);
+
+/**
+ * Normaliza el query (minúsculas, SIN tildes) y genera términos tolerantes a
+ * plural: la frase completa + cada palabra significativa + su raíz singular.
+ * Corrige el falso negativo real "edredones"/"edredón" → catálogo "EDREDON"
+ * (ILIKE es case-insensitive pero NO ignora tildes ni plural).
+ * OJO: normaliza el LADO DEL QUERY; si el PRODUCTO tuviera tildes en el nombre
+ * el ILIKE aún fallaría → mejora futura (columna normalizada / unaccent).
+ */
+function construirTerminos(query: string): string[] {
+  const norm = query
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // quita tildes (marcas diacríticas)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .trim();
+  const terminos = new Set<string>();
+  if (norm.length >= 2) terminos.add(norm);
+  for (const w of norm.split(/\s+/)) {
+    if (w.length < 3 || STOPWORDS.has(w)) continue;
+    terminos.add(w);
+    if (w.length >= 5 && w.endsWith('es')) terminos.add(w.slice(0, -2));
+    else if (w.length >= 4 && w.endsWith('s')) terminos.add(w.slice(0, -1));
+  }
+  return [...terminos];
+}
+
 /**
  * Tool `buscarProducto` — envuelve la búsqueda del catálogo (ILIKE en
  * nombre/descripción, mismo criterio que producto-catalog.buildWhereClause)
@@ -53,15 +87,19 @@ export function crearBuscarProductoTool(
       if (query.length < 2) {
         return { ok: false, motivo: 'QUERY_MUY_CORTA' };
       }
+      const terminos = construirTerminos(query);
+      if (terminos.length === 0) {
+        return { ok: false, motivo: 'QUERY_MUY_CORTA' };
+      }
 
       const productos = await prisma.producto.findMany({
         where: {
           empresaId: ctx.empresaId,
           deletedAt: null,
-          OR: [
-            { nombre: { contains: query, mode: 'insensitive' } },
-            { descripcion: { contains: query, mode: 'insensitive' } },
-          ],
+          OR: terminos.flatMap((t) => [
+            { nombre: { contains: t, mode: 'insensitive' as const } },
+            { descripcion: { contains: t, mode: 'insensitive' as const } },
+          ]),
         },
         include: {
           stocksPorSede: {
@@ -71,7 +109,7 @@ export function crearBuscarProductoTool(
             },
           },
         },
-        take: MAX_RESULTADOS * 3, // margen para descartar los sin stock/precio
+        take: MAX_RESULTADOS * 4, // margen para descartar los sin stock/precio
       });
 
       const items = productos
