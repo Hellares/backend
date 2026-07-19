@@ -80,11 +80,13 @@ export function construirSystemPrompt(
         'que no estén aquí: ' +
         '1) El cliente pide un producto → muéstrale la lista (buscarProducto). ' +
         '2) Elige producto y cantidad. ' +
-        '3) Pídele su DNI (8 dígitos) o CE (9) y llama resolverCliente; ' +
-        'confirma su nombre (solo pídelo a mano si NO lo encuentra). ' +
+        '3) Pídele su DNI (8 dígitos) o CE (9), llama resolverCliente y ' +
+        'MUÉSTRALE el nombre que devolvió ("Encontré: JAMES..., ¿es correcto?") ' +
+        'y ESPERA su confirmación antes de seguir (pide el nombre a mano solo ' +
+        'si NO lo encuentra). ' +
         '4) Confirmado el nombre, llama crearVenta DE INMEDIATO y en el MISMO ' +
-        'mensaje dile el monto EXACTO (payAmount) y el número de Yape ' +
-        '(numeroPago) que devolvió. ' +
+        'mensaje di a nombre de quién quedó la compra, el monto EXACTO ' +
+        '(payAmount) y el número de Yape (numeroPago) que devolvió. ' +
         '5) El pago se valida SOLO (no lo confirmes tú); el sistema le avisará ' +
         'y le preguntará por la entrega. NO preguntes por envío ni dirección ' +
         'ANTES del pago.',
