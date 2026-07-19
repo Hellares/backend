@@ -19,6 +19,7 @@ describe('WebhooksService.procesarPagoYape', () => {
   let pedidoEmpresa: any;
   let cotizacionService: any;
   let sorteosService: any;
+  let whatsapp: any;
   let service: WebhooksService;
 
   const logger = {
@@ -66,6 +67,7 @@ describe('WebhooksService.procesarPagoYape', () => {
         .fn()
         .mockResolvedValue({ accion: 'sin-pendientes' }),
     };
+    whatsapp = { enviarTexto: jest.fn().mockResolvedValue(true) };
     service = new WebhooksService(
       prisma,
       logger as any,
@@ -75,6 +77,7 @@ describe('WebhooksService.procesarPagoYape', () => {
       pedidoEmpresa,
       cotizacionService,
       sorteosService,
+      whatsapp,
     );
   });
 

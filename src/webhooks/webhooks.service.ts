@@ -9,6 +9,7 @@ import { RealtimeInvalidationService } from '../notificacion/realtime-invalidati
 import { PedidoMarketplaceEmpresaService } from '../pedido-marketplace/pedido-marketplace-empresa.service';
 import { CotizacionService } from '../cotizacion/cotizacion.service';
 import { SorteosService } from '../sorteos/sorteos.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 /**
  * Payload estándar de Syncrofact (documentacion/webhooks.md).
@@ -99,6 +100,7 @@ export class WebhooksService {
     private readonly pedidoMarketplaceEmpresa: PedidoMarketplaceEmpresaService,
     private readonly cotizacionService: CotizacionService,
     private readonly sorteosService: SorteosService,
+    private readonly whatsapp: WhatsappService,
   ) {
     this.logger = loggerService;
     this.logger.setContext('WebhooksService');
@@ -236,6 +238,28 @@ export class WebhooksService {
       (ventaActualizada as any)?.estado === EstadoVenta.PAGADA_COMPLETA;
     if (completa) {
       this.realtime.notifyVentaPagada({ empresaId, ventaId });
+
+      // Confirmación al CLIENTE por WhatsApp (ventas ONLINE con celular — las
+      // del agente IA): "pago validado, tu compra se está preparando".
+      // Best-effort: si el WhatsApp de la empresa no está conectado, no rompe.
+      if (venta.canalVenta === 'ONLINE' && venta.telefonoCliente) {
+        const envio = venta.conEnvio
+          ? '\n📦 Te avisaremos cuando salga hacia tu agencia.'
+          : '';
+        this.whatsapp
+          .enviarTexto(
+            empresaId,
+            venta.telefonoCliente,
+            `✅ ¡Tu pago fue confirmado! Recibimos S/ ${Number(venta.total).toFixed(2)}.\n` +
+              `🧾 Tu compra *${venta.codigo}* ya se está preparando.${envio}\n` +
+              '¡Gracias por tu compra! 🙌',
+          )
+          .catch((e: Error) =>
+            this.logger.warn(
+              `Confirmación WhatsApp de venta ${ventaId}: ${e.message}`,
+            ),
+          );
+      }
     }
     return {
       ok: true,
