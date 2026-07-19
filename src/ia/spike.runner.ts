@@ -1,17 +1,23 @@
 /**
- * Spike Fase 0 — prueba la tool `buscarProducto` contra el catálogo REAL,
- * SIN LLM todavía (esa parte necesita la API key). Valida que la pieza que
- * no depende de IA funciona de punta a punta.
+ * Spike Fase 0 — dos modos:
  *
- * Ejecutar (usa la DATABASE_URL del .env del backend):
- *   npx ts-node -r dotenv/config src/ia/spike.runner.ts "oso stich"
- *   npx ts-node -r dotenv/config src/ia/spike.runner.ts "peluche"
+ *   TOOL (sin LLM, no necesita key): prueba buscarProducto contra el catálogo.
+ *     npx ts-node -r dotenv/config src/ia/spike.runner.ts "peluche"
+ *
+ *   CHAT (loop completo con el LLM, necesita IA_ANTHROPIC_API_KEY en .env):
+ *     npx ts-node -r dotenv/config src/ia/spike.runner.ts --chat "quiero un peluche de stitch"
+ *
+ * Apunta a BETA por defecto (SPIKE_TARGET=prod para prod, solo lectura).
  */
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { crearBuscarProductoTool } from './tools/buscar-producto.tool';
+import { AnthropicProvider } from './provider/anthropic.provider';
+import { EjecutorTools } from './ejecutor-tools';
+import { AgenteService } from './agente.service';
+import { construirSystemPrompt } from './prompt-sistema';
 
 // Contexto de prueba: empresa BETA (TORRES LEDEZMA, 341 productos). En el
 // módulo real llega del webhook de WhatsApp.
@@ -30,23 +36,56 @@ function resolverDbUrl(): string {
 }
 
 async function main() {
-  const query = process.argv[2] ?? 'peluche';
+  const esChat = process.argv[2] === '--chat';
+  const arg = esChat ? process.argv.slice(3).join(' ') : process.argv[2];
   const dbUrl = resolverDbUrl();
   const db = dbUrl.match(/\/([^/?]+)(\?|$)/)?.[1] ?? '(desconocida)';
   // Mismo patrón que PrismaService (Prisma 7 + adapter pg).
   const pool = new Pool({ connectionString: dbUrl });
-  console.log(`🗄️  DB: ${db}`);
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
+  console.log(`🗄️  DB: ${db}`);
+  const ctx = { empresaId: EMPRESA_ID, sedeId: SEDE_ID };
+  const buscar = crearBuscarProductoTool(prisma);
   try {
-    const tool = crearBuscarProductoTool(prisma);
-    console.log(
-      `\n🔧 ${tool.nombre}("${query}")  · empresa …${EMPRESA_ID.slice(-6)}\n`,
-    );
-    const r = await tool.ejecutar(
-      { query },
-      { empresaId: EMPRESA_ID, sedeId: SEDE_ID },
-    );
-    console.log(JSON.stringify(r, null, 2));
+    if (!esChat) {
+      // ── Modo TOOL (sin LLM) ──
+      const query = arg ?? 'peluche';
+      console.log(`\n🔧 ${buscar.nombre}("${query}")\n`);
+      console.log(
+        JSON.stringify(await buscar.ejecutar({ query }, ctx), null, 2),
+      );
+      return;
+    }
+
+    // ── Modo CHAT (loop completo con el LLM) ──
+    const apiKey = process.env.IA_ANTHROPIC_API_KEY ?? '';
+    if (!apiKey) {
+      console.error(
+        '\n❌ Falta IA_ANTHROPIC_API_KEY en el .env para el modo --chat.\n' +
+          '   (El modo tool funciona sin key: corre sin --chat.)',
+      );
+      return;
+    }
+    const mensaje = arg || 'quiero un peluche de stitch';
+    const provider = new AnthropicProvider({ apiKey });
+    const ejecutor = new EjecutorTools().registrar(buscar);
+    const agente = new AgenteService(provider, ejecutor);
+    const system = construirSystemPrompt(ctx, {
+      empresaNombre: 'Importaciones JAYLI',
+      agenciaEnvio: 'SHALOM',
+    });
+
+    console.log(`\n👤 ${mensaje}\n`);
+    const r = await agente.responder({ system, mensajeCliente: mensaje, ctx });
+    for (const t of r.trazas) {
+      for (const tl of t.tools) {
+        const prods = (tl.resultado as any)?.productos?.length ?? 0;
+        console.log(
+          `   🔧 ${tl.nombre}(${JSON.stringify(tl.args)}) → ${prods} productos`,
+        );
+      }
+    }
+    console.log(`\n🤖 ${r.texto}\n   (${r.iteraciones} iteración/es)`);
   } finally {
     await prisma.$disconnect();
     await pool.end();

@@ -335,11 +335,26 @@ Arrancamos con más capacidad de la que parecía.
 
 ## 11. Estado actual y próximo paso
 
-**Estado:** solo diseño (este documento). Sin código aún.
+**Fase 0 EN CURSO.** Ya construido y probado contra BETA:
+- `tools/tool.types.ts` — `ContextoTool` (inyectado) vs args del LLM, `DefinicionTool`.
+- `tools/buscar-producto.tool.ts` — **funcional**: ILIKE nombre/descripción,
+  precio+stock del sistema, colapsa por producto (rango de precio), filtra sin
+  stock/precio, tope 5. Agnóstica del LLM (recibe PrismaClient).
+- `spike.runner.ts` — prueba standalone. **Apunta a BETA por defecto** (deriva
+  `db_saas_beta` de la URL del .env; `SPIKE_TARGET=prod` para prod solo-lectura).
+  Probado: `"peluche"` → 5 peluches reales de beta con precio/stock; `"disco"`
+  → 0 (correcto: el disco está en otra sede — el filtro por sede funciona).
+- Proveedor de IA elegido: **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`).
+  Decisión BYOK: global + propio de empresa (§9.1). Modelo agnóstico igual.
 
-**Próximo paso — Fase 0 (spike).** Falta definir para arrancar:
-1. **Proveedor del primer spike** (Claude Haiku / GPT-4o-mini / Gemini Flash) →
-   se necesita una API key. Alternativa: spike agnóstico y probar con el que se
-   consiga primero.
-2. **Nombre del servicio/endpoint de búsqueda de productos actual** en el
-   backend → para que la tool `buscarProducto` lo envuelva directo.
+**Próximo paso — cerrar Fase 0 (necesita la API key):**
+1. `provider/agente-ia.provider.ts` — interfaz agnóstica (mensajes, tools, respuesta).
+2. `provider/anthropic.provider.ts` — implementación (fetch a la Messages API;
+   lee la key de env, ej. `IA_ANTHROPIC_API_KEY`).
+3. `agente.service.ts` — el LOOP: mensaje → LLM decide tool → ejecutor → resultado
+   → LLM responde. Con el prompt de sistema (Capa A: solo tools, no inventar).
+4. Correr el spike completo: `"quiero un peluche de stitch"` → el LLM traduce y
+   llama `buscarProducto` → responde al cliente con los productos reales.
+
+Ejecutar la tool sola (sin LLM):
+`npx ts-node -r dotenv/config src/ia/spike.runner.ts "peluche"`
