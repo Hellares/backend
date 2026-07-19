@@ -53,6 +53,8 @@ export class IaAgenteService {
     celular?: string | null;
     mensaje: string;
     historialPrevio?: MensajeAgente[];
+    /** El bot ya envió la bienvenida → el agente no debe re-saludar. */
+    omitirSaludo?: boolean;
   }): Promise<ResultadoAtencion> {
     const cfg = await this.prisma.integracionAgenteIA.findUnique({
       where: { empresaId: params.empresaId },
@@ -70,7 +72,7 @@ export class IaAgenteService {
     const provider = this.resolverProvider(cfg);
     const ejecutor = this.construirEjecutor(cfg);
     const agente = new AgenteService(provider, ejecutor);
-    const system = await this.construirPrompt(ctx, cfg);
+    const system = await this.construirPrompt(ctx, cfg, params.omitirSaludo);
 
     const resultado = await agente.responder({
       system,
@@ -143,6 +145,7 @@ export class IaAgenteService {
   private async construirPrompt(
     ctx: ContextoTool,
     cfg: IntegracionAgenteIA,
+    omitirSaludo?: boolean,
   ): Promise<string> {
     const empresa = await this.prisma.empresa.findUnique({
       where: { id: cfg.empresaId },
@@ -164,6 +167,7 @@ export class IaAgenteService {
     return construirSystemPrompt(ctx, {
       personalidad,
       empresaNombre: empresa?.nombre ?? null,
+      saludoYaEnviado: omitirSaludo,
     });
   }
 }

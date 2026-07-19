@@ -106,6 +106,26 @@ export class WhatsappBotService {
     );
   }
 
+  /// Palabras que, solas o combinadas, forman un saludo SIN consulta real
+  /// (para el agente IA: si el primer mensaje es solo un saludo, la bienvenida
+  /// configurada basta y no se llama al LLM).
+  private static readonly SALUDO_PALABRAS = new Set([
+    'hola', 'holaa', 'holaaa', 'holi', 'holis', 'ola', 'buenas', 'buenos',
+    'buen', 'dia', 'dias', 'día', 'días', 'tarde', 'tardes', 'noche', 'noches',
+    'hey', 'ey', 'saludos', 'que', 'qué', 'tal', 'hello', 'hi', 'alo', 'aló',
+  ]);
+
+  private static esSaludoSimple(msg: string): boolean {
+    const palabras = msg
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-záéíóúñ\s]/gi, '')
+      .split(/\s+/)
+      .filter(Boolean);
+    if (palabras.length === 0 || palabras.length > 3) return false;
+    return palabras.every((w) => WhatsappBotService.SALUDO_PALABRAS.has(w));
+  }
+
   private static readonly MSG_PREMIO_EN_PREPARACION =
     '📦 Tu premio ya está siendo preparado con la dirección registrada ' +
     '— para cambiarla coordina con la tienda (opción *3*).';
@@ -2912,7 +2932,7 @@ export class WhatsappBotService {
     // el chat es humano. Evita resolver sede/historial para el caso común.
     const cfgIa = await this.prisma.integracionAgenteIA.findUnique({
       where: { empresaId },
-      select: { habilitado: true },
+      select: { habilitado: true, mensajeBienvenida: true },
     });
     if (!cfgIa?.habilitado) return;
 
@@ -2940,6 +2960,31 @@ export class WhatsappBotService {
       bloques: [{ tipo: 'texto', texto: h.texto }],
     }));
 
+    // Saludo de bienvenida: solo en el PRIMER turno (sin historial). Se envía
+    // ANTES de la respuesta del agente y se le avisa al agente que no re-salude.
+    const esPrimerTurno = histTexto.length === 0;
+    const bienvenida = cfgIa.mensajeBienvenida?.trim() || '';
+    if (esPrimerTurno && bienvenida) {
+      await this.evolution.sendText({
+        instanceName,
+        number: celular,
+        text: bienvenida,
+      });
+      // Si el cliente SOLO saludó, la bienvenida ya es la respuesta: no llamamos
+      // al LLM (evita el doble saludo y ahorra tokens).
+      if (WhatsappBotService.esSaludoSimple(msg)) {
+        await this.guardarConversacion(empresaId, celular, 'IA', {
+          ...ctxPrevio,
+          historialIa: [
+            ...histTexto,
+            { rol: 'user' as const, texto: msg },
+            { rol: 'assistant' as const, texto: bienvenida },
+          ].slice(-12),
+        });
+        return;
+      }
+    }
+
     let r;
     try {
       r = await this.iaAgente.atender({
@@ -2948,22 +2993,13 @@ export class WhatsappBotService {
         celular,
         mensaje: msg,
         historialPrevio,
+        omitirSaludo: esPrimerTurno && !!bienvenida,
       });
     } catch (e) {
       this.logger.warn(`Agente IA (${celular}): ${(e as Error).message}`);
       return; // ante un fallo del agente, el chat sigue humano (no rompe)
     }
     if (!r.atendido || !r.resultado) return; // agente apagado → sigue humano
-
-    // Primer turno de la conversación con el agente (sin historial): si la
-    // empresa configuró un saludo, se envía ANTES de la primera respuesta.
-    if (histTexto.length === 0 && r.mensajeBienvenida?.trim()) {
-      await this.evolution.sendText({
-        instanceName,
-        number: celular,
-        text: r.mensajeBienvenida.trim(),
-      });
-    }
 
     await this.evolution.sendText({
       instanceName,

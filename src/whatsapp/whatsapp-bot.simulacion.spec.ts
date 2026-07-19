@@ -333,6 +333,7 @@ class Simulador {
       id: 'ia1',
       empresaId: EMPRESA,
       habilitado: true,
+      mensajeBienvenida: '¡Hola! Soy eSync ☠️',
       ...over,
     });
   }
@@ -1691,7 +1692,6 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.habilitarAgente();
     sim.iaAtender = async (p: any) => ({
       atendido: true,
-      mensajeBienvenida: '¡Hola! Soy eSync ☠️',
       resultado: {
         texto: `Tenemos peluches 🧸 (turnos previos: ${p.historialPrevio?.length ?? 0})`,
         iteraciones: 1,
@@ -1699,11 +1699,13 @@ describe('Simulación E2E del bot de sorteos', () => {
       },
     });
 
-    const r1 = await sim.cliente(CEL, 'hola, ¿qué peluches tienes?');
-    // PRIMER turno: saludo configurado + respuesta del agente (2 mensajes)
+    // Primer mensaje con consulta real (NO es saludo puro) → saludo + respuesta.
+    const r1 = await sim.cliente(CEL, '¿qué peluches tienes?');
     expect(r1).toHaveLength(2);
-    expect(r1[0]).toContain('Soy eSync');
+    expect(r1[0]).toContain('Soy eSync'); // saludo configurado (de la config)
     expect(r1[1]).toContain('Tenemos peluches');
+    // se le avisó al agente que no re-salude
+    expect(sim.iaLlamadas[0].omitirSaludo).toBe(true);
     // el bot lo llamó con la sede resuelta y SIN historial la 1ra vez
     expect(sim.iaLlamadas[0].sedeId).toBe('sede1');
     expect(sim.iaLlamadas[0].historialPrevio).toHaveLength(0);
@@ -1741,5 +1743,29 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r).toHaveLength(0);
     expect(sim.iaLlamadas).toHaveLength(0);
     sim.imprimir('38. Agente apagado → humano');
+  });
+
+  it('39. saludo puro ("hola"): solo la bienvenida, sin llamar al LLM', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'NO DEBERÍA LLAMARSE', iteraciones: 1, trazas: [] },
+    });
+
+    const r = await sim.cliente(CEL, 'Hola!');
+    expect(r).toHaveLength(1); // solo el saludo configurado
+    expect(r[0]).toContain('Soy eSync');
+    expect(sim.iaLlamadas).toHaveLength(0); // el LLM no se invoca
+    // queda en estado IA con el saludo en el historial
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('IA');
+
+    // el SIGUIENTE mensaje (ya con consulta) sí va al agente, sin re-saludar
+    const r2 = await sim.cliente(CEL, 'tienes edredones?');
+    expect(sim.iaLlamadas).toHaveLength(1);
+    expect(sim.iaLlamadas[0].omitirSaludo).toBeFalsy(); // no es primer turno
+    expect(r2).toHaveLength(1); // sin saludo repetido
+    sim.imprimir('39. Saludo puro → solo bienvenida (sin LLM)');
   });
 });

@@ -28,6 +28,8 @@ export interface CapasPrompt {
   empresaNombre?: string | null;
   agenciaEnvio?: string | null;
   clienteNombre?: string | null;
+  /** El sistema ya envió el saludo de bienvenida → el agente no debe re-saludar. */
+  saludoYaEnviado?: boolean;
 }
 
 export function construirSystemPrompt(
@@ -53,6 +55,12 @@ export function construirSystemPrompt(
       ? `Cliente: ${capas.clienteNombre} (ya registrado).`
       : 'Cliente: aún no identificado.',
   );
+  if (capas.saludoYaEnviado) {
+    runtime.push(
+      'El sistema YA envió el saludo de bienvenida: NO saludes ni te ' +
+        'presentes de nuevo, responde directo a lo que pide el cliente.',
+    );
+  }
   partes.push('--- CONTEXTO ACTUAL ---\n' + runtime.join(' '));
 
   return partes.join('\n\n');
