@@ -13,6 +13,19 @@ export interface VentaServiceLike {
     cajeroId: string,
   ): Promise<any>;
   cobroYape(empresaId: string, ventaId: string, monto?: number): Promise<any>;
+  upsertEnvio(
+    id: string,
+    empresaId: string,
+    dto: {
+      destinatarioNombre: string;
+      destinatarioDni?: string;
+      destinatarioCelular?: string;
+      agenciaNombre?: string;
+      destinoDepartamento?: string;
+      destinoProvincia?: string;
+      agenciaDireccion?: string;
+    },
+  ): Promise<any>;
 }
 
 /**
@@ -78,9 +91,19 @@ export function crearCrearVentaTool(
         },
         entrega: {
           type: 'object',
+          description:
+            'Solo si el cliente quiere ENVÍO por agencia (no recojo en tienda). ' +
+            'Pregunta UNA POR UNA: ciudad, departamento, y la dirección o ' +
+            'sucursal de la agencia en su ciudad si la conoce (acepta que no).',
           properties: {
             conEnvio: { type: 'boolean' },
-            direccion: { type: 'string' },
+            ciudad: { type: 'string', description: 'Ciudad/provincia de destino.' },
+            departamento: { type: 'string', description: 'Departamento (región).' },
+            direccionAgencia: {
+              type: 'string',
+              description:
+                'Dirección o sucursal de la agencia donde recogerá. Omite si no la sabe.',
+            },
           },
         },
       },
@@ -264,7 +287,9 @@ export function crearCrearVentaTool(
       const doc = String(args.documentoCliente ?? '').replace(/\D/g, '');
       const entrega = (args.entrega ?? {}) as {
         conEnvio?: boolean;
-        direccion?: string;
+        ciudad?: string;
+        departamento?: string;
+        direccionAgencia?: string;
       };
       // CLIENTE: con documento, el nombre OFICIAL y el vínculo salen de la BD
       // (Persona por dni), NUNCA del LLM — recorta/reformatea ("James Johel" en
@@ -303,7 +328,6 @@ export function crearCrearVentaTool(
           doc.length === 9 ? '4' : doc.length === 8 ? '1' : undefined,
         telefonoCliente: ctx.celular ?? undefined,
         conEnvio: !!entrega.conEnvio,
-        direccionCliente: entrega.direccion ?? undefined,
         tipoComprobante: 'BOLETA',
         condicionPago: 'CONTADO',
         detalles,
@@ -329,10 +353,11 @@ export function crearCrearVentaTool(
         .catch(() => null);
 
       // 5) Número al que el cliente yapea (para decírselo): el de pago del
-      //    WhatsApp, si no el de IntegracionYape.
+      //    WhatsApp, si no el de IntegracionYape. La agencia sale de la misma
+      //    config (la empresa envía todo por UNA agencia, como en sorteos).
       const wpp = await prisma.integracionWhatsapp.findUnique({
         where: { empresaId: ctx.empresaId },
-        select: { numeroPago: true },
+        select: { numeroPago: true, agenciaEnvio: true },
       });
       let numeroPago = wpp?.numeroPago ?? null;
       if (!numeroPago) {
@@ -343,6 +368,31 @@ export function crearCrearVentaTool(
         numeroPago = iy?.celular ?? null;
       }
 
+      // 6) ENVÍO estructurado (VentaEnvio — mismo flujo que el bot de sorteos):
+      //    ciudad→destinoProvincia, departamento→destinoDepartamento,
+      //    dirección/sucursal→agenciaDireccion. Alimenta el sheet de envío y
+      //    el rótulo — NO va en direccionCliente (snapshot del cliente).
+      const agencia = wpp?.agenciaEnvio?.trim() || 'SHALOM';
+      let envioRegistrado = false;
+      if (entrega.conEnvio) {
+        const limpio = (v?: string) => {
+          const t = (v ?? '').trim();
+          return t.length >= 3 && t.length <= 60 ? t.toUpperCase() : undefined;
+        };
+        envioRegistrado = await ventaService
+          .upsertEnvio(ventaId, ctx.empresaId, {
+            destinatarioNombre: nombreCliente,
+            destinatarioDni: doc || undefined,
+            destinatarioCelular: ctx.celular ?? undefined,
+            agenciaNombre: agencia,
+            destinoProvincia: limpio(entrega.ciudad),
+            destinoDepartamento: limpio(entrega.departamento),
+            agenciaDireccion: limpio(entrega.direccionAgencia),
+          })
+          .then(() => true)
+          .catch(() => false);
+      }
+
       return {
         ok: true,
         ventaId,
@@ -350,6 +400,9 @@ export function crearCrearVentaTool(
         yapeHabilitado: cobro?.habilitado ?? false,
         payAmount: cobro?.payAmount ?? null,
         numeroPago,
+        ...(entrega.conEnvio
+          ? { envioRegistrado, agenciaEnvio: agencia }
+          : {}),
       };
     },
   };

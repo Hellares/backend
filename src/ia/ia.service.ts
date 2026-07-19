@@ -163,10 +163,16 @@ export class IaAgenteService {
     omitirSaludo?: boolean,
     sorteoActivo?: string | null,
   ): Promise<string> {
-    const empresa = await this.prisma.empresa.findUnique({
-      where: { id: cfg.empresaId },
-      select: { nombre: true },
-    });
+    const [empresa, wpp] = await Promise.all([
+      this.prisma.empresa.findUnique({
+        where: { id: cfg.empresaId },
+        select: { nombre: true },
+      }),
+      this.prisma.integracionWhatsapp.findUnique({
+        where: { empresaId: cfg.empresaId },
+        select: { agenciaEnvio: true },
+      }),
+    ]);
 
     const personalidad =
       [
@@ -183,6 +189,7 @@ export class IaAgenteService {
     return construirSystemPrompt(ctx, {
       personalidad,
       empresaNombre: empresa?.nombre ?? null,
+      agenciaEnvio: wpp?.agenciaEnvio?.trim() || null,
       saludoYaEnviado: omitirSaludo,
       modoVenta: cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape,
       sorteoActivo: sorteoActivo ?? null,

@@ -93,6 +93,14 @@ export function construirSystemPrompt(
         'tú: se valida solo.',
     );
     runtime.push(
+      'ENVÍO: pregunta si recoge en tienda o quiere envío por agencia. Si es ' +
+        'envío, pregunta UNA POR UNA (mensajes cortos): 1) ¿a qué ciudad?, ' +
+        '2) ¿de qué departamento?, 3) si conoce la dirección o sucursal de la ' +
+        'agencia en su ciudad (si no la sabe, no importa). Pasa ciudad, ' +
+        'departamento y direccionAgencia en `entrega` al llamar crearVenta. ' +
+        'NO pidas dirección de domicilio: el envío llega a la agencia.',
+    );
+    runtime.push(
       'Si crearVenta devuelve ok:false o un error, NO inventes datos ni digas ' +
         'que la compra está lista: discúlpate, avisa que hubo un problema al ' +
         'registrar la venta y ofrece que un asesor lo ayude.',
