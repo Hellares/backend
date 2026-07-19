@@ -43,9 +43,10 @@ export class AgenteService {
     /**
      * Guard determinístico sobre la respuesta FINAL: si devuelve una
      * instrucción (string), la respuesta se rechaza y se reinyecta al LLM
-     * para corregirla (una sola vez). null = respuesta válida.
+     * para corregirla (una sola vez). Recibe también las trazas del turno
+     * (qué tools corrieron y sus resultados). null = respuesta válida.
      */
-    validarFinal?: (texto: string) => string | null;
+    validarFinal?: (texto: string, trazas: TrazaTurno[]) => string | null;
   }): Promise<ResultadoConversacion> {
     const tools = this.ejecutor.definiciones();
     const max = params.maxIteraciones ?? 6;
@@ -83,7 +84,7 @@ export class AgenteService {
         // inventado) se rechaza y se reinyecta para que el LLM la corrija
         // llamando a las tools de verdad. Una sola corrección por turno.
         if (params.validarFinal && !corregido) {
-          const nudge = params.validarFinal(textoTurno);
+          const nudge = params.validarFinal(textoTurno, trazas);
           if (nudge) {
             corregido = true;
             trazas.push({ iteracion: i + 1, tools: [], texto: textoTurno });

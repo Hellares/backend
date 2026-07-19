@@ -7,7 +7,11 @@ import { descifrarSecreto } from '../ia-config/crypto-key.util';
 import { AnthropicProvider } from './provider/anthropic.provider';
 import { AgenteIaProvider, MensajeAgente } from './provider/agente-ia.provider';
 import { EjecutorTools } from './ejecutor-tools';
-import { AgenteService, ResultadoConversacion } from './agente.service';
+import {
+  AgenteService,
+  ResultadoConversacion,
+  TrazaTurno,
+} from './agente.service';
 import { construirSystemPrompt } from './prompt-sistema';
 import { crearBuscarProductoTool } from './tools/buscar-producto.tool';
 import { crearVerDetalleTool } from './tools/ver-detalle.tool';
@@ -89,11 +93,15 @@ export class IaAgenteService {
       params.sorteoActivo,
     );
 
-    // Guard anti-alucinación (solo VENDE): si la respuesta final trae un
-    // número de celular de 9 dígitos que NO es el numeroPago real ni el del
-    // cliente, es INVENTADO → se rechaza y se fuerza la corrección (llamar
-    // crearVenta de verdad). Haiku a veces fabrica el número pese al prompt.
-    let validarFinal: ((texto: string) => string | null) | undefined;
+    // Guards anti-alucinación (solo VENDE), determinísticos sobre la respuesta
+    // final — Haiku a veces ignora el prompt:
+    //  1) Número de 9 dígitos que NO es el numeroPago real ni el del cliente
+    //     → INVENTADO: se rechaza y se fuerza a llamar crearVenta de verdad.
+    //  2) Disculpa de "hubo un problema" cuando NINGUNA tool falló en el turno
+    //     → error fantasma: se rechaza y se le ordena continuar el flujo.
+    let validarFinal:
+      | ((texto: string, trazas: TrazaTurno[]) => string | null)
+      | undefined;
     if (cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape) {
       const blancos = new Set<string>();
       const numeroPago = await this.resolverNumeroPago(params.empresaId);
@@ -103,20 +111,40 @@ export class IaAgenteService {
         blancos.add(cel);
         blancos.add(cel.replace(/^51/, ''));
       }
-      validarFinal = (texto: string) => {
+      validarFinal = (texto: string, trazas: TrazaTurno[]) => {
         const nums = texto.match(/\b9\d{8}\b/g) ?? [];
         const falso = nums.find((n) => !blancos.has(n));
-        if (!falso) return null;
-        this.logger.warn(
-          `Agente inventó número ${falso} (empresa ${params.empresaId}) — corrigiendo`,
+        if (falso) {
+          this.logger.warn(
+            `Agente inventó número ${falso} (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            `[SISTEMA] El número ${falso} que diste NO existe: lo inventaste. ` +
+            'NUNCA inventes números de Yape ni montos. Si aún no llamaste a ' +
+            'crearVenta en esta conversación, llámala AHORA: el monto (payAmount) ' +
+            'y el número (numeroPago) reales SOLO salen de su respuesta. Corrige ' +
+            'tu mensaje al cliente usando los datos reales.'
+          );
+        }
+        const seDisculpa =
+          /hubo un (problema|inconveniente)|no pud[eo] (procesar|registrar)|problema al (procesar|registrar)/i.test(
+            texto,
+          );
+        const algunaFallo = trazas.some((t) =>
+          t.tools.some((tl) => (tl.resultado as any)?.ok === false),
         );
-        return (
-          `[SISTEMA] El número ${falso} que diste NO existe: lo inventaste. ` +
-          'NUNCA inventes números de Yape ni montos. Si aún no llamaste a ' +
-          'crearVenta en esta conversación, llámala AHORA: el monto (payAmount) ' +
-          'y el número (numeroPago) reales SOLO salen de su respuesta. Corrige ' +
-          'tu mensaje al cliente usando los datos reales.'
-        );
+        if (seDisculpa && !algunaFallo) {
+          this.logger.warn(
+            `Agente se disculpó sin fallo real (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            '[SISTEMA] NO ocurrió ningún error: ninguna herramienta falló. No ' +
+            'te disculpes ni derives a un asesor. Continúa el flujo de venta ' +
+            'donde quedó: si el cliente te dio su DNI/CE llama resolverCliente; ' +
+            'si ya confirmó su nombre llama crearVenta. Hazlo AHORA.'
+          );
+        }
+        return null;
       };
     }
 
