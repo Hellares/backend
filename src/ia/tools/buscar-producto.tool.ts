@@ -102,10 +102,25 @@ export function crearBuscarProductoTool(
           ]),
         },
         include: {
+          // Stock a nivel producto (varianteId null).
           stocksPorSede: {
             where: {
               precio: { not: null },
               ...(ctx.sedeId ? { sedeId: ctx.sedeId } : {}),
+            },
+          },
+          // Stock a nivel VARIANTE: productos "EDREDON → variante" guardan su
+          // precio/stock aquí, no en el producto. Sin esto, un producto con
+          // variantes se descartaba por "sin stock" (falso negativo real).
+          variantes: {
+            where: { isActive: true, deletedAt: null },
+            select: {
+              stocksPorSede: {
+                where: {
+                  precio: { not: null },
+                  ...(ctx.sedeId ? { sedeId: ctx.sedeId } : {}),
+                },
+              },
             },
           },
         },
@@ -114,7 +129,11 @@ export function crearBuscarProductoTool(
 
       const items = productos
         .map((p) => {
-          const stocks = p.stocksPorSede.filter((s) => s.precio != null);
+          // Precio/stock = producto + TODAS sus variantes (cualquiera con stock).
+          const stocks = [
+            ...p.stocksPorSede,
+            ...p.variantes.flatMap((v) => v.stocksPorSede),
+          ].filter((s) => s.precio != null);
           if (stocks.length === 0) return null;
           const precios = stocks.map((s) => Number(s.precio));
           const stockTotal = stocks.reduce(
@@ -132,6 +151,7 @@ export function crearBuscarProductoTool(
                 ? precioMin
                 : { desde: precioMin, hasta: precioMax },
             stockDisponible: stockTotal,
+            tieneVariantes: p.variantes.length > 0,
           };
         })
         .filter((x): x is NonNullable<typeof x> => x !== null)

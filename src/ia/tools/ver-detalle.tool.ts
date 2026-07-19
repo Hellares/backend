@@ -48,13 +48,28 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
           },
           variantes: {
             where: { isActive: true, deletedAt: null },
-            select: { id: true, nombre: true, sku: true },
+            select: {
+              id: true,
+              nombre: true,
+              sku: true,
+              // Precio/stock POR VARIANTE (edredón "3 piezas", "carnero"...).
+              stocksPorSede: {
+                where: {
+                  precio: { not: null },
+                  ...(ctx.sedeId ? { sedeId: ctx.sedeId } : {}),
+                },
+              },
+            },
           },
         },
       });
       if (!p) return { ok: false, motivo: 'NO_ENCONTRADO' };
 
-      const stocks = p.stocksPorSede.filter((s) => s.precio != null);
+      // Precio/stock agregado = producto + variantes (igual que buscarProducto).
+      const stocks = [
+        ...p.stocksPorSede,
+        ...p.variantes.flatMap((v) => v.stocksPorSede),
+      ].filter((s) => s.precio != null);
       if (stocks.length === 0) return { ok: false, motivo: 'SIN_STOCK_EN_SEDE' };
 
       const precios = stocks.map((s) => Number(s.precio));
@@ -87,11 +102,20 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
           stockDisponible: stockTotal,
           urlImagen: img?.url ?? null,
           urlThumbnail: img?.urlThumbnail ?? null,
-          variantes: p.variantes.map((v) => ({
-            id: v.id,
-            nombre: v.nombre,
-            sku: v.sku,
-          })),
+          variantes: p.variantes.map((v) => {
+            const vs = v.stocksPorSede.filter((s) => s.precio != null);
+            const vprecios = vs.map((s) => Number(s.precio));
+            return {
+              id: v.id,
+              nombre: v.nombre,
+              sku: v.sku,
+              precio: vprecios.length ? Math.min(...vprecios) : null,
+              stockDisponible: vs.reduce(
+                (a, s) => a + Math.max(0, stockDisponible(s)),
+                0,
+              ),
+            };
+          }),
         },
       };
     },
