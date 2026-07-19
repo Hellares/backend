@@ -53,7 +53,12 @@ export function crearCrearVentaTool(
             properties: {
               productoId: { type: 'string' },
               cantidad: { type: 'number' },
-              varianteId: { type: 'string' },
+              varianteId: {
+                type: 'string',
+                description:
+                  'Inclúyelo SOLO si el producto elegido vino con "varianteId" ' +
+                  'en el resultado de buscarProducto (ej. "EDREDON Cristal").',
+              },
             },
             required: ['productoId', 'cantidad'],
           },
@@ -97,22 +102,52 @@ export function crearCrearVentaTool(
       const detalles: any[] = [];
       for (const it of items) {
         const productoId = String(it?.productoId ?? '');
+        const varianteId = it?.varianteId ? String(it.varianteId) : null;
         const cantidad = Number(it?.cantidad ?? 0);
         if (!productoId || !(cantidad > 0)) {
           return { ok: false, motivo: 'ITEM_INVALIDO' };
         }
+        // Producto (guard de pertenencia al tenant) + nombre.
         const prod = await prisma.producto.findFirst({
           where: { id: productoId, empresaId: ctx.empresaId, deletedAt: null },
-          include: {
-            stocksPorSede: {
-              where: { sedeId: ctx.sedeId, precio: { not: null } },
-            },
-          },
+          select: { id: true, nombre: true },
         });
         if (!prod) {
           return { ok: false, motivo: 'PRODUCTO_NO_ENCONTRADO', productoId };
         }
-        const stock = prod.stocksPorSede[0];
+
+        // Stock/precio: el de la VARIANTE si viene (ramificado por varianteId,
+        // NUNCA AND productoId+varianteId), o el del producto si es simple.
+        let nombre = prod.nombre;
+        let stock;
+        if (varianteId) {
+          const variante = await prisma.productoVariante.findFirst({
+            where: {
+              id: varianteId,
+              productoId,
+              empresaId: ctx.empresaId,
+              isActive: true,
+              deletedAt: null,
+            },
+            select: { id: true, nombre: true },
+          });
+          if (!variante) {
+            return { ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId };
+          }
+          nombre = `${prod.nombre} ${variante.nombre}`.trim();
+          stock = await prisma.productoStock.findFirst({
+            where: { varianteId, sedeId: ctx.sedeId, precio: { not: null } },
+          });
+        } else {
+          stock = await prisma.productoStock.findFirst({
+            where: {
+              productoId,
+              varianteId: null,
+              sedeId: ctx.sedeId,
+              precio: { not: null },
+            },
+          });
+        }
         if (!stock) {
           return { ok: false, motivo: 'SIN_STOCK_EN_SEDE', productoId };
         }
@@ -127,8 +162,8 @@ export function crearCrearVentaTool(
         }
         detalles.push({
           productoId,
-          varianteId: it?.varianteId ?? undefined,
-          descripcion: prod.nombre,
+          varianteId: varianteId ?? undefined,
+          descripcion: nombre,
           cantidad,
           precioUnitario: Number(stock.precio), // ← DEL SISTEMA, no del LLM
         });
