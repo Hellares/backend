@@ -223,6 +223,33 @@ export class IaAgenteService {
             );
           }
         }
+        // 3.7) NIEGA disponibilidad SIN haber buscado en este turno →
+        //      negación de memoria: Haiku concluye desde la lista ya
+        //      mostrada en vez de re-buscar el término nuevo (caso real:
+        //      "¿tienes de Alianza Lima?" → "no tienen ese diseño", y la
+        //      variante EDREDON alianza lima EXISTÍA con stock — venta
+        //      perdida). Si buscó y no hay, la negación es honesta y pasa.
+        const niega =
+          /\bno\s+(lo|la|los|las)?\s?(tenemos|tengo|hay|manejamos|vendemos|trabajamos)\b|no\s+(tiene|tienen|existe|está|esta)n?\s[^.!?]{0,30}(diseñ|model|color|talla|stock|disponib|catalog)/i.test(
+            texto,
+          );
+        const buscoEnTurno = trazas.some((t) =>
+          t.tools.some((tl) => tl.nombre === 'buscarProducto'),
+        );
+        if (niega && !buscoEnTurno) {
+          this.logger.warn(
+            `Agente negó disponibilidad sin buscar (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            '[SISTEMA] Afirmaste que algo NO existe o no está disponible ' +
+            'SIN haber llamado buscarProducto en este turno. PROHIBIDO ' +
+            'negar de memoria: la lista que mostraste antes no prueba que ' +
+            'no exista otra cosa (los diseños suelen estar en variantes). ' +
+            `Llama AHORA buscarProducto con el término del cliente ` +
+            `("${params.mensaje.slice(0, 60)}") y responde según ESE resultado.` +
+            NOTA_INTERNA
+          );
+        }
         // 4) Producto INVENTADO en la lista: un nombre en negrita en una línea
         //    con precio "S/" que NO matchea ningún producto del catálogo
         //    mostrado → Haiku completó la lista de memoria (pasó en beta:
