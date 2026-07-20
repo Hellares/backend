@@ -3225,21 +3225,27 @@ export class WhatsappBotService {
 
     // FOTO del producto: si el agente consultó verDetalle y el producto tiene
     // imagen, la envía el CÓDIGO (determinístico — el LLM no ve URLs ni puede
-    // inventarlas). Se manda ANTES del texto; máx. 2 por turno.
+    // inventarlas). Se manda ANTES del texto; máx. 4 por turno. Incluye las
+    // fotos de las VARIANTES (verDetalle las expone en variantes[].urlImagen):
+    // "muéstrame los dos Lucifer" → cada variante con SU imagen.
     const fotos: { nombre: string; precio: any; url: string }[] = [];
+    const pushFoto = (nombre: string, precio: any, url?: string | null) => {
+      if (url && !fotos.some((f) => f.url === url)) {
+        fotos.push({ nombre, precio, url });
+      }
+    };
     for (const t of r.resultado.trazas ?? []) {
       for (const tl of t.tools ?? []) {
+        if (tl.nombre !== 'verDetalle') continue;
         const prod = (tl.resultado as any)?.producto;
-        if (
-          tl.nombre === 'verDetalle' &&
-          prod?.urlImagen &&
-          !fotos.some((f) => f.url === prod.urlImagen)
-        ) {
-          fotos.push({
-            nombre: prod.nombre,
-            precio: prod.precio,
-            url: prod.urlImagen,
-          });
+        if (!prod) continue;
+        pushFoto(prod.nombre, prod.precio, prod.urlImagen);
+        for (const v of prod.variantes ?? []) {
+          pushFoto(
+            `${prod.nombre} ${v.nombre}`.trim(),
+            v.precio ?? prod.precio,
+            v.urlImagen,
+          );
         }
       }
     }
@@ -3258,78 +3264,63 @@ export class WhatsappBotService {
           itemsUnico = prods;
         }
       }
-      if (ids.size === 1) {
-        const id = [...ids][0];
+      // Resultado ACOTADO (hasta 3 productos distintos) → foto de cada ítem
+      // mostrado, sin esperar verDetalle. "peluche lucifer" (2 productos con
+      // variantes) manda las fotos de una; listas largas ("edredones") no
+      // spamean — ahí las fotos van al pedir el detalle.
+      if (ids.size >= 1 && ids.size <= 3) {
         // Fotos del producto Y de sus variantes: muchos catálogos cargan la
         // imagen SOLO en la variante (EDREDON: el producto no tiene Archivo,
-        // "Cristal"/"alianza lima" sí). Si lo mostrado son variantes, cada
-        // una va con SU foto (máx 2, el tope de siempre); si no, la del
-        // producto o la de la primera variante con imagen.
+        // "Cristal"/"alianza lima" sí). Cada ítem mostrado va con SU foto.
         const varIds = itemsUnico
           .map((it: any) => it.varianteId)
           .filter((v: any): v is string => !!v);
-        const [imgs, prod] = await Promise.all([
-          this.prisma.archivo.findMany({
-            where: {
-              isActive: true,
-              deletedAt: null,
-              // Solo IMÁGENES: hay productos cuyo primer Archivo es un VIDEO
-              // (mp4) y Evolution revienta al mandarlo como imagen.
-              mimeType: { startsWith: 'image/' },
-              OR: [
-                { entidadTipo: EntidadTipo.PRODUCTO, entidadId: id },
-                ...(varIds.length
-                  ? [
-                      {
-                        entidadTipo: EntidadTipo.PRODUCTO_VARIANTE,
-                        entidadId: { in: varIds },
-                      },
-                    ]
-                  : []),
-              ],
-            },
-            orderBy: { orden: 'asc' },
-            select: { url: true, entidadTipo: true, entidadId: true },
-          }),
-          this.prisma.producto.findFirst({
-            where: { id, empresaId },
-            select: { nombre: true },
-          }),
-        ]);
-        if (prod && imgs.length > 0) {
-          const deVariante = (vId: string) =>
-            imgs.find(
-              (a: any) =>
-                a.entidadTipo === 'PRODUCTO_VARIANTE' && a.entidadId === vId,
-            );
-          const dePr = imgs.find((a: any) => a.entidadTipo === 'PRODUCTO');
-          // Variantes mostradas → la foto propia de cada una.
+        const imgs = await this.prisma.archivo.findMany({
+          where: {
+            isActive: true,
+            deletedAt: null,
+            // Solo IMÁGENES: hay productos cuyo primer Archivo es un VIDEO
+            // (mp4) y Evolution revienta al mandarlo como imagen.
+            mimeType: { startsWith: 'image/' },
+            OR: [
+              { entidadTipo: EntidadTipo.PRODUCTO, entidadId: { in: [...ids] } },
+              ...(varIds.length
+                ? [
+                    {
+                      entidadTipo: EntidadTipo.PRODUCTO_VARIANTE,
+                      entidadId: { in: varIds },
+                    },
+                  ]
+                : []),
+            ],
+          },
+          orderBy: { orden: 'asc' },
+          select: { url: true, entidadTipo: true, entidadId: true },
+        });
+        if (imgs.length > 0) {
+          const imgDe = (tipo: string, id: string) =>
+            imgs.find((a: any) => a.entidadTipo === tipo && a.entidadId === id);
+          // Cada ítem mostrado: su foto de variante, o la de su producto.
           for (const it of itemsUnico) {
-            const img = it.varianteId ? deVariante(it.varianteId) : dePr;
-            if (img?.url && !fotos.some((f) => f.url === img.url)) {
-              fotos.push({
-                nombre: (it.nombre as string) ?? prod.nombre,
-                precio: it.precio ?? null,
-                url: img.url,
-              });
-            }
+            const img =
+              (it.varianteId
+                ? imgDe('PRODUCTO_VARIANTE', it.varianteId)
+                : undefined) ?? imgDe('PRODUCTO', it.id);
+            pushFoto(it.nombre as string, it.precio ?? null, img?.url);
           }
-          // Nada calzó por ítem (p.ej. variantes sin foto propia) → fallback:
-          // producto, o la primera imagen que haya.
-          if (fotos.length === 0) {
-            const img = dePr ?? imgs[0];
-            const solo = itemsUnico.length === 1 ? itemsUnico[0] : null;
-            fotos.push({
-              nombre: (solo?.nombre as string) ?? prod.nombre,
-              precio: solo?.precio ?? null,
-              url: img.url,
-            });
+          // Nada calzó por ítem → fallback: la primera imagen que haya.
+          if (fotos.length === 0 && itemsUnico.length > 0) {
+            pushFoto(
+              itemsUnico[0].nombre as string,
+              itemsUnico[0].precio ?? null,
+              imgs[0].url,
+            );
           }
         }
       }
     }
 
-    for (const foto of fotos.slice(0, 2)) {
+    for (const foto of fotos.slice(0, 4)) {
       const precioTxt =
         typeof foto.precio === 'number'
           ? `S/ ${foto.precio.toFixed(2)}`

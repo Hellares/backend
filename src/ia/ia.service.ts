@@ -280,6 +280,50 @@ export class IaAgenteService {
             NOTA_INTERNA
           );
         }
+        // 3.8) FOTO FANTASMA: afirma que las imágenes ya se enviaron ("Aquí
+        //      están 👆") sin que NINGUNA tool del turno haya devuelto una
+        //      imagen — visto en beta con "los dos Lucifer": dijo "aquí están"
+        //      dos veces sin llamar verDetalle, y el cliente no recibió nada.
+        //      El bot envía fotos SOLO desde trazas con urlImagen (verDetalle)
+        //      o búsquedas acotadas (≤3 productos): fuera de eso, la
+        //      afirmación es mentira.
+        const afirmaFoto =
+          /👆|aqu[ií]\s+(est[áa]n?|tienes|te\s+(dejo|van|va))[^.!?\n]{0,40}(foto|imagen|im[áa]gen)|te\s+(env[ií]o|mando|muestro|comparto|dej[oé])\s+(la|las|una|sus)\s+(foto|imagen|im[áa]gen)/i.test(
+            texto,
+          );
+        const huboImagenReal = trazas.some((t) =>
+          t.tools.some((tl) => {
+            const res: any = tl.resultado;
+            if (tl.nombre === 'verDetalle' && res?.ok) {
+              return (
+                !!res.producto?.urlImagen ||
+                (res.producto?.variantes ?? []).some((v: any) => v?.urlImagen)
+              );
+            }
+            if (tl.nombre === 'buscarProducto' && res?.ok) {
+              // Búsqueda acotada → el bot manda las fotos él mismo.
+              const idsDistintos = new Set(
+                (res.productos ?? []).map((p: any) => p.id),
+              );
+              return idsDistintos.size >= 1 && idsDistintos.size <= 3;
+            }
+            return false;
+          }),
+        );
+        if (afirmaFoto && !huboImagenReal) {
+          this.logger.warn(
+            `Agente afirmó fotos enviadas sin imagen real (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            '[SISTEMA] Afirmaste que las fotos/imágenes ya se enviaron, pero ' +
+            'NINGUNA herramienta de este turno devolvió una imagen: el ' +
+            'cliente NO recibió nada. Llama AHORA verDetalle con el producto ' +
+            'que pidió (uno por producto, máx 2) — sus fotos y las de sus ' +
+            'variantes se envían solas. Si verDetalle no trae urlImagen, di ' +
+            'honestamente que no tiene foto.' +
+            NOTA_INTERNA
+          );
+        }
         // 4) Producto INVENTADO en la lista: un nombre en negrita en una línea
         //    con precio "S/" que NO matchea ningún producto del catálogo
         //    mostrado → Haiku completó la lista de memoria (pasó en beta:

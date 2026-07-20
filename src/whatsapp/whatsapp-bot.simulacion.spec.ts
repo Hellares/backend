@@ -2064,6 +2064,80 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('48. Foto directa desde buscarProducto (resultado único)');
   });
 
+  it('53. fotos directas con VARIOS productos (≤3), incluida la de variante', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    // Dos productos: uno simple con foto de PRODUCTO, otro cuya foto vive en
+    // la VARIANTE (caso Lucifer/EDREDON — el producto no tiene Archivo).
+    sim.db.archivos.push(
+      {
+        id: 'imgA',
+        entidadTipo: 'PRODUCTO',
+        entidadId: 'prodA',
+        isActive: true,
+        deletedAt: null,
+        orden: 1,
+        url: 'https://cdn.test/lucifer-simple.jpg',
+        urlThumbnail: null,
+      },
+      {
+        id: 'imgB',
+        entidadTipo: 'PRODUCTO_VARIANTE',
+        entidadId: 'varB1',
+        isActive: true,
+        deletedAt: null,
+        orden: 1,
+        url: 'https://cdn.test/lucifer-80cm.jpg',
+        urlThumbnail: null,
+      },
+    );
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: {
+        texto: 'Opciones de Lucifer 👇 ¿Cuál llevas?',
+        iteraciones: 2,
+        trazas: [
+          {
+            iteracion: 1,
+            tools: [
+              {
+                nombre: 'buscarProducto',
+                args: { query: 'peluche lucifer' },
+                resultado: {
+                  ok: true,
+                  productos: [
+                    {
+                      id: 'prodA',
+                      nombre: 'PELUCHE LUCIFER CON RELLENO',
+                      precio: 40,
+                      stockDisponible: 4,
+                    },
+                    {
+                      id: 'prodB',
+                      varianteId: 'varB1',
+                      nombre: 'PELUCHE LUCIFER Relleno / 80 CM',
+                      precio: 80,
+                      stockDisponible: 24,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const r = await sim.cliente(CEL, 'peluche lucifer');
+    const imgs = r.filter((m) => m.includes('[imagen]'));
+    expect(imgs).toHaveLength(2); // una por ítem: producto + variante
+    expect(imgs.some((m) => m.includes('LUCIFER CON RELLENO — S/ 40.00'))).toBe(
+      true,
+    );
+    expect(imgs.some((m) => m.includes('80 CM — S/ 80.00'))).toBe(true);
+    sim.imprimir('53. Fotos directas para lista corta (2 productos)');
+  });
+
   it('49. "quiero hablar con una persona" → ASESOR sin gastar LLM + push', async () => {
     const sim = new Simulador();
     sim.habilitarAgente();
