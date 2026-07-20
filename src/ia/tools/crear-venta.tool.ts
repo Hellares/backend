@@ -1,6 +1,6 @@
 import { PrismaClient, Rol, TipoAfectacionIgv } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
-import { stockDisponible } from './stock.util';
+import { stockDisponible, emparejarCatalogo } from './stock.util';
 
 /**
  * Interfaz mínima de VentaService que necesita la tool (evita acoplarse al
@@ -143,30 +143,17 @@ export function crearCrearVentaTool(
 
         // PRIMERO: resolver contra el CATÁLOGO ya mostrado en la conversación
         // (buscarProducto/verDetalle lo llenaron). Así, aunque el LLM mande el
-        // nombre ("LAPICERO") o un id parcial, lo mapeamos al id+variante REAL.
-        const cat = ctx.catalogoReciente ?? [];
-        const low = rawProdId.toLowerCase();
-        let hit =
-          cat.find((c) => c.id === rawProdId) ||
-          cat.find((c) => c.nombre.toLowerCase() === low);
-        if (!hit && low.length >= 3) {
-          const parciales = cat.filter(
-            (c) =>
-              c.nombre.toLowerCase().includes(low) ||
-              low.includes(c.nombre.toLowerCase()),
-          );
-          if (parciales.length === 1) hit = parciales[0];
-        }
-        if (!hit) {
-          // Haiku a veces inventa códigos derivados del nombre ("LAP001" para
-          // LAPICERO): comparar solo las LETRAS del código contra el catálogo.
-          const letras = low.replace(/[^a-záéíóúñ]/g, '');
-          if (letras.length >= 3) {
-            const porLetras = cat.filter((c) =>
-              c.nombre.toLowerCase().includes(letras),
-            );
-            if (porLetras.length === 1) hit = porLetras[0];
-          }
+        // nombre ("LAPICERO"), un código inventado ("LAP001") o un id abreviado
+        // ("ALMOHADA_ROJA_RELLENO_2M"), lo mapeamos al id+variante REAL.
+        const { match: hit, opciones } = emparejarCatalogo(ctx, rawProdId);
+        if (!hit && opciones && opciones.length > 1) {
+          // Empate (ej. "con"/"sin" relleno): que el agente elija, no adivinar.
+          return {
+            ok: false,
+            motivo: 'PRODUCTO_AMBIGUO',
+            productoId: rawProdId,
+            opciones: opciones.map((o) => ({ id: o.id, nombre: o.nombre })),
+          };
         }
         if (hit) {
           rawProdId = hit.id;
@@ -198,6 +185,7 @@ export function crearCrearVentaTool(
               c.stocksPorSede.length > 0 ||
               c.variantes.some((v: any) => v.stocksPorSede.length > 0),
           );
+          const cat = ctx.catalogoReciente ?? [];
           if (conStock.length === 1) {
             prod = conStock[0];
           } else if (conStock.length === 0 && cat.length === 1) {

@@ -127,7 +127,12 @@ export function construirSystemPrompt(
         'en tienda, no registres envío.',
     );
     runtime.push(
-      'Si crearVenta o registrarEnvio devuelven ok:false o un error, NO ' +
+      'Al llamar crearVenta, en productoId usa el NOMBRE COMPLETO y EXACTO del ' +
+        'producto tal como se lo mostraste al cliente (con su color/tamaño/' +
+        'relleno si es una variante), no una abreviatura. Si crearVenta ' +
+        'devuelve motivo PRODUCTO_AMBIGUO con "opciones", elige de esa lista la ' +
+        'que el cliente confirmó y vuelve a llamar crearVenta con ese nombre ' +
+        'exacto — NO escales por esto. Para OTROS ok:false o error, NO ' +
         'inventes datos ni digas que quedó listo: discúlpate, avisa que hubo ' +
         'un problema y ofrece que un asesor lo ayude.',
     );
