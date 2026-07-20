@@ -5,3 +5,4 @@ export * from './ajuste-masivo-precios.dto';
 export * from './query-historial-precios.dto';
 export * from './activar-liquidacion.dto';
 export * from './verificar-precios.dto';
+export * from './bulk-editar-stock-precios.dto';

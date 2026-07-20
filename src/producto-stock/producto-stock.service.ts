@@ -12,6 +12,7 @@ import { AjustarStockDto } from './dto/ajustar-stock.dto';
 import { ActualizarPreciosSedeDto } from './dto/actualizar-precios-sede.dto';
 import { QueryHistorialPreciosDto } from './dto/query-historial-precios.dto';
 import { ActivarLiquidacionDto } from './dto/activar-liquidacion.dto';
+import { BulkEditarStockPreciosDto } from './dto/bulk-editar-stock-precios.dto';
 import {
   CampoPrecio,
   ComparacionPrecio,
@@ -2043,6 +2044,243 @@ export class ProductoStockService {
         }),
       ),
     );
+  }
+
+  /**
+   * Edición masiva de stock y precios de una sede (grilla tipo excel).
+   *
+   * Por cada fila:
+   * - Si no existe el registro ProductoStock en la sede, se crea (stock 0).
+   * - `agregarStock` ajusta el stock generando MovimientoStock
+   *   (AJUSTE_ENTRADA / AJUSTE_SALIDA) — trazabilidad completa en kardex.
+   * - `precio` / `precioCosto` actualizan precios registrando
+   *   ProductoPrecioHistorialSede, igual que el flujo individual.
+   *
+   * Todo corre en UNA transacción: si una fila falla, no se aplica nada.
+   * Los precios se aplican antes que el stock para que el movimiento de
+   * kardex quede valorizado con el costo nuevo de la misma fila.
+   */
+  async bulkEditarStockPrecios(
+    empresaId: string,
+    sedeId: string,
+    dto: BulkEditarStockPreciosDto,
+    usuarioId: string,
+  ) {
+    dto.items.forEach((item, i) => {
+      if (!!item.varianteId === !!item.productoId) {
+        throw new BadRequestException(
+          `Fila ${i + 1}: se requiere exactamente uno de varianteId o productoId`,
+        );
+      }
+      if (
+        item.agregarStock === undefined &&
+        item.precio === undefined &&
+        item.precioCosto === undefined
+      ) {
+        throw new BadRequestException(`Fila ${i + 1}: no tiene cambios que aplicar`);
+      }
+    });
+
+    const motivo = dto.motivo?.trim() || 'Edición masiva de inventario';
+
+    // Tolerancia de centavo, mismo criterio que actualizarPreciosSede
+    const cambio = (anterior: DecimalType | null, nuevo: number | undefined) => {
+      if (nuevo === undefined) return false;
+      const ant = anterior != null ? Number(anterior.toString()) : null;
+      if (ant == null) return true;
+      return Math.abs(ant - nuevo) > 0.001;
+    };
+
+    const resultado = await this.prisma.$transaction(
+      async (tx) => {
+        const resumen = {
+          stockAjustado: 0,
+          preciosActualizados: 0,
+          registrosCreados: 0,
+        };
+        const productosAfectados = new Set<string>();
+
+        for (const item of dto.items) {
+          let stock = await tx.productoStock.findFirst({
+            where: {
+              sedeId,
+              empresaId,
+              productoId: item.productoId ?? null,
+              varianteId: item.varianteId ?? null,
+            },
+            include: {
+              producto: { select: { id: true, nombre: true, isActive: true } },
+              variante: {
+                select: { id: true, nombre: true, isActive: true, productoId: true },
+              },
+            },
+          });
+
+          // Crear el registro si la variante/producto aún no existe en la sede
+          if (!stock) {
+            if (item.varianteId) {
+              const variante = await tx.productoVariante.findFirst({
+                where: { id: item.varianteId, empresaId, deletedAt: null },
+                select: { id: true },
+              });
+              if (!variante) {
+                throw new NotFoundException(
+                  `Variante ${item.varianteId} no encontrada en esta empresa`,
+                );
+              }
+            } else {
+              const producto = await tx.producto.findFirst({
+                where: { id: item.productoId, empresaId, deletedAt: null },
+                select: { id: true },
+              });
+              if (!producto) {
+                throw new NotFoundException(
+                  `Producto ${item.productoId} no encontrado en esta empresa`,
+                );
+              }
+            }
+
+            const creado = await tx.productoStock.create({
+              data: {
+                sedeId,
+                empresaId,
+                productoId: item.productoId ?? null,
+                varianteId: item.varianteId ?? null,
+                stockActual: 0,
+                precioConfigurado: false,
+              },
+              include: {
+                producto: { select: { id: true, nombre: true, isActive: true } },
+                variante: {
+                  select: { id: true, nombre: true, isActive: true, productoId: true },
+                },
+              },
+            });
+            stock = creado;
+            resumen.registrosCreados++;
+          }
+
+          const nombre = stock.variante?.nombre || stock.producto?.nombre || stock.id;
+
+          if (stock.producto && !stock.producto.isActive) {
+            throw new BadRequestException(`${nombre}: el producto está inactivo`);
+          }
+          if (stock.variante && !stock.variante.isActive) {
+            throw new BadRequestException(`${nombre}: la variante está inactiva`);
+          }
+
+          const productoPadreId = stock.variante?.productoId || stock.producto?.id;
+          if (productoPadreId) productosAfectados.add(productoPadreId);
+
+          // 1) Precios primero (el kardex valoriza con el costo nuevo)
+          const precioCambia = cambio(stock.precio, item.precio);
+          const costoCambia = cambio(stock.precioCosto, item.precioCosto);
+
+          if (precioCambia || costoCambia) {
+            await tx.productoStock.update({
+              where: { id: stock.id },
+              data: {
+                ...(precioCambia && {
+                  precio: new Decimal(item.precio!),
+                  precioConfigurado: true,
+                }),
+                ...(costoCambia && { precioCosto: new Decimal(item.precioCosto!) }),
+              },
+            });
+
+            await tx.productoPrecioHistorialSede.create({
+              data: {
+                productoStockId: stock.id,
+                sedeId,
+                precioAnterior: stock.precio ? new Decimal(stock.precio.toString()) : null,
+                precioNuevo: precioCambia
+                  ? new Decimal(item.precio!)
+                  : stock.precio
+                    ? new Decimal(stock.precio.toString())
+                    : null,
+                precioCostoAnterior: stock.precioCosto
+                  ? new Decimal(stock.precioCosto.toString())
+                  : null,
+                precioCostoNuevo: costoCambia
+                  ? new Decimal(item.precioCosto!)
+                  : stock.precioCosto
+                    ? new Decimal(stock.precioCosto.toString())
+                    : null,
+                precioOfertaAnterior: stock.precioOferta
+                  ? new Decimal(stock.precioOferta.toString())
+                  : null,
+                precioOfertaNuevo: stock.precioOferta
+                  ? new Decimal(stock.precioOferta.toString())
+                  : null,
+                tipoCambio: TipoCambioPrecio.MANUAL,
+                razon: motivo,
+                origenModulo: 'INVENTARIO',
+                usuarioId,
+              },
+            });
+            resumen.preciosActualizados++;
+          }
+
+          // 2) Ajuste de stock con bloqueo de fila y movimiento de kardex
+          if (item.agregarStock !== undefined && item.agregarStock !== 0) {
+            const [locked] = await tx.$queryRaw<Array<{ stockActual: number }>>`
+              SELECT "stockActual" FROM "ProductoStock"
+              WHERE id = ${stock.id}
+              FOR UPDATE`;
+
+            const stockAnterior = locked.stockActual;
+            const nuevoStock = stockAnterior + item.agregarStock;
+
+            if (nuevoStock < 0) {
+              throw new BadRequestException(
+                `${nombre}: stock insuficiente (actual ${stockAnterior}, se intentó descontar ${Math.abs(item.agregarStock)})`,
+              );
+            }
+
+            await tx.productoStock.update({
+              where: { id: stock.id },
+              data: { stockActual: nuevoStock },
+            });
+
+            await crearMovimientoStockConValoracion(tx, {
+              sedeId,
+              empresaId,
+              productoStockId: stock.id,
+              tipo: item.agregarStock > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA',
+              tipoDocumento: 'EDICION_MASIVA',
+              cantidadAnterior: stockAnterior,
+              cantidad: item.agregarStock,
+              cantidadNueva: nuevoStock,
+              motivo,
+              usuarioId,
+            });
+            resumen.stockAjustado++;
+          }
+        }
+
+        return { resumen, productosAfectados: [...productosAfectados] };
+      },
+      { timeout: 60_000 },
+    );
+
+    await this.invalidateProductCache(empresaId);
+
+    // Una notificación realtime por producto afectado (no por fila)
+    for (const productoId of resultado.productosAfectados) {
+      if (resultado.resumen.stockAjustado > 0) {
+        this.realtimeInvalidation.notifyStockCambiado({ empresaId, productoId, sedeId });
+      }
+      if (resultado.resumen.preciosActualizados > 0) {
+        this.realtimeInvalidation.notifyPrecioCambiado({ empresaId, productoId, sedeId });
+      }
+    }
+
+    this.logger.log(
+      `Edición masiva en sede ${sedeId}: ${resultado.resumen.stockAjustado} ajustes de stock, ` +
+        `${resultado.resumen.preciosActualizados} precios, ${resultado.resumen.registrosCreados} registros creados`,
+    );
+
+    return resultado.resumen;
   }
 
   /**

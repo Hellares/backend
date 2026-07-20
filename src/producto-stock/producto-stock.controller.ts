@@ -23,6 +23,7 @@ import {
   QueryHistorialPreciosDto,
   ActivarLiquidacionDto,
   VerificarPreciosDto,
+  BulkEditarStockPreciosDto,
 } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequiresPermission } from '../auth/decorators/requires-permission.decorator';
@@ -251,6 +252,24 @@ export class ProductoStockController {
     @Body() body: { items: Array<{ productoStockId: string; stockMinimo?: number; stockMaximo?: number }> },
   ) {
     return this.stockService.actualizarStockMinMaxBulk(empresaId, sedeId, body.items);
+  }
+
+  @Patch('sede/:sedeId/bulk-editar')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Edición masiva de stock y precios en una sede',
+    description:
+      'Aplica ajustes de stock (con movimiento de kardex) y cambios de precio ' +
+      '(con historial) a múltiples productos/variantes en una sola transacción.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async bulkEditarStockPrecios(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('sedeId') sedeId: string,
+    @Body() dto: BulkEditarStockPreciosDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.stockService.bulkEditarStockPrecios(empresaId, sedeId, dto, user.sub);
   }
 
   @Get('sede/:sedeId/por-ubicacion')
