@@ -150,8 +150,13 @@ export function crearBuscarProductoTool(
             },
           },
         },
-        // margen para descartar sin stock/precio; crece con la página pedida
-        take: (pagina + 1) * MAX_RESULTADOS * 4,
+        // Set FIJO y ordenado: se rankea y pagina en JS. Antes el take crecía
+        // con la página y SIN orden estable → un producto talla-40 aparecía en
+        // pág 3 con score alto (ranking inconsistente entre páginas). El
+        // catálogo por empresa es acotado (cientos), traer el match completo
+        // (cap 200) y paginar sobre el ranking es correcto y barato.
+        orderBy: { creadoEn: 'asc' },
+        take: 200,
       });
       let productos = await buscarEnBd({
         OR: terminos.flatMap((t) => [
