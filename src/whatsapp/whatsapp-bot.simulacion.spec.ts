@@ -204,6 +204,7 @@ class Simulador {
 
   /// upsertEnvio del flujo determinístico de entrega (VentaService fake).
   enviosRegistrados: any[] = [];
+  pushes: any[] = [];
 
   /// Pagos "recibidos" en el api-yape fake (para el yape anticipado).
   pagosYape: { id: string; senderName: string; amount: number; provider: string; receivedAt: string }[] = [];
@@ -239,6 +240,10 @@ class Simulador {
       }),
       persona: modelo(this.db, () => this.db.personas),
       integracionAgenteIA: modelo(this.db, () => this.db.integracionesAgenteIa),
+      // Staff para la push "cliente pide asesor".
+      empresaUsuarioRol: {
+        findMany: async () => [{ usuarioId: 'admin-1' }],
+      },
       sede: modelo(this.db, () => this.db.sedes),
       venta: modelo(this.db, () => this.db.ventas),
       ventaEnvio: modelo(this.db, () => this.db.ventaEnvios),
@@ -289,6 +294,16 @@ class Simulador {
         return { id: 'envio_' + id };
       },
     } as any;
+    // Notificaciones fake: captura las push (pedido de asesor).
+    const notificaciones = {
+      enviarAUsuarios: async (
+        usuarioIds: string[],
+        titulo: string,
+        cuerpo: string,
+      ) => {
+        this.pushes.push({ usuarioIds, titulo, cuerpo });
+      },
+    } as any;
     this.bot = new WhatsappBotService(
       prisma,
       evolution,
@@ -297,6 +312,7 @@ class Simulador {
       integracionYape,
       iaAgente,
       ventaService,
+      notificaciones,
     );
 
     this.db.empresas.push({ id: EMPRESA, nombre: 'IMPORTACIONES PRUEBA SAC' });
@@ -384,6 +400,7 @@ class Simulador {
       empresaId: EMPRESA,
       habilitado: true,
       mensajeBienvenida: '¡Hola! Soy eSync ☠️',
+      escalarAHumano: true,
       ...over,
     });
   }
@@ -2045,6 +2062,83 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[idxImg]).toContain('LAPICERO GEL BOIL — S/ 1.00');
     expect(idxImg).toBeLessThan(r.findIndex((m) => m.includes('Cuántos')));
     sim.imprimir('48. Foto directa desde buscarProducto (resultado único)');
+  });
+
+  it('49. "quiero hablar con una persona" → ASESOR sin gastar LLM + push', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'NO DEBERÍA LLAMARSE', iteraciones: 1, trazas: [] },
+    });
+
+    const r = await sim.cliente(CEL, 'quiero hablar con una persona por favor');
+    // Derivación determinística: 1 solo mensaje (más la bienvenida del 1er turno).
+    expect(r.some((m) => m.includes('Te comunico con un asesor'))).toBe(true);
+    expect(sim.iaLlamadas).toHaveLength(0); // el LLM NI se invoca
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('ASESOR');
+    // La empresa se entera por push.
+    expect(sim.pushes).toHaveLength(1);
+    expect(sim.pushes[0].titulo).toContain('asesor');
+
+    // Mensaje siguiente → SILENCIO total (humano atendiendo).
+    const r2 = await sim.cliente(CEL, 'gracias, espero');
+    expect(r2).toHaveLength(0);
+    expect(sim.iaLlamadas).toHaveLength(0);
+    sim.imprimir('49. Pedido de asesor → silencio 12h + push');
+  });
+
+  it('50. el AGENTE escala con la tool escalarAsesor → ASESOR + push', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: {
+        texto: 'Listo, un asesor continuará contigo 🙌',
+        iteraciones: 1,
+        trazas: [
+          {
+            tools: [
+              {
+                nombre: 'escalarAsesor',
+                resultado: { ok: true, motivo: 'quiere cotizar al por mayor' },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    // Frase que el regex NO caza (intención implícita) → la resuelve el LLM.
+    const r = await sim.cliente(CEL, 'esto es para un pedido grande de mi empresa');
+    expect(r.some((m) => m.includes('asesor continuará'))).toBe(true);
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('ASESOR');
+    expect(sim.pushes).toHaveLength(1);
+
+    // Y el silencio aplica igual que en el 49.
+    const r2 = await sim.cliente(CEL, 'ya, aquí espero');
+    expect(r2).toHaveLength(0);
+    sim.imprimir('50. Tool escalarAsesor → bot en silencio + push');
+  });
+
+  it('51. escalarAHumano=false: el pedido de asesor NO silencia (config manda)', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente({ escalarAHumano: false });
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'Puedo ayudarte yo 😊', iteraciones: 1, trazas: [] },
+    });
+
+    const r = await sim.cliente(CEL, 'quiero hablar con un asesor');
+    // Sin escalación: el agente responde normal (la empresa así lo configuró).
+    expect(r.some((m) => m.includes('Puedo ayudarte yo'))).toBe(true);
+    expect(sim.iaLlamadas).toHaveLength(1);
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('IA');
+    expect(sim.pushes).toHaveLength(0);
+    sim.imprimir('51. escalarAHumano=false → el agente sigue');
   });
 
   it('39. saludo puro ("hola"): solo la bienvenida, sin llamar al LLM', async () => {

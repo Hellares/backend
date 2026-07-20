@@ -5,8 +5,10 @@ import {
   EstadoPremioSorteo,
   EstadoSorteo,
   Prisma,
+  Rol,
   TipoSorteo,
 } from '@prisma/client';
+import { NotificacionService } from '../notificacion/notificacion.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
@@ -140,6 +142,41 @@ export class WhatsappBotService {
     return palabras.every((w) => WhatsappBotService.SALUDO_PALABRAS.has(w));
   }
 
+  /**
+   * ¿El cliente pide hablar con un HUMANO? Detección DETERMINÍSTICA antes de
+   * gastar un turno del LLM (y para no depender de que Haiku llame la tool).
+   * Dos familias: (a) verbo de contacto + sustantivo humano cerca ("quiero
+   * hablar con el dueño", "que me atienda una persona"), (b) rechazo del bot
+   * ("no quiero hablar con un robot") o el pedido seco ("asesor", "un humano
+   * por favor"). Palabras sueltas en otra frase NO disparan ("¿el vendedor
+   * me da factura?" sigue con el agente).
+   */
+  private static esPedidoDeAsesor(msg: string): boolean {
+    const t = msg
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const HUMANO =
+      '(asesor(a|es)?|humanos?|personas?( real(es)?)?|alguien|due(n|ñ)os?|encargad[oa]s?|vendedor(a|es)?|jefe|gerente)';
+    return (
+      // "quiero hablar con…", "me puede atender…", "pásame con…", "comunícame con…"
+      new RegExp(
+        `(hablar|conversar|comunicar(me)?|contactar(me)?|atienda|atenderme|atencion|pasa(r|me)?|conecta(r|me)?|deriva(r|me)?|llame|escriba)[^.!?]{0,30}\\b${HUMANO}\\b`,
+      ).test(t) ||
+      // rechazo explícito del bot
+      /no quiero (hablar|chatear|tratar|seguir)[^.!?]{0,20}(bot|robot|maquina|ia|asistente)/.test(
+        t,
+      ) ||
+      /(eres|habla) un (bot|robot|maquina)\??$/.test(t) ||
+      // pedido seco: el mensaje ES la palabra ("asesor", "una persona porfa")
+      new RegExp(
+        `^(un |una |el |la )?${HUMANO}( por ?favor| porfa| pls)?[.!?\\s]*$`,
+      ).test(t)
+    );
+  }
+
   private static readonly MSG_PREMIO_EN_PREPARACION =
     '📦 Tu premio ya está siendo preparado con la dirección registrada ' +
     '— para cambiarla coordina con la tienda (opción *3*).';
@@ -225,6 +262,7 @@ export class WhatsappBotService {
     private readonly integracionYape: IntegracionYapeService,
     private readonly iaAgente: IaAgenteService,
     private readonly venta: VentaService,
+    private readonly notificaciones: NotificacionService,
   ) {}
 
   /** Punto de entrada desde el webhook MESSAGES_UPSERT. */
@@ -3037,7 +3075,11 @@ export class WhatsappBotService {
     // el chat es humano. Evita resolver sede/historial para el caso común.
     const cfgIa = await this.prisma.integracionAgenteIA.findUnique({
       where: { empresaId },
-      select: { habilitado: true, mensajeBienvenida: true },
+      select: {
+        habilitado: true,
+        mensajeBienvenida: true,
+        escalarAHumano: true,
+      },
     });
     if (!cfgIa?.habilitado) return false;
 
@@ -3070,6 +3112,31 @@ export class WhatsappBotService {
       : [];
     // Última búsqueda → "muéstrame más" pagina en vez de inventar.
     const busquedaPrevia = ctxPrevio.busquedaIa ?? null;
+
+    // PEDIDO DE ASESOR determinístico — ANTES de gastar un turno del LLM:
+    // "quiero hablar con una persona/el dueño/asesor" → el bot se silencia
+    // (estado ASESOR, 12h) y avisa a la empresa por push. No ser invasivo:
+    // si el cliente quiere un humano, el asistente se corre.
+    if (cfgIa.escalarAHumano && WhatsappBotService.esPedidoDeAsesor(msg)) {
+      const despedida =
+        '👌 Te comunico con un asesor: te responderá por este mismo chat.\n' +
+        '(escribe *menu* si quieres volver al asistente)';
+      await this.evolution.sendText({
+        instanceName,
+        number: celular,
+        text: despedida,
+      });
+      await this.guardarConversacion(empresaId, celular, 'ASESOR', {
+        ...ctxPrevio,
+        historialIa: [
+          ...histTexto,
+          { rol: 'user' as const, texto: msg },
+          { rol: 'assistant' as const, texto: despedida },
+        ].slice(-12),
+      });
+      void this.avisarPedidoAsesor(empresaId, celular, msg);
+      return true;
+    }
 
     // Saludo de bienvenida: solo en el PRIMER turno (sin historial). Se envía
     // ANTES de la respuesta del agente y se le avisa al agente que no re-salude.
@@ -3212,19 +3279,77 @@ export class WhatsappBotService {
       text: r.resultado.texto,
     });
 
-    // Persistir el historial (últimos 12 turnos) bajo estado 'IA'.
+    // ¿El AGENTE escaló a humano (tool escalarAsesor)? El bot ejecuta lo
+    // determinístico: estado ASESOR (silencio 12h) + push a la empresa. La
+    // tool solo marca la traza — el LLM propone, el bot dispone.
+    const escalado = (r.resultado.trazas ?? []).some((t) =>
+      (t.tools ?? []).some(
+        (tl) =>
+          tl.nombre === 'escalarAsesor' && (tl.resultado as any)?.ok === true,
+      ),
+    );
+
+    // Persistir el historial (últimos 12 turnos): 'IA' o, si escaló, 'ASESOR'.
     const nuevoHist = [
       ...histTexto,
       { rol: 'user' as const, texto: msg },
       { rol: 'assistant' as const, texto: r.resultado.texto },
     ].slice(-12);
-    await this.guardarConversacion(empresaId, celular, 'IA', {
-      ...ctxPrevio,
-      historialIa: nuevoHist,
-      catalogoIa: r.catalogo ?? catalogoPrevio,
-      busquedaIa: r.busqueda ?? busquedaPrevia,
-    });
+    await this.guardarConversacion(
+      empresaId,
+      celular,
+      escalado ? 'ASESOR' : 'IA',
+      {
+        ...ctxPrevio,
+        historialIa: nuevoHist,
+        catalogoIa: r.catalogo ?? catalogoPrevio,
+        busquedaIa: r.busqueda ?? busquedaPrevia,
+      },
+    );
+    if (escalado) void this.avisarPedidoAsesor(empresaId, celular, msg);
     return true;
+  }
+
+  /**
+   * Push a los usuarios que pueden atender (admins/vendedores/cajeros):
+   * un cliente pidió hablar con un humano y el bot se silenció 12h — sin
+   * este aviso, el silencio sería un hueco (nadie mira ese chat). Mismo
+   * patrón que la alerta de pago sin conciliar. Best-effort.
+   */
+  private async avisarPedidoAsesor(
+    empresaId: string,
+    celular: string,
+    ultimoMensaje: string,
+  ): Promise<void> {
+    try {
+      const roles = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+          rol: {
+            in: [Rol.EMPRESA_ADMIN, Rol.SEDE_ADMIN, Rol.VENDEDOR, Rol.CAJERO],
+          },
+        },
+        select: { usuarioId: true },
+      });
+      const usuarioIds = [...new Set(roles.map((r) => r.usuarioId))];
+      if (usuarioIds.length === 0) return;
+      await this.notificaciones.enviarAUsuarios(
+        usuarioIds,
+        '💬 Cliente pide un asesor',
+        `${celular} escribió: "${ultimoMensaje.slice(0, 120)}". ` +
+          'El asistente se silenció — respóndele desde WhatsApp.',
+        {
+          empresaId,
+          data: { evento: 'PIDE_ASESOR', celular },
+        },
+      );
+    } catch (e) {
+      this.logger.warn(
+        `avisarPedidoAsesor (${celular}): ${(e as Error).message}`,
+      );
+    }
   }
 
   private async guardarConversacion(

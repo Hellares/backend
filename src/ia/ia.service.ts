@@ -19,6 +19,7 @@ import { crearVerDetalleTool } from './tools/ver-detalle.tool';
 import { crearResolverClienteTool } from './tools/resolver-cliente.tool';
 import { crearCrearVentaTool } from './tools/crear-venta.tool';
 import { crearRegistrarEnvioTool } from './tools/registrar-envio.tool';
+import { crearEscalarAsesorTool } from './tools/escalar-asesor.tool';
 import { ContextoTool, CatalogoItem } from './tools/tool.types';
 
 /** Resultado de atender un mensaje. Si el agente está apagado para la empresa
@@ -192,6 +193,36 @@ export class IaAgenteService {
             NOTA_INTERNA
           );
         }
+        // 3.5) Afirma que lo pasa con un asesor SIN haber llamado
+        //      escalarAsesor → derivación fantasma: el bot no se silencia y
+        //      el agente sigue respondiendo (pasó en beta: "te conecto con
+        //      un asesor" y siguió chateando él). Solo si la empresa tiene
+        //      escalación activa (si no, la Capa B ya dice no ofrecerla).
+        if (cfg.escalarAHumano) {
+          const afirmaDerivar =
+            /te (paso|conecto|comunico|derivo|transfiero) con|un asesor (te|se pondr|va a|se comunicar)|te atender[áa] (un|una|el|la)? ?(asesor|persona|humano)/i.test(
+              texto,
+            );
+          const escaloReal = trazas.some((t) =>
+            t.tools.some(
+              (tl) =>
+                tl.nombre === 'escalarAsesor' &&
+                (tl.resultado as any)?.ok === true,
+            ),
+          );
+          if (afirmaDerivar && !escaloReal) {
+            this.logger.warn(
+              `Agente afirmó derivar a asesor sin llamar escalarAsesor (empresa ${params.empresaId}) — corrigiendo`,
+            );
+            return (
+              '[SISTEMA] Dijiste que lo pasas con un asesor pero NO llamaste ' +
+              'a la herramienta escalarAsesor: nadie fue avisado y tú ' +
+              'seguirías respondiendo. Llama AHORA a escalarAsesor (con un ' +
+              'motivo corto) y despídete en una frase.' +
+              NOTA_INTERNA
+            );
+          }
+        }
         // 4) Producto INVENTADO en la lista: un nombre en negrita en una línea
         //    con precio "S/" que NO matchea ningún producto del catálogo
         //    mostrado → Haiku completó la lista de memoria (pasó en beta:
@@ -324,6 +355,11 @@ export class IaAgenteService {
       crearVerDetalleTool(this.prisma),
       crearResolverClienteTool(this.prisma, this.consultas, this.clientes),
     );
+    // El cliente puede pedir un humano: la tool marca la traza y el BOT
+    // silencia la conversación (estado ASESOR) + avisa a la empresa.
+    if (cfg.escalarAHumano) {
+      ejecutor.registrar(crearEscalarAsesorTool());
+    }
     if (cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape) {
       ejecutor.registrar(
         crearCrearVentaTool(this.prisma, this.venta),
