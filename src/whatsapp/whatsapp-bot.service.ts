@@ -3239,13 +3239,32 @@ export class WhatsappBotService {
         if (tl.nombre !== 'verDetalle') continue;
         const prod = (tl.resultado as any)?.producto;
         if (!prod) continue;
-        pushFoto(prod.nombre, prod.precio, prod.urlImagen);
-        for (const v of prod.variantes ?? []) {
+        // Si la imagen principal ES la de una variante (verDetalle prioriza
+        // la variante pedida), el caption lleva SU nombre y SU precio — no el
+        // del padre con su rango ("EDREDON — S/ 40 a S/ 50" cuando la foto
+        // era la del Cristal a S/ 40).
+        const vFoto = (prod.variantes ?? []).find(
+          (v: any) => v?.urlImagen && v.urlImagen === prod.urlImagen,
+        );
+        if (vFoto) {
           pushFoto(
-            `${prod.nombre} ${v.nombre}`.trim(),
-            v.precio ?? prod.precio,
-            v.urlImagen,
+            `${prod.nombre} ${vFoto.nombre}`.trim(),
+            vFoto.precio ?? prod.precio,
+            prod.urlImagen,
           );
+        } else {
+          pushFoto(prod.nombre, prod.precio, prod.urlImagen);
+        }
+        // Pidió UNA variante ("edredón cristal") → solo su foto; detalle
+        // genérico ("el edredón") → las fotos de todas las variantes.
+        if (!prod.variantePedidaId) {
+          for (const v of prod.variantes ?? []) {
+            pushFoto(
+              `${prod.nombre} ${v.nombre}`.trim(),
+              v.precio ?? prod.precio,
+              v.urlImagen,
+            );
+          }
         }
       }
     }

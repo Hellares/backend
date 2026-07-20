@@ -167,6 +167,9 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
           stockDisponible: stockTotal,
           urlImagen: img?.url ?? null,
           urlThumbnail: img?.urlThumbnail ?? null,
+          // Variante que PIDIÓ el cliente (si el id/nombre resolvió a una):
+          // el bot manda solo SU foto, no las de las hermanas.
+          variantePedidaId: varianteIdPedida,
           variantes: p.variantes.map((v) => {
             const vs = v.stocksPorSede.filter((s) => s.precio != null);
             const vprecios = vs.map((s) => Number(s.precio));
