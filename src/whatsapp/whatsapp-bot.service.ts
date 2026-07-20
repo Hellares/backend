@@ -3112,6 +3112,50 @@ export class WhatsappBotService {
     }
     if (!r.atendido || !r.resultado) return false; // agente apagado → sigue humano
 
+    // FOTO del producto: si el agente consultó verDetalle y el producto tiene
+    // imagen, la envía el CÓDIGO (determinístico — el LLM no ve URLs ni puede
+    // inventarlas). Se manda ANTES del texto; máx. 2 por turno.
+    const fotos: { nombre: string; precio: any; url: string }[] = [];
+    for (const t of r.resultado.trazas ?? []) {
+      for (const tl of t.tools ?? []) {
+        const prod = (tl.resultado as any)?.producto;
+        if (
+          tl.nombre === 'verDetalle' &&
+          prod?.urlImagen &&
+          !fotos.some((f) => f.url === prod.urlImagen)
+        ) {
+          fotos.push({
+            nombre: prod.nombre,
+            precio: prod.precio,
+            url: prod.urlImagen,
+          });
+        }
+      }
+    }
+    for (const foto of fotos.slice(0, 2)) {
+      const precioTxt =
+        typeof foto.precio === 'number'
+          ? `S/ ${foto.precio.toFixed(2)}`
+          : foto.precio?.desde != null
+            ? `S/ ${Number(foto.precio.desde).toFixed(2)} a S/ ${Number(
+                foto.precio.hasta,
+              ).toFixed(2)}`
+            : '';
+      // Best-effort: una imagen caída no debe romper la respuesta.
+      await this.evolution
+        .sendImage({
+          instanceName,
+          number: celular,
+          mediaUrl: foto.url,
+          caption: `${foto.nombre}${precioTxt ? ` — ${precioTxt}` : ''}`,
+        })
+        .catch((e) =>
+          this.logger.warn(
+            `Imagen de ${foto.nombre} (${celular}): ${(e as Error).message}`,
+          ),
+        );
+    }
+
     await this.evolution.sendText({
       instanceName,
       number: celular,

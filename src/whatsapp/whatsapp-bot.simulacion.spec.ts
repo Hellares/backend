@@ -1947,6 +1947,47 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('46. Entrega: reusa dirección previa con "1"');
   });
 
+  it('47. foto de producto: verDetalle con urlImagen → el bot manda la imagen', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: {
+        texto: 'Aquí tienes las ZAPATILLAS VERNO a S/ 60.',
+        iteraciones: 2,
+        trazas: [
+          {
+            iteracion: 1,
+            tools: [
+              {
+                nombre: 'verDetalle',
+                args: { productoId: 'prod1' },
+                resultado: {
+                  ok: true,
+                  producto: {
+                    id: 'prod1',
+                    nombre: 'ZAPATILLAS VERNO',
+                    precio: 60,
+                    urlImagen: 'https://cdn.test/zapatillas.jpg',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const r = await sim.cliente(CEL, 'muéstrame la foto de las zapatillas');
+    // bienvenida + imagen + texto — la imagen va ANTES del texto
+    const idxImg = r.findIndex((m) => m.includes('[imagen]'));
+    const idxTxt = r.findIndex((m) => m.includes('Aquí tienes'));
+    expect(idxImg).toBeGreaterThanOrEqual(0);
+    expect(r[idxImg]).toContain('ZAPATILLAS VERNO — S/ 60.00');
+    expect(idxImg).toBeLessThan(idxTxt);
+    sim.imprimir('47. Foto de producto vía verDetalle');
+  });
+
   it('39. saludo puro ("hola"): solo la bienvenida, sin llamar al LLM', async () => {
     const sim = new Simulador();
     sim.habilitarAgente();
