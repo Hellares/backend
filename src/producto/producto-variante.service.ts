@@ -845,15 +845,24 @@ export class ProductoVarianteService {
       await this.prisma.precioNivel.createMany({ data: todosNiveles });
     }
 
-    // 2. Buscar sedes UNA sola vez y crear stock para TODAS las variantes
-    const stocksProductoBase = await this.prisma.productoStock.findMany({
-      where: { productoId, empresaId },
+    // 2. Buscar sedes UNA sola vez y crear stock para TODAS las variantes.
+    // Igual que en crearProductoStockEnSedes: se incluyen los stocks de
+    // variantes existentes porque tras la conversión a variantes los
+    // registros del producto base quedan con productoId=null.
+    const stocksExistentes = await this.prisma.productoStock.findMany({
+      where: {
+        empresaId,
+        OR: [
+          { productoId },
+          { variante: { productoId, deletedAt: null } },
+        ],
+      },
       select: { sedeId: true },
     });
 
     let sedeIds: string[];
-    if (stocksProductoBase.length > 0) {
-      sedeIds = stocksProductoBase.map(s => s.sedeId);
+    if (stocksExistentes.length > 0) {
+      sedeIds = [...new Set(stocksExistentes.map(s => s.sedeId))];
     } else {
       const sedesActivas = await this.prisma.sede.findMany({
         where: { empresaId, isActive: true },
@@ -957,19 +966,27 @@ export class ProductoVarianteService {
   ): Promise<void> {
     const prisma = tx || this.prisma;
     try {
-      // Buscar sedes donde el producto base tiene stock (con precios para heredar)
-      const stocksProductoBase = await prisma.productoStock.findMany({
+      // Buscar sedes donde el producto base o sus variantes ya tienen stock.
+      // Se incluyen los stocks de variantes porque al convertir un producto a
+      // variantes, migrarProductoStockAVariante() deja los registros del
+      // producto base con productoId=null (pasan a la variante por defecto);
+      // sin esto, las variantes creadas después de la conversión caerían al
+      // fallback de "todas las sedes activas" e ignorarían las sedes elegidas.
+      const stocksExistentes = await prisma.productoStock.findMany({
         where: {
-          productoId,
           empresaId,
+          OR: [
+            { productoId },
+            { variante: { productoId, deletedAt: null } },
+          ],
         },
-        select: { sedeId: true, precio: true, precioCosto: true, precioConfigurado: true },
+        select: { sedeId: true, varianteId: true, precio: true, precioCosto: true, precioConfigurado: true },
       });
 
       let sedeIds: string[];
 
-      if (stocksProductoBase.length > 0) {
-        sedeIds = stocksProductoBase.map(s => s.sedeId);
+      if (stocksExistentes.length > 0) {
+        sedeIds = [...new Set(stocksExistentes.map(s => s.sedeId))];
       } else {
         const sedesActivas = await prisma.sede.findMany({
           where: { empresaId, isActive: true },
@@ -981,9 +998,13 @@ export class ProductoVarianteService {
       if (sedeIds.length === 0) return;
 
       // Crear ProductoStock heredando precio del producto base si existe
+      // (solo de registros del producto base, varianteId=null; los precios
+      // de otras variantes no se heredan)
       await prisma.productoStock.createMany({
         data: sedeIds.map(sedeId => {
-          const stockBase = stocksProductoBase.find(s => s.sedeId === sedeId);
+          const stockBase = stocksExistentes.find(
+            s => s.sedeId === sedeId && s.varianteId === null,
+          );
           const tienePrecios = stockBase?.precioConfigurado && stockBase?.precio != null;
           return {
             sedeId,
