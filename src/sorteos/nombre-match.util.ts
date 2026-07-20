@@ -81,5 +81,57 @@ export function nombresCoinciden(
 ): boolean {
   if (nombreCoincideYape(sender, registrado)) return true;
   const palabras = (registrado ?? '').trim().split(/\s+/).filter(Boolean);
-  return palabras.length >= 2 && nombreCoincideYape(registrado, sender);
+  if (palabras.length >= 2 && nombreCoincideYape(registrado, sender)) {
+    return true;
+  }
+  return nombreCoincideDesordenado(sender, registrado);
+}
+
+/**
+ * TERCER formato visto en producción: el nombre COMPLETO con los apellidos
+ * PRIMERO — "SALAS FLORES RAYZA NADIEJDA" vs registro RENIEC "RAYZA NADIEJDA
+ * SALAS FLORES" (caso real 07-19: la participante pagó 3 min después de
+ * registrarse y quedó pendiente porque el match exige orden). Con ≥3 palabras
+ * COMPLETAS idénticas el orden deja de importar: ese conjunto identifica a la
+ * persona igual de bien. Regla: ninguna inicial suelta, cada palabra de un
+ * lado calza con una palabra DISTINTA del otro (truncada "SIL*" = prefijo), y
+ * el lado más corto queda 100% cubierto con ≥3 palabras.
+ */
+function nombreCoincideDesordenado(
+  sender: string | null | undefined,
+  registrado: string | null | undefined,
+): boolean {
+  if (!sender || !registrado) return false;
+  const norm = (s: string) =>
+    s
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toUpperCase()
+      .replace(/[^A-ZÑ* ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const tok = (s: string) =>
+    norm(s)
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => ({ texto: w.replace(/\*/g, ''), truncado: w.includes('*') }))
+      .filter((t) => t.texto.length >= 2); // iniciales sueltas NO cuentan
+  const st = tok(sender);
+  const ct = tok(registrado).map((t) => t.texto);
+  // El lado corto define la exigencia; con <3 palabras el desorden es riesgoso
+  // ("JUAN CARLOS" vs "CARLOS JUAN" podrían ser personas distintas).
+  const minimo = Math.min(st.length, ct.length);
+  if (minimo < 3) return false;
+  const libres = [...ct];
+  let cubiertas = 0;
+  for (const t of st) {
+    const i = libres.findIndex((w) =>
+      t.truncado ? w.startsWith(t.texto) : w === t.texto,
+    );
+    if (i === -1) continue;
+    libres.splice(i, 1); // cada palabra registrada se usa UNA vez
+    cubiertas++;
+  }
+  // Todas las palabras del lado corto deben calzar (≥3).
+  return cubiertas >= minimo;
 }

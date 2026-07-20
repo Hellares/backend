@@ -90,4 +90,43 @@ describe('nombresCoinciden (bidireccional)', () => {
   it('un solo nombre de pila registrado no basta en el sentido inverso', () => {
     expect(nombresCoinciden('Geydy Silvana Ramos', 'GEYDY')).toBe(false);
   });
+
+  describe('formato APELLIDOS-PRIMERO (caso real Rayza 07-19)', () => {
+    it('nombre completo volteado matchea por conjunto de palabras', () => {
+      expect(
+        nombresCoinciden(
+          'SALAS FLORES RAYZA NADIEJDA',
+          'RAYZA NADIEJDA SALAS FLORES',
+        ),
+      ).toBe(true);
+    });
+
+    it('volteado con una palabra menos (sin segundo nombre) también', () => {
+      expect(
+        nombresCoinciden('SALAS FLORES RAYZA', 'RAYZA NADIEJDA SALAS FLORES'),
+      ).toBe(true);
+    });
+
+    it('volteado + apellido truncado con asterisco', () => {
+      expect(
+        nombresCoinciden('Salas Flo* Rayza', 'RAYZA NADIEJDA SALAS FLORES'),
+      ).toBe(true);
+    });
+
+    it('con solo 2 palabras el desorden NO vale (muy ambiguo)', () => {
+      expect(nombresCoinciden('CARLOS JUAN', 'JUAN CARLOS RAMOS')).toBe(false);
+    });
+
+    it('coincidencia parcial de palabras NO vale', () => {
+      expect(
+        nombresCoinciden('SALAS FLORES PEDRO JOSE', 'RAYZA NADIEJDA SALAS FLORES'),
+      ).toBe(false);
+    });
+
+    it('las iniciales sueltas no cuentan para el conjunto', () => {
+      expect(
+        nombresCoinciden('SALAS F. R. N.', 'RAYZA NADIEJDA SALAS FLORES'),
+      ).toBe(false);
+    });
+  });
 });
