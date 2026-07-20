@@ -28,12 +28,29 @@ function construirTerminos(query: string): string[] {
   const terminos = new Set<string>();
   if (norm.length >= 2) terminos.add(norm);
   for (const w of norm.split(/\s+/)) {
+    // Números sueltos ("40") NO son términos de producto (traían ANGELA 40 CM,
+    // LOTSO 140 CM): sirven solo para filtrar/rankear variantes (tokensQuery).
     if (w.length < 3 || STOPWORDS.has(w)) continue;
     terminos.add(w);
     if (w.length >= 5 && w.endsWith('es')) terminos.add(w.slice(0, -2));
     else if (w.length >= 4 && w.endsWith('s')) terminos.add(w.slice(0, -1));
   }
   return [...terminos];
+}
+
+/** Tokens individuales significativos de la query (para filtrar variantes). */
+function tokensQuery(query: string): string[] {
+  const norm = query
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ');
+  return norm
+    .split(/\s+/)
+    .filter((w) => {
+      const esNumero = /^\d+$/.test(w);
+      return (w.length >= 3 || esNumero) && !STOPWORDS.has(w);
+    });
 }
 
 /**
@@ -140,6 +157,17 @@ export function crearBuscarProductoTool(
         OR: terminos.flatMap((t) => [
           { nombre: { contains: t, mode: 'insensitive' as const } },
           { descripcion: { contains: t, mode: 'insensitive' as const } },
+          // También por nombre de VARIANTE: "zapatillas talla 40" → el producto
+          // ZAPATILLAS VERNO se encuentra por sus variantes "TALLA 40 ...".
+          {
+            variantes: {
+              some: {
+                isActive: true,
+                deletedAt: null,
+                nombre: { contains: t, mode: 'insensitive' as const },
+              },
+            },
+          },
         ]),
       });
 
@@ -160,13 +188,34 @@ export function crearBuscarProductoTool(
         return { precio: min === max ? min : { desde: min, hasta: max }, stock };
       };
 
+      // Términos DISCRIMINANTES de variante (talla/color/material): tokens de
+      // la query que NO están en el nombre del producto pero SÍ aparecen en
+      // alguna variante → se usan para FILTRAR las variantes mostradas
+      // ("zapatillas talla 40" → solo las variantes talla 40, no todas).
+      const qTokens = tokensQuery(query);
+      const normp = (s: string) =>
+        s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
       const armarItems = (prods: typeof productos) => {
         const out: Record<string, unknown>[] = [];
         for (const p of prods) {
           const desc = (p.descripcion ?? '').slice(0, 90);
-          const variantesConStock = p.variantes
+          const nombreProd = normp(p.nombre);
+          const discriminantes = qTokens.filter(
+            (t) =>
+              !nombreProd.includes(t) &&
+              p.variantes.some((v) => normp(v.nombre).includes(t)),
+          );
+          let variantesConStock = p.variantes
             .map((v) => ({ v, ps: precioYStock(v.stocksPorSede) }))
             .filter((x): x is { v: (typeof p.variantes)[number]; ps: NonNullable<ReturnType<typeof precioYStock>> } => x.ps !== null);
+          if (discriminantes.length > 0) {
+            const filtradas = variantesConStock.filter(({ v }) => {
+              const n = normp(v.nombre);
+              return discriminantes.every((t) => n.includes(t));
+            });
+            if (filtradas.length > 0) variantesConStock = filtradas;
+          }
 
           if (variantesConStock.length > 0) {
             for (const { v, ps } of variantesConStock) {
@@ -211,6 +260,20 @@ export function crearBuscarProductoTool(
           });
           items = armarItems(productos);
         }
+      }
+
+      // RANKING por relevancia: los ítems cuyo nombre cubre más tokens de la
+      // query van primero ("zapatillas talla 40" → las variantes talla 40
+      // arriba, las base ZAPATILLAS después). Estable: empate = orden original.
+      if (qTokens.length > 0) {
+        const score = (nombre: string) => {
+          const n = normp(nombre);
+          return qTokens.reduce((a, t) => a + (n.includes(t) ? 1 : 0), 0);
+        };
+        items = items
+          .map((it, i) => ({ it, i, s: score(it.nombre as string) }))
+          .sort((a, b) => b.s - a.s || a.i - b.i)
+          .map((x) => x.it);
       }
 
       // ¿Quedaron productos FUERA del tope? El agente debe decirlo (y ofrecer
