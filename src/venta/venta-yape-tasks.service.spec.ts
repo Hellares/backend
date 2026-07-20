@@ -10,6 +10,7 @@ describe('VentaYapeTasksService.expirarVentasYapePendientes', () => {
   let prisma: any;
   let ventaService: any;
   let realtime: any;
+  let integracionYape: any;
 
   const logger = {
     setContext: jest.fn(), info: jest.fn(), warn: jest.fn(),
@@ -28,8 +29,12 @@ describe('VentaYapeTasksService.expirarVentasYapePendientes', () => {
       anular: jest.fn().mockResolvedValue({}),
     };
     realtime = { notifyStockCambiado: jest.fn() };
+    // Por defecto no hay pagos recientes → el cron limpia como siempre.
+    integracionYape = { listarPagosRecientes: jest.fn().mockResolvedValue([]) };
 
-    service = new VentaYapeTasksService(prisma, ventaService, realtime, logger as any);
+    service = new VentaYapeTasksService(
+      prisma, ventaService, realtime, integracionYape, logger as any,
+    );
   });
 
   it('venta DIFERIDA abandonada → se BORRA (no se anula)', async () => {
@@ -76,5 +81,59 @@ describe('VentaYapeTasksService.expirarVentasYapePendientes', () => {
     await service.expirarVentasYapePendientes();
     expect(ventaService.eliminarVentaYapeDiferidaPendiente).not.toHaveBeenCalled();
     expect(ventaService.anular).not.toHaveBeenCalled();
+  });
+
+  // El caso Geydy (07-20): pagó S/3, el nombre de Yape venía truncado
+  // ("Geydy Sil*"), la conciliación falló y el TTL le borró la venta.
+  describe('guard: pago reciente sin conciliar del mismo monto', () => {
+    it('NO borra la venta si entró un Yape por ese monto en las últimas 24h', async () => {
+      prisma.venta.findMany.mockResolvedValue([
+        { id: 'v1', empresaId: 'e1', sedeId: 's1', codigo: 'VTA-1', cobroDiferido: true, total: 3 },
+      ]);
+      integracionYape.listarPagosRecientes.mockResolvedValue([
+        { id: 'p1', senderName: 'Geydy Sil*', amount: 3, provider: 'yape', receivedAt: '' },
+      ]);
+
+      await service.expirarVentasYapePendientes();
+
+      expect(ventaService.eliminarVentaYapeDiferidaPendiente).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('VTA-1'));
+    });
+
+    it('sí la borra si el pago reciente es de OTRO monto', async () => {
+      prisma.venta.findMany.mockResolvedValue([
+        { id: 'v1', empresaId: 'e1', sedeId: 's1', codigo: 'VTA-1', cobroDiferido: true, total: 3 },
+      ]);
+      integracionYape.listarPagosRecientes.mockResolvedValue([
+        { id: 'p1', senderName: 'Otro', amount: 40, provider: 'yape', receivedAt: '' },
+      ]);
+
+      await service.expirarVentasYapePendientes();
+
+      expect(ventaService.eliminarVentaYapeDiferidaPendiente).toHaveBeenCalledWith('v1', 'e1');
+    });
+
+    it('api-yape caída → no bloquea la limpieza (fail-open)', async () => {
+      prisma.venta.findMany.mockResolvedValue([
+        { id: 'v1', empresaId: 'e1', sedeId: 's1', codigo: 'VTA-1', cobroDiferido: true, total: 3 },
+      ]);
+      integracionYape.listarPagosRecientes.mockRejectedValue(new Error('timeout'));
+
+      await service.expirarVentasYapePendientes();
+
+      expect(ventaService.eliminarVentaYapeDiferidaPendiente).toHaveBeenCalledWith('v1', 'e1');
+    });
+
+    it('consulta los pagos UNA vez por empresa, no por venta', async () => {
+      prisma.venta.findMany.mockResolvedValue([
+        { id: 'v1', empresaId: 'e1', sedeId: 's1', codigo: 'VTA-1', cobroDiferido: true, total: 3 },
+        { id: 'v2', empresaId: 'e1', sedeId: 's1', codigo: 'VTA-2', cobroDiferido: true, total: 5 },
+        { id: 'v3', empresaId: 'e2', sedeId: 's9', codigo: 'VTA-3', cobroDiferido: true, total: 7 },
+      ]);
+
+      await service.expirarVentasYapePendientes();
+
+      expect(integracionYape.listarPagosRecientes).toHaveBeenCalledTimes(2);
+    });
   });
 });

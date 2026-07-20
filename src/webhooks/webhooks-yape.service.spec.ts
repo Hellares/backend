@@ -20,6 +20,7 @@ describe('WebhooksService.procesarPagoYape', () => {
   let cotizacionService: any;
   let sorteosService: any;
   let whatsapp: any;
+  let notificaciones: any;
   let service: WebhooksService;
 
   const logger = {
@@ -78,6 +79,10 @@ describe('WebhooksService.procesarPagoYape', () => {
         .mockResolvedValue({ accion: 'sin-pendientes' }),
     };
     whatsapp = { enviarTexto: jest.fn().mockResolvedValue(true) };
+    notificaciones = { enviarAUsuarios: jest.fn().mockResolvedValue(undefined) };
+    prisma.empresaUsuarioRol = {
+      findMany: jest.fn().mockResolvedValue([{ usuarioId: 'u1' }]),
+    };
     service = new WebhooksService(
       prisma,
       logger as any,
@@ -88,6 +93,7 @@ describe('WebhooksService.procesarPagoYape', () => {
       cotizacionService,
       sorteosService,
       whatsapp,
+      notificaciones,
     );
   });
 
@@ -382,6 +388,77 @@ describe('WebhooksService.procesarPagoYape', () => {
     const r = await service.procesarPagoYape(RAW, FIRMA);
     expect(ventaService.procesarPago).not.toHaveBeenCalled();
     expect(r).toMatchObject({ ok: true, accion: 'venta-sin-match' });
+  });
+
+  // ── El caso Geydy (07-20): Yape truncó el apellido con asterisco ──
+  it('payment.received con apellido TRUNCADO por Yape ("Geydy Sil*") → auto-valida', async () => {
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: {
+          provider: 'yape',
+          senderName: 'Geydy Sil*',
+          amount: 3,
+          operationCode: 'OP-777',
+        },
+      }),
+    );
+    prisma.venta.findMany.mockResolvedValue([
+      {
+        id: 'venta-721',
+        codigo: 'VTA-SED-00000721',
+        total: 3,
+        nombreCliente: 'GEYDY SILVANA RAMOS VEGA',
+        canalVenta: 'WHATSAPP_IA',
+        conEnvio: false,
+        telefonoCliente: '51922039941',
+        cajeroId: 'caj-1',
+        pagos: [],
+      },
+    ]);
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+
+    expect(r).toMatchObject({ ok: true, accion: 'venta-auto-validada' });
+    expect(notificaciones.enviarAUsuarios).not.toHaveBeenCalled();
+  });
+
+  it('pago que no calza con NADA → alerta a la empresa (no se pierde en el log)', async () => {
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: { provider: 'yape', senderName: 'Nadie Conocido', amount: 3 },
+      }),
+    );
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+    await new Promise((res) => setImmediate(res)); // la alerta es fire-and-forget
+
+    expect(r).toMatchObject({ accion: 'venta-sin-match' });
+    expect(notificaciones.enviarAUsuarios).toHaveBeenCalledWith(
+      ['u1'],
+      expect.stringContaining('sin conciliar'),
+      expect.stringContaining('S/ 3.00'),
+      expect.objectContaining({ empresaId: 'emp-1' }),
+    );
+  });
+
+  it('si el SORTEO ya lo dejó como ambiguo (chip) → no duplica la alerta', async () => {
+    sorteosService.autoValidarPorPagoYape.mockResolvedValue({ accion: 'ambiguo' });
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: { provider: 'yape', senderName: 'Nadie Conocido', amount: 3 },
+      }),
+    );
+
+    await service.procesarPagoYape(RAW, FIRMA);
+    await new Promise((res) => setImmediate(res));
+
+    expect(notificaciones.enviarAUsuarios).not.toHaveBeenCalled();
   });
 
   it('evento que no es payment.confirmed → ignorado', async () => {

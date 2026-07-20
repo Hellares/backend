@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { VentaService } from './venta.service';
+import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 
 /**
  * TTL de ventas Yape/Plin abandonadas.
@@ -34,6 +35,7 @@ export class VentaYapeTasksService {
     private readonly prisma: PrismaService,
     private readonly ventaService: VentaService,
     private readonly realtime: RealtimeInvalidationService,
+    private readonly integracionYape: IntegracionYapeService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -57,7 +59,14 @@ export class VentaYapeTasksService {
           creadoEn: { lt: limite },
           pagos: { none: {} },
         },
-        select: { id: true, empresaId: true, sedeId: true, codigo: true, cobroDiferido: true },
+        select: {
+          id: true,
+          empresaId: true,
+          sedeId: true,
+          codigo: true,
+          cobroDiferido: true,
+          total: true,
+        },
         take: 100, // batch — el resto en la próxima corrida
       });
 
@@ -69,8 +78,39 @@ export class VentaYapeTasksService {
 
       const empresasAfectadas = new Map<string, Set<string>>(); // empresaId → set<sedeId>
 
+      // Montos que SÍ entraron por Yape en las últimas 24h, por empresa. Una
+      // venta cuyo total calza con uno de ellos probablemente está PAGADA y
+      // solo falló la conciliación (nombre truncado, homónimo, api caída):
+      // borrarla pierde la compra de un cliente que ya pagó (pasó el 07-20).
+      // La retenemos hasta que el pago salga de la ventana de 24h; ahí sí
+      // expira. Si api-yape no responde, la lista viene vacía → se comporta
+      // como antes (no bloquea la limpieza).
+      const montosPagados = new Map<string, Set<string>>(); // empresaId → totales
+      for (const empresaId of new Set(ventas.map((v) => v.empresaId))) {
+        try {
+          const pagos = await this.integracionYape.listarPagosRecientes(
+            empresaId,
+            { horas: 24 },
+          );
+          montosPagados.set(
+            empresaId,
+            new Set(pagos.map((p) => Number(p.amount).toFixed(2))),
+          );
+        } catch {
+          montosPagados.set(empresaId, new Set());
+        }
+      }
+
       for (const v of ventas) {
         try {
+          const total = Number(v.total).toFixed(2);
+          if (montosPagados.get(v.empresaId)?.has(total)) {
+            this.logger.warn(
+              `[CRON] Venta ${v.codigo} NO se expira: hay un pago Yape de ` +
+                `S/ ${total} sin conciliar en las últimas 24h — revisar a mano`,
+            );
+            continue;
+          }
           if (v.cobroDiferido) {
             // Venta DIFERIDA (registro diferido): nació CONFIRMADA sin
             // comprobante esperando el pago. Abandonada → se BORRA y se

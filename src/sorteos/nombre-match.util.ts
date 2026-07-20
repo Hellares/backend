@@ -6,12 +6,16 @@
 
 /**
  * ¿El nombre de la notificación de Yape/Plin corresponde a esta persona?
- * Yape manda el nombre PARCIAL ("SEBASTIANA C." = nombres + inicial del
- * apellido); Plin a veces completo. Regla: cada token del sender debe
- * calzar EN ORDEN contra las palabras del nombre completo — palabra
- * exacta (puede saltar segundos nombres), o inicial (1 letra) que calce
- * con la palabra INMEDIATA (si saltara, "R." matchearía el apellido
- * materno de otra persona).
+ * Yape manda el nombre PARCIAL — en dos formatos vistos en producción:
+ *   - "SEBASTIANA C."   → nombres + INICIAL del apellido
+ *   - "Geydy Sil*"      → nombres + apellido TRUNCADO con asterisco
+ * Plin a veces manda el completo. Regla: cada token del sender debe calzar
+ * EN ORDEN contra las palabras del nombre completo:
+ *   - palabra exacta → puede saltar segundos nombres;
+ *   - truncada "SIL*" (≥2 letras) → prefijo, también puede saltar;
+ *   - inicial (1 letra, con o sin asterisco) → prefijo contra la palabra
+ *     INMEDIATA (si saltara, "R." matchearía el apellido materno de otra
+ *     persona).
  */
 export function nombreCoincideYape(
   sender: string | null | undefined,
@@ -23,25 +27,38 @@ export function nombreCoincideYape(
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '')
       .toUpperCase()
-      .replace(/[^A-ZÑ ]/g, ' ')
+      // El asterisco SE CONSERVA: marca que Yape truncó la palabra.
+      .replace(/[^A-ZÑ* ]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-  const st = norm(sender).split(' ').filter(Boolean);
-  const ct = norm(nombreCompleto).split(' ').filter(Boolean);
+  // "SIL*" → {texto:'SIL', truncado:true}. Un "*" suelto no aporta nada.
+  const tok = (s: string) =>
+    s
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => ({
+        texto: w.replace(/\*/g, ''),
+        truncado: w.includes('*'),
+      }))
+      .filter((t) => t.texto.length > 0);
+  const st = tok(norm(sender));
+  const ct = tok(norm(nombreCompleto)).map((t) => t.texto);
   if (st.length === 0 || ct.length === 0) return false;
   // Solo iniciales no identifican a nadie.
-  if (st.every((t) => t.length === 1)) return false;
+  if (st.every((t) => t.texto.length === 1)) return false;
   let i = 0;
   for (const t of st) {
-    if (t.length === 1) {
-      if (i >= ct.length || !ct[i].startsWith(t)) return false;
+    // Inicial suelta ("C." / "C*"): solo contra la palabra inmediata.
+    if (t.texto.length === 1) {
+      if (i >= ct.length || !ct[i].startsWith(t.texto)) return false;
       i++;
       continue;
     }
     let ok = false;
     while (i < ct.length) {
       const w = ct[i++];
-      if (w === t) {
+      // Truncada por Yape → basta el prefijo ("SIL*" ↔ "SILVANA").
+      if (t.truncado ? w.startsWith(t.texto) : w === t.texto) {
         ok = true;
         break;
       }

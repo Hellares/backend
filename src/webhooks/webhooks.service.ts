@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { EstadoVenta, MetodoPagoVenta } from '@prisma/client';
+import { EstadoVenta, MetodoPagoVenta, Rol } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
@@ -10,6 +10,7 @@ import { PedidoMarketplaceEmpresaService } from '../pedido-marketplace/pedido-ma
 import { CotizacionService } from '../cotizacion/cotizacion.service';
 import { SorteosService } from '../sorteos/sorteos.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { NotificacionService } from '../notificacion/notificacion.service';
 import { nombresCoinciden } from '../sorteos/nombre-match.util';
 
 /**
@@ -88,6 +89,28 @@ const EVENTOS_RC = new Set([
   'daily_summary.processed',
 ]);
 
+/**
+ * Resultados de la auto-validación de VENTAS que dejan el pago HUÉRFANO:
+ * entró plata y ninguna venta se marcó pagada. `venta-pago-ya-usado` NO
+ * está (es un reintento del webhook) ni los parciales/validados.
+ */
+const ACCIONES_VENTA_HUERFANA = new Set([
+  'venta-sin-match',
+  'venta-ambigua',
+  'venta-sin-saldo',
+]);
+
+/**
+ * Resultados del lado SORTEOS que significan que el pago ya está atendido
+ * por ahí — validado, o ambiguo (aparece como chip de sugerencia en la
+ * pantalla del sorteo). No hace falta una segunda alerta.
+ */
+const ACCIONES_SORTEO_ATENDIDO = new Set([
+  'participante-auto-validado',
+  'ambiguo',
+  'pago-ya-usado',
+]);
+
 @Injectable()
 export class WebhooksService {
   private readonly logger: AppLoggerService;
@@ -102,6 +125,7 @@ export class WebhooksService {
     private readonly cotizacionService: CotizacionService,
     private readonly sorteosService: SorteosService,
     private readonly whatsapp: WhatsappService,
+    private readonly notificaciones: NotificacionService,
   ) {
     this.logger = loggerService;
     this.logger.setContext('WebhooksService');
@@ -138,6 +162,15 @@ export class WebhooksService {
       this.logger.log(
         `Webhook payment.received → sorteo:${res.accion} venta:${resVenta.accion}`,
       );
+      // Plata que entró y no calzó con NADA: nadie se entera solo con el log
+      // (pasó el 07-20: un cliente pagó S/3, el nombre de Yape venía truncado
+      // "Geydy Sil*", no matcheó y su venta murió por TTL). Avisar a la empresa.
+      if (
+        ACCIONES_VENTA_HUERFANA.has(resVenta.accion) &&
+        !ACCIONES_SORTEO_ATENDIDO.has(res.accion)
+      ) {
+        void this.alertarPagoSinConciliar(empresaId, payload?.payment ?? {});
+      }
       return { ok: true, ...resVenta };
     }
 
@@ -266,6 +299,62 @@ export class WebhooksService {
    * historial del agente para que entienda la respuesta ("envío"/"recojo").
    * Best-effort: nunca rompe el webhook.
    */
+  /**
+   * Un pago Yape entró y NO se pudo conciliar (ni sorteo ni venta). Antes esto
+   * solo dejaba una línea de log: el cliente se quedaba sin su compra y la
+   * empresa ni se enteraba. Ahora avisa por push a los usuarios que pueden
+   * resolverlo (admins/cajeros) con el nombre y el monto exactos, para que
+   * validen a mano desde la app.
+   *
+   * Best-effort: nunca debe romper el webhook (el pago YA entró).
+   */
+  private async alertarPagoSinConciliar(
+    empresaId: string,
+    pago: { senderName?: string | null; amount?: number | null },
+  ): Promise<void> {
+    try {
+      const monto = Number(pago?.amount ?? 0);
+      const quien = pago?.senderName?.trim() || 'desconocido';
+      this.logger.warn(
+        `⚠️ Pago Yape SIN CONCILIAR en empresa ${empresaId}: ` +
+          `S/ ${monto.toFixed(2)} de "${quien}" — requiere validación manual`,
+      );
+
+      const roles = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+          rol: { in: [Rol.EMPRESA_ADMIN, Rol.SEDE_ADMIN, Rol.CAJERO] },
+        },
+        select: { usuarioId: true },
+      });
+      const usuarioIds = [...new Set(roles.map((r) => r.usuarioId))];
+      if (usuarioIds.length === 0) return;
+
+      await this.notificaciones.enviarAUsuarios(
+        usuarioIds,
+        '⚠️ Pago Yape sin conciliar',
+        `Llegó S/ ${monto.toFixed(2)} de "${quien}" y no calzó con ninguna ` +
+          'venta ni participación. Valídalo a mano.',
+        // Sin `tipo`: no hay TipoNotificacion propio para esto (caería a
+        // SISTEMA igual). El marcador va en `data` para que la app enrute.
+        {
+          empresaId,
+          data: {
+            evento: 'PAGO_SIN_CONCILIAR',
+            monto: monto.toFixed(2),
+            senderName: quien,
+          },
+        },
+      );
+    } catch (e) {
+      this.logger.warn(
+        `No se pudo alertar el pago sin conciliar: ${(e as Error).message}`,
+      );
+    }
+  }
+
   private notificarVentaPagada(
     empresaId: string,
     venta: {
