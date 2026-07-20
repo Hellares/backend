@@ -49,6 +49,11 @@ export interface ResultadoAtencion {
 export class IaAgenteService {
   private readonly logger = new Logger(IaAgenteService.name);
 
+  /** Texto que NIEGA tener algo — compartido por el guard 3.7 y la red
+   *  final determinística (si niega sin haber buscado, el código busca). */
+  private static readonly NIEGA_DISPONIBILIDAD =
+    /\bno\s+(lo|la|los|las)?\s?(tenemos|tengo|hay|manejamos|vendemos|trabajamos)\b|no\s+(tiene|tienen|existe|está|esta)n?\s[^.!?]{0,30}(diseñ|model|color|talla|stock|disponib|catalog)|no\s+(encontr[ée]|me aparecen)|sin resultados/i;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly venta: VentaService,
@@ -250,14 +255,18 @@ export class IaAgenteService {
         //      "¿tienes de Alianza Lima?" → "no tienen ese diseño", y la
         //      variante EDREDON alianza lima EXISTÍA con stock — venta
         //      perdida). Si buscó y no hay, la negación es honesta y pasa.
-        const niega =
-          /\bno\s+(lo|la|los|las)?\s?(tenemos|tengo|hay|manejamos|vendemos|trabajamos)\b|no\s+(tiene|tienen|existe|está|esta)n?\s[^.!?]{0,30}(diseñ|model|color|talla|stock|disponib|catalog)/i.test(
+        const niega = IaAgenteService.NIEGA_DISPONIBILIDAD.test(texto);
+        // También la MENTIRA de obediencia: "acabo de buscar y no hay" sin
+        // haber llamado la tool (visto en beta con "peluches": fingió buscar
+        // dos veces y había 10). Afirmar que buscó sin traza = corregir.
+        const fingeBuscar =
+          /acab[oé] de (buscar|revisar)|ya (busqu[ée]|revis[ée])|he (buscado|revisado)/i.test(
             texto,
           );
         const buscoEnTurno = trazas.some((t) =>
           t.tools.some((tl) => tl.nombre === 'buscarProducto'),
         );
-        if (niega && !buscoEnTurno) {
+        if ((niega || fingeBuscar) && !buscoEnTurno) {
           this.logger.warn(
             `Agente negó disponibilidad sin buscar (empresa ${params.empresaId}) — corrigiendo`,
           );
@@ -346,6 +355,55 @@ export class IaAgenteService {
       historialPrevio: params.historialPrevio,
       validarFinal,
     });
+
+    // ÚLTIMA PALABRA DEL CÓDIGO: si tras agotar las correcciones el texto
+    // final SIGUE negando disponibilidad sin UNA SOLA llamada real a
+    // buscarProducto (Haiku fingió obedecer: "acabo de buscar y no hay" —
+    // pasó con "peluches" habiendo 10), el código busca por él y, si HAY
+    // resultados, arma la lista determinística. El cliente jamás recibe un
+    // "no tenemos" falso.
+    if (
+      validarFinal &&
+      resultado?.texto &&
+      IaAgenteService.NIEGA_DISPONIBILIDAD.test(resultado.texto) &&
+      !resultado.trazas?.some((t) =>
+        t.tools.some((tl) => tl.nombre === 'buscarProducto'),
+      )
+    ) {
+      const r = await ejecutor.ejecutar(
+        'buscarProducto',
+        { query: params.mensaje },
+        ctx,
+      );
+      const prods = (r as any)?.productos;
+      if (r?.ok && Array.isArray(prods) && prods.length > 0) {
+        this.logger.warn(
+          `Agente negó con productos EXISTENTES (empresa ${params.empresaId}, ` +
+            `"${params.mensaje.slice(0, 40)}") — lista generada por código`,
+        );
+        const fmtPrecio = (p: any) =>
+          typeof p === 'number'
+            ? `S/ ${p.toFixed(2)}`
+            : p?.desde != null
+              ? `S/ ${Number(p.desde).toFixed(2)} a S/ ${Number(p.hasta).toFixed(2)}`
+              : '';
+        resultado.texto =
+          'Sí tengo 😊:\n\n' +
+          prods
+            .map(
+              (p: any, i: number) =>
+                `${i + 1}. **${p.nombre}** — ${fmtPrecio(p.precio)}` +
+                (p.stockDisponible != null
+                  ? ` (${p.stockDisponible} disponibles)`
+                  : ''),
+            )
+            .join('\n') +
+          ((r as any).hayMas
+            ? '\n\nHay más modelos — dime si quieres verlos.'
+            : '') +
+          '\n\n¿Cuál te interesa?';
+      }
+    }
 
     return {
       atendido: true,
