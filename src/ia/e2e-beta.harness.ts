@@ -207,10 +207,12 @@ async function main() {
     registrar(v);
     if (v) {
       await pagarYape(YAPE_JAMES, Number(v.total));
+      // Flujo determinístico: el bot pide los datos UNO POR UNO.
       await enviar(cel, 'envío');
-      await enviar(cel, 'a Piura, departamento Piura');
+      await enviar(cel, 'a Piura');
+      await enviar(cel, 'Piura');
       await enviar(cel, 'no sé la dirección de la agencia');
-      await enviar(cel, 'lo recoge mi hermana MONICA, su DNI es 44885298');
+      await enviar(cel, 'MONICA 44885298');
       const e = await prisma.ventaEnvio.findUnique({ where: { ventaId: v.id } });
       check('E3', !!e, `VentaEnvio registrado (${v.codigo})`);
       check('E3', !!e?.destinatarioNombre?.toUpperCase().includes('MONICA'), `destinatario=${e?.destinatarioNombre}`);

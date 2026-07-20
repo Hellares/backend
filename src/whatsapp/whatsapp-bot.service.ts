@@ -3323,7 +3323,10 @@ export class WhatsappBotService {
             agencia: ve.previo.agencia,
           });
         }
-        const ciudad = WhatsappBotService.campoCorto(msg);
+        // "a Piura" / "para Trujillo" → quedarse con la ciudad.
+        const ciudad = WhatsappBotService.campoCorto(
+          msg.replace(/^(a|para|hacia)\s+/i, ''),
+        );
         if (!ciudad) {
           await responder(
             '📍 Solo el nombre de la *ciudad* por favor (ej. TRUJILLO)',
@@ -3374,7 +3377,9 @@ export class WhatsappBotService {
       }
 
       case 'VENTA_ENVIO_DESTINATARIO': {
-        if (msg === '1') {
+        // "1", "yo", "yo mismo" = el comprador (pasó en beta: "yo mismo"
+        // quedó registrado como destinatario literal "YO MISMO").
+        if (/^(1|yo|yo\s+mism[oa])\s*[.!]*$/i.test(msg)) {
           return completar({
             ciudad: ve.ciudad,
             departamento: ve.departamento,

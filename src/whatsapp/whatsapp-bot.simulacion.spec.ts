@@ -1879,7 +1879,7 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[0]).toContain('SHALOM'); // sucursal de la agencia configurada
     r = await sim.cliente(CEL, '-'); // no sabe la sucursal
     expect(r[0]).toContain('Quién');
-    r = await sim.cliente(CEL, '1'); // lo recoge él mismo
+    r = await sim.cliente(CEL, 'yo mismo'); // = el comprador (como "1")
 
     expect(sim.enviosRegistrados).toHaveLength(1);
     const e = sim.enviosRegistrados[0];
