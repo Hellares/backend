@@ -335,7 +335,7 @@ export function crearCrearVentaTool(
         }
       }
       const dto = {
-        canalVenta: 'ONLINE', // el enum no tiene WhatsApp; se marca en observaciones
+        canalVenta: 'WHATSAPP_IA', // canal propio → chip "Agente IA" en el app
         // Sin esto el cron TTL (expirarVentasYapePendientes filtra por
         // metodoPago YAPE/PLIN) NUNCA anula la venta abandonada → el stock
         // quedaba reservado para siempre (pasó en beta: lapicero agotado).

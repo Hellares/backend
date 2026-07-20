@@ -521,9 +521,14 @@ export class VentaService {
       }
     }
 
-    // 3. Cliente persona (EmpresaPersona) — solo si NO es genérico/ONLINE.
-    // El genérico se resuelve internamente con clienteId que ya pertenece al tenant.
-    if (dto.clienteId && canalVenta !== 'ONLINE') {
+    // 3. Cliente persona (EmpresaPersona) — solo si NO es genérico/online
+    // (marketplace o agente IA: su clienteId se resuelve internamente y ya
+    // pertenece al tenant).
+    if (
+      dto.clienteId &&
+      canalVenta !== 'ONLINE' &&
+      canalVenta !== 'WHATSAPP_IA'
+    ) {
       const cliente = await this.prisma.empresaPersona.findFirst({
         where: { id: dto.clienteId, empresaId },
         select: { id: true },
@@ -1110,8 +1115,9 @@ export class VentaService {
     const canalVenta = dto.canalVenta ?? 'POS';
     this.logger.info('Creando y cobrando venta', { empresaId, sede: dto.sedeId, canal: canalVenta });
 
-    // Validar caja abierta según canal (POS y COTIZACION requieren caja, ONLINE no)
-    if (canalVenta !== 'ONLINE') {
+    // Validar caja abierta según canal (POS y COTIZACION requieren caja;
+    // ONLINE y WHATSAPP_IA no — nadie está en mostrador).
+    if (canalVenta !== 'ONLINE' && canalVenta !== 'WHATSAPP_IA') {
       const cajaActiva = await this.prisma.caja.findFirst({
         where: { empresaId, sedeId: dto.sedeId, usuarioId: cajeroId, estado: 'ABIERTA' },
       });
@@ -3824,7 +3830,8 @@ export class VentaService {
         usuarioId &&
         !opts?.skipCajaValidacion &&
         venta &&
-        venta.canalVenta !== 'ONLINE'
+        venta.canalVenta !== 'ONLINE' &&
+        venta.canalVenta !== 'WHATSAPP_IA'
       ) {
         const cajaActiva = await tx.caja.findFirst({
           where: { empresaId, usuarioId, estado: 'ABIERTA' },

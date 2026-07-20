@@ -1951,6 +1951,7 @@ export class ProductoStockService {
       POS: 'Mostrador (POS)',
       ONLINE: 'Marketplace',
       COTIZACION: 'Cotización',
+      WHATSAPP_IA: 'Agente IA (WhatsApp)',
     };
     for (const mov of data.movimientos) {
       const doc = mov.venta?.codigo || mov.compra?.codigo || mov.transferencia?.codigo || mov.devolucion?.codigo || mov.numeroDocumento || '';

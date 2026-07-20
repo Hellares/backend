@@ -14,6 +14,7 @@ enum CanalVenta {
   POS // Punto de venta físico — requiere caja abierta
   COTIZACION // Desde cotización (atención presencial) — requiere caja abierta
   ONLINE // Tienda online / marketplace — no requiere caja
+  WHATSAPP_IA // Vendida por el agente IA por WhatsApp — no requiere caja
 }
 
 enum MetodoPagoVenta {

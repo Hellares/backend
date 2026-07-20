@@ -74,7 +74,8 @@ export function crearRegistrarEnvioTool(
       const venta = await prisma.venta.findFirst({
         where: {
           empresaId: ctx.empresaId,
-          canalVenta: 'ONLINE',
+          // WHATSAPP_IA desde 07-20; ONLINE cubre ventas previas del agente.
+          canalVenta: { in: ['WHATSAPP_IA', 'ONLINE'] },
           telefonoCliente: ctx.celular,
           estado: { not: EstadoVenta.ANULADA },
           creadoEn: { gte: hace48h },

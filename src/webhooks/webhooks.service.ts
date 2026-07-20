@@ -279,7 +279,12 @@ export class WebhooksService {
   ): void {
     this.realtime.notifyVentaPagada({ empresaId, ventaId: venta.id });
 
-    if (venta.canalVenta !== 'ONLINE' || !venta.telefonoCliente) return;
+    if (
+      (venta.canalVenta !== 'ONLINE' && venta.canalVenta !== 'WHATSAPP_IA') ||
+      !venta.telefonoCliente
+    ) {
+      return;
+    }
     const celularCliente = venta.telefonoCliente;
     const pregunta = venta.conEnvio
       ? '📦 Te avisaremos cuando salga hacia tu agencia.'
@@ -371,7 +376,8 @@ export class WebhooksService {
     const candidatas = await this.prisma.venta.findMany({
       where: {
         empresaId,
-        canalVenta: 'ONLINE',
+        // WHATSAPP_IA desde 07-20; ONLINE cubre ventas previas del agente.
+        canalVenta: { in: ['WHATSAPP_IA', 'ONLINE'] },
         estado: EstadoVenta.CONFIRMADA,
         cobroDiferido: true,
         telefonoCliente: { not: null },
