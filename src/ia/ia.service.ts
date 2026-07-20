@@ -144,6 +144,34 @@ export class IaAgenteService {
             'si ya confirmó su nombre llama crearVenta. Hazlo AHORA.'
           );
         }
+        // 3) Afirma que el envío "quedó registrado" sin haber llamado
+        //    registrarEnvio con éxito → éxito fantasma: se rechaza y se fuerza
+        //    la llamada real. (Los patrones son AFIRMACIONES de registro; la
+        //    pregunta "¿usas tu dirección registrada?" no matchea.)
+        const afirmaRegistro =
+          /qued(ó|o)\s+registrad|registr(é|e)\s+(tu|el|la)\s|env[ií]o\s+(fue|est(á|a)|ha\s+sido)\s+registrad|se\s+registr(ó|o)\s|hemos\s+registrado/i.test(
+            texto,
+          );
+        const envioRegistrado = trazas.some((t) =>
+          t.tools.some(
+            (tl) =>
+              tl.nombre === 'registrarEnvio' &&
+              (tl.resultado as any)?.ok === true,
+          ),
+        );
+        if (afirmaRegistro && !envioRegistrado) {
+          this.logger.warn(
+            `Agente afirmó envío registrado sin llamar registrarEnvio (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            '[SISTEMA] NO registraste ningún envío: no llamaste a la ' +
+            'herramienta registrarEnvio. NUNCA afirmes que algo quedó ' +
+            'registrado sin que la herramienta lo confirme. Llama AHORA a ' +
+            'registrarEnvio con los datos que el cliente te dio (ciudad, ' +
+            'departamento, sucursal/dirección de la agencia; si recoge otra ' +
+            'persona, su nombre y DNI) y responde según su resultado.'
+          );
+        }
         return null;
       };
     }
