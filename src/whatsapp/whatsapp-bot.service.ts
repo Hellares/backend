@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import {
+  EntidadTipo,
   EstadoParticipanteSorteo,
   EstadoPremioSorteo,
   EstadoSorteo,
@@ -3259,32 +3260,71 @@ export class WhatsappBotService {
       }
       if (ids.size === 1) {
         const id = [...ids][0];
-        const [img, prod] = await Promise.all([
-          this.prisma.archivo.findFirst({
+        // Fotos del producto Y de sus variantes: muchos catálogos cargan la
+        // imagen SOLO en la variante (EDREDON: el producto no tiene Archivo,
+        // "Cristal"/"alianza lima" sí). Si lo mostrado son variantes, cada
+        // una va con SU foto (máx 2, el tope de siempre); si no, la del
+        // producto o la de la primera variante con imagen.
+        const varIds = itemsUnico
+          .map((it: any) => it.varianteId)
+          .filter((v: any): v is string => !!v);
+        const [imgs, prod] = await Promise.all([
+          this.prisma.archivo.findMany({
             where: {
-              entidadTipo: 'PRODUCTO',
-              entidadId: id,
               isActive: true,
               deletedAt: null,
               // Solo IMÁGENES: hay productos cuyo primer Archivo es un VIDEO
               // (mp4) y Evolution revienta al mandarlo como imagen.
               mimeType: { startsWith: 'image/' },
+              OR: [
+                { entidadTipo: EntidadTipo.PRODUCTO, entidadId: id },
+                ...(varIds.length
+                  ? [
+                      {
+                        entidadTipo: EntidadTipo.PRODUCTO_VARIANTE,
+                        entidadId: { in: varIds },
+                      },
+                    ]
+                  : []),
+              ],
             },
             orderBy: { orden: 'asc' },
-            select: { url: true },
+            select: { url: true, entidadTipo: true, entidadId: true },
           }),
           this.prisma.producto.findFirst({
             where: { id, empresaId },
             select: { nombre: true },
           }),
         ]);
-        if (img?.url && prod) {
-          const solo = itemsUnico.length === 1 ? itemsUnico[0] : null;
-          fotos.push({
-            nombre: (solo?.nombre as string) ?? prod.nombre,
-            precio: solo?.precio ?? null,
-            url: img.url,
-          });
+        if (prod && imgs.length > 0) {
+          const deVariante = (vId: string) =>
+            imgs.find(
+              (a: any) =>
+                a.entidadTipo === 'PRODUCTO_VARIANTE' && a.entidadId === vId,
+            );
+          const dePr = imgs.find((a: any) => a.entidadTipo === 'PRODUCTO');
+          // Variantes mostradas → la foto propia de cada una.
+          for (const it of itemsUnico) {
+            const img = it.varianteId ? deVariante(it.varianteId) : dePr;
+            if (img?.url && !fotos.some((f) => f.url === img.url)) {
+              fotos.push({
+                nombre: (it.nombre as string) ?? prod.nombre,
+                precio: it.precio ?? null,
+                url: img.url,
+              });
+            }
+          }
+          // Nada calzó por ítem (p.ej. variantes sin foto propia) → fallback:
+          // producto, o la primera imagen que haya.
+          if (fotos.length === 0) {
+            const img = dePr ?? imgs[0];
+            const solo = itemsUnico.length === 1 ? itemsUnico[0] : null;
+            fotos.push({
+              nombre: (solo?.nombre as string) ?? prod.nombre,
+              precio: solo?.precio ?? null,
+              url: img.url,
+            });
+          }
         }
       }
     }

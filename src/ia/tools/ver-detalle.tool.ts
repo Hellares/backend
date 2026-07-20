@@ -1,9 +1,9 @@
-import { PrismaClient } from '@prisma/client';
+import { EntidadTipo, PrismaClient } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
 import {
   stockDisponible,
   recordarCatalogo,
-  resolverIdPorCatalogo,
+  emparejarCatalogo,
 } from './stock.util';
 
 /**
@@ -38,8 +38,12 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
       if (!rawId) return { ok: false, motivo: 'FALTA_PRODUCTO_ID' };
       // Haiku a veces manda el NOMBRE en vez del id (pasó en beta: "LAPICERO
       // GEL BOIL" → NO_ENCONTRADO → "no tiene imagen"). Resolver contra el
-      // catálogo mostrado y, si no, por nombre en BD.
-      let productoId = resolverIdPorCatalogo(ctx, rawId);
+      // catálogo mostrado y, si no, por nombre en BD. emparejarCatalogo
+      // además trae el varianteId si pidió UNA variante ("edredón alianza
+      // lima") → su foto propia tiene prioridad.
+      const emp = emparejarCatalogo(ctx, rawId);
+      let productoId = emp.match?.id ?? rawId;
+      const varianteIdPedida = emp.match?.varianteId ?? null;
       if (productoId === rawId && rawId.length < 20) {
         // No parece cuid: buscar por nombre (único match para no adivinar).
         const porNombre = await prisma.producto.findMany({
@@ -101,20 +105,47 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
       const min = Math.min(...precios);
       const max = Math.max(...precios);
 
-      // Imagen principal (Archivo polimórfico entidadTipo=PRODUCTO).
-      const img = await prisma.archivo.findFirst({
+      // Imágenes (Archivo polimórfico): del PRODUCTO y de sus VARIANTES —
+      // muchos catálogos cargan la foto SOLO en la variante (EDREDON: el
+      // producto no tiene Archivo, "Cristal"/"alianza lima" sí). Prioridad:
+      // variante pedida → producto → primera variante con foto.
+      const vIds = p.variantes.map((v) => v.id);
+      const imgs = await prisma.archivo.findMany({
         where: {
-          entidadTipo: 'PRODUCTO',
-          entidadId: productoId,
           isActive: true,
           deletedAt: null,
           // Solo IMÁGENES: el primer Archivo puede ser un video (mp4) y
           // Evolution no lo acepta como imagen.
           mimeType: { startsWith: 'image/' },
+          OR: [
+            { entidadTipo: EntidadTipo.PRODUCTO, entidadId: productoId },
+            ...(vIds.length
+              ? [
+                  {
+                    entidadTipo: EntidadTipo.PRODUCTO_VARIANTE,
+                    entidadId: { in: vIds },
+                  },
+                ]
+              : []),
+          ],
         },
         orderBy: { orden: 'asc' },
-        select: { url: true, urlThumbnail: true },
+        select: {
+          url: true,
+          urlThumbnail: true,
+          entidadTipo: true,
+          entidadId: true,
+        },
       });
+      const imgDeVariante = (id: string) =>
+        imgs.find(
+          (a) => a.entidadTipo === 'PRODUCTO_VARIANTE' && a.entidadId === id,
+        );
+      const img =
+        (varianteIdPedida ? imgDeVariante(varianteIdPedida) : undefined) ??
+        imgs.find((a) => a.entidadTipo === 'PRODUCTO') ??
+        imgs[0] ??
+        null;
 
       // Recordar el producto y sus variantes (id+varianteId) para crearVenta.
       recordarCatalogo(ctx, [
@@ -148,6 +179,9 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
                 (a, s) => a + Math.max(0, stockDisponible(s)),
                 0,
               ),
+              // Foto propia de la variante (si la tiene) — el bot puede
+              // mandarla y el agente sabe qué variantes tienen imagen.
+              urlImagen: imgDeVariante(v.id)?.url ?? null,
             };
           }),
         },
