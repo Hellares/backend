@@ -343,6 +343,10 @@ export function crearCrearVentaTool(
         observaciones: 'Venta por agente IA (WhatsApp)',
       };
 
+      // El guard de productos inventados excluye el nombre del cliente
+      // (el resumen de pago lo pone en negrita junto al monto).
+      ctx.clienteNombre = nombreCliente;
+
       let venta: any;
       try {
         venta = await ventaService.crearVentaYapeDiferida(

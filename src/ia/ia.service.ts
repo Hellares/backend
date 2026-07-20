@@ -192,15 +192,25 @@ export class IaAgenteService {
         );
         const SEG_SAFE =
           /monto|pagar|precio|total|yape|numero|envio|recojo|stock|cantidad|compra|vta-|entrega|agencia/;
+        // Nombre oficial del cliente (resolverCliente/crearVenta lo dejan en
+        // ctx): "**KELI RODRIGUEZ SALINAS**" en la línea del monto NO es un
+        // producto inventado (falso positivo real en beta — costó una
+        // corrección y un round-trip al LLM).
+        const cliNombre = ctx.clienteNombre ? norm(ctx.clienteNombre) : null;
         let inventado: string | null = null;
         for (const linea of texto.split('\n')) {
           // "S/ 40", "S/. 40" y "S/.40" — el punto tras S/ evadía el guard
           // (pasó: página 2 de almohadas TODA inventada con formato "S/.").
           if (!/S\/\.?\s*\d/.test(linea)) continue;
+          // Línea del resumen "A nombre de: …" — no es lista de productos.
+          if (/nombre\s+de/i.test(linea)) continue;
           for (const m of linea.matchAll(/\*\*([^*]{4,60})\*\*/g)) {
             const seg = norm(m[1].trim());
             if ((seg.match(/[a-z]/g)?.length ?? 0) < 4) continue;
             if (SEG_SAFE.test(seg)) continue;
+            if (cliNombre && (cliNombre.includes(seg) || seg.includes(cliNombre))) {
+              continue;
+            }
             // n.includes(seg): el LLM acorta nombres largos (VERNO TALLA 35
             // sin el color) → válido. seg.includes(n): SOLO si el nombre del
             // catálogo cubre ≥70% del texto — el producto genérico "ZAPATILLAS"

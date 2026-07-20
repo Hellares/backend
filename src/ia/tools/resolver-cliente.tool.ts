@@ -151,12 +151,15 @@ export function crearResolverClienteTool(
 
       if (persona) {
         const clienteEmpresaId = persona.empresasAsociadas[0]?.id ?? null;
+        const nombreCompleto =
+          `${persona.nombres} ${persona.apellidos ?? ''}`.trim();
+        ctx.clienteNombre = nombreCompleto;
         return {
           ok: true,
           registrado: true,
           clienteId: clienteEmpresaId,
           personaId: persona.id,
-          nombreCompleto: `${persona.nombres} ${persona.apellidos ?? ''}`.trim(),
+          nombreCompleto,
           yaEsClienteDeEstaEmpresa: !!clienteEmpresaId,
           tipoDoc,
           // Última dirección de envío conocida (ventas o sorteos) para
@@ -180,6 +183,7 @@ export function crearResolverClienteTool(
       if (clientes) {
         try {
           const creado = await clientes.getOrCreateByDni(ctx.empresaId, doc);
+          ctx.clienteNombre = creado.nombreCompleto;
           return {
             ok: true,
             registrado: true,

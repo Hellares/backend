@@ -31,6 +31,10 @@ export interface ContextoTool {
   /** Última búsqueda del turno/conversación (buscarProducto la escribe):
    *  permite que "muéstrame más" pagine en vez de inventar. */
   ultimaBusqueda?: { query: string; pagina: number; hayMas: boolean };
+  /** Nombre oficial del cliente (resolverCliente/crearVenta lo escriben):
+   *  el guard de productos inventados lo excluye — "**KELI RODRIGUEZ**"
+   *  en la línea del monto no es un producto (falso positivo visto en beta). */
+  clienteNombre?: string | null;
 }
 
 /**
