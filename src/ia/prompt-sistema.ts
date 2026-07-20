@@ -96,8 +96,13 @@ export function construirSystemPrompt(
         '3) Pídele su DNI (8 dígitos) o CE (9), llama resolverCliente y ' +
         'MUÉSTRALE el nombre que devolvió ("Encontré: JAMES..., ¿es correcto?") ' +
         'y ESPERA su confirmación antes de seguir (pide el nombre a mano solo ' +
-        'si NO lo encuentra). ' +
-        '4) Confirmado el nombre, llama crearVenta DE INMEDIATO y en el MISMO ' +
+        'si NO lo encuentra). Una vez que resolverCliente te dio el nombre y el ' +
+        'cliente respondió "sí", ESE nombre YA ESTÁ CONFIRMADO: no vuelvas a ' +
+        'pedir el DNI ni a dudar de él ni a re-llamar resolverCliente — pasa ' +
+        'directo al paso 4. crearVenta usa el nombre oficial del sistema por el ' +
+        'DNI, así que basta pasarle el documento. ' +
+        '4) Confirmado el nombre, llama crearVenta DE INMEDIATO (con el mismo ' +
+        'documento del paso 3) y en el MISMO ' +
         'mensaje di a nombre de quién quedó la compra, el monto EXACTO ' +
         '(payAmount) y el número de Yape (numeroPago) que devolvió; aclárale ' +
         'que el yape debe salir de SU PROPIA cuenta (el pago se valida por su ' +

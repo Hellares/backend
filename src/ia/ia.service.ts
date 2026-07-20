@@ -133,7 +133,7 @@ export class IaAgenteService {
           );
         }
         const seDisculpa =
-          /hubo un (problema|inconveniente)|no pud[eo] (procesar|registrar)|problema al (procesar|registrar)/i.test(
+          /hubo un (problema|inconveniente)|no pud[eo] (procesar|registrar)|problema al (procesar|registrar)|no (lo |la )?(confirm[ée]|verifiqu[ée]|valid[ée])\b/i.test(
             texto,
           );
         const algunaFallo = trazas.some((t) =>
@@ -145,9 +145,10 @@ export class IaAgenteService {
           );
           return (
             '[SISTEMA] NO ocurrió ningún error: ninguna herramienta falló. No ' +
-            'te disculpes ni derives a un asesor. Continúa el flujo de venta ' +
+            'te disculpes, no vuelvas a pedir el DNI ni dudes del nombre ya ' +
+            'confirmado, ni derives a un asesor. Continúa el flujo de venta ' +
             'donde quedó: si el cliente te dio su DNI/CE llama resolverCliente; ' +
-            'si ya confirmó su nombre llama crearVenta. Hazlo AHORA.'
+            'si ya confirmó su nombre llama crearVenta con ese documento. Hazlo AHORA.'
           );
         }
         // 3) Afirma que el envío "quedó registrado" sin haber llamado
