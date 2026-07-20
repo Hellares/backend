@@ -196,8 +196,14 @@ export class IaAgenteService {
             const seg = norm(m[1].trim());
             if ((seg.match(/[a-z]/g)?.length ?? 0) < 4) continue;
             if (SEG_SAFE.test(seg)) continue;
+            // n.includes(seg): el LLM acorta nombres largos (VERNO TALLA 35
+            // sin el color) → válido. seg.includes(n): SOLO si el nombre del
+            // catálogo cubre ≥70% del texto — el producto genérico "ZAPATILLAS"
+            // validaba cualquier invento "ZAPATILLAS X" (CASUALES/BASQUET...).
             const enCatalogo = nombresCat.some(
-              (n) => n.includes(seg) || seg.includes(n),
+              (n) =>
+                n.includes(seg) ||
+                (seg.includes(n) && n.length >= seg.length * 0.7),
             );
             if (!enCatalogo) {
               inventado = m[1].trim();
