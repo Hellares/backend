@@ -108,6 +108,9 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
           entidadId: productoId,
           isActive: true,
           deletedAt: null,
+          // Solo IMÁGENES: el primer Archivo puede ser un video (mp4) y
+          // Evolution no lo acepta como imagen.
+          mimeType: { startsWith: 'image/' },
         },
         orderBy: { orden: 'asc' },
         select: { url: true, urlThumbnail: true },

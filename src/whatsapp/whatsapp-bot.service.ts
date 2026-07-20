@@ -3159,6 +3159,9 @@ export class WhatsappBotService {
               entidadId: id,
               isActive: true,
               deletedAt: null,
+              // Solo IMÁGENES: hay productos cuyo primer Archivo es un VIDEO
+              // (mp4) y Evolution revienta al mandarlo como imagen.
+              mimeType: { startsWith: 'image/' },
             },
             orderBy: { orden: 'asc' },
             select: { url: true },

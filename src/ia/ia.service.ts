@@ -191,7 +191,9 @@ export class IaAgenteService {
           /monto|pagar|precio|total|yape|numero|envio|recojo|stock|cantidad|compra|vta-|entrega|agencia/;
         let inventado: string | null = null;
         for (const linea of texto.split('\n')) {
-          if (!/S\/\s*\d/.test(linea)) continue;
+          // "S/ 40", "S/. 40" y "S/.40" — el punto tras S/ evadía el guard
+          // (pasó: página 2 de almohadas TODA inventada con formato "S/.").
+          if (!/S\/\.?\s*\d/.test(linea)) continue;
           for (const m of linea.matchAll(/\*\*([^*]{4,60})\*\*/g)) {
             const seg = norm(m[1].trim());
             if ((seg.match(/[a-z]/g)?.length ?? 0) < 4) continue;
