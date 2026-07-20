@@ -313,22 +313,42 @@ export class WebhooksService {
       // registrarse. Si el monto es múltiplo exacto del precio de un sorteo
       // ABIERTO, no alertar: sería una push por cada anticipado (visto en
       // prod: ~9 seguidas en un CAJAZO). El resto de montos sí alerta.
-      const sorteosAbiertos = await this.prisma.sorteo.findMany({
-        where: { empresaId, estado: EstadoSorteo.ABIERTO },
-        select: { precioParticipacion: true },
+      //
+      // EXCEPCIÓN (evento + agente VENDE conviviendo): si hay una VENTA
+      // diferida PENDIENTE por EXACTAMENTE este monto, el pago probablemente
+      // era de esa venta y falló el match por nombre (pagó un tercero) →
+      // alertar SIEMPRE, aunque el monto también calce con el precio del
+      // sorteo. Sin esto, la venta muere en silencio cuando su total
+      // coincide con un ticket.
+      const ventasEsperando = await this.prisma.venta.count({
+        where: {
+          empresaId,
+          canalVenta: { in: ['WHATSAPP_IA', 'ONLINE'] },
+          estado: EstadoVenta.CONFIRMADA,
+          cobroDiferido: true,
+          telefonoCliente: { not: null },
+          creadoEn: { gte: new Date(Date.now() - 24 * 3600 * 1000) },
+          total: monto,
+        },
       });
-      const esAnticipado = sorteosAbiertos.some((s) => {
-        const precio = Number(s.precioParticipacion);
-        if (!(precio > 0)) return false;
-        const n = monto / precio;
-        return n >= 1 && Math.abs(n - Math.round(n)) < 1e-6;
-      });
-      if (esAnticipado) {
-        this.logger.log(
-          `Pago S/ ${monto.toFixed(2)} de "${quien}" sin conciliar: probable ` +
-            'pago anticipado de sorteo — sin alerta (el bot lo toma al registrarse)',
-        );
-        return;
+      if (ventasEsperando === 0) {
+        const sorteosAbiertos = await this.prisma.sorteo.findMany({
+          where: { empresaId, estado: EstadoSorteo.ABIERTO },
+          select: { precioParticipacion: true },
+        });
+        const esAnticipado = sorteosAbiertos.some((s) => {
+          const precio = Number(s.precioParticipacion);
+          if (!(precio > 0)) return false;
+          const n = monto / precio;
+          return n >= 1 && Math.abs(n - Math.round(n)) < 1e-6;
+        });
+        if (esAnticipado) {
+          this.logger.log(
+            `Pago S/ ${monto.toFixed(2)} de "${quien}" sin conciliar: probable ` +
+              'pago anticipado de sorteo — sin alerta (el bot lo toma al registrarse)',
+          );
+          return;
+        }
       }
 
       this.logger.warn(

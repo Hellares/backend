@@ -739,10 +739,39 @@ export class SorteosService {
       where: { empresaId, yapePaymentId: { not: null } },
       select: { yapePaymentId: true },
     });
-    return new Set(
-      filas
+    // CONVIVENCIA con el agente IA: un yape que ya pagó una VENTA
+    // (PagoVenta.referencia = operationCode || payment.id del webhook) no
+    // puede sugerirse ni consumirse para validar una participación — un
+    // solo pago validaría dos cosas. Ventana 48h: los pagos de api-yape
+    // que se cruzan viven en la de 24h.
+    const pagosVenta = await this.prisma.pagoVenta.findMany({
+      where: {
+        venta: { empresaId },
+        referencia: { not: null },
+        creadoEn: { gte: new Date(Date.now() - 48 * 3600 * 1000) },
+      },
+      select: { referencia: true },
+    });
+    return new Set([
+      ...filas
         .map((f) => f.yapePaymentId)
         .filter((id): id is string => !!id),
+      ...pagosVenta
+        .map((p) => p.referencia)
+        .filter((r): r is string => !!r),
+    ]);
+  }
+
+  /** ¿Este pago ya fue consumido (participación o venta)? Compara por el
+   *  id del payment Y por su operationCode — PagoVenta guarda
+   *  `operationCode || id`, así que hay que mirar ambos. */
+  private static pagoConsumido(
+    usados: Set<string>,
+    pago: { id?: string | null; operationCode?: string | null },
+  ): boolean {
+    return (
+      (!!pago.id && usados.has(pago.id)) ||
+      (!!pago.operationCode && usados.has(pago.operationCode))
     );
   }
 
@@ -777,7 +806,7 @@ export class SorteosService {
         ? 0
         : p.creadoEn.getTime() - 5 * 60_000;
       const candidatos = pagos.filter((pg) => {
-        if (usados.has(pg.id)) return false;
+        if (SorteosService.pagoConsumido(usados, pg)) return false;
         const ts = new Date(pg.receivedAt).getTime();
         if (!Number.isFinite(ts) || ts < desde) return false;
         return (
@@ -827,9 +856,11 @@ export class SorteosService {
     if (pendientes.length === 0) return { sugerencias: [] };
     const pagosTodos =
       await this.integracionYape.listarPagosRecientes(empresaId);
-    // Pagos ya CONSUMIDOS por otra participación: fuera del tablero.
+    // Pagos ya CONSUMIDOS por otra participación o por una VENTA: fuera.
     const usados = await this.pagosYapeUsados(empresaId);
-    const pagos = pagosTodos.filter((pg) => !usados.has(pg.id));
+    const pagos = pagosTodos.filter(
+      (pg) => !SorteosService.pagoConsumido(usados, pg),
+    );
     if (pagos.length === 0) return { sugerencias: [] };
 
     // Tamaño de cada COMPRA (n tickets = un solo pago por n × precio).
@@ -909,16 +940,20 @@ export class SorteosService {
       senderName?: string | null;
       amount?: number | null;
       receivedAt?: string | null;
+      operationCode?: string | null;
     },
   ) {
     const monto = Number(pago?.amount ?? 0);
     if (!pago?.senderName || !(monto > 0)) {
       return { accion: 'pago-sin-datos' };
     }
-    // Replay/duplicado: un pago ya consumido jamás valida otra vez.
-    if (pago.id) {
+    // Replay/duplicado: un pago ya consumido (por participación O por una
+    // venta del agente) jamás valida otra vez.
+    if (pago.id || pago.operationCode) {
       const usados = await this.pagosYapeUsados(empresaId);
-      if (usados.has(pago.id)) return { accion: 'pago-ya-usado' };
+      if (SorteosService.pagoConsumido(usados, pago)) {
+        return { accion: 'pago-ya-usado' };
+      }
     }
     const pendientes = await this.prisma.sorteoParticipante.findMany({
       where: {

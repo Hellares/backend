@@ -129,6 +129,9 @@ export class IntegracionYapeService {
       amount: number;
       provider: string | null;
       receivedAt: string;
+      /** Código de operación de Yape — PagoVenta.referencia lo usa cuando
+       *  existe (si no, el id): necesario para cruzar pagos ya consumidos. */
+      operationCode: string | null;
     }[]
   > {
     const cfg = await this.prisma.integracionYape.findUnique({
@@ -160,6 +163,7 @@ export class IntegracionYapeService {
           amount: Number(p.amount ?? 0),
           provider: p.provider ?? null,
           receivedAt: String(p.receivedAt ?? p.createdAt ?? ''),
+          operationCode: p.operationCode ? String(p.operationCode) : null,
         }));
     } catch (e) {
       this.logger.warn(

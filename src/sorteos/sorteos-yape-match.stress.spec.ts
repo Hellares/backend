@@ -50,6 +50,10 @@ describe('Stress: auto-validación Yape con 10 empresas / 100 participantes', ()
   const pendientes: Pend[] = [];
   const validados: { empresaId: string; participanteId: string }[] = [];
 
+  // Referencias de pagos ya CONSUMIDOS por VENTAS del agente (PagoVenta):
+  // los tests de convivencia evento+VENDE las setean.
+  let pagosVentaRefs: string[] = [];
+
   // ── BD fake mínima (solo lo que usan los métodos bajo prueba) ──
   const prisma = {
     sorteoParticipante: {
@@ -60,6 +64,9 @@ describe('Stress: auto-validación Yape con 10 empresas / 100 participantes', ()
     },
     empresaUsuarioRol: {
       findFirst: async () => ({ usuarioId: 'admin-1' }),
+    },
+    pagoVenta: {
+      findMany: async () => pagosVentaRefs.map((r) => ({ referencia: r })),
     },
   } as any;
 
@@ -296,5 +303,46 @@ describe('Stress: auto-validación Yape con 10 empresas / 100 participantes', ()
     const ids = sugerencias.map((s: any) => s.participanteId).sort();
     expect(ids).toEqual(['p-0-8', 'p-0-9']); // ambos homónimos con chip
     expect(sugerencias.every((s: any) => s.montoCoincide)).toBe(true);
+  });
+
+  // CONVIVENCIA evento + agente VENDE: un yape que YA pagó una venta no
+  // puede sugerirse (ni consumirse) para validar una participación — un
+  // solo pago validaría dos cosas.
+  it('un pago ya consumido por una VENTA del agente no aparece como chip', async () => {
+    const empresaId = 'emp-0';
+    const base = NOMBRES[8 % 10];
+    (service as any).integracionYape = {
+      listarPagosRecientes: async () => [
+        {
+          id: 'pay-x',
+          senderName: `${base} L.`,
+          amount: 5,
+          provider: 'yape',
+          receivedAt: new Date(T0 + 50 * 60_000).toISOString(),
+          operationCode: 'OP-999',
+        },
+      ],
+    };
+    // La venta lo consumió guardando el operationCode como referencia.
+    pagosVentaRefs = ['OP-999'];
+    const { sugerencias } = await service.sugerirPagosYape(empresaId);
+    expect(sugerencias).toEqual([]);
+
+    // …y también si la referencia fue el ID del payment (operationCode vacío).
+    pagosVentaRefs = ['pay-x'];
+    const r2 = await service.sugerirPagosYape(empresaId);
+    expect(r2.sugerencias).toEqual([]);
+
+    // El mismo pago tampoco re-valida por webhook (replay).
+    const r3 = await service.autoValidarPorPagoYape(empresaId, {
+      id: 'pay-x',
+      operationCode: 'OP-999',
+      senderName: `${base} L.`,
+      amount: 5,
+      receivedAt: new Date(T0 + 50 * 60_000).toISOString(),
+    });
+    expect(r3.accion).toBe('pago-ya-usado');
+
+    pagosVentaRefs = [];
   });
 });

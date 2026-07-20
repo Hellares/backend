@@ -85,6 +85,8 @@ describe('WebhooksService.procesarPagoYape', () => {
     };
     // Sin sorteos abiertos por defecto → la alerta de pago sin conciliar corre.
     prisma.sorteo = { findMany: jest.fn().mockResolvedValue([]) };
+    // Sin ventas pendientes esperando el monto (para la excepción anti-supresión).
+    prisma.venta.count = jest.fn().mockResolvedValue(0);
     service = new WebhooksService(
       prisma,
       logger as any,
@@ -464,6 +466,26 @@ describe('WebhooksService.procesarPagoYape', () => {
 
     expect(r).toMatchObject({ accion: 'venta-sin-match' });
     expect(notificaciones.enviarAUsuarios).not.toHaveBeenCalled();
+  });
+
+  it('múltiplo del precio PERO hay una VENTA pendiente por ese monto → la alerta SÍ sale', async () => {
+    // Convivencia evento+VENDE: el pago era de la venta (tercero pagó, el
+    // nombre no calzó) y el monto coincide con un ticket — sin esta
+    // excepción la supresión anti-spam mataría la venta en silencio.
+    prisma.sorteo.findMany.mockResolvedValue([{ precioParticipacion: 34 }]);
+    prisma.venta.count.mockResolvedValue(1);
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: { provider: 'yape', senderName: 'Tercero Que Paga', amount: 34 },
+      }),
+    );
+
+    await service.procesarPagoYape(RAW, FIRMA);
+    await new Promise((res) => setImmediate(res));
+
+    expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
   });
 
   it('monto que NO es múltiplo del precio del sorteo → la alerta SÍ sale', async () => {
