@@ -83,6 +83,8 @@ describe('WebhooksService.procesarPagoYape', () => {
     prisma.empresaUsuarioRol = {
       findMany: jest.fn().mockResolvedValue([{ usuarioId: 'u1' }]),
     };
+    // Sin sorteos abiertos por defecto → la alerta de pago sin conciliar corre.
+    prisma.sorteo = { findMany: jest.fn().mockResolvedValue([]) };
     service = new WebhooksService(
       prisma,
       logger as any,
@@ -443,6 +445,41 @@ describe('WebhooksService.procesarPagoYape', () => {
       expect.stringContaining('S/ 3.00'),
       expect.objectContaining({ empresaId: 'emp-1' }),
     );
+  });
+
+  it('pago anticipado de sorteo (múltiplo del precio, sorteo ABIERTO) → SIN alerta', async () => {
+    // El caso de los CAJAZOS en vivo: yapean S/34 (o S/68 = 2 tickets) ANTES
+    // de registrarse; el bot consume el pago al registrarse. Alertar sería spam.
+    prisma.sorteo.findMany.mockResolvedValue([{ precioParticipacion: 34 }]);
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: { provider: 'yape', senderName: 'Yuliana Vil*', amount: 68 },
+      }),
+    );
+
+    const r = await service.procesarPagoYape(RAW, FIRMA);
+    await new Promise((res) => setImmediate(res));
+
+    expect(r).toMatchObject({ accion: 'venta-sin-match' });
+    expect(notificaciones.enviarAUsuarios).not.toHaveBeenCalled();
+  });
+
+  it('monto que NO es múltiplo del precio del sorteo → la alerta SÍ sale', async () => {
+    prisma.sorteo.findMany.mockResolvedValue([{ precioParticipacion: 34 }]);
+    conPayload(
+      payloadPago({
+        event: 'payment.received',
+        charge: null,
+        payment: { provider: 'yape', senderName: 'Nadie Conocido', amount: 3 },
+      }),
+    );
+
+    await service.procesarPagoYape(RAW, FIRMA);
+    await new Promise((res) => setImmediate(res));
+
+    expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
   });
 
   it('si el SORTEO ya lo dejó como ambiguo (chip) → no duplica la alerta', async () => {

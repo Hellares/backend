@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { EstadoVenta, MetodoPagoVenta, Rol } from '@prisma/client';
+import { EstadoSorteo, EstadoVenta, MetodoPagoVenta, Rol } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
@@ -292,14 +292,6 @@ export class WebhooksService {
   }
 
   /**
-   * Venta pagada COMPLETA: avisa a la app (FCM realtime) y al CLIENTE por
-   * WhatsApp (ventas ONLINE con celular — las del agente IA): "pago validado,
-   * tu compra se está preparando" + la pregunta de ENTREGA (el envío se
-   * registra DESPUÉS del pago, como en sorteos). El mensaje se guarda en el
-   * historial del agente para que entienda la respuesta ("envío"/"recojo").
-   * Best-effort: nunca rompe el webhook.
-   */
-  /**
    * Un pago Yape entró y NO se pudo conciliar (ni sorteo ni venta). Antes esto
    * solo dejaba una línea de log: el cliente se quedaba sin su compra y la
    * empresa ni se enteraba. Ahora avisa por push a los usuarios que pueden
@@ -315,6 +307,30 @@ export class WebhooksService {
     try {
       const monto = Number(pago?.amount ?? 0);
       const quien = pago?.senderName?.trim() || 'desconocido';
+
+      // Durante una dinámica en vivo muchos clientes YAPEAN PRIMERO y se
+      // registran después (pago anticipado) — el bot consume ese pago al
+      // registrarse. Si el monto es múltiplo exacto del precio de un sorteo
+      // ABIERTO, no alertar: sería una push por cada anticipado (visto en
+      // prod: ~9 seguidas en un CAJAZO). El resto de montos sí alerta.
+      const sorteosAbiertos = await this.prisma.sorteo.findMany({
+        where: { empresaId, estado: EstadoSorteo.ABIERTO },
+        select: { precioParticipacion: true },
+      });
+      const esAnticipado = sorteosAbiertos.some((s) => {
+        const precio = Number(s.precioParticipacion);
+        if (!(precio > 0)) return false;
+        const n = monto / precio;
+        return n >= 1 && Math.abs(n - Math.round(n)) < 1e-6;
+      });
+      if (esAnticipado) {
+        this.logger.log(
+          `Pago S/ ${monto.toFixed(2)} de "${quien}" sin conciliar: probable ` +
+            'pago anticipado de sorteo — sin alerta (el bot lo toma al registrarse)',
+        );
+        return;
+      }
+
       this.logger.warn(
         `⚠️ Pago Yape SIN CONCILIAR en empresa ${empresaId}: ` +
           `S/ ${monto.toFixed(2)} de "${quien}" — requiere validación manual`,
@@ -355,6 +371,14 @@ export class WebhooksService {
     }
   }
 
+  /**
+   * Venta pagada COMPLETA: avisa a la app (FCM realtime) y al CLIENTE por
+   * WhatsApp (ventas ONLINE con celular — las del agente IA): "pago validado,
+   * tu compra se está preparando" + la pregunta de ENTREGA (el envío se
+   * registra DESPUÉS del pago, como en sorteos). El mensaje se guarda en el
+   * historial del agente para que entienda la respuesta ("envío"/"recojo").
+   * Best-effort: nunca rompe el webhook.
+   */
   private notificarVentaPagada(
     empresaId: string,
     venta: {
