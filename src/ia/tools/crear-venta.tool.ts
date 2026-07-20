@@ -230,8 +230,24 @@ export function crearCrearVentaTool(
         let nombre = prod.nombre;
         let stock: any = null;
         if (varianteId) {
-          const v = prod.variantes.find((x: any) => x.id === varianteId);
+          let v = prod.variantes.find((x: any) => x.id === varianteId);
+          if (!v) {
+            // Haiku manda el NOMBRE de la variante (o el nombre mostrado
+            // "EDREDON Cristal") en vez del id → resolver por nombre.
+            const vlow = varianteId.toLowerCase();
+            const porNombre = prod.variantes.filter(
+              (x: any) =>
+                x.nombre.toLowerCase() === vlow ||
+                vlow.includes(x.nombre.toLowerCase()),
+            );
+            if (porNombre.length === 1) v = porNombre[0];
+          }
+          if (!v && hit?.varianteId) {
+            // Último recurso: la variante REAL del ítem del catálogo mostrado.
+            v = prod.variantes.find((x: any) => x.id === hit!.varianteId);
+          }
           if (!v) return { ok: false, motivo: 'VARIANTE_NO_ENCONTRADA', productoId };
+          varianteId = v.id;
           nombre = `${prod.nombre} ${v.nombre}`.trim();
           stock = v.stocksPorSede.find((s: any) => s.precio != null) ?? null;
         } else if (prod.stocksPorSede.length > 0) {

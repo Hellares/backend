@@ -301,19 +301,28 @@ export class WebhooksService {
         const hist = Array.isArray(ctxConv.historialIa)
           ? ctxConv.historialIa
           : [];
+        // Sin envío aún → la respuesta ("recojo"/"envío") la maneja el flujo
+        // DETERMINÍSTICO del bot (estado VENTA_ENTREGA), no el LLM: la
+        // dirección se captura por pasos y va directo a upsertEnvio.
+        const estadoNuevo = venta.conEnvio ? 'IA' : 'VENTA_ENTREGA';
+        const ventaEnvio = venta.conEnvio ? {} : { ventaEnvio: { ventaId: venta.id } };
         await this.prisma.conversacionWhatsapp.upsert({
           where: { empresaId_celular: { empresaId, celular: celularCliente } },
           create: {
             empresaId,
             celular: celularCliente,
-            estado: 'IA',
-            contexto: { historialIa: [{ rol: 'assistant', texto }] },
+            estado: estadoNuevo,
+            contexto: {
+              historialIa: [{ rol: 'assistant', texto }],
+              ...ventaEnvio,
+            },
           },
           update: {
-            estado: 'IA',
+            estado: estadoNuevo,
             contexto: {
               ...ctxConv,
               historialIa: [...hist, { rol: 'assistant', texto }].slice(-12),
+              ...ventaEnvio,
             },
           },
         });

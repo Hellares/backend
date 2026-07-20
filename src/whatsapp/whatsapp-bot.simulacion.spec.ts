@@ -31,10 +31,16 @@ class FakeDb {
   personas: Row[] = [];
   integracionesAgenteIa: Row[] = [];
   sedes: Row[] = [];
+  ventas: Row[] = [];
+  ventaEnvios: Row[] = [];
 }
 
 function coincide(row: Row, where: Row, db: FakeDb): boolean {
   for (const [k, cond] of Object.entries(where ?? {})) {
+    if (k === 'OR') {
+      if (!(cond as Row[]).some((c) => coincide(row, c, db))) return false;
+      continue;
+    }
     if (k === 'sorteo') {
       const sorteo = db.sorteos.find((s) => s.id === row.sorteoId);
       if (!sorteo || !coincide(sorteo, cond as Row, db)) return false;
@@ -195,6 +201,9 @@ class Simulador {
   iaAtender?: (p: any) => Promise<any> | any;
   iaLlamadas: any[] = [];
 
+  /// upsertEnvio del flujo determinístico de entrega (VentaService fake).
+  enviosRegistrados: any[] = [];
+
   /// Pagos "recibidos" en el api-yape fake (para el yape anticipado).
   pagosYape: { id: string; senderName: string; amount: number; provider: string; receivedAt: string }[] = [];
 
@@ -230,6 +239,8 @@ class Simulador {
       persona: modelo(this.db, () => this.db.personas),
       integracionAgenteIA: modelo(this.db, () => this.db.integracionesAgenteIa),
       sede: modelo(this.db, () => this.db.sedes),
+      venta: modelo(this.db, () => this.db.ventas),
+      ventaEnvio: modelo(this.db, () => this.db.ventaEnvios),
     } as any;
     const evolution = {
       disponible: true,
@@ -269,6 +280,13 @@ class Simulador {
         return this.iaAtender ? this.iaAtender(p) : { atendido: false };
       },
     } as any;
+    // VentaService fake: registra los upsertEnvio del flujo determinístico.
+    const ventaService = {
+      upsertEnvio: async (id: string, empresaId: string, dto: any) => {
+        this.enviosRegistrados.push({ ventaId: id, empresaId, ...dto });
+        return { id: 'envio_' + id };
+      },
+    } as any;
     this.bot = new WhatsappBotService(
       prisma,
       evolution,
@@ -276,6 +294,7 @@ class Simulador {
       realtime,
       integracionYape,
       iaAgente,
+      ventaService,
     );
 
     this.db.empresas.push({ id: EMPRESA, nombre: 'IMPORTACIONES PRUEBA SAC' });
@@ -316,6 +335,35 @@ class Simulador {
     };
     this.db.sorteos.push(s);
     return s;
+  }
+
+  /** Deja la conversación como la deja el webhook tras el pago de una
+   *  venta del agente: estado VENTA_ENTREGA + ventaEnvio.ventaId. */
+  sembrarVentaPagada(celular: string, over: Row = {}): Row {
+    const venta = {
+      id: `venta_${++this.db.seq}`,
+      empresaId: EMPRESA,
+      codigo: 'VTA-SED-00000777',
+      nombreCliente: 'JAMES JOHEL TORRES LEDEZMA',
+      documentoCliente: '44885296',
+      telefonoCliente: celular,
+      creadoEn: new Date(),
+      ...over,
+    };
+    this.db.ventas.push(venta);
+    this.db.conversaciones.push({
+      id: `conv_${++this.db.seq}`,
+      empresaId: EMPRESA,
+      celular,
+      estado: 'VENTA_ENTREGA',
+      contexto: {
+        historialIa: [{ rol: 'assistant', texto: '✅ pago confirmado' }],
+        ventaEnvio: { ventaId: venta.id },
+      },
+      creadoEn: new Date(),
+      actualizadoEn: new Date(),
+    });
+    return venta;
   }
 
   /** Habilita el agente IA de ventas para la empresa (config + una sede). */
@@ -1802,6 +1850,101 @@ describe('Simulación E2E del bot de sorteos', () => {
     const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
     expect(conv.estado).toBe('IA');
     sim.imprimir('42. Flujo del agente: cantidad numérica no salta al sorteo');
+  });
+
+  it('43. entrega determinística: "recojo" cierra sin envío y sin LLM', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.sembrarVentaPagada(CEL);
+
+    const r = await sim.cliente(CEL, 'recojo');
+    expect(r[0]).toContain('tienda');
+    expect(sim.enviosRegistrados).toHaveLength(0);
+    expect(sim.iaLlamadas).toHaveLength(0); // sin LLM: flujo determinístico
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('IA'); // el agente retoma después
+    sim.imprimir('43. Entrega: recojo en tienda (determinístico)');
+  });
+
+  it('44. entrega determinística: envío por pasos → upsertEnvio real', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    const venta = sim.sembrarVentaPagada(CEL);
+
+    let r = await sim.cliente(CEL, 'envío');
+    expect(r[0]).toContain('ciudad');
+    r = await sim.cliente(CEL, 'Trujillo');
+    expect(r[0]).toContain('departamento');
+    r = await sim.cliente(CEL, 'La Libertad');
+    expect(r[0]).toContain('SHALOM'); // sucursal de la agencia configurada
+    r = await sim.cliente(CEL, '-'); // no sabe la sucursal
+    expect(r[0]).toContain('Quién');
+    r = await sim.cliente(CEL, '1'); // lo recoge él mismo
+
+    expect(sim.enviosRegistrados).toHaveLength(1);
+    const e = sim.enviosRegistrados[0];
+    expect(e.ventaId).toBe(venta.id);
+    expect(e.destinoProvincia).toBe('TRUJILLO');
+    expect(e.destinoDepartamento).toBe('LA LIBERTAD');
+    expect(e.agenciaDireccion).toBeUndefined(); // respondió "-"
+    expect(e.destinatarioNombre).toBe('JAMES JOHEL TORRES LEDEZMA');
+    expect(e.destinatarioDni).toBe('44885296');
+    expect(r[0]).toContain('Envío registrado');
+    expect(r[0]).toContain(venta.codigo);
+    expect(sim.iaLlamadas).toHaveLength(0); // TODO sin LLM
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('IA');
+    sim.imprimir('44. Entrega: envío por pasos → VentaEnvio');
+  });
+
+  it('45. entrega determinística: recoge OTRA persona (nombre + DNI)', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.sembrarVentaPagada(CEL);
+
+    await sim.cliente(CEL, 'envio'); // sin tilde también entra
+    await sim.cliente(CEL, 'Piura');
+    await sim.cliente(CEL, 'Piura');
+    await sim.cliente(CEL, 'Av. Grau 500');
+    const r = await sim.cliente(CEL, 'MARIA PEREZ 40556677');
+
+    expect(sim.enviosRegistrados).toHaveLength(1);
+    const e = sim.enviosRegistrados[0];
+    expect(e.destinatarioNombre).toBe('MARIA PEREZ');
+    expect(e.destinatarioDni).toBe('40556677');
+    expect(e.agenciaDireccion).toBe('AV. GRAU 500');
+    expect(r[0]).toContain('MARIA PEREZ');
+    sim.imprimir('45. Entrega: envío lo recoge otra persona');
+  });
+
+  it('46. entrega determinística: "1" reusa la dirección previa', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.sembrarVentaPagada(CEL);
+    // Envío anterior del mismo cliente (otra venta) → se ofrece reusar.
+    sim.db.ventaEnvios.push({
+      id: 've_prev',
+      empresaId: EMPRESA,
+      ventaId: 'venta_vieja',
+      destinatarioDni: '44885296',
+      destinatarioCelular: CEL,
+      agenciaNombre: 'SHALOM',
+      destinoProvincia: 'ZORRITOS',
+      destinoDepartamento: 'TUMBES',
+      agenciaDireccion: 'AV CENTRAL 1',
+      creadoEn: new Date(),
+    });
+
+    let r = await sim.cliente(CEL, 'envío');
+    expect(r[0]).toContain('ZORRITOS'); // ofrece la dirección previa
+    r = await sim.cliente(CEL, '1');
+
+    expect(sim.enviosRegistrados).toHaveLength(1);
+    const e = sim.enviosRegistrados[0];
+    expect(e.destinoProvincia).toBe('ZORRITOS');
+    expect(e.destinoDepartamento).toBe('TUMBES');
+    expect(e.agenciaDireccion).toBe('AV CENTRAL 1');
+    sim.imprimir('46. Entrega: reusa dirección previa con "1"');
   });
 
   it('39. saludo puro ("hola"): solo la bienvenida, sin llamar al LLM', async () => {

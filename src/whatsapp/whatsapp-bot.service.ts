@@ -14,6 +14,8 @@ import { IntegracionYapeService } from '../integracion-yape/integracion-yape.ser
 import { nombresCoinciden } from '../sorteos/nombre-match.util';
 import { IaAgenteService } from '../ia/ia.service';
 import { MensajeAgente } from '../ia/provider/agente-ia.provider';
+import { buscarEnvioPrevio } from '../ia/tools/resolver-cliente.tool';
+import { VentaService } from '../venta/venta.service';
 import { EvolutionApiService } from './evolution-api.service';
 import { generarCartillasPdf } from './cartilla-pdf.util';
 import { generarCartillaPng } from './cartilla-imagen.util';
@@ -66,6 +68,18 @@ export class WhatsappBotService {
     'GANADOR_DIRECCION',
     'REGALO_DNI',
     'REGALO_NOMBRE',
+  ];
+
+  /// Pasos del flujo DETERMINÍSTICO de entrega de una venta PAGADA del
+  /// agente IA (ctx.ventaEnvio.ventaId): la dirección se captura por
+  /// pasos y va directo a VentaService.upsertEnvio — el LLM no participa
+  /// (alucinaba "envío registrado" sin llamar la tool).
+  private static readonly ESTADOS_VENTA_ENTREGA = [
+    'VENTA_ENTREGA',
+    'VENTA_ENVIO_CIUDAD',
+    'VENTA_ENVIO_DEPARTAMENTO',
+    'VENTA_ENVIO_DIRECCION',
+    'VENTA_ENVIO_DESTINATARIO',
   ];
 
   /// Fallback si la empresa no configuró su agencia (IntegracionWhatsapp
@@ -210,6 +224,7 @@ export class WhatsappBotService {
     private readonly realtime: RealtimeInvalidationService,
     private readonly integracionYape: IntegracionYapeService,
     private readonly iaAgente: IaAgenteService,
+    private readonly venta: VentaService,
   ) {}
 
   /** Punto de entrada desde el webhook MESSAGES_UPSERT. */
@@ -240,6 +255,33 @@ export class WhatsappBotService {
       },
     });
     const sinSorteos = sorteos.length === 0;
+
+    // ── Flujo determinístico de ENTREGA post-pago (ventas del agente IA) ──
+    // Tiene prioridad sobre sorteos Y sobre el agente: la dirección se
+    // captura por pasos sin LLM. "menu"/"0"/caducidad lo sacan por el flujo
+    // normal de abajo (reset a MENU).
+    const convEntrega = await this.prisma.conversacionWhatsapp.findUnique({
+      where: { empresaId_celular: { empresaId, celular } },
+    });
+    if (
+      convEntrega &&
+      WhatsappBotService.ESTADOS_VENTA_ENTREGA.includes(convEntrega.estado) &&
+      !['menu', 'menú', 'cancelar', '0'].includes(
+        texto.trim().toLowerCase(),
+      ) &&
+      (Date.now() - convEntrega.actualizadoEn.getTime()) / 60000 <=
+        WhatsappBotService.TIMEOUT_PASO_MIN
+    ) {
+      await this.manejarEntregaVenta(
+        instanceName,
+        empresaId,
+        celular,
+        texto.trim(),
+        convEntrega,
+      );
+      return;
+    }
+
     if (sinSorteos) {
       // EXCEPCIÓN: un GANADOR a mitad del flujo de su premio (dirección
       // o número de Yape) se atiende aunque no haya sorteos abiertos —
@@ -3101,5 +3143,295 @@ export class WhatsappBotService {
       create: { empresaId, celular, estado, contexto },
       update: { estado, contexto },
     });
+  }
+
+  /**
+   * Flujo DETERMINÍSTICO de entrega de una venta PAGADA del agente IA:
+   * recojo/envío + dirección por pasos (patrón PART_CIUDAD de sorteos) y
+   * registro directo con VentaService.upsertEnvio — sin LLM (Haiku afirmaba
+   * "envío registrado" sin llamar la tool). El intercambio se anexa a
+   * historialIa para que el agente retome después con contexto.
+   */
+  private async manejarEntregaVenta(
+    instanceName: string,
+    empresaId: string,
+    celular: string,
+    msg: string,
+    conv: { estado: string; contexto: Prisma.JsonValue; actualizadoEn: Date },
+  ): Promise<void> {
+    const ctx: any = conv.contexto ?? {};
+    const ve: any = ctx.ventaEnvio ?? {};
+    const responder = (texto: string) =>
+      this.evolution.sendText({ instanceName, number: celular, text: texto });
+    /** Responde + anexa el turno al historial del agente + persiste estado. */
+    const decir = async (
+      texto: string,
+      estado: string,
+      veNuevo: any | null,
+    ) => {
+      await responder(texto);
+      const hist = Array.isArray(ctx.historialIa) ? ctx.historialIa : [];
+      ctx.historialIa = [
+        ...hist,
+        { rol: 'user', texto: msg },
+        { rol: 'assistant', texto },
+      ].slice(-12);
+      if (veNuevo === null) delete ctx.ventaEnvio;
+      else ctx.ventaEnvio = veNuevo;
+      return this.guardarConversacion(empresaId, celular, estado, ctx);
+    };
+
+    /** Registra el envío con los datos capturados y cierra el flujo. */
+    const completar = async (datos: {
+      ciudad?: string | null;
+      departamento?: string | null;
+      direccion?: string | null;
+      agencia?: string | null;
+      destNombre?: string;
+      destDni?: string;
+    }) => {
+      const venta = await this.prisma.venta.findFirst({
+        where: { id: ve.ventaId ?? '', empresaId },
+        select: {
+          id: true,
+          codigo: true,
+          nombreCliente: true,
+          documentoCliente: true,
+        },
+      });
+      if (!venta) {
+        return decir(
+          'No encontré tu compra reciente 😕 Un asesor coordinará tu ' +
+            'envío por este chat.',
+          'ASESOR',
+          null,
+        );
+      }
+      const nombre = datos.destNombre ?? venta.nombreCliente;
+      const dni = datos.destDni ?? venta.documentoCliente ?? undefined;
+      const agencia =
+        datos.agencia?.trim() || WhatsappBotService.AGENCIA_DEFAULT;
+      try {
+        await this.venta.upsertEnvio(venta.id, empresaId, {
+          destinatarioNombre: nombre,
+          destinatarioDni: dni,
+          destinatarioCelular: celular,
+          agenciaNombre: agencia,
+          destinoProvincia: datos.ciudad ?? undefined,
+          destinoDepartamento: datos.departamento ?? undefined,
+          agenciaDireccion: datos.direccion ?? undefined,
+        } as any);
+      } catch (e) {
+        this.logger.warn(
+          `upsertEnvio venta ${venta.codigo} falló: ${(e as Error).message}`,
+        );
+        return decir(
+          'No pude registrar tu envío 😕 Un asesor lo coordinará ' +
+            'contigo por este chat.',
+          'ASESOR',
+          null,
+        );
+      }
+      const destino = [datos.ciudad, datos.departamento]
+        .filter(Boolean)
+        .join(', ');
+      return decir(
+        `📦 ¡Envío registrado! Tu compra *${venta.codigo}* va por ` +
+          `*${agencia}*${destino ? ` a *${destino}*` : ''}` +
+          `${datos.direccion ? ` (${datos.direccion})` : ''}.\n` +
+          `La recoge *${nombre}*${dni ? ` (DNI ${dni})` : ''}.\n` +
+          '¡Te avisamos cuando salga! 🙌',
+        'IA',
+        null,
+      );
+    };
+
+    const norm = msg
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '');
+
+    switch (conv.estado) {
+      case 'VENTA_ENTREGA': {
+        if (/recoj|recog|tienda|local/.test(norm)) {
+          return decir(
+            '🏬 ¡Perfecto! Tu compra te espera en tienda. Cualquier ' +
+              'consulta escríbeme por aquí 🙌',
+            'IA',
+            null,
+          );
+        }
+        if (/envi|agencia|delivery|mandar|provincia/.test(norm)) {
+          const venta = await this.prisma.venta.findFirst({
+            where: { id: ve.ventaId ?? '', empresaId },
+            select: { documentoCliente: true },
+          });
+          const previo = await buscarEnvioPrevio(
+            this.prisma as any,
+            empresaId,
+            venta?.documentoCliente ?? '',
+            celular,
+          );
+          if (previo?.ciudad) {
+            const desc = [
+              previo.ciudad,
+              previo.departamento,
+              previo.direccionAgencia,
+            ]
+              .filter(Boolean)
+              .join(', ');
+            return decir(
+              `📦 Tengo una dirección tuya registrada: *${desc}*.\n` +
+                '*1* — Enviar ahí mismo\n' +
+                'O escribe la *ciudad* de destino (ej. TRUJILLO)',
+              'VENTA_ENVIO_CIUDAD',
+              { ...ve, previo },
+            );
+          }
+          return decir(
+            '📦 ¿A qué *ciudad* llega tu pedido? (ej. TRUJILLO)',
+            'VENTA_ENVIO_CIUDAD',
+            ve,
+          );
+        }
+        // Ni recojo ni envío: 1 repregunta; después responde el agente
+        // (puede ser una consulta libre) sin perder el estado de entrega.
+        if (!ve.reintento) {
+          return decir(
+            '¿La *recoges en tienda* o te la *enviamos por agencia*? ' +
+              'Escríbeme *recojo* o *envío* 🙂',
+            'VENTA_ENTREGA',
+            { ...ve, reintento: true },
+          );
+        }
+        await this.atenderConAgenteIa(
+          instanceName,
+          empresaId,
+          celular,
+          msg,
+          conv as any,
+        );
+        return;
+      }
+
+      case 'VENTA_ENVIO_CIUDAD': {
+        if (msg === '1' && ve.previo?.ciudad) {
+          return completar({
+            ciudad: ve.previo.ciudad,
+            departamento: ve.previo.departamento,
+            direccion: ve.previo.direccionAgencia,
+            agencia: ve.previo.agencia,
+          });
+        }
+        const ciudad = WhatsappBotService.campoCorto(msg);
+        if (!ciudad) {
+          await responder(
+            '📍 Solo el nombre de la *ciudad* por favor (ej. TRUJILLO)',
+          );
+          return;
+        }
+        return decir(
+          `📍 ¿En qué *departamento* está ${ciudad}? (ej. LA LIBERTAD)`,
+          'VENTA_ENVIO_DEPARTAMENTO',
+          { ...ve, ciudad },
+        );
+      }
+
+      case 'VENTA_ENVIO_DEPARTAMENTO': {
+        const departamento = WhatsappBotService.campoCorto(msg);
+        if (!departamento) {
+          await responder(
+            '📍 Solo el *departamento* por favor (ej. LA LIBERTAD)',
+          );
+          return;
+        }
+        const wpp = await this.prisma.integracionWhatsapp.findUnique({
+          where: { empresaId },
+          select: { agenciaEnvio: true },
+        });
+        const agencia =
+          wpp?.agenciaEnvio?.trim() || WhatsappBotService.AGENCIA_DEFAULT;
+        return decir(
+          `¿Cuál es la *dirección o sucursal* de ${agencia} en ` +
+            `${ve.ciudad ?? 'tu ciudad'}? (ej. ATAHUALPA)\n` +
+            'Responde *-* si no la sabes.',
+          'VENTA_ENVIO_DIRECCION',
+          { ...ve, departamento, agencia },
+        );
+      }
+
+      case 'VENTA_ENVIO_DIRECCION': {
+        const direccion = WhatsappBotService.sinDato(msg)
+          ? null
+          : msg.replace(/\s+/g, ' ').trim().toUpperCase().slice(0, 80);
+        return decir(
+          '¿Quién recogerá el pedido en la agencia?\n' +
+            '*1* — Yo mismo\n' +
+            'O escribe su *nombre y DNI* (ej. MARIA PEREZ 12345678)',
+          'VENTA_ENVIO_DESTINATARIO',
+          { ...ve, direccion },
+        );
+      }
+
+      case 'VENTA_ENVIO_DESTINATARIO': {
+        if (msg === '1') {
+          return completar({
+            ciudad: ve.ciudad,
+            departamento: ve.departamento,
+            direccion: ve.direccion,
+            agencia: ve.agencia,
+          });
+        }
+        const dni = msg.match(/\b\d{8,9}\b/)?.[0];
+        const nombreTipeado = msg
+          .replace(dni ?? '', ' ')
+          .replace(/\b(dni|d\.n\.i\.?|ce|carnet de extranjeria)\b/gi, ' ')
+          .replace(/[.,:;]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (!dni && nombreTipeado.length < 3) {
+          await responder(
+            'No te entendí 🙈 *1* si lo recoges tú mismo, o el ' +
+              '*nombre y DNI* de quien lo recogerá (ej. MARIA PEREZ 12345678)',
+          );
+          return;
+        }
+        let destNombre = nombreTipeado.toUpperCase();
+        if (dni) {
+          // Nombre oficial de la BD si la persona está registrada.
+          const p = await this.prisma.persona.findUnique({
+            where: { dni },
+            select: { nombres: true, apellidos: true },
+          });
+          if (p) destNombre = `${p.nombres} ${p.apellidos ?? ''}`.trim();
+        }
+        if (!destNombre) {
+          await responder(
+            'Me falta el *nombre* de quien recogerá el pedido 🙏 ' +
+              '(ej. MARIA PEREZ 12345678)',
+          );
+          return;
+        }
+        return completar({
+          ciudad: ve.ciudad,
+          departamento: ve.departamento,
+          direccion: ve.direccion,
+          agencia: ve.agencia,
+          destNombre,
+          destDni: dni,
+        });
+      }
+
+      default:
+        // Estado inesperado: que responda el agente (no dejar mudo el chat).
+        await this.atenderConAgenteIa(
+          instanceName,
+          empresaId,
+          celular,
+          msg,
+          conv as any,
+        );
+        return;
+    }
   }
 }

@@ -5,6 +5,7 @@ import { ConsultasExternasModule } from '../consultas-externas/consultas-externa
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
 import { IaModule } from '../ia/ia.module';
+import { VentaModule } from '../venta/venta.module';
 import { EvolutionApiService } from './evolution-api.service';
 import { WhatsappBotService } from './whatsapp-bot.service';
 import { WhatsappService } from './whatsapp.service';
@@ -21,6 +22,7 @@ import {
     NotificacionModule,
     IntegracionYapeModule,
     IaModule,
+    VentaModule,
   ],
   controllers: [WhatsappEmpresaController, WhatsappWebhookController],
   providers: [WhatsappService, EvolutionApiService, WhatsappBotService],
