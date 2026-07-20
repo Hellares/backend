@@ -172,6 +172,46 @@ export class IaAgenteService {
             'persona, su nombre y DNI) y responde según su resultado.'
           );
         }
+        // 4) Producto INVENTADO en la lista: un nombre en negrita en una línea
+        //    con precio "S/" que NO matchea ningún producto del catálogo
+        //    mostrado → Haiku completó la lista de memoria (pasó en beta:
+        //    "EDREDON MICROFIBRA", que no existe). 1 corrección por turno.
+        const norm = (s: string) =>
+          s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        const nombresCat = (ctx.catalogoReciente ?? []).map((c) =>
+          norm(c.nombre),
+        );
+        const SEG_SAFE =
+          /monto|pagar|precio|total|yape|numero|envio|recojo|stock|cantidad|compra|vta-|entrega|agencia/;
+        let inventado: string | null = null;
+        for (const linea of texto.split('\n')) {
+          if (!/S\/\s*\d/.test(linea)) continue;
+          for (const m of linea.matchAll(/\*\*([^*]{4,60})\*\*/g)) {
+            const seg = norm(m[1].trim());
+            if ((seg.match(/[a-z]/g)?.length ?? 0) < 4) continue;
+            if (SEG_SAFE.test(seg)) continue;
+            const enCatalogo = nombresCat.some(
+              (n) => n.includes(seg) || seg.includes(n),
+            );
+            if (!enCatalogo) {
+              inventado = m[1].trim();
+              break;
+            }
+          }
+          if (inventado) break;
+        }
+        if (inventado) {
+          this.logger.warn(
+            `Agente mencionó producto fuera de catálogo "${inventado}" (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            `[SISTEMA] "${inventado}" NO está en los resultados de tus ` +
+            'herramientas: lo inventaste o lo recordaste de otra conversación. ' +
+            'PROHIBIDO. Vuelve a responder presentando EXACTAMENTE los ' +
+            'productos del último resultado de buscarProducto (todos, sin ' +
+            'omitir ni agregar ninguno).'
+          );
+        }
         return null;
       };
     }

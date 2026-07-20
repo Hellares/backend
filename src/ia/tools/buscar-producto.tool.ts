@@ -175,9 +175,12 @@ export function crearBuscarProductoTool(
             stockDisponible: ps.stock,
           });
         }
-        if (items.length >= MAX_RESULTADOS) break;
       }
 
+      // ¿Quedaron productos FUERA del tope? El agente debe decirlo (y ofrecer
+      // afinar), no fingir que esto es todo — con tope corto la gente creía
+      // que no había más modelos.
+      const totalItems = items.length;
       const salida = items.slice(0, MAX_RESULTADOS);
       // Recordar id+varianteId de lo mostrado → crearVenta lo resuelve luego.
       recordarCatalogo(
@@ -188,7 +191,14 @@ export function crearBuscarProductoTool(
           nombre: p.nombre as string,
         })),
       );
-      return { ok: true, productos: salida };
+      const hayMas = totalItems > salida.length;
+      return {
+        ok: true,
+        productos: salida,
+        // Señal para el agente: hay más modelos que no entraron en el tope.
+        hayMas,
+        ...(hayMas ? { totalCoincidencias: totalItems } : {}),
+      };
     },
   };
 }
