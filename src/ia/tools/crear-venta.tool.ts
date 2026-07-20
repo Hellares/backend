@@ -336,6 +336,10 @@ export function crearCrearVentaTool(
       }
       const dto = {
         canalVenta: 'ONLINE', // el enum no tiene WhatsApp; se marca en observaciones
+        // Sin esto el cron TTL (expirarVentasYapePendientes filtra por
+        // metodoPago YAPE/PLIN) NUNCA anula la venta abandonada → el stock
+        // quedaba reservado para siempre (pasó en beta: lapicero agotado).
+        metodoPago: 'YAPE',
         sedeId: ctx.sedeId,
         vendedorId: staff.usuarioId,
         clienteId,
