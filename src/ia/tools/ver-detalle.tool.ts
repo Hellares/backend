@@ -1,6 +1,10 @@
 import { PrismaClient } from '@prisma/client';
 import { ContextoTool, DefinicionTool, ResultadoTool } from './tool.types';
-import { stockDisponible, recordarCatalogo } from './stock.util';
+import {
+  stockDisponible,
+  recordarCatalogo,
+  resolverIdPorCatalogo,
+} from './stock.util';
 
 /**
  * Tool `verDetalle` — detalle completo de UN producto: descripción,
@@ -30,8 +34,25 @@ export function crearVerDetalleTool(prisma: PrismaClient): DefinicionTool {
     },
 
     async ejecutar(args, ctx: ContextoTool): Promise<ResultadoTool> {
-      const productoId = String(args.productoId ?? '').trim();
-      if (!productoId) return { ok: false, motivo: 'FALTA_PRODUCTO_ID' };
+      const rawId = String(args.productoId ?? '').trim();
+      if (!rawId) return { ok: false, motivo: 'FALTA_PRODUCTO_ID' };
+      // Haiku a veces manda el NOMBRE en vez del id (pasó en beta: "LAPICERO
+      // GEL BOIL" → NO_ENCONTRADO → "no tiene imagen"). Resolver contra el
+      // catálogo mostrado y, si no, por nombre en BD.
+      let productoId = resolverIdPorCatalogo(ctx, rawId);
+      if (productoId === rawId && rawId.length < 20) {
+        // No parece cuid: buscar por nombre (único match para no adivinar).
+        const porNombre = await prisma.producto.findMany({
+          where: {
+            empresaId: ctx.empresaId,
+            deletedAt: null,
+            nombre: { contains: rawId, mode: 'insensitive' },
+          },
+          select: { id: true },
+          take: 2,
+        });
+        if (porNombre.length === 1) productoId = porNombre[0].id;
+      }
 
       const p = await prisma.producto.findFirst({
         where: {

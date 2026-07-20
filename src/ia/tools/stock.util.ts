@@ -21,6 +21,42 @@ export function recordarCatalogo(
   if (cat.length > 40) cat.splice(0, cat.length - 40);
 }
 
+/**
+ * Resuelve el `productoId` que mandó el LLM al ID REAL: Haiku a veces manda
+ * el NOMBRE ("LAPICERO GEL BOIL") o un código inventado ("LAP001") en vez del
+ * cuid. Orden: id exacto en catálogo → nombre exacto → parcial único →
+ * LETRAS del código único ("LAP001"→"lap" ⊂ "lapicero..."). Devuelve el id
+ * del catálogo o el valor original (que puede ser un cuid válido no mostrado).
+ */
+export function resolverIdPorCatalogo(
+  ctx: ContextoTool,
+  rawId: string,
+): string {
+  const cat = ctx.catalogoReciente ?? [];
+  const low = rawId.toLowerCase();
+  let hit =
+    cat.find((c) => c.id === rawId) ||
+    cat.find((c) => c.nombre.toLowerCase() === low);
+  if (!hit && low.length >= 3) {
+    const parciales = cat.filter(
+      (c) =>
+        c.nombre.toLowerCase().includes(low) ||
+        low.includes(c.nombre.toLowerCase()),
+    );
+    if (parciales.length === 1) hit = parciales[0];
+  }
+  if (!hit) {
+    const letras = low.replace(/[^a-záéíóúñ]/g, '');
+    if (letras.length >= 3) {
+      const porLetras = cat.filter((c) =>
+        c.nombre.toLowerCase().includes(letras),
+      );
+      if (porLetras.length === 1) hit = porLetras[0];
+    }
+  }
+  return hit?.id ?? rawId;
+}
+
 /** Fila de ProductoStock con los campos que afectan lo vendible. */
 export interface FilaStock {
   stockActual: number;
