@@ -107,6 +107,14 @@ export class IaAgenteService {
     //     → INVENTADO: se rechaza y se fuerza a llamar crearVenta de verdad.
     //  2) Disculpa de "hubo un problema" cuando NINGUNA tool falló en el turno
     //     → error fantasma: se rechaza y se le ordena continuar el flujo.
+    // Cierre de TODA corrección de guard: sin esto, Haiku traduce el regaño
+    // interno en una disculpa al cliente ("disculpa, cometí un error") aunque
+    // la venta haya salido perfecta — pasó en beta con el falso positivo del
+    // nombre. La corrección es tramoya, el cliente jamás debe verla.
+    const NOTA_INTERNA =
+      ' IMPORTANTE: esta corrección es INTERNA (el cliente no la vio). NO te ' +
+      'disculpes, NO digas que hubo un error ni la menciones: entrega ' +
+      'directamente la respuesta corregida como si fuera la primera.';
     let validarFinal:
       | ((texto: string, trazas: TrazaTurno[]) => string | null)
       | undefined;
@@ -131,7 +139,8 @@ export class IaAgenteService {
             'NUNCA inventes números de Yape ni montos. Si aún no llamaste a ' +
             'crearVenta en esta conversación, llámala AHORA: el monto (payAmount) ' +
             'y el número (numeroPago) reales SOLO salen de su respuesta. Corrige ' +
-            'tu mensaje al cliente usando los datos reales.'
+            'tu mensaje al cliente usando los datos reales.' +
+            NOTA_INTERNA
           );
         }
         const seDisculpa =
@@ -150,7 +159,8 @@ export class IaAgenteService {
             'te disculpes, no vuelvas a pedir el DNI ni dudes del nombre ya ' +
             'confirmado, ni derives a un asesor. Continúa el flujo de venta ' +
             'donde quedó: si el cliente te dio su DNI/CE llama resolverCliente; ' +
-            'si ya confirmó su nombre llama crearVenta con ese documento. Hazlo AHORA.'
+            'si ya confirmó su nombre llama crearVenta con ese documento. Hazlo AHORA.' +
+            NOTA_INTERNA
           );
         }
         // 3) Afirma que el envío "quedó registrado" sin haber llamado
@@ -178,7 +188,8 @@ export class IaAgenteService {
             'registrado sin que la herramienta lo confirme. Llama AHORA a ' +
             'registrarEnvio con los datos que el cliente te dio (ciudad, ' +
             'departamento, sucursal/dirección de la agencia; si recoge otra ' +
-            'persona, su nombre y DNI) y responde según su resultado.'
+            'persona, su nombre y DNI) y responde según su resultado.' +
+            NOTA_INTERNA
           );
         }
         // 4) Producto INVENTADO en la lista: un nombre en negrita en una línea
@@ -241,7 +252,8 @@ export class IaAgenteService {
             `[SISTEMA] "${inventado}" NO está en los resultados de tus ` +
             'herramientas: lo inventaste o lo recordaste de otra conversación. ' +
             'PROHIBIDO.' +
-            pista
+            pista +
+            NOTA_INTERNA
           );
         }
         return null;
