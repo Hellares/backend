@@ -101,14 +101,12 @@ export function crearBuscarProductoTool(
         return { ok: false, motivo: 'QUERY_MUY_CORTA' };
       }
 
-      const productos = await prisma.producto.findMany({
+      const buscarEnBd = (where: Record<string, unknown>) =>
+        prisma.producto.findMany({
         where: {
           empresaId: ctx.empresaId,
           deletedAt: null,
-          OR: terminos.flatMap((t) => [
-            { nombre: { contains: t, mode: 'insensitive' as const } },
-            { descripcion: { contains: t, mode: 'insensitive' as const } },
-          ]),
+          ...where,
         },
         include: {
           // Stock a nivel producto (varianteId null).
@@ -138,6 +136,12 @@ export function crearBuscarProductoTool(
         // margen para descartar sin stock/precio; crece con la página pedida
         take: (pagina + 1) * MAX_RESULTADOS * 4,
       });
+      let productos = await buscarEnBd({
+        OR: terminos.flatMap((t) => [
+          { nombre: { contains: t, mode: 'insensitive' as const } },
+          { descripcion: { contains: t, mode: 'insensitive' as const } },
+        ]),
+      });
 
       // El cliente ve UNIDADES COMPRABLES, no la estructura interna: un producto
       // con variantes se EXPANDE en un ítem por variante ("EDREDON Cristal",
@@ -156,34 +160,56 @@ export function crearBuscarProductoTool(
         return { precio: min === max ? min : { desde: min, hasta: max }, stock };
       };
 
-      const items: Record<string, unknown>[] = [];
-      for (const p of productos) {
-        const desc = (p.descripcion ?? '').slice(0, 90);
-        const variantesConStock = p.variantes
-          .map((v) => ({ v, ps: precioYStock(v.stocksPorSede) }))
-          .filter((x): x is { v: (typeof p.variantes)[number]; ps: NonNullable<ReturnType<typeof precioYStock>> } => x.ps !== null);
+      const armarItems = (prods: typeof productos) => {
+        const out: Record<string, unknown>[] = [];
+        for (const p of prods) {
+          const desc = (p.descripcion ?? '').slice(0, 90);
+          const variantesConStock = p.variantes
+            .map((v) => ({ v, ps: precioYStock(v.stocksPorSede) }))
+            .filter((x): x is { v: (typeof p.variantes)[number]; ps: NonNullable<ReturnType<typeof precioYStock>> } => x.ps !== null);
 
-        if (variantesConStock.length > 0) {
-          for (const { v, ps } of variantesConStock) {
-            items.push({
+          if (variantesConStock.length > 0) {
+            for (const { v, ps } of variantesConStock) {
+              out.push({
+                id: p.id,
+                varianteId: v.id,
+                nombre: `${p.nombre} ${v.nombre}`.trim(),
+                descCorta: desc,
+                precio: ps.precio,
+                stockDisponible: ps.stock,
+              });
+            }
+          } else {
+            const ps = precioYStock(p.stocksPorSede);
+            if (!ps) continue;
+            out.push({
               id: p.id,
-              varianteId: v.id,
-              nombre: `${p.nombre} ${v.nombre}`.trim(),
+              nombre: p.nombre,
               descCorta: desc,
               precio: ps.precio,
               stockDisponible: ps.stock,
             });
           }
-        } else {
-          const ps = precioYStock(p.stocksPorSede);
-          if (!ps) continue;
-          items.push({
-            id: p.id,
-            nombre: p.nombre,
-            descCorta: desc,
-            precio: ps.precio,
-            stockDisponible: ps.stock,
+        }
+        return out;
+      };
+      let items = armarItems(productos);
+
+      // Fallback FUZZY (pg_trgm): "estevia"→ESTEBIA, "almuhada"→ALMOHADA…
+      // typos y variantes ortográficas que `contains` no matchea. Umbral 0.35
+      // (medido: typos reales ≈0.45-0.5; palabras distintas quedan fuera).
+      if (items.length === 0) {
+        const parecidos = await prisma.$queryRaw<{ id: string }[]>`
+          SELECT id FROM "Producto"
+          WHERE "empresaId" = ${ctx.empresaId} AND "deletedAt" IS NULL
+            AND similarity(nombre, ${query}) > 0.35
+          ORDER BY similarity(nombre, ${query}) DESC
+          LIMIT 10`;
+        if (parecidos.length > 0) {
+          productos = await buscarEnBd({
+            id: { in: parecidos.map((r) => r.id) },
           });
+          items = armarItems(productos);
         }
       }
 
