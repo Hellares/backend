@@ -157,6 +157,17 @@ export function crearCrearVentaTool(
           );
           if (parciales.length === 1) hit = parciales[0];
         }
+        if (!hit) {
+          // Haiku a veces inventa códigos derivados del nombre ("LAP001" para
+          // LAPICERO): comparar solo las LETRAS del código contra el catálogo.
+          const letras = low.replace(/[^a-záéíóúñ]/g, '');
+          if (letras.length >= 3) {
+            const porLetras = cat.filter((c) =>
+              c.nombre.toLowerCase().includes(letras),
+            );
+            if (porLetras.length === 1) hit = porLetras[0];
+          }
+        }
         if (hit) {
           rawProdId = hit.id;
           if (!varianteId && hit.varianteId) varianteId = hit.varianteId;
@@ -187,7 +198,20 @@ export function crearCrearVentaTool(
               c.stocksPorSede.length > 0 ||
               c.variantes.some((v: any) => v.stocksPorSede.length > 0),
           );
-          if (conStock.length !== 1) {
+          if (conStock.length === 1) {
+            prod = conStock[0];
+          } else if (conStock.length === 0 && cat.length === 1) {
+            // ÚLTIMO RECURSO determinístico: en la conversación solo se mostró
+            // UN producto → un id irresoluble ("LAP001") solo puede ser ese.
+            // (Si el cliente pidiera otro producto real, la búsqueda por nombre
+            // de arriba ya lo habría encontrado y no llegaríamos aquí.)
+            if (!varianteId && cat[0].varianteId) varianteId = cat[0].varianteId;
+            prod = await prisma.producto.findFirst({
+              where: { id: cat[0].id, empresaId: ctx.empresaId, deletedAt: null },
+              include: includeStock,
+            });
+          }
+          if (!prod) {
             return {
               ok: false,
               motivo:
@@ -198,7 +222,6 @@ export function crearCrearVentaTool(
                 .map((c: any) => ({ id: c.id, nombre: c.nombre })),
             };
           }
-          prod = conStock[0];
         }
         const productoId = prod.id;
 
