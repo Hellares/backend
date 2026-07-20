@@ -31,6 +31,8 @@ export interface ResultadoAtencion {
   resultado?: ResultadoConversacion;
   /** Catálogo mostrado (id+variante) — el bot lo persiste para el próximo turno. */
   catalogo?: CatalogoItem[];
+  /** Última búsqueda (query/página/hayMas) — el bot la persiste para paginar. */
+  busqueda?: { query: string; pagina: number; hayMas: boolean };
 }
 
 /**
@@ -68,6 +70,8 @@ export class IaAgenteService {
     sorteoActivo?: string | null;
     /** Catálogo mostrado en turnos previos (para resolver ids en crearVenta). */
     catalogoPrevio?: CatalogoItem[];
+    /** Última búsqueda de turnos previos (para paginar "muéstrame más"). */
+    busquedaPrevia?: { query: string; pagina: number; hayMas: boolean } | null;
   }): Promise<ResultadoAtencion> {
     const cfg = await this.prisma.integracionAgenteIA.findUnique({
       where: { empresaId: params.empresaId },
@@ -81,6 +85,7 @@ export class IaAgenteService {
       sedeId: params.sedeId ?? null,
       celular: params.celular ?? null,
       catalogoReciente: params.catalogoPrevio ? [...params.catalogoPrevio] : [],
+      ultimaBusqueda: params.busquedaPrevia ?? undefined,
     };
 
     const provider = this.resolverProvider(cfg);
@@ -91,6 +96,7 @@ export class IaAgenteService {
       cfg,
       params.omitirSaludo,
       params.sorteoActivo,
+      params.busquedaPrevia ?? null,
     );
 
     // Guards anti-alucinación (solo VENDE), determinísticos sobre la respuesta
@@ -204,12 +210,17 @@ export class IaAgenteService {
           this.logger.warn(
             `Agente mencionó producto fuera de catálogo "${inventado}" (empresa ${params.empresaId}) — corrigiendo`,
           );
+          const pista = ctx.ultimaBusqueda?.hayMas
+            ? ` Si el cliente pidió VER MÁS modelos, llama AHORA buscarProducto ` +
+              `con query "${ctx.ultimaBusqueda.query}" y pagina ` +
+              `${ctx.ultimaBusqueda.pagina + 1} y presenta ESE resultado.`
+            : ' Presenta EXACTAMENTE los productos del último resultado de ' +
+              'buscarProducto (todos, sin omitir ni agregar ninguno).';
           return (
             `[SISTEMA] "${inventado}" NO está en los resultados de tus ` +
             'herramientas: lo inventaste o lo recordaste de otra conversación. ' +
-            'PROHIBIDO. Vuelve a responder presentando EXACTAMENTE los ' +
-            'productos del último resultado de buscarProducto (todos, sin ' +
-            'omitir ni agregar ninguno).'
+            'PROHIBIDO.' +
+            pista
           );
         }
         return null;
@@ -229,6 +240,7 @@ export class IaAgenteService {
       mensajeBienvenida: cfg.mensajeBienvenida,
       resultado,
       catalogo: ctx.catalogoReciente,
+      busqueda: ctx.ultimaBusqueda,
     };
   }
 
@@ -308,6 +320,7 @@ export class IaAgenteService {
     cfg: IntegracionAgenteIA,
     omitirSaludo?: boolean,
     sorteoActivo?: string | null,
+    busquedaPrevia?: { query: string; pagina: number; hayMas: boolean } | null,
   ): Promise<string> {
     const [empresa, wpp] = await Promise.all([
       this.prisma.empresa.findUnique({
@@ -339,6 +352,7 @@ export class IaAgenteService {
       saludoYaEnviado: omitirSaludo,
       modoVenta: cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape,
       sorteoActivo: sorteoActivo ?? null,
+      busquedaPrevia,
     });
   }
 }

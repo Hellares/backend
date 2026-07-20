@@ -203,6 +203,9 @@ export function crearBuscarProductoTool(
         })),
       );
       const hayMas = totalItems > desde + salida.length;
+      // Memoria de búsqueda: el bot la persiste entre turnos → la Capa C
+      // instruye paginar cuando el cliente pida "más".
+      ctx.ultimaBusqueda = { query, pagina, hayMas };
       return {
         ok: true,
         productos: salida,

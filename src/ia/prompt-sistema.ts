@@ -37,6 +37,8 @@ export interface CapasPrompt {
   modoVenta?: boolean;
   /** Título del sorteo/evento activo (si hay) → el agente redirige a participar. */
   sorteoActivo?: string | null;
+  /** Última búsqueda persistida — para paginar "muéstrame más". */
+  busquedaPrevia?: { query: string; pagina: number; hayMas: boolean } | null;
 }
 
 export function construirSystemPrompt(
@@ -66,6 +68,15 @@ export function construirSystemPrompt(
     runtime.push(
       'El sistema YA envió el saludo de bienvenida: NO saludes ni te ' +
         'presentes de nuevo, responde directo a lo que pide el cliente.',
+    );
+  }
+  if (capas.busquedaPrevia?.hayMas) {
+    const b = capas.busquedaPrevia;
+    runtime.push(
+      `La última búsqueda fue "${b.query}" (página ${b.pagina}) y QUEDAN MÁS ` +
+        'resultados: si el cliente pide ver más modelos, llama buscarProducto ' +
+        `con query "${b.query}" y pagina ${b.pagina + 1}. NUNCA digas que ya ` +
+        'no hay más ni completes la lista de memoria.',
     );
   }
   if (capas.sorteoActivo) {

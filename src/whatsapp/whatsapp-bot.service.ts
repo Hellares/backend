@@ -3068,6 +3068,8 @@ export class WhatsappBotService {
     const catalogoPrevio = Array.isArray(ctxPrevio.catalogoIa)
       ? ctxPrevio.catalogoIa
       : [];
+    // Última búsqueda → "muéstrame más" pagina en vez de inventar.
+    const busquedaPrevia = ctxPrevio.busquedaIa ?? null;
 
     // Saludo de bienvenida: solo en el PRIMER turno (sin historial). Se envía
     // ANTES de la respuesta del agente y se le avisa al agente que no re-salude.
@@ -3105,6 +3107,7 @@ export class WhatsappBotService {
         omitirSaludo: esPrimerTurno && !!bienvenida,
         sorteoActivo: sorteoActivo ?? null,
         catalogoPrevio,
+        busquedaPrevia,
       });
     } catch (e) {
       this.logger.warn(`Agente IA (${celular}): ${(e as Error).message}`);
@@ -3216,6 +3219,7 @@ export class WhatsappBotService {
       ...ctxPrevio,
       historialIa: nuevoHist,
       catalogoIa: r.catalogo ?? catalogoPrevio,
+      busquedaIa: r.busqueda ?? busquedaPrevia,
     });
     return true;
   }

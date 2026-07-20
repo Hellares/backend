@@ -28,6 +28,9 @@ export interface ContextoTool {
    * Array MUTABLE compartido en el turno; el bot lo persiste entre turnos.
    */
   catalogoReciente?: CatalogoItem[];
+  /** Última búsqueda del turno/conversación (buscarProducto la escribe):
+   *  permite que "muéstrame más" pagine en vez de inventar. */
+  ultimaBusqueda?: { query: string; pagina: number; hayMas: boolean };
 }
 
 /**
