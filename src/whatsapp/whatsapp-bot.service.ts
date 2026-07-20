@@ -3132,6 +3132,50 @@ export class WhatsappBotService {
         }
       }
     }
+    // También al MOSTRAR resultados: si buscarProducto devolvió UN solo
+    // producto (aunque sean varias variantes), su foto va de una — sin
+    // esperar a que el LLM decida llamar verDetalle.
+    if (fotos.length === 0) {
+      const ids = new Set<string>();
+      let itemsUnico: any[] = [];
+      for (const t of r.resultado.trazas ?? []) {
+        for (const tl of t.tools ?? []) {
+          if (tl.nombre !== 'buscarProducto') continue;
+          const prods = (tl.resultado as any)?.productos;
+          if (!Array.isArray(prods)) continue;
+          for (const it of prods) ids.add(it.id);
+          itemsUnico = prods;
+        }
+      }
+      if (ids.size === 1) {
+        const id = [...ids][0];
+        const [img, prod] = await Promise.all([
+          this.prisma.archivo.findFirst({
+            where: {
+              entidadTipo: 'PRODUCTO',
+              entidadId: id,
+              isActive: true,
+              deletedAt: null,
+            },
+            orderBy: { orden: 'asc' },
+            select: { url: true },
+          }),
+          this.prisma.producto.findFirst({
+            where: { id, empresaId },
+            select: { nombre: true },
+          }),
+        ]);
+        if (img?.url && prod) {
+          const solo = itemsUnico.length === 1 ? itemsUnico[0] : null;
+          fotos.push({
+            nombre: (solo?.nombre as string) ?? prod.nombre,
+            precio: solo?.precio ?? null,
+            url: img.url,
+          });
+        }
+      }
+    }
+
     for (const foto of fotos.slice(0, 2)) {
       const precioTxt =
         typeof foto.precio === 'number'

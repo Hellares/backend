@@ -33,6 +33,7 @@ class FakeDb {
   sedes: Row[] = [];
   ventas: Row[] = [];
   ventaEnvios: Row[] = [];
+  productos: Row[] = [];
 }
 
 function coincide(row: Row, where: Row, db: FakeDb): boolean {
@@ -241,6 +242,7 @@ class Simulador {
       sede: modelo(this.db, () => this.db.sedes),
       venta: modelo(this.db, () => this.db.ventas),
       ventaEnvio: modelo(this.db, () => this.db.ventaEnvios),
+      producto: modelo(this.db, () => this.db.productos),
     } as any;
     const evolution = {
       disponible: true,
@@ -1986,6 +1988,63 @@ describe('Simulación E2E del bot de sorteos', () => {
     expect(r[idxImg]).toContain('ZAPATILLAS VERNO — S/ 60.00');
     expect(idxImg).toBeLessThan(idxTxt);
     sim.imprimir('47. Foto de producto vía verDetalle');
+  });
+
+  it('48. foto directa: buscarProducto con UN solo producto → imagen sin verDetalle', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.db.productos.push({
+      id: 'prod9',
+      empresaId: EMPRESA,
+      nombre: 'LAPICERO GEL BOIL',
+      deletedAt: null,
+    });
+    sim.db.archivos.push({
+      id: 'img9',
+      entidadTipo: 'PRODUCTO',
+      entidadId: 'prod9',
+      isActive: true,
+      deletedAt: null,
+      orden: 1,
+      url: 'https://cdn.test/lapicero.jpg',
+      urlThumbnail: null,
+    });
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: {
+        texto: 'Tengo el LAPICERO GEL BOIL a S/ 1. ¿Cuántos llevas?',
+        iteraciones: 2,
+        trazas: [
+          {
+            iteracion: 1,
+            tools: [
+              {
+                nombre: 'buscarProducto',
+                args: { query: 'lapicero' },
+                resultado: {
+                  ok: true,
+                  productos: [
+                    {
+                      id: 'prod9',
+                      nombre: 'LAPICERO GEL BOIL',
+                      precio: 1,
+                      stockDisponible: 20,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const r = await sim.cliente(CEL, 'tienes lapiceros?');
+    const idxImg = r.findIndex((m) => m.includes('[imagen]'));
+    expect(idxImg).toBeGreaterThanOrEqual(0);
+    expect(r[idxImg]).toContain('LAPICERO GEL BOIL — S/ 1.00');
+    expect(idxImg).toBeLessThan(r.findIndex((m) => m.includes('Cuántos')));
+    sim.imprimir('48. Foto directa desde buscarProducto (resultado único)');
   });
 
   it('39. saludo puro ("hola"): solo la bienvenida, sin llamar al LLM', async () => {
