@@ -78,12 +78,21 @@ export function crearBuscarProductoTool(
             'Términos de búsqueda de dominio (1 a 4 palabras) derivados de la ' +
             'intención del cliente. Ej: "mochila spiderman", "disco", "peluche stitch".',
         },
+        pagina: {
+          type: 'number',
+          description:
+            'Página de resultados (1 = primera). Si el resultado anterior ' +
+            'trajo hayMas:true y el cliente pide VER MÁS modelos, repite la ' +
+            'MISMA query con la página siguiente. NUNCA inventes productos ' +
+            'para completar una lista.',
+        },
       },
       required: ['query'],
     },
 
     async ejecutar(args, ctx: ContextoTool): Promise<ResultadoTool> {
       const query = String(args.query ?? '').trim();
+      const pagina = Math.max(1, Math.floor(Number(args.pagina ?? 1) || 1));
       if (query.length < 2) {
         return { ok: false, motivo: 'QUERY_MUY_CORTA' };
       }
@@ -126,7 +135,8 @@ export function crearBuscarProductoTool(
             },
           },
         },
-        take: MAX_RESULTADOS * 4, // margen para descartar los sin stock/precio
+        // margen para descartar sin stock/precio; crece con la página pedida
+        take: (pagina + 1) * MAX_RESULTADOS * 4,
       });
 
       // El cliente ve UNIDADES COMPRABLES, no la estructura interna: un producto
@@ -178,10 +188,11 @@ export function crearBuscarProductoTool(
       }
 
       // ¿Quedaron productos FUERA del tope? El agente debe decirlo (y ofrecer
-      // afinar), no fingir que esto es todo — con tope corto la gente creía
-      // que no había más modelos.
+      // afinar o pedir la página siguiente), no fingir que esto es todo — con
+      // tope corto la gente creía que no había más modelos.
       const totalItems = items.length;
-      const salida = items.slice(0, MAX_RESULTADOS);
+      const desde = (pagina - 1) * MAX_RESULTADOS;
+      const salida = items.slice(desde, desde + MAX_RESULTADOS);
       // Recordar id+varianteId de lo mostrado → crearVenta lo resuelve luego.
       recordarCatalogo(
         ctx,
@@ -191,11 +202,12 @@ export function crearBuscarProductoTool(
           nombre: p.nombre as string,
         })),
       );
-      const hayMas = totalItems > salida.length;
+      const hayMas = totalItems > desde + salida.length;
       return {
         ok: true,
         productos: salida,
-        // Señal para el agente: hay más modelos que no entraron en el tope.
+        pagina,
+        // Señal para el agente: hay más modelos → puede pedir pagina+1.
         hayMas,
         ...(hayMas ? { totalCoincidencias: totalItems } : {}),
       };

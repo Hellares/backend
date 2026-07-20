@@ -118,11 +118,12 @@ async function main() {
     }
 
     if (!esChat) {
-      // ── Modo TOOL: buscarProducto (sin LLM) ──
+      // ── Modo TOOL: buscarProducto (sin LLM). 2º arg opcional = página ──
       const query = arg ?? 'peluche';
-      console.log(`\n🔧 ${buscar.nombre}("${query}")\n`);
+      const pagina = Number(process.argv[3] ?? 1) || 1;
+      console.log(`\n🔧 ${buscar.nombre}("${query}", pagina ${pagina})\n`);
       console.log(
-        JSON.stringify(await buscar.ejecutar({ query }, ctx), null, 2),
+        JSON.stringify(await buscar.ejecutar({ query, pagina }, ctx), null, 2),
       );
       return;
     }

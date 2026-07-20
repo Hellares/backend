@@ -51,7 +51,7 @@ export class AgenteService {
     const tools = this.ejecutor.definiciones();
     const max = params.maxIteraciones ?? 6;
     const trazas: TrazaTurno[] = [];
-    let corregido = false;
+    let corregido = 0;
 
     const historial: MensajeAgente[] = [
       ...(params.historialPrevio ?? []),
@@ -80,13 +80,15 @@ export class AgenteService {
 
       // Sin tools → el agente terminó su respuesta al cliente.
       if (usos.length === 0) {
-        // Guard determinístico: una respuesta inválida (ej. número de Yape
-        // inventado) se rechaza y se reinyecta para que el LLM la corrija
-        // llamando a las tools de verdad. Una sola corrección por turno.
-        if (params.validarFinal && !corregido) {
+        // Guard determinístico: una respuesta inválida (ej. número de Yape o
+        // producto inventado) se rechaza y se reinyecta para que el LLM la
+        // corrija llamando a las tools de verdad. Hasta 2 correcciones por
+        // turno: pasó que la PRIMERA corrección volvía a inventar (zapatillas
+        // ESCOLAR/CASUAL tras rechazar NIÑO) y se colaba sin re-chequear.
+        if (params.validarFinal && corregido < 2) {
           const nudge = params.validarFinal(textoTurno, trazas);
           if (nudge) {
-            corregido = true;
+            corregido++;
             trazas.push({ iteracion: i + 1, tools: [], texto: textoTurno });
             historial.push({
               rol: 'user',
