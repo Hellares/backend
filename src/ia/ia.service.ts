@@ -3,6 +3,7 @@ import { IntegracionAgenteIA, ModoAgenteIA } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { VentaService } from '../venta/venta.service';
 import { ConsultasExternasService } from '../consultas-externas/consultas-externas.service';
+import { ClientesService } from '../clientes/clientes.service';
 import { descifrarSecreto } from '../ia-config/crypto-key.util';
 import { AnthropicProvider } from './provider/anthropic.provider';
 import { AgenteIaProvider, MensajeAgente } from './provider/agente-ia.provider';
@@ -51,6 +52,7 @@ export class IaAgenteService {
     private readonly prisma: PrismaService,
     private readonly venta: VentaService,
     private readonly consultas: ConsultasExternasService,
+    private readonly clientes: ClientesService,
   ) {}
 
   /**
@@ -298,7 +300,7 @@ export class IaAgenteService {
     const ejecutor = new EjecutorTools().registrar(
       crearBuscarProductoTool(this.prisma, cfg.maxProductosMostrar),
       crearVerDetalleTool(this.prisma),
-      crearResolverClienteTool(this.prisma, this.consultas),
+      crearResolverClienteTool(this.prisma, this.consultas, this.clientes),
     );
     if (cfg.modo === ModoAgenteIA.VENDE && cfg.puedeCobrarYape) {
       ejecutor.registrar(

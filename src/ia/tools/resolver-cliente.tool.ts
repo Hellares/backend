@@ -21,6 +21,23 @@ export interface ConsultasLike {
 }
 
 /**
+ * Interfaz mínima de ClientesService: registra al cliente con los datos
+ * oficiales (Factiliza por dentro) — Persona (esCliente) + EmpresaPersona del
+ * tenant. Idempotente. Es EL MISMO camino del bot de sorteos.
+ */
+export interface ClientesLike {
+  getOrCreateByDni(
+    empresaId: string,
+    dni: string,
+  ): Promise<{
+    clienteEmpresaId: string;
+    personaId: string;
+    nombreCompleto: string;
+    origen: 'INTERNO' | 'RENIEC' | 'MIGRACIONES';
+  }>;
+}
+
+/**
  * Tool `resolverCliente` — identifica al cliente por su documento: DNI
  * (8 dígitos) o CE de extranjería (9). El documento vive en `Persona.dni`
  * (el CE se distingue por longitud, sin columna aparte).
@@ -89,14 +106,15 @@ export async function buscarEnvioPrevio(
 export function crearResolverClienteTool(
   prisma: PrismaClient,
   consultas?: ConsultasLike,
+  clientes?: ClientesLike,
 ): DefinicionTool {
   return {
     nombre: 'resolverCliente',
     descripcion:
       'Identifica al cliente por su DNI (8 dígitos) o CE de extranjería (9). ' +
       'EN CUANTO el cliente te dé un DNI/CE, llama a esta herramienta ANTES de ' +
-      'pedirle el nombre: primero busca en la base y, si no está, consulta ' +
-      'RENIEC/Migraciones y devuelve el nombre oficial (registrado=false) para ' +
+      'pedirle el nombre: primero busca en la base y, si no está, lo REGISTRA ' +
+      'con su nombre oficial de RENIEC/Migraciones y te lo devuelve para ' +
       'que lo confirmes. Solo pide el nombre a mano si devuelve NO_ENCONTRADO. ' +
       'No inventes el nombre.',
     parametros: {
@@ -112,7 +130,7 @@ export function crearResolverClienteTool(
 
     async ejecutar(args, ctx: ContextoTool): Promise<ResultadoTool> {
       const doc = String(args.documento ?? '').replace(/\D/g, '');
-      if (doc.length !== 8 && doc.length !== 9) {
+      if ((doc.length !== 8 && doc.length !== 9) || doc === '00000000') {
         return { ok: false, motivo: 'DOCUMENTO_INVALIDO' };
       }
       const tipoDoc = doc.length === 9 ? 'CE' : 'DNI';
@@ -152,7 +170,42 @@ export function crearResolverClienteTool(
         };
       }
 
-      // 2) No está en la base → RENIEC/Migraciones (Factiliza) por el nombre.
+      // 2) No está en la base → REGISTRARLO YA con los datos oficiales
+      //    (ClientesService.getOrCreateByDni: Factiliza → crea Persona +
+      //    EmpresaPersona, el MISMO camino del bot de sorteos). Así, cuando
+      //    llegue el pago Yape, el matcher compara contra el nombre OFICIAL
+      //    de RENIEC y no contra lo que tipeó el LLM — la venta 721 se perdió
+      //    porque la clienta nueva no existía como Persona y el snapshot del
+      //    nombre quedó en manos del modelo.
+      if (clientes) {
+        try {
+          const creado = await clientes.getOrCreateByDni(ctx.empresaId, doc);
+          return {
+            ok: true,
+            registrado: true,
+            // Recién dado de alta (no estaba en el paso 1): con nombre oficial.
+            registradoAhora: true,
+            clienteId: creado.clienteEmpresaId,
+            personaId: creado.personaId,
+            nombreCompleto: creado.nombreCompleto,
+            fuente: creado.origen,
+            tipoDoc,
+            envioPrevio: await buscarEnvioPrevio(
+              prisma,
+              ctx.empresaId,
+              doc,
+              ctx.celular,
+            ),
+          };
+        } catch {
+          // Factiliza no lo encontró (o no respondió) → que el agente pida el
+          // nombre a mano; la venta quedará sin vínculo, como hasta ahora.
+          return { ok: false, motivo: 'NO_ENCONTRADO', documento: doc };
+        }
+      }
+
+      // 3) Fallback SIN ClientesService (spike/standalone): solo consulta el
+      //    nombre oficial, sin registrar (registrado=false).
       if (!consultas) {
         return { ok: false, motivo: 'NO_REGISTRADO', documento: doc };
       }

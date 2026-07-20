@@ -2,18 +2,17 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { VentaModule } from '../venta/venta.module';
 import { ConsultasExternasModule } from '../consultas-externas/consultas-externas.module';
+import { ClientesModule } from '../clientes/clientes.module';
 import { IaAgenteService } from './ia.service';
 
 /**
  * Módulo del agente IA vendedor por WhatsApp. Reusa los servicios reales
- * (VentaService y, a futuro, ClientesService) para que las tools de
- * escritura ejecuten el flujo determinístico existente.
- *
- * Aún NO se registra en AppModule: el enganche al bot de WhatsApp es
- * Fase 1. Por ahora el módulo queda listo y verificado (tsc).
+ * (VentaService, ClientesService) para que las tools de escritura ejecuten
+ * el flujo determinístico existente — resolverCliente registra al cliente
+ * nuevo con getOrCreateByDni (mismo camino que el bot de sorteos).
  */
 @Module({
-  imports: [PrismaModule, VentaModule, ConsultasExternasModule],
+  imports: [PrismaModule, VentaModule, ConsultasExternasModule, ClientesModule],
   providers: [IaAgenteService],
   exports: [IaAgenteService],
 })
