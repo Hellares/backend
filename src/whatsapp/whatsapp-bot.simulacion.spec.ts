@@ -2123,6 +2123,35 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('50. Tool escalarAsesor → bot en silencio + push');
   });
 
+  it('52. en ASESOR, "menu" reactiva al asistente (sin sorteos, sin LLM)', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente({ nombreAgente: 'eSync' });
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'Aquí estoy 😊', iteraciones: 1, trazas: [] },
+    });
+
+    // Silenciar primero: pedido de asesor.
+    await sim.cliente(CEL, 'quiero hablar con un asesor');
+    expect(sim.db.conversaciones.find((c) => c.celular === CEL)!.estado).toBe(
+      'ASESOR',
+    );
+    const llamadasAntes = sim.iaLlamadas.length;
+
+    // "menu" (incluso con el formato *menu* de WhatsApp) → reactiva SIN LLM.
+    const r = await sim.cliente(CEL, '*menu*');
+    expect(r.some((m) => m.includes('De vuelta con eSync'))).toBe(true);
+    expect(sim.iaLlamadas).toHaveLength(llamadasAntes); // sin gastar LLM
+    expect(sim.db.conversaciones.find((c) => c.celular === CEL)!.estado).toBe(
+      'IA',
+    );
+
+    // Y el siguiente mensaje ya lo atiende el agente normalmente.
+    const r2 = await sim.cliente(CEL, 'quiero un lapicero');
+    expect(r2.some((m) => m.includes('Aquí estoy'))).toBe(true);
+    sim.imprimir('52. "menu" saca del silencio de asesor');
+  });
+
   it('51. escalarAHumano=false: el pedido de asesor NO silencia (config manda)', async () => {
     const sim = new Simulador();
     sim.habilitarAgente({ escalarAHumano: false });

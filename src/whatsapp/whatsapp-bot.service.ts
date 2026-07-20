@@ -375,8 +375,11 @@ export class WhatsappBotService {
     let estado = conv.estado;
     const ctx: any = conv.contexto ?? {};
 
-    // "menu"/"cancelar" siempre reinician; pasos a medias caducan.
-    const esComandoMenu = ['menu', 'menú', 'cancelar', '0'].includes(msgLower);
+    // "menu"/"cancelar" siempre reinician; pasos a medias caducan. Se limpian
+    // los marcadores de formato de WhatsApp ("*menu*" llega con asteriscos).
+    const esComandoMenu = ['menu', 'menú', 'cancelar', '0'].includes(
+      msgLower.replace(/[*_~]/g, '').trim(),
+    );
     const minutos = (Date.now() - conv.actualizadoEn.getTime()) / 60000;
     if (esComandoMenu) {
       estado = 'MENU';
@@ -3084,10 +3087,47 @@ export class WhatsappBotService {
     if (!cfgIa?.habilitado) return false;
 
     // Un asesor humano está atendiendo → silencio (mismo criterio que el bot).
+    // EXCEPCIÓN: el comando "menu" reactiva al asistente — sin sorteos
+    // abiertos este es el ÚNICO camino del mensaje, y la despedida promete
+    // "escribe *menu* si quieres volver" (los asteriscos de formato de
+    // WhatsApp viajan en el texto crudo → se limpian antes de comparar).
+    const msgComando = msg.toLowerCase().replace(/[*_~]/g, '').trim();
+    const esComandoMenu = ['menu', 'menú', 'cancelar', '0'].includes(
+      msgComando,
+    );
     if (convPrevia?.estado === 'ASESOR') {
       const minutos =
         (Date.now() - convPrevia.actualizadoEn.getTime()) / 60000;
-      if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) return false;
+      if (minutos < WhatsappBotService.SILENCIO_ASESOR_HORAS * 60) {
+        if (!esComandoMenu) return false;
+        // Reactivación DETERMINÍSTICA (sin LLM): saluda de vuelta y deja la
+        // conversación en IA — el próximo mensaje ya lo atiende el agente.
+        const cfgVuelta = await this.prisma.integracionAgenteIA.findUnique({
+          where: { empresaId },
+          select: { nombreAgente: true },
+        });
+        const nombre = cfgVuelta?.nombreAgente?.trim() || 'el asistente';
+        await this.evolution.sendText({
+          instanceName,
+          number: celular,
+          text: `👋 ¡De vuelta con ${nombre}! ¿Qué necesitas?`,
+        });
+        const ctxAsesor: any = convPrevia.contexto ?? {};
+        await this.guardarConversacion(empresaId, celular, 'IA', {
+          ...ctxAsesor,
+          historialIa: [
+            ...(Array.isArray(ctxAsesor.historialIa)
+              ? ctxAsesor.historialIa
+              : []),
+            { rol: 'user' as const, texto: msg },
+            {
+              rol: 'assistant' as const,
+              texto: `¡De vuelta con ${nombre}! ¿Qué necesitas?`,
+            },
+          ].slice(-12),
+        });
+        return true;
+      }
     }
 
     // Sede desde la que vende el agente: la más antigua activa de la empresa.
