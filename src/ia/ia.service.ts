@@ -113,9 +113,11 @@ export class IaAgenteService {
     // la venta haya salido perfecta — pasó en beta con el falso positivo del
     // nombre. La corrección es tramoya, el cliente jamás debe verla.
     const NOTA_INTERNA =
-      ' IMPORTANTE: esta corrección es INTERNA (el cliente no la vio). NO te ' +
-      'disculpes, NO digas que hubo un error ni la menciones: entrega ' +
-      'directamente la respuesta corregida como si fuera la primera.';
+      ' IMPORTANTE: esta corrección es INTERNA (el cliente NO la vio y NO ' +
+      'escribió nada nuevo). NO te disculpes, NO digas que hubo un error, NO ' +
+      'menciones protocolos ni "para el futuro": su último mensaje sigue ' +
+      `siendo «${params.mensaje.slice(0, 80)}» — respóndele SOLO a eso, ` +
+      'directo, como si fuera tu primera respuesta.';
     let validarFinal:
       | ((texto: string, trazas: TrazaTurno[]) => string | null)
       | undefined;
@@ -129,6 +131,25 @@ export class IaAgenteService {
         blancos.add(cel.replace(/^51/, ''));
       }
       validarFinal = (texto: string, trazas: TrazaTurno[]) => {
+        // 0) META-FUGA: la respuesta menciona la TRAMOYA (el nudge de una
+        //    corrección previa) como si el cliente la hubiera escrito —
+        //    visto en beta: "tienes razón en recordarme el protocolo. Para
+        //    el futuro: siempre busco primero". El cliente nunca dijo eso.
+        const meta =
+          /(tienes|tiene) raz[oó]n en record|recordarme el protocolo|el sistema me (corrigi[oó]|indic[oó]|record[oó])|\[SISTEMA\]|(instrucci[oó]n|correcci[oó]n) interna|protocolo interno|para el futuro:?[^.!?]{0,50}(buscar[eé]?|busco|verificar[eé]?|llamar[eé]?)/i.test(
+            texto,
+          );
+        if (meta) {
+          this.logger.warn(
+            `Agente filtró la corrección interna al cliente (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            '[SISTEMA] Tu respuesta menciona protocolos/correcciones que el ' +
+            'cliente JAMÁS escribió ni puede ver. Bórralo todo y responde ' +
+            'ÚNICAMENTE su último mensaje real, directo al grano.' +
+            NOTA_INTERNA
+          );
+        }
         const nums = texto.match(/\b9\d{8}\b/g) ?? [];
         const falso = nums.find((n) => !blancos.has(n));
         if (falso) {
