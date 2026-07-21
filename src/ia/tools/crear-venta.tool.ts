@@ -347,15 +347,58 @@ export function crearCrearVentaTool(
       // (el resumen de pago lo pone en negrita junto al monto).
       ctx.clienteNombre = nombreCliente;
 
+      // IDEMPOTENCIA: si el LLM llama crearVenta DOS veces (reintento tras
+      // una corrección del guard, relectura del historial), NO duplicar la
+      // venta ni la reserva de stock. Una venta PENDIENTE reciente (10 min)
+      // del MISMO celular con los MISMOS ítems es la misma intención de
+      // compra → se devuelve esa (con su monto y número de siempre).
       let venta: any;
-      try {
-        venta = await ventaService.crearVentaYapeDiferida(
-          ctx.empresaId,
-          dto,
-          staff.usuarioId,
-        );
-      } catch (e) {
-        return { ok: false, motivo: 'ERROR_VENTA', detalle: (e as Error).message };
+      let yaExistia = false;
+      if (ctx.celular) {
+        const previa = await prisma.venta.findFirst({
+          where: {
+            empresaId: ctx.empresaId,
+            canalVenta: 'WHATSAPP_IA' as any,
+            estado: 'CONFIRMADA' as any,
+            cobroDiferido: true,
+            telefonoCliente: ctx.celular,
+            creadoEn: { gte: new Date(Date.now() - 10 * 60_000) },
+          },
+          orderBy: { creadoEn: 'desc' },
+          include: { detalles: true },
+        });
+        if (previa) {
+          const firma = (
+            dets: { productoId?: any; varianteId?: any; cantidad: any }[],
+          ) =>
+            dets
+              .map(
+                (d) =>
+                  `${d.productoId ?? ''}:${d.varianteId ?? ''}:${Number(d.cantidad)}`,
+              )
+              .sort()
+              .join('|');
+          if (firma(previa.detalles as any[]) === firma(detalles)) {
+            venta = previa;
+            yaExistia = true;
+          }
+        }
+      }
+
+      if (!venta) {
+        try {
+          venta = await ventaService.crearVentaYapeDiferida(
+            ctx.empresaId,
+            dto,
+            staff.usuarioId,
+          );
+        } catch (e) {
+          return {
+            ok: false,
+            motivo: 'ERROR_VENTA',
+            detalle: (e as Error).message,
+          };
+        }
       }
       const ventaId = venta?.id ?? venta?.venta?.id;
       if (!ventaId) return { ok: false, motivo: 'VENTA_SIN_ID' };
@@ -388,6 +431,14 @@ export function crearCrearVentaTool(
         // + monto exacto). Debe pagarse desde la cuenta Yape del comprador.
         payAmount: totalVenta,
         numeroPago,
+        ...(yaExistia
+          ? {
+              yaExistia: true,
+              nota:
+                'Esta compra YA estaba registrada (no se creó otra): repite ' +
+                'al cliente el monto y el número de Yape.',
+            }
+          : {}),
       };
     },
   };
