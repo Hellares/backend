@@ -28,9 +28,17 @@ export class AnthropicProvider implements AgenteIaProvider {
   }
 
   async completar(params: ParametrosCompletar): Promise<MensajeAgente> {
-    const body = {
-      model: this.opts.modelo ?? 'claude-haiku-4-5-20251001',
+    const modelo = this.opts.modelo ?? 'claude-haiku-4-5-20251001';
+    const body: Record<string, unknown> = {
+      model: modelo,
       max_tokens: this.opts.maxTokens ?? 1024,
+      // Agente TRANSACCIONAL: la "creatividad" del default (1.0) es
+      // exactamente inventar productos/montos. Temperatura baja = tool-calling
+      // determinístico. Solo en modelos que aceptan sampling params (Haiku y
+      // legacy; Sonnet 5 / Opus 4.7+ los RECHAZAN con 400).
+      ...(/haiku|sonnet-4|opus-4-[05]|opus-4-1/.test(modelo)
+        ? { temperature: 0.2 }
+        : {}),
       system: params.system,
       messages: params.mensajes.map((m) => ({
         role: m.rol,
