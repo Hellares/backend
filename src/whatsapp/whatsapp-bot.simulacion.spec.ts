@@ -2138,6 +2138,45 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('53. Fotos directas para lista corta (2 productos)');
   });
 
+  it('54. elegir un ítem de la lista → llega SU foto (mención, sin verDetalle) y no se repite', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.db.archivos.push({
+      id: 'imgH',
+      entidadTipo: 'PRODUCTO',
+      entidadId: 'prodH',
+      isActive: true,
+      deletedAt: null,
+      orden: 1,
+      url: 'https://cdn.test/hermes.jpg',
+      urlThumbnail: null,
+    });
+    // El agente responde nombrando UN ítem del catálogo SIN llamar tools
+    // (el cliente eligió "la 3") — el bot debe mandar su foto igual.
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: {
+        texto: 'Perfecto, la **BILLETERA HERMES** a S/ 25. ¿Cuántas llevas?',
+        iteraciones: 1,
+        trazas: [],
+      },
+      catalogo: [
+        { id: 'prodG', varianteId: null, nombre: 'BILLETERA GATO' },
+        { id: 'prodH', varianteId: null, nombre: 'BILLETERA HERMES' },
+      ],
+    });
+
+    const r = await sim.cliente(CEL, 'la 3');
+    const imgs = r.filter((m) => m.includes('[imagen]'));
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0]).toContain('BILLETERA HERMES');
+
+    // Segundo turno nombrando el mismo ítem → NO se re-manda la foto.
+    const r2 = await sim.cliente(CEL, 'sí, esa');
+    expect(r2.filter((m) => m.includes('[imagen]'))).toHaveLength(0);
+    sim.imprimir('54. Foto al elegir ítem + sin repetición');
+  });
+
   it('49. "quiero hablar con una persona" → ASESOR sin gastar LLM + push', async () => {
     const sim = new Simulador();
     sim.habilitarAgente();

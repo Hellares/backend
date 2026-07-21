@@ -3228,9 +3228,18 @@ export class WhatsappBotService {
     // inventarlas). Se manda ANTES del texto; máx. 4 por turno. Incluye las
     // fotos de las VARIANTES (verDetalle las expone en variantes[].urlImagen):
     // "muéstrame los dos Lucifer" → cada variante con SU imagen.
+    // Fotos ya enviadas en ESTA conversación (persistidas): no repetir la
+    // misma imagen cada vez que el agente vuelve a nombrar el producto.
+    const fotosPrevias: string[] = Array.isArray(ctxPrevio.fotosIa)
+      ? ctxPrevio.fotosIa
+      : [];
     const fotos: { nombre: string; precio: any; url: string }[] = [];
     const pushFoto = (nombre: string, precio: any, url?: string | null) => {
-      if (url && !fotos.some((f) => f.url === url)) {
+      if (
+        url &&
+        !fotos.some((f) => f.url === url) &&
+        !fotosPrevias.includes(url)
+      ) {
         fotos.push({ nombre, precio, url });
       }
     };
@@ -3338,6 +3347,65 @@ export class WhatsappBotService {
         }
       }
     }
+    // TERCER camino: el cliente ELIGIÓ un ítem ("el 3", "la hermes") y el
+    // agente respondió nombrándolo SIN llamar verDetalle → si el texto final
+    // menciona UN único ítem del catálogo de la conversación, su foto va
+    // igual, determinística. Con menciones anidadas gana la MÁS larga
+    // ("EDREDON" ⊂ "EDREDON Cristal"); ambigua (varias distintas) → nada.
+    if (fotos.length === 0) {
+      const catalogo: any[] = (r.catalogo ?? catalogoPrevio) as any[];
+      if (Array.isArray(catalogo) && catalogo.length > 0) {
+        const normalizar = (s: string) =>
+          s
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '');
+        const textoNorm = normalizar(r.resultado.texto);
+        const menciones = catalogo.filter(
+          (c) =>
+            c?.nombre &&
+            (c.nombre as string).length >= 4 &&
+            textoNorm.includes(normalizar(c.nombre)),
+        );
+        if (menciones.length > 0) {
+          const maxLen = Math.max(...menciones.map((m) => m.nombre.length));
+          const top = new Map(
+            menciones
+              .filter((m) => m.nombre.length === maxLen)
+              .map((m) => [`${m.id}:${m.varianteId ?? ''}`, m]),
+          );
+          if (top.size === 1) {
+            const item: any = [...top.values()][0];
+            const img =
+              (item.varianteId
+                ? await this.prisma.archivo.findFirst({
+                    where: {
+                      entidadTipo: EntidadTipo.PRODUCTO_VARIANTE,
+                      entidadId: item.varianteId,
+                      isActive: true,
+                      deletedAt: null,
+                      mimeType: { startsWith: 'image/' },
+                    },
+                    orderBy: { orden: 'asc' },
+                    select: { url: true },
+                  })
+                : null) ??
+              (await this.prisma.archivo.findFirst({
+                where: {
+                  entidadTipo: EntidadTipo.PRODUCTO,
+                  entidadId: item.id,
+                  isActive: true,
+                  deletedAt: null,
+                  mimeType: { startsWith: 'image/' },
+                },
+                orderBy: { orden: 'asc' },
+                select: { url: true },
+              }));
+            pushFoto(item.nombre as string, null, img?.url);
+          }
+        }
+      }
+    }
 
     for (const foto of fotos.slice(0, 4)) {
       const precioTxt =
@@ -3394,6 +3462,12 @@ export class WhatsappBotService {
         historialIa: nuevoHist,
         catalogoIa: r.catalogo ?? catalogoPrevio,
         busquedaIa: r.busqueda ?? busquedaPrevia,
+        // URLs de fotos ya enviadas — evita re-mandar la misma imagen cada
+        // vez que el agente vuelve a nombrar el producto (últimas 20).
+        fotosIa: [
+          ...fotosPrevias,
+          ...fotos.slice(0, 4).map((f) => f.url),
+        ].slice(-20),
       },
     );
     if (escalado) void this.avisarPedidoAsesor(empresaId, celular, msg);
