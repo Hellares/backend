@@ -70,6 +70,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { IntegracionYapeModule } from './integracion-yape/integracion-yape.module';
 import { IaConfigModule } from './ia-config/ia-config.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { DeliveryLocalModule } from './delivery-local/delivery-local.module';
 import { CaracteristicaEmpresaModule } from './caracteristica-empresa/caracteristica-empresa.module';
 import { GuiaRemisionModule } from './guia-remision/guia-remision.module';
 import { LoggerModule } from './common/logger/logger.module';
@@ -93,6 +94,7 @@ import { SubscriptionTasksService } from './common/tasks/subscription-tasks.serv
     IntegracionYapeModule,
     IaConfigModule,
     WhatsappModule,
+    DeliveryLocalModule,
     CaracteristicaEmpresaModule,
     LoggerModule, // Logger global
     PrismaModule,

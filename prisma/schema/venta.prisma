@@ -153,6 +153,7 @@ model Venta {
   guiasRemision               GuiaRemision[]
   pedidoMarketplace           PedidoMarketplace?      @relation("VentaPedidoMarketplace")
   envio                       VentaEnvio?
+  deliveryLocal               DeliveryLocal?
 
   @@unique([empresaId, codigo])
   // FK indexes

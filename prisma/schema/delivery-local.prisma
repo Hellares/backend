@@ -1,0 +1,61 @@
+// ═══════════════════════════════════════════════════════════════════
+// DELIVERY LOCAL — repartidores propios de la empresa (F1)
+//
+// Regla de plata (decisión 07-23): el PRODUCTO se paga completo ANTES
+// (gate: venta PAGADA_COMPLETA — el repartidor jamás cobra el producto);
+// el repartidor cobra SOLO su tarifa de delivery al entregar, en
+// efectivo. En F1 esa tarifa es informativa (sin caja/tesorería — la
+// liquidación del repartidor es F3).
+// ═══════════════════════════════════════════════════════════════════
+
+enum EstadoDeliveryLocal {
+  SOLICITADO // pagado y publicado — visible en el pool de repartidores
+  TOMADO // un repartidor lo reclamó (asignación atómica)
+  EN_CAMINO // recogió el paquete y va al destino
+  ENTREGADO // entregado y tarifa cobrada por el repartidor
+  CANCELADO
+}
+
+model DeliveryLocal {
+  id        String @id @default(cuid())
+  empresaId String
+  sedeId    String
+
+  // Origen: venta (bot IA / POS / online). Única por venta.
+  ventaId String? @unique
+  // Reservado para F2 (pedido web directo, aún sin FK).
+  pedidoMarketplaceId String? @unique
+
+  estado EstadoDeliveryLocal @default(SOLICITADO)
+
+  destinatarioNombre  String
+  destinatarioCelular String?
+  direccion           String
+  referencia          String?
+  distrito            String?
+  coordenadas         Json? // {lat, lon} — F2: ubicación compartida por WhatsApp
+
+  // Tarifa que cobra el REPARTIDOR al entregar (default: Sede.tarifaDeliveryLocal).
+  costoDelivery Decimal @default(0) @db.Decimal(10, 2)
+
+  repartidorId      String?
+  tomadoEn          DateTime?
+  enCaminoEn        DateTime?
+  entregadoEn       DateTime?
+  canceladoEn       DateTime?
+  motivoCancelacion String?
+
+  // Seguimiento público del cliente (sin login): /tracking/<token>.
+  trackingToken String @unique @default(cuid())
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  venta      Venta?   @relation(fields: [ventaId], references: [id])
+  repartidor Usuario? @relation("DeliveryRepartidor", fields: [repartidorId], references: [id])
+
+  @@index([empresaId, estado])
+  @@index([sedeId, estado])
+  @@index([repartidorId, estado])
+  @@map("delivery_local")
+}

@@ -675,6 +675,7 @@ export class UsuariosService {
       [Rol.LECTURA]: SedeRole.CONSULTOR,
       [Rol.OPERADOR]: SedeRole.ASISTENTE,
       [Rol.CLIENTE]: SedeRole.CAJERO, // No debería llegar aquí
+      [Rol.REPARTIDOR]: SedeRole.REPARTIDOR,
     };
 
     return roleMap[rol] || SedeRole.ASISTENTE;

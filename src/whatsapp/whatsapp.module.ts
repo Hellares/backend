@@ -26,6 +26,8 @@ import {
   ],
   controllers: [WhatsappEmpresaController, WhatsappWebhookController],
   providers: [WhatsappService, EvolutionApiService, WhatsappBotService],
-  exports: [WhatsappService],
+  // EvolutionApiService se exporta para módulos que avisan al cliente por
+  // WhatsApp fuera del bot (ej. delivery local: "tu pedido va en camino").
+  exports: [WhatsappService, EvolutionApiService],
 })
 export class WhatsappModule {}

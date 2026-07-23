@@ -92,6 +92,9 @@ model Usuario {
   // Relación inversa para registrados por este usuario
   usuariosRegistrados EmpresaUsuarioRol[] @relation("RegistradoPor")
 
+  // Deliveries locales asignados como repartidor
+  deliveriesRepartidor DeliveryLocal[] @relation("DeliveryRepartidor")
+
   // Relaciones para incidencias de transferencias
   incidenciasReportadas TransferenciaStockIncidencia[] @relation("IncidenciasReportadas")
   incidenciasResueltas  TransferenciaStockIncidencia[] @relation("IncidenciasResueltas")
@@ -412,6 +415,7 @@ enum Rol {
   LECTURA
   OPERADOR
   CLIENTE
+  REPARTIDOR // Repartidor de delivery local — solo ve/toma deliveries
 }
 
 // Roles específicos para gestión de sedes

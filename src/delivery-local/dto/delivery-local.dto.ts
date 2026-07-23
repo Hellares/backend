@@ -1,0 +1,63 @@
+import {
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+
+/** Solicitar delivery local para una venta YA PAGADA al 100%. */
+export class SolicitarDeliveryDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  ventaId: string;
+
+  /** Default: nombre del cliente de la venta. */
+  @IsOptional()
+  @IsString()
+  destinatarioNombre?: string;
+
+  /** Default: teléfono del cliente de la venta. */
+  @IsOptional()
+  @IsString()
+  destinatarioCelular?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  direccion: string;
+
+  @IsOptional()
+  @IsString()
+  referencia?: string;
+
+  @IsOptional()
+  @IsString()
+  distrito?: string;
+
+  /** Tarifa que cobra el repartidor al entregar. Default: Sede.tarifaDeliveryLocal. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  costoDelivery?: number;
+}
+
+/** Acciones del repartidor (tomar / en-camino / entregado). */
+export class AccionDeliveryDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+}
+
+export class CancelarDeliveryDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+
+  @IsOptional()
+  @IsString()
+  motivo?: string;
+}
