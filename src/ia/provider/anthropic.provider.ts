@@ -20,6 +20,8 @@ export class AnthropicProvider implements AgenteIaProvider {
       apiKey: string;
       modelo?: string;
       maxTokens?: number;
+      /** Base del backoff entre reintentos (ms). Solo para specs. */
+      backoffMs?: number;
     },
   ) {
     if (!opts.apiKey) {
@@ -51,27 +53,57 @@ export class AnthropicProvider implements AgenteIaProvider {
       })),
     };
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': this.opts.apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!res.ok) {
-      const detalle = await res.text().catch(() => '');
-      throw new Error(`Anthropic API ${res.status}: ${detalle.slice(0, 300)}`);
-    }
+    const res = await this.postConReintentos(JSON.stringify(body));
 
     const data: any = await res.json();
     const bloques: BloqueContenido[] = (data.content ?? []).map(
       bloqueAnthropicANeutro,
     );
     return { rol: 'assistant', bloques };
+  }
+
+  /**
+   * POST con REINTENTOS: 529 Overloaded / 5xx / 429 y errores de red se
+   * reintentan con backoff creciente (hasta 3 intentos). El 07-21 seis 529
+   * seguidos atravesaron el throw seco y dejaron a una clienta EN VISTO
+   * (caso Rayza) — el retry absorbe picos cortos; si la caída es larga, el
+   * error sube y el bot responde su mensaje fijo sin LLM.
+   * Errores del CLIENTE (400/401/403…) NO se reintentan: son bugs o config
+   * mala, repetirlos no los arregla.
+   */
+  private async postConReintentos(body: string): Promise<Response> {
+    const MAX_INTENTOS = 3;
+    const base = this.opts.backoffMs ?? 1000;
+    for (let intento = 1; ; intento++) {
+      let res: Response | null = null;
+      let errorRed: Error | null = null;
+      try {
+        res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': this.opts.apiKey,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          },
+          body,
+          signal: AbortSignal.timeout(30000),
+        });
+      } catch (e) {
+        errorRed = e as Error;
+      }
+      if (res?.ok) return res;
+
+      const status = res?.status ?? 0;
+      const reintentable =
+        errorRed !== null || status === 429 || status >= 500;
+      if (reintentable && intento < MAX_INTENTOS) {
+        await new Promise((r) => setTimeout(r, base * intento));
+        continue;
+      }
+      if (errorRed) throw errorRed;
+      const detalle = await res!.text().catch(() => '');
+      throw new Error(`Anthropic API ${status}: ${detalle.slice(0, 300)}`);
+    }
   }
 }
 

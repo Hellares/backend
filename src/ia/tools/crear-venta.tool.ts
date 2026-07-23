@@ -423,6 +423,11 @@ export function crearCrearVentaTool(
         numeroPago = iy?.celular ?? null;
       }
 
+      // Constancia EN EL CONTEXTO de que existe una venta real pendiente: el
+      // guard "venta fantasma" (ia.service) solo deja hablar de "pago en
+      // validación" si esto está seteado. El bot lo persiste entre turnos.
+      ctx.ventaIa = { ventaId, monto: totalVenta };
+
       return {
         ok: true,
         ventaId,

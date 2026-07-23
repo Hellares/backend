@@ -35,6 +35,12 @@ export interface ContextoTool {
    *  el guard de productos inventados lo excluye — "**KELI RODRIGUEZ**"
    *  en la línea del monto no es un producto (falso positivo visto en beta). */
   clienteNombre?: string | null;
+  /** Venta PENDIENTE de la conversación (crearVenta la escribe al crear; el
+   *  bot la persiste entre turnos). El guard "venta fantasma" la exige:
+   *  afirmar "tu pago se está validando" / "tu pedido quedó registrado" sin
+   *  que esto exista es una alucinación (caso Rayza 07-21: pagó S/1 real
+   *  contra una venta que jamás se creó). */
+  ventaIa?: { ventaId: string; monto: number } | null;
 }
 
 /**

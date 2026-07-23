@@ -1871,6 +1871,78 @@ describe('Simulación E2E del bot de sorteos', () => {
     sim.imprimir('42. Flujo del agente: cantidad numérica no salta al sorteo');
   });
 
+  it('55. LLM caído: mensaje fijo (no visto), sin repetir disculpa, historial guardado', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    sim.iaAtender = async () => {
+      throw new Error('Anthropic API 529: Overloaded');
+    };
+
+    // Caso Rayza 07-21: el catch devolvía false y la dejaba EN VISTO.
+    await sim.cliente(CEL, 'hola'); // bienvenida (sin LLM)
+    const r1 = await sim.cliente(CEL, 'quiero el lapicero gel boil');
+    expect(r1).toHaveLength(1);
+    expect(r1[0]).toBe(WhatsappBotService.MSG_AGENTE_CAIDO);
+
+    // Insiste durante la caída → NO se repite la misma disculpa (anti-spam)…
+    const r2 = await sim.cliente(CEL, '¿estás ahí?');
+    expect(r2).toHaveLength(0);
+    // …pero SUS mensajes quedaron en el historial para retomar al volver.
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect(conv.estado).toBe('IA');
+    const hist = (conv.contexto as any).historialIa.map((h: any) => h.texto);
+    expect(hist).toContain('quiero el lapicero gel boil');
+    expect(hist).toContain('¿estás ahí?');
+
+    // El LLM vuelve → retoma con el contexto completo de la caída.
+    sim.iaAtender = async (p: any) => ({
+      atendido: true,
+      resultado: {
+        texto: `de vuelta (historial: ${p.historialPrevio.length})`,
+        iteraciones: 1,
+        trazas: [],
+      },
+    });
+    const r3 = await sim.cliente(CEL, '¿me atiendes?');
+    expect(r3[0]).toContain('de vuelta');
+    sim.imprimir('55. LLM caído → mensaje fijo, sin visto ni spam');
+  });
+
+  it('56. ventaIa persiste entre turnos (guard anti venta-fantasma)', async () => {
+    const sim = new Simulador();
+    sim.habilitarAgente();
+    // Turno que CREA la venta: el service la devuelve en `venta`.
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'Venta creada ✅', iteraciones: 1, trazas: [] },
+      venta: { ventaId: 'vta_1', monto: 40.07 },
+    });
+    await sim.cliente(CEL, 'sí, confirmo la compra');
+    const conv = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect((conv.contexto as any).ventaIa).toEqual({
+      ventaId: 'vta_1',
+      monto: 40.07,
+    });
+
+    // Turno siguiente SIN venta nueva → el bot le pasa la previa al service
+    // (habilita "tu pago está en validación" legítimo) y la conserva.
+    sim.iaAtender = async () => ({
+      atendido: true,
+      resultado: { texto: 'Tu pago está en validación 😊', iteraciones: 1, trazas: [] },
+    });
+    await sim.cliente(CEL, 'ya yapeé');
+    expect(sim.iaLlamadas[1].ventaPrevia).toEqual({
+      ventaId: 'vta_1',
+      monto: 40.07,
+    });
+    const conv2 = sim.db.conversaciones.find((c) => c.celular === CEL)!;
+    expect((conv2.contexto as any).ventaIa).toEqual({
+      ventaId: 'vta_1',
+      monto: 40.07,
+    });
+    sim.imprimir('56. ventaIa viaja y persiste entre turnos');
+  });
+
   it('43. entrega determinística: "recojo" cierra sin envío y sin LLM', async () => {
     const sim = new Simulador();
     sim.habilitarAgente();

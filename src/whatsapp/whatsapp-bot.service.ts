@@ -51,6 +51,13 @@ export class WhatsappBotService {
   private static readonly SILENCIO_ASESOR_HORAS = 12;
   private static readonly THROTTLE_MENU_MIN = 60;
 
+  /** Respuesta FIJA (sin LLM) cuando el agente IA muere tras los reintentos
+   *  del provider — el cliente jamás queda EN VISTO (caso Rayza 07-21: seis
+   *  529 = seis mensajes ignorados). Pública para su spec. */
+  static readonly MSG_AGENTE_CAIDO =
+    '🙏 Disculpa la demora, estamos con muchas consultas en este momento. ' +
+    'Escríbeme de nuevo en unos minutos, por favor.';
+
   /// Tope de tickets por compra en sorteos clásicos (anti "quiero 99999").
   private static readonly MAX_TICKETS_COMPRA = 100;
 
@@ -3153,6 +3160,9 @@ export class WhatsappBotService {
       : [];
     // Última búsqueda → "muéstrame más" pagina en vez de inventar.
     const busquedaPrevia = ctxPrevio.busquedaIa ?? null;
+    // Venta pendiente creada en turnos previos → el guard "venta fantasma"
+    // solo permite hablar de "pago en validación" si esto existe.
+    const ventaPrevia = ctxPrevio.ventaIa ?? null;
 
     // PEDIDO DE ASESOR determinístico — ANTES de gastar un turno del LLM:
     // "quiero hablar con una persona/el dueño/asesor" → el bot se silencia
@@ -3216,10 +3226,35 @@ export class WhatsappBotService {
         sorteoActivo: sorteoActivo ?? null,
         catalogoPrevio,
         busquedaPrevia,
+        ventaPrevia,
       });
     } catch (e) {
       this.logger.warn(`Agente IA (${celular}): ${(e as Error).message}`);
-      return false; // ante un fallo del agente, el chat sigue humano (no rompe)
+      // NO dejar al cliente EN VISTO (caso Rayza 07-21: seis 529 seguidos =
+      // seis mensajes ignorados; luego pagó contra una venta que no existía).
+      // El provider ya reintentó con backoff — si aun así murió, respuesta
+      // FIJA sin LLM y el turno queda en el historial para retomar después.
+      // Anti-spam: si la disculpa fue lo último que dijimos, no se repite.
+      const disculpa = WhatsappBotService.MSG_AGENTE_CAIDO;
+      const yaSeDisculpo =
+        histTexto.length > 0 &&
+        histTexto[histTexto.length - 1].texto === disculpa;
+      if (!yaSeDisculpo) {
+        await this.evolution
+          .sendText({ instanceName, number: celular, text: disculpa })
+          .catch(() => undefined);
+      }
+      await this.guardarConversacion(empresaId, celular, 'IA', {
+        ...ctxPrevio,
+        historialIa: [
+          ...histTexto,
+          { rol: 'user' as const, texto: msg },
+          ...(yaSeDisculpo
+            ? []
+            : [{ rol: 'assistant' as const, texto: disculpa }]),
+        ].slice(-12),
+      }).catch(() => undefined);
+      return true;
     }
     if (!r.atendido || !r.resultado) return false; // agente apagado → sigue humano
 
@@ -3462,6 +3497,9 @@ export class WhatsappBotService {
         historialIa: nuevoHist,
         catalogoIa: r.catalogo ?? catalogoPrevio,
         busquedaIa: r.busqueda ?? busquedaPrevia,
+        // Venta pendiente (crearVenta la escribió este turno o venía de
+        // antes) — habilita el guard "venta fantasma" en turnos siguientes.
+        ventaIa: r.venta ?? ventaPrevia,
         // URLs de fotos ya enviadas — evita re-mandar la misma imagen cada
         // vez que el agente vuelve a nombrar el producto (últimas 20).
         fotosIa: [

@@ -35,6 +35,9 @@ export interface ResultadoAtencion {
   catalogo?: CatalogoItem[];
   /** Última búsqueda (query/página/hayMas) — el bot la persiste para paginar. */
   busqueda?: { query: string; pagina: number; hayMas: boolean };
+  /** Venta pendiente de la conversación (creada en este turno o repuesta de
+   *  turnos previos) — el bot la persiste para el guard anti venta-fantasma. */
+  venta?: { ventaId: string; monto: number } | null;
 }
 
 /**
@@ -53,6 +56,14 @@ export class IaAgenteService {
    *  final determinística (si niega sin haber buscado, el código busca). */
   private static readonly NIEGA_DISPONIBILIDAD =
     /\bno\s+(lo|la|los|las)?\s?(tenemos|tengo|hay|manejamos|vendemos|trabajamos)\b|no\s+(tiene|tienen|existe|está|esta)n?\s[^.!?]{0,30}(diseñ|model|color|talla|stock|disponib|catalog)|no\s+(encontr[ée]|me aparecen)|sin resultados/i;
+
+  /** Afirmaciones de "pago en validación" / "pedido registrado" — SOLO son
+   *  legítimas si existe una venta real (ctx.ventaIa, la escribe crearVenta).
+   *  Guard 2.5 "venta fantasma": Haiku cerró una compra fingiendo todo esto
+   *  sin llamar crearVenta (caso Rayza 07-21 — "El sistema validará tu
+   *  pago") y la clienta yapeó S/1 contra la nada. Público para su spec. */
+  static readonly AFIRMA_VENTA_O_PAGO =
+    /validar[áa]n?\s+(tu|el|su)\s+(pago|yape)|est[áa](n|mos)?\s+validando|est[áa]\s+siendo\s+(validad|verificad|revisad|procesad)|se\s+validar[áa]|en\s+proceso\s+de\s+validaci[oó]n|(pago|yape)\s+(ya\s+)?(est[áa]|queda(r[áa])?|ser[áa]|se\s+encuentra)\s+(en\s+)?(validaci[oó]n|revisi[oó]n|verificaci[oó]n|validado|confirmado|procesado)|(pedido|compra|venta|orden)\s+(ya\s+)?(qued[óo]|est[áa]|fue|ha\s+sido|se\s+ha)\s+(registrad|procesad|confirmad|generad|cread|realizad|list[oa])|(registr|proces|gener|cre)(é|amos)\s+(tu|su|la|el)\s+(pedido|compra|venta|orden)|recib(í|imos)\s+(tu|el)\s+(pago|yape)|pago\s+recibido/i;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -80,6 +91,9 @@ export class IaAgenteService {
     catalogoPrevio?: CatalogoItem[];
     /** Última búsqueda de turnos previos (para paginar "muéstrame más"). */
     busquedaPrevia?: { query: string; pagina: number; hayMas: boolean } | null;
+    /** Venta pendiente creada en turnos previos (contexto persistido por el
+     *  bot) — habilita hablar de "pago en validación" sin re-crear nada. */
+    ventaPrevia?: { ventaId: string; monto: number } | null;
   }): Promise<ResultadoAtencion> {
     const cfg = await this.prisma.integracionAgenteIA.findUnique({
       where: { empresaId: params.empresaId },
@@ -94,6 +108,7 @@ export class IaAgenteService {
       celular: params.celular ?? null,
       catalogoReciente: params.catalogoPrevio ? [...params.catalogoPrevio] : [],
       ultimaBusqueda: params.busquedaPrevia ?? undefined,
+      ventaIa: params.ventaPrevia ?? null,
     };
 
     const provider = this.resolverProvider(cfg);
@@ -187,6 +202,29 @@ export class IaAgenteService {
             'confirmado, ni derives a un asesor. Continúa el flujo de venta ' +
             'donde quedó: si el cliente te dio su DNI/CE llama resolverCliente; ' +
             'si ya confirmó su nombre llama crearVenta con ese documento. Hazlo AHORA.' +
+            NOTA_INTERNA
+          );
+        }
+        // 2.5) VENTA/PAGO FANTASMA: afirma "tu pago se está validando" /
+        //      "tu pedido quedó registrado" SIN venta real que lo respalde —
+        //      ni creada en este turno (crearVenta ok deja ctx.ventaIa) ni
+        //      pendiente de turnos previos (ventaPrevia persistida por el
+        //      bot). Caso Rayza 07-21: Haiku cerró la compra fingiendo el
+        //      flujo completo ("Listo 👍 El sistema validará tu pago") sin
+        //      llamar crearVenta, y la clienta yapeó S/1 real contra una
+        //      venta que jamás existió.
+        if (IaAgenteService.AFIRMA_VENTA_O_PAGO.test(texto) && !ctx.ventaIa) {
+          this.logger.warn(
+            `Agente afirmó venta/pago sin venta real (empresa ${params.empresaId}) — corrigiendo`,
+          );
+          return (
+            '[SISTEMA] Afirmaste que el pedido quedó registrado o que el ' +
+            'pago se está validando, pero NO existe NINGUNA venta: nunca ' +
+            'llamaste a crearVenta en esta conversación. PROHIBIDO afirmar ' +
+            'que un pedido o pago existe sin que crearVenta lo confirme. Si ' +
+            'el cliente ya confirmó qué lleva y sus datos, llama AHORA a ' +
+            'crearVenta y responde con el monto exacto y el número de Yape ' +
+            'REALES que devuelva; si falta algún dato, pídeselo.' +
             NOTA_INTERNA
           );
         }
@@ -449,12 +487,35 @@ export class IaAgenteService {
       }
     }
 
+    // ÚLTIMA PALABRA DEL CÓDIGO (venta fantasma): si tras agotar las
+    // correcciones el texto final SIGUE afirmando pago-en-validación /
+    // pedido-registrado sin una venta real (ctx.ventaIa), NO se envía esa
+    // mentira — se reemplaza por una respuesta honesta que retoma la venta.
+    // Es la simetría de la red de NIEGA: aquí la alucinación cuesta plata
+    // (Rayza yapeó S/1 contra una venta inexistente).
+    if (
+      validarFinal &&
+      resultado?.texto &&
+      IaAgenteService.AFIRMA_VENTA_O_PAGO.test(resultado.texto) &&
+      !ctx.ventaIa
+    ) {
+      this.logger.error(
+        `Agente insistió en venta/pago fantasma tras correcciones (empresa ` +
+          `${params.empresaId}) — texto reemplazado por código`,
+      );
+      resultado.texto =
+        'Un momento 🙏 aún NO he registrado tu pedido en el sistema. ' +
+        'Confírmame por favor qué producto llevas y la cantidad, y lo ' +
+        'registro ahora mismo para darte el monto exacto y el número de Yape.';
+    }
+
     return {
       atendido: true,
       mensajeBienvenida: cfg.mensajeBienvenida,
       resultado,
       catalogo: ctx.catalogoReciente,
       busqueda: ctx.ultimaBusqueda,
+      venta: ctx.ventaIa ?? null,
     };
   }
 
