@@ -4,7 +4,12 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { EstadoDeliveryLocal, EstadoVenta, Rol } from '@prisma/client';
+import {
+  EstadoDeliveryLocal,
+  EstadoRepartidorSyncronize,
+  EstadoVenta,
+  Rol,
+} from '@prisma/client';
 import { DeliveryLocalService } from './delivery-local.service';
 
 /**
@@ -40,6 +45,14 @@ describe('DeliveryLocalService', () => {
         findUniqueOrThrow: jest.fn(),
       },
       integracionWhatsapp: { findUnique: jest.fn().mockResolvedValue(null) },
+      repartidorSyncronize: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      empresa: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
     };
     notificaciones = { enviarAUsuarios: jest.fn().mockResolvedValue(undefined) };
     evolution = { sendText: jest.fn().mockResolvedValue(undefined) };
@@ -268,6 +281,139 @@ describe('DeliveryLocalService', () => {
       });
       const t2 = await service.tracking('tok');
       expect(t2.posicion).toBeNull();
+    });
+  });
+
+  describe('pool EXTERNO (freelance)', () => {
+    const FREELANCE = 'user-freelance';
+    const repAprobado = (over: Record<string, unknown> = {}) => ({
+      id: 'rep1',
+      usuarioId: FREELANCE,
+      estado: EstadoRepartidorSyncronize.APROBADO,
+      nombreCompleto: 'RAYZA PEREZ QUISPE',
+      zonas: ['Chiclayo'],
+      entregasCompletadas: 0,
+      ...over,
+    });
+
+    it('no aprobado → Forbidden (PENDIENTE no ve nada)', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(
+        repAprobado({ estado: EstadoRepartidorSyncronize.PENDIENTE }),
+      );
+      await expect(service.poolExterno(FREELANCE)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('pool filtra por opt-in + zona + tope de la empresa', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(repAprobado());
+      prisma.empresa.findMany.mockResolvedValue([
+        { id: 'empA', nombre: 'TIENDA A', montoMaxDeliveryExterno: 100 },
+      ]);
+      prisma.deliveryLocal.findMany.mockResolvedValue([
+        // zona ok, monto ok → pasa
+        {
+          id: 'd1',
+          empresaId: 'empA',
+          distrito: 'chiclayo', // case/tilde-insensible
+          venta: { codigo: 'VTA-1', total: '80' },
+        },
+        // fuera de zona → fuera
+        {
+          id: 'd2',
+          empresaId: 'empA',
+          distrito: 'Lima',
+          venta: { codigo: 'VTA-2', total: '10' },
+        },
+        // supera el tope de mercadería → fuera
+        {
+          id: 'd3',
+          empresaId: 'empA',
+          distrito: 'Chiclayo',
+          venta: { codigo: 'VTA-3', total: '500' },
+        },
+      ]);
+      const pool = await service.poolExterno(FREELANCE);
+      expect(pool.map((d: any) => d.id)).toEqual(['d1']);
+      expect((pool[0] as any).empresaNombre).toBe('TIENDA A');
+      // el where del query solo pide empresas con opt-in
+      expect(prisma.empresa.findMany.mock.calls[0][0].where).toMatchObject({
+        aceptaRepartidoresExternos: true,
+      });
+    });
+
+    it('tomarExterno: empresa sin opt-in → Forbidden', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(repAprobado());
+      prisma.deliveryLocal.findUnique.mockResolvedValue({
+        id: 'd1',
+        empresaId: 'empA',
+        distrito: 'Chiclayo',
+        venta: { total: '50' },
+      });
+      prisma.empresa.findUnique.mockResolvedValue({
+        aceptaRepartidoresExternos: false,
+      });
+      await expect(service.tomarExterno('d1', FREELANCE)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('tomarExterno: nuevo (<10 entregas) con 1 activa → Conflict (límite)', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(repAprobado());
+      prisma.deliveryLocal.findUnique.mockResolvedValue({
+        id: 'd1',
+        empresaId: 'empA',
+        distrito: 'Chiclayo',
+        venta: { total: '50' },
+      });
+      prisma.empresa.findUnique.mockResolvedValue({
+        aceptaRepartidoresExternos: true,
+        montoMaxDeliveryExterno: null,
+      });
+      prisma.deliveryLocal.count = jest.fn().mockResolvedValue(1);
+      await expect(service.tomarExterno('d1', FREELANCE)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.deliveryLocal.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('tomarExterno ok → toma atómica y aviso al cliente con su nombre', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(repAprobado());
+      prisma.deliveryLocal.findUnique.mockResolvedValue({
+        id: 'd1',
+        empresaId: 'empA',
+        distrito: 'Chiclayo',
+        venta: { total: '50' },
+      });
+      prisma.empresa.findUnique.mockResolvedValue({
+        aceptaRepartidoresExternos: true,
+        montoMaxDeliveryExterno: 100,
+      });
+      prisma.deliveryLocal.count = jest.fn().mockResolvedValue(0);
+      prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 1 });
+      prisma.deliveryLocal.findUniqueOrThrow.mockResolvedValue({
+        id: 'd1',
+        empresaId: 'empA',
+        destinatarioCelular: '51904773029',
+        trackingToken: 'tok1',
+        venta: { codigo: 'VTA-1' },
+      });
+      prisma.integracionWhatsapp.findUnique.mockResolvedValue({
+        instanceName: 'inst1',
+        estado: 'CONECTADO',
+        habilitado: true,
+      });
+
+      await service.tomarExterno('d1', FREELANCE);
+      await new Promise((r) => setImmediate(r));
+
+      const where = prisma.deliveryLocal.updateMany.mock.calls[0][0].where;
+      expect(where.repartidorId).toBeNull(); // atómico igual que el interno
+      expect(evolution.sendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('RAYZA'),
+        }),
+      );
     });
   });
 

@@ -95,6 +95,9 @@ model Usuario {
   // Deliveries locales asignados como repartidor
   deliveriesRepartidor DeliveryLocal[] @relation("DeliveryRepartidor")
 
+  // Perfil de repartidor freelance de Syncronize (si se registró como tal)
+  repartidorSyncronize RepartidorSyncronize?
+
   // Relaciones para incidencias de transferencias
   incidenciasReportadas TransferenciaStockIncidencia[] @relation("IncidenciasReportadas")
   incidenciasResueltas  TransferenciaStockIncidencia[] @relation("IncidenciasResueltas")

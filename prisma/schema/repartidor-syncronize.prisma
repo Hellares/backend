@@ -1,0 +1,59 @@
+// ═══════════════════════════════════════════════════════════════════
+// REPARTIDOR FREELANCE DE SYNCRONIZE (R1)
+//
+// Registro GLOBAL (no cuelga de una empresa): cualquier persona se
+// registra como repartidor, el super admin la aprueba, y entonces ve el
+// pool de deliveries de las empresas con opt-in en SUS zonas. El riesgo
+// está acotado por diseño: el producto se paga antes (jamás lleva plata
+// del producto) + tope de valor por empresa + límite de entregas activas.
+// ═══════════════════════════════════════════════════════════════════
+
+enum EstadoRepartidorSyncronize {
+  PENDIENTE // registrado, esperando aprobación del super admin
+  APROBADO // puede ver y tomar deliveries del pool externo
+  SUSPENDIDO // temporal (mal score / incidente en revisión)
+  BLOQUEADO // permanente
+}
+
+model RepartidorSyncronize {
+  id        String @id @default(cuid())
+  usuarioId String @unique
+
+  estado EstadoRepartidorSyncronize @default(PENDIENTE)
+
+  // Identidad (nombre oficial de RENIEC, no autodeclarado)
+  dni            String @unique
+  nombreCompleto String
+  celular        String
+
+  // Verificación del celular por WhatsApp (OTP)
+  celularVerificado Boolean   @default(false)
+  otpCodigo         String?
+  otpExpiraEn       DateTime?
+
+  // Perfil (visible para el vendedor y el cliente)
+  fotoUrl         String? // selfie
+  placaVehiculo   String?
+  antecedentesUrl String? // certificado de antecedentes subido
+
+  // Zonas de trabajo (distritos) — filtran su pool
+  zonas String[]
+
+  // Reputación / confianza
+  entregasCompletadas Int @default(0)
+  entregasFallidas    Int @default(0)
+  calificacionSuma    Int @default(0)
+  calificacionTotal   Int @default(0)
+
+  aprobadoPor  String?
+  aprobadoEn   DateTime?
+  motivoEstado String? // razón de suspensión/bloqueo
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@index([estado])
+  @@map("repartidor_syncronize")
+}

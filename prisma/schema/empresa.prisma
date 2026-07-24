@@ -36,6 +36,11 @@ model Empresa {
   fechaFinWebGratuita    DateTime? // Fecha en que expira la web gratuita (plan básico)
   usuariosActuales       Int               @default(0)
 
+  // Delivery local — repartidores EXTERNOS (freelance de Syncronize):
+  // opt-in explícito y tope de valor de mercadería que confía a externos.
+  aceptaRepartidoresExternos Boolean  @default(false)
+  montoMaxDeliveryExterno    Decimal? @db.Decimal(10, 2)
+
   // Campos para Marketplace
   visibleEnMarketplace Boolean @default(true)
   destacadoMarketplace Boolean @default(false)

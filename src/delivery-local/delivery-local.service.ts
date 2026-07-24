@@ -6,7 +6,12 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { EstadoDeliveryLocal, EstadoVenta, Rol } from '@prisma/client';
+import {
+  EstadoDeliveryLocal,
+  EstadoRepartidorSyncronize,
+  EstadoVenta,
+  Rol,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { EvolutionApiService } from '../whatsapp/evolution-api.service';
@@ -235,6 +240,14 @@ export class DeliveryLocalService {
       EstadoDeliveryLocal.ENTREGADO,
       { entregadoEn: new Date() },
     );
+    // Historial del freelance (updateMany = no-op si es repartidor de
+    // empresa). El contador sube su límite de entregas simultáneas.
+    void this.prisma.repartidorSyncronize
+      .updateMany({
+        where: { usuarioId: userId },
+        data: { entregasCompletadas: { increment: 1 } },
+      })
+      .catch(() => undefined);
     void this.avisarCliente(
       delivery,
       `✅ ¡Pedido ${delivery.venta?.codigo ?? ''} entregado! Gracias por tu compra 🙌`,
@@ -285,6 +298,178 @@ export class DeliveryLocalService {
         );
     }
     return this.cargar(deliveryId);
+  }
+
+  // ── Pool EXTERNO (repartidores freelance de Syncronize, R1) ──
+
+  /** Freelance APROBADO — o fuera. */
+  private async verificarFreelance(usuarioId: string) {
+    if (!usuarioId) throw new BadRequestException('usuario obligatorio');
+    const rep = await this.prisma.repartidorSyncronize.findUnique({
+      where: { usuarioId },
+    });
+    if (!rep || rep.estado !== EstadoRepartidorSyncronize.APROBADO) {
+      throw new ForbiddenException(
+        'No eres repartidor aprobado de Syncronize',
+      );
+    }
+    return rep;
+  }
+
+  private static normalizarZona(z: string): string {
+    return z
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .trim();
+  }
+
+  /**
+   * Pool del freelance: deliveries SOLICITADOS de empresas con OPT-IN,
+   * en SUS zonas, y que no superen el tope de mercadería que cada
+   * empresa confía a externos. Sin zonas declaradas → pool vacío.
+   */
+  async poolExterno(usuarioId: string) {
+    const rep = await this.verificarFreelance(usuarioId);
+    const zonas = rep.zonas.map(DeliveryLocalService.normalizarZona);
+    if (zonas.length === 0) return [];
+
+    const empresas = await this.prisma.empresa.findMany({
+      where: { aceptaRepartidoresExternos: true, isActive: true },
+      select: { id: true, nombre: true, montoMaxDeliveryExterno: true },
+    });
+    if (empresas.length === 0) return [];
+
+    const deliveries = await this.prisma.deliveryLocal.findMany({
+      where: {
+        empresaId: { in: empresas.map((e) => e.id) },
+        estado: EstadoDeliveryLocal.SOLICITADO,
+      },
+      include: { venta: { select: { codigo: true, total: true } } },
+      orderBy: { creadoEn: 'asc' },
+    });
+
+    const topes = new Map(
+      empresas.map((e) => [
+        e.id,
+        e.montoMaxDeliveryExterno != null
+          ? Number(e.montoMaxDeliveryExterno)
+          : null,
+      ]),
+    );
+    const nombres = new Map(empresas.map((e) => [e.id, e.nombre]));
+
+    return deliveries
+      .filter(
+        (d) =>
+          d.distrito &&
+          zonas.includes(DeliveryLocalService.normalizarZona(d.distrito)),
+      )
+      .filter((d) => {
+        const tope = topes.get(d.empresaId);
+        if (tope == null) return true;
+        const total = d.venta?.total != null ? Number(d.venta.total) : null;
+        return total == null || total <= tope;
+      })
+      .map((d) => ({ ...d, empresaNombre: nombres.get(d.empresaId) ?? null }));
+  }
+
+  /**
+   * Toma de un freelance: además de la atomicidad, valida opt-in de la
+   * empresa, zona, tope de mercadería y LÍMITE de entregas activas por
+   * historial (<10 completadas → 1 a la vez; luego 3).
+   */
+  async tomarExterno(deliveryId: string, usuarioId: string) {
+    const rep = await this.verificarFreelance(usuarioId);
+    if (!deliveryId) throw new BadRequestException('deliveryId obligatorio');
+
+    const delivery = await this.prisma.deliveryLocal.findUnique({
+      where: { id: deliveryId },
+      include: { venta: { select: { total: true } } },
+    });
+    if (!delivery) throw new NotFoundException('Delivery no encontrado');
+
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: delivery.empresaId },
+      select: { aceptaRepartidoresExternos: true, montoMaxDeliveryExterno: true },
+    });
+    if (!empresa?.aceptaRepartidoresExternos) {
+      throw new ForbiddenException(
+        'Esta empresa no trabaja con repartidores externos',
+      );
+    }
+    const zonas = rep.zonas.map(DeliveryLocalService.normalizarZona);
+    if (
+      !delivery.distrito ||
+      !zonas.includes(DeliveryLocalService.normalizarZona(delivery.distrito))
+    ) {
+      throw new ForbiddenException('Este pedido está fuera de tus zonas');
+    }
+    const tope =
+      empresa.montoMaxDeliveryExterno != null
+        ? Number(empresa.montoMaxDeliveryExterno)
+        : null;
+    const total =
+      delivery.venta?.total != null ? Number(delivery.venta.total) : null;
+    if (tope != null && total != null && total > tope) {
+      throw new ForbiddenException(
+        'El valor del pedido supera el tope para repartidores externos',
+      );
+    }
+    const maxActivas = rep.entregasCompletadas < 10 ? 1 : 3;
+    const activas = await this.prisma.deliveryLocal.count({
+      where: {
+        repartidorId: usuarioId,
+        estado: {
+          in: [EstadoDeliveryLocal.TOMADO, EstadoDeliveryLocal.EN_CAMINO],
+        },
+      },
+    });
+    if (activas >= maxActivas) {
+      throw new ConflictException(
+        `Ya tienes ${activas} entrega(s) activa(s) — completa antes de tomar otra`,
+      );
+    }
+
+    const r = await this.prisma.deliveryLocal.updateMany({
+      where: {
+        id: deliveryId,
+        estado: EstadoDeliveryLocal.SOLICITADO,
+        repartidorId: null,
+      },
+      data: {
+        estado: EstadoDeliveryLocal.TOMADO,
+        repartidorId: usuarioId,
+        tomadoEn: new Date(),
+      },
+    });
+    if (r.count === 0) {
+      throw new ConflictException(
+        'DELIVERY_YA_TOMADO: otro repartidor lo tomó primero (o ya no está disponible)',
+      );
+    }
+
+    const cargado = await this.cargar(deliveryId);
+    const nombreCorto = rep.nombreCompleto.split(' ')[0];
+    void this.avisarCliente(
+      cargado,
+      `🛵 ¡Tu pedido ${cargado.venta?.codigo ?? ''} ya tiene repartidor ` +
+        `asignado (${nombreCorto}, repartidor Syncronize)! Te aviso cuando ` +
+        'esté en camino.\n' +
+        `Sigue tu pedido aquí: ${this.urlTracking(cargado.trackingToken)}`,
+    );
+    return cargado;
+  }
+
+  /** Entregas del freelance (cruzan empresas — filtro solo por él). */
+  async misEntregasFreelance(usuarioId: string) {
+    await this.verificarFreelance(usuarioId);
+    return this.prisma.deliveryLocal.findMany({
+      where: { repartidorId: usuarioId },
+      include: { venta: { select: { codigo: true } } },
+      orderBy: { actualizadoEn: 'desc' },
+      take: 50,
+    });
   }
 
   /**

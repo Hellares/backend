@@ -97,6 +97,35 @@ export class DeliveryLocalController {
     return this.service.marcarEntregado(dto.empresaId, id, user.sub);
   }
 
+  // ── Pool EXTERNO (repartidores freelance de Syncronize) ──
+
+  /** Pool cross-empresa del freelance: opt-in + sus zonas + topes. */
+  @Get('externo/disponibles')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Pool de deliveries para repartidor freelance' })
+  poolExterno(@CurrentUser() user: any) {
+    return this.service.poolExterno(user.sub);
+  }
+
+  /** Entregas del freelance (cruzan empresas). */
+  @Get('externo/mis-entregas')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Entregas del repartidor freelance' })
+  misEntregasExterno(@CurrentUser() user: any) {
+    return this.service.misEntregasFreelance(user.sub);
+  }
+
+  /** Tomar como freelance (opt-in + zona + tope + límite de activas). */
+  @Post(':id/tomar-externo')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Tomar un delivery como repartidor freelance' })
+  tomarExterno(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.tomarExterno(id, user.sub);
+  }
+
   /** GPS: posición del repartidor en camino (best-effort, alta frecuencia). */
   @Post(':id/posicion')
   @UseGuards(JwtAuthGuard)
