@@ -81,8 +81,18 @@ export class RepartidoresService {
             dni: dto.dni,
             nombres: partes.slice(0, -2).join(' ') || nombreCompleto,
             apellidos: partes.slice(-2).join(' '),
+            // "Datos personales" del perfil leen de Persona — sin esto el
+            // celular del registro no aparecía en la app.
+            telefono: dto.celular,
             esUsuario: true,
           },
+        });
+      } else if (!persona.telefono) {
+        // Persona reusada (era cliente): completar el teléfono SOLO si no
+        // tenía — jamás pisar el que ya declaró en otra empresa.
+        persona = await tx.persona.update({
+          where: { id: persona.id },
+          data: { telefono: dto.celular, esUsuario: true },
         });
       }
 

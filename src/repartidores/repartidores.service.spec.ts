@@ -98,6 +98,10 @@ describe('RepartidoresService', () => {
       );
       const repData = tx.repartidorSyncronize.create.mock.calls[0][0].data;
       expect(repData.zonas).toEqual(['Chiclayo', 'José Leonardo Ortiz']);
+      // El celular también va a Persona.telefono ("datos personales").
+      expect(tx.persona.create.mock.calls[0][0].data.telefono).toBe(
+        '904773029',
+      );
     });
 
     it('DNI ya registrado como repartidor → Conflict', async () => {
