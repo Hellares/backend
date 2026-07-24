@@ -98,6 +98,9 @@ export class RepartidoresService {
             metodoPrincipalLogin: 'DNI',
             dniVerificado: true,
             authMethodsCount: 1,
+            // El freelance NO tiene email (canal = celular vía OTP) — sin
+            // esto el login exige "verifica tu email" y lo deja fuera.
+            emailVerificado: true,
           },
         });
         await tx.authProvider.create({

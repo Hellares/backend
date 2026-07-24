@@ -89,6 +89,9 @@ describe('RepartidoresService', () => {
       const usuarioData = tx.usuario.create.mock.calls[0][0].data;
       expect(usuarioData.metodoPrincipalLogin).toBe('DNI');
       expect(usuarioData.passwordHash).toBeTruthy();
+      // Sin email no hay nada que verificar — sin este flag el login lo
+      // rebota con "verifica tu email" (pasó con el repartidor de prueba).
+      expect(usuarioData.emailVerificado).toBe(true);
       // El login exige AuthProvider PASSWORD (gotcha real del test manual).
       expect(tx.authProvider.create.mock.calls[0][0].data.provider).toBe(
         'PASSWORD',
