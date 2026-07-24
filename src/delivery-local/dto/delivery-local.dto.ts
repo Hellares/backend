@@ -52,6 +52,17 @@ export class AccionDeliveryDto {
   empresaId: string;
 }
 
+/** Entrega con prueba: PIN que el cliente le dicta al repartidor. */
+export class EntregarDeliveryDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+
+  @IsOptional()
+  @IsString()
+  pin?: string;
+}
+
 /** Posición GPS del repartidor (mientras va EN_CAMINO). */
 export class ReportarPosicionDto {
   @IsString()

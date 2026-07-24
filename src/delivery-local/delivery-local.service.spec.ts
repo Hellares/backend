@@ -198,10 +198,85 @@ describe('DeliveryLocalService', () => {
     });
 
     it('transición de un delivery ajeno (count=0) → Conflict', async () => {
+      prisma.deliveryLocal.findFirst.mockResolvedValue({ pinEntrega: null });
       prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 0 });
       await expect(
         service.marcarEntregado(EMPRESA, 'd1', 'otro-user'),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('PIN de entrega (prueba de entrega)', () => {
+    it('al salir EN_CAMINO se genera PIN de 4 dígitos y viaja SOLO al cliente', async () => {
+      prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 1 });
+      prisma.deliveryLocal.findUniqueOrThrow.mockResolvedValue({
+        id: 'd1',
+        empresaId: EMPRESA,
+        destinatarioCelular: '51904773029',
+        costoDelivery: 5,
+        trackingToken: 'tok1',
+        venta: { codigo: 'VTA-1' },
+      });
+      prisma.integracionWhatsapp.findUnique.mockResolvedValue({
+        instanceName: 'inst1',
+        estado: 'CONECTADO',
+        habilitado: true,
+      });
+
+      await service.marcarEnCamino(EMPRESA, 'd1', REPARTIDOR);
+      await tick();
+
+      const data = prisma.deliveryLocal.updateMany.mock.calls[0][0].data;
+      expect(data.pinEntrega).toMatch(/^\d{4}$/);
+      // El WhatsApp del CLIENTE lleva el código; el repartidor jamás lo ve.
+      const texto = evolution.sendText.mock.calls[0][0].text as string;
+      expect(texto).toContain(data.pinEntrega);
+      expect(texto).toContain('código de entrega');
+    });
+
+    it('entregar con PIN incorrecto → BadRequest y NO transiciona', async () => {
+      prisma.deliveryLocal.findFirst.mockResolvedValue({ pinEntrega: '1234' });
+      await expect(
+        service.marcarEntregado(EMPRESA, 'd1', REPARTIDOR, '9999'),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.deliveryLocal.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('entregar SIN pin cuando el delivery tiene PIN → BadRequest', async () => {
+      prisma.deliveryLocal.findFirst.mockResolvedValue({ pinEntrega: '1234' });
+      await expect(
+        service.marcarEntregado(EMPRESA, 'd1', REPARTIDOR),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('PIN correcto → ENTREGADO (transición solo desde EN_CAMINO)', async () => {
+      prisma.deliveryLocal.findFirst.mockResolvedValue({ pinEntrega: '1234' });
+      prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 1 });
+      prisma.deliveryLocal.findUniqueOrThrow.mockResolvedValue({
+        id: 'd1',
+        empresaId: EMPRESA,
+        destinatarioCelular: null,
+        costoDelivery: 5,
+        venta: { codigo: 'VTA-1' },
+      });
+      await service.marcarEntregado(EMPRESA, 'd1', REPARTIDOR, ' 1234 ');
+      const where = prisma.deliveryLocal.updateMany.mock.calls[0][0].where;
+      expect(where.estado).toEqual({ in: [EstadoDeliveryLocal.EN_CAMINO] });
+    });
+
+    it('delivery legado sin PIN → entrega sin código (compatibilidad)', async () => {
+      prisma.deliveryLocal.findFirst.mockResolvedValue({ pinEntrega: null });
+      prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 1 });
+      prisma.deliveryLocal.findUniqueOrThrow.mockResolvedValue({
+        id: 'd1',
+        empresaId: EMPRESA,
+        destinatarioCelular: null,
+        costoDelivery: 5,
+        venta: { codigo: 'VTA-1' },
+      });
+      await expect(
+        service.marcarEntregado(EMPRESA, 'd1', REPARTIDOR),
+      ).resolves.toBeTruthy();
     });
   });
 

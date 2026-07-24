@@ -208,15 +208,17 @@ export class DeliveryLocalService {
     return delivery;
   }
 
-  /** El repartidor asignado sale hacia el destino. */
+  /** El repartidor asignado sale hacia el destino. Aquí nace el PIN de
+   *  entrega: viaja SOLO al cliente — el repartidor jamás lo ve. */
   async marcarEnCamino(empresaId: string, deliveryId: string, userId: string) {
+    const pin = String(Math.floor(1000 + Math.random() * 9000));
     const delivery = await this.transicionDeRepartidor(
       empresaId,
       deliveryId,
       userId,
       [EstadoDeliveryLocal.TOMADO],
       EstadoDeliveryLocal.EN_CAMINO,
-      { enCaminoEn: new Date() },
+      { enCaminoEn: new Date(), pinEntrega: pin },
     );
     const costo = Number(delivery.costoDelivery);
     void this.avisarCliente(
@@ -225,18 +227,44 @@ export class DeliveryLocalService {
         (costo > 0
           ? ` Al recibirlo, paga S/ ${costo.toFixed(2)} del delivery al repartidor.`
           : '') +
+        `\n🔐 Tu código de entrega es *${pin}* — dáselo al repartidor SOLO al recibir tu pedido.` +
         `\n📍 Míralo EN VIVO en el mapa: ${this.urlTracking(delivery.trackingToken)}`,
     );
     return delivery;
   }
 
-  /** Entregado (el repartidor cobró su tarifa en la puerta). */
-  async marcarEntregado(empresaId: string, deliveryId: string, userId: string) {
+  /**
+   * Entregado (el repartidor cobró su tarifa en la puerta). PRUEBA DE
+   * ENTREGA: el PIN lo tiene SOLO el cliente — si el delivery tiene PIN
+   * (todo EN_CAMINO nuevo lo tiene), es obligatorio y debe coincidir.
+   * Además ENTREGADO solo se llega desde EN_CAMINO (sin atajos que
+   * esquiven el PIN ni el GPS).
+   */
+  async marcarEntregado(
+    empresaId: string,
+    deliveryId: string,
+    userId: string,
+    pin?: string,
+  ) {
+    if (!deliveryId || !empresaId) {
+      throw new BadRequestException('empresaId y deliveryId son obligatorios');
+    }
+    const previo = await this.prisma.deliveryLocal.findFirst({
+      where: { id: deliveryId, empresaId },
+      select: { pinEntrega: true },
+    });
+    if (!previo) throw new NotFoundException('Delivery no encontrado');
+    if (previo.pinEntrega && previo.pinEntrega !== (pin ?? '').trim()) {
+      throw new BadRequestException(
+        'PIN_INCORRECTO: pídele al cliente su código de entrega (le llegó ' +
+          'por WhatsApp y está en su página de seguimiento)',
+      );
+    }
     const delivery = await this.transicionDeRepartidor(
       empresaId,
       deliveryId,
       userId,
-      [EstadoDeliveryLocal.TOMADO, EstadoDeliveryLocal.EN_CAMINO],
+      [EstadoDeliveryLocal.EN_CAMINO],
       EstadoDeliveryLocal.ENTREGADO,
       { entregadoEn: new Date() },
     );
@@ -538,6 +566,10 @@ export class DeliveryLocalService {
       enCaminoEn: d.enCaminoEn,
       entregadoEn: d.entregadoEn,
       canceladoEn: d.canceladoEn,
+      // Código de entrega: el cliente lo ve mientras espera (esta página
+      // es SUYA — llega por el token secreto del WhatsApp).
+      pinEntrega:
+        d.estado === EstadoDeliveryLocal.EN_CAMINO ? d.pinEntrega : null,
       // Posición del repartidor SOLO mientras va en camino (privacidad:
       // fuera de la entrega activa jamás se expone dónde está).
       posicion:
@@ -576,7 +608,7 @@ export class DeliveryLocalService {
     userId: string,
     desde: EstadoDeliveryLocal[],
     hacia: EstadoDeliveryLocal,
-    marcas: Record<string, Date>,
+    marcas: Record<string, Date | string>,
   ) {
     if (!deliveryId || !userId || !empresaId) {
       throw new BadRequestException('empresaId, deliveryId y usuario son obligatorios');

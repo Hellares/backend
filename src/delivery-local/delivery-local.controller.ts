@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '../auth/guards';
 import {
   AccionDeliveryDto,
   CancelarDeliveryDto,
+  EntregarDeliveryDto,
   ReportarPosicionDto,
   SolicitarDeliveryDto,
 } from './dto/delivery-local.dto';
@@ -88,13 +89,13 @@ export class DeliveryLocalController {
   @Post(':id/entregado')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Marcar delivery entregado' })
+  @ApiOperation({ summary: 'Marcar entregado (exige el PIN del cliente)' })
   entregado(
     @Param('id') id: string,
-    @Body() dto: AccionDeliveryDto,
+    @Body() dto: EntregarDeliveryDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.marcarEntregado(dto.empresaId, id, user.sub);
+    return this.service.marcarEntregado(dto.empresaId, id, user.sub, dto.pin);
   }
 
   // ── Pool EXTERNO (repartidores freelance de Syncronize) ──
