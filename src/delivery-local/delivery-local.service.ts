@@ -143,6 +143,12 @@ export class DeliveryLocalService {
         direccion: dto.direccion,
         referencia: dto.referencia ?? null,
         distrito: dto.distrito ?? null,
+        // Pin del mapa (si el staff lo fijó): destino exacto para el
+        // NAVEGAR del repartidor y el 📍 del tracking del cliente.
+        coordenadas:
+          dto.destinoLat != null && dto.destinoLon != null
+            ? { lat: dto.destinoLat, lon: dto.destinoLon }
+            : undefined,
         costoDelivery: costo,
       },
     });

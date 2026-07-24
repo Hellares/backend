@@ -43,6 +43,16 @@ export class SolicitarDeliveryDto {
   @IsNumber()
   @Min(0)
   costoDelivery?: number;
+
+  /** Coordenadas EXACTAS del destino (pin en el mapa): NAVEGAR del
+   *  repartidor va al punto y el cliente ve el 📍 en su tracking. */
+  @IsOptional()
+  @IsNumber()
+  destinoLat?: number;
+
+  @IsOptional()
+  @IsNumber()
+  destinoLon?: number;
 }
 
 /** Acciones del repartidor (tomar / en-camino / entregado). */

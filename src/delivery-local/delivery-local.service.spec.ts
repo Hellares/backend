@@ -118,6 +118,20 @@ describe('DeliveryLocalService', () => {
       );
     });
 
+    it('pin del mapa → coordenadas exactas del destino en el delivery', async () => {
+      conRol(Rol.VENDEDOR);
+      prisma.venta.findFirst.mockResolvedValue(ventaPagada());
+      prisma.deliveryLocal.create.mockImplementation(({ data }: any) =>
+        Promise.resolve({ id: 'd1', ...data }),
+      );
+      const d = await service.solicitar(VENDEDOR, {
+        ...dtoBase,
+        destinoLat: -6.7768,
+        destinoLon: -79.8446,
+      });
+      expect(d.coordenadas).toEqual({ lat: -6.7768, lon: -79.8446 });
+    });
+
     it('venta con delivery previo → Conflict (única por venta)', async () => {
       conRol(Rol.VENDEDOR);
       prisma.venta.findFirst.mockResolvedValue(
