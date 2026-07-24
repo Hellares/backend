@@ -219,6 +219,58 @@ describe('DeliveryLocalService', () => {
     });
   });
 
+  describe('GPS en vivo', () => {
+    it('reportarPosicion escribe SOLO si es el dueño y va EN_CAMINO', async () => {
+      prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 1 });
+      const r = await service.reportarPosicion(
+        EMPRESA,
+        'd1',
+        REPARTIDOR,
+        -6.7714,
+        -79.8409,
+      );
+      expect(r.ok).toBe(true);
+      const call = prisma.deliveryLocal.updateMany.mock.calls[0][0];
+      expect(call.where.repartidorId).toBe(REPARTIDOR);
+      expect(call.where.estado).toBe(EstadoDeliveryLocal.EN_CAMINO);
+      expect(call.data.ultimaPosicion).toEqual({ lat: -6.7714, lon: -79.8409 });
+    });
+
+    it('reporte tardío (ya entregado / otro dueño) → ok:false SIN error', async () => {
+      prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 0 });
+      const r = await service.reportarPosicion(EMPRESA, 'd1', 'otro', 0, 0);
+      expect(r.ok).toBe(false);
+    });
+
+    it('tracking expone posición SOLO en EN_CAMINO', async () => {
+      const base = {
+        estado: EstadoDeliveryLocal.EN_CAMINO,
+        costoDelivery: 5,
+        creadoEn: new Date(),
+        tomadoEn: new Date(),
+        enCaminoEn: new Date(),
+        entregadoEn: null,
+        canceladoEn: null,
+        ultimaPosicion: { lat: -6.77, lon: -79.84 },
+        posicionEn: new Date('2026-07-23T20:00:00Z'),
+        coordenadas: null,
+        venta: { codigo: 'VTA-1' },
+      };
+      prisma.deliveryLocal.findUnique.mockResolvedValue(base);
+      const t1 = await service.tracking('tok');
+      expect(t1.posicion).toMatchObject({ lat: -6.77, lon: -79.84 });
+
+      // Entregado → la posición desaparece del tracking (privacidad).
+      prisma.deliveryLocal.findUnique.mockResolvedValue({
+        ...base,
+        estado: EstadoDeliveryLocal.ENTREGADO,
+        entregadoEn: new Date(),
+      });
+      const t2 = await service.tracking('tok');
+      expect(t2.posicion).toBeNull();
+    });
+  });
+
   describe('cancelar', () => {
     it('staff cancela y se avisa al repartidor asignado', async () => {
       conRol(Rol.EMPRESA_ADMIN);

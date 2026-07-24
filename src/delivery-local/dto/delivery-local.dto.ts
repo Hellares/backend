@@ -52,6 +52,21 @@ export class AccionDeliveryDto {
   empresaId: string;
 }
 
+/** Posición GPS del repartidor (mientras va EN_CAMINO). */
+export class ReportarPosicionDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+
+  @IsNumber()
+  @Min(-90)
+  lat: number;
+
+  @IsNumber()
+  @Min(-180)
+  lon: number;
+}
+
 export class CancelarDeliveryDto {
   @IsString()
   @IsNotEmpty()

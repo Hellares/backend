@@ -197,7 +197,8 @@ export class DeliveryLocalService {
     void this.avisarCliente(
       delivery,
       `🛵 ¡Tu pedido ${delivery.venta?.codigo ?? ''} ya tiene repartidor asignado! ` +
-        'Te aviso cuando esté en camino.',
+        'Te aviso cuando esté en camino.\n' +
+        `Sigue tu pedido aquí: ${this.urlTracking(delivery.trackingToken)}`,
     );
     return delivery;
   }
@@ -218,7 +219,8 @@ export class DeliveryLocalService {
       `🛵 ¡Tu pedido ${delivery.venta?.codigo ?? ''} va en camino a tu dirección!` +
         (costo > 0
           ? ` Al recibirlo, paga S/ ${costo.toFixed(2)} del delivery al repartidor.`
-          : ''),
+          : '') +
+        `\n📍 Míralo EN VIVO en el mapa: ${this.urlTracking(delivery.trackingToken)}`,
     );
     return delivery;
   }
@@ -285,6 +287,34 @@ export class DeliveryLocalService {
     return this.cargar(deliveryId);
   }
 
+  /**
+   * GPS en vivo: el repartidor asignado reporta su posición mientras va
+   * EN_CAMINO. Escritura condicionada (dueño + estado) — cualquier otra
+   * combinación simplemente no matchea (count 0, sin error: el teléfono
+   * puede reportar un instante después de entregar y no es un fallo).
+   */
+  async reportarPosicion(
+    empresaId: string,
+    deliveryId: string,
+    userId: string,
+    lat: number,
+    lon: number,
+  ): Promise<{ ok: boolean }> {
+    if (!empresaId || !deliveryId || !userId) {
+      throw new BadRequestException('empresaId y deliveryId son obligatorios');
+    }
+    const r = await this.prisma.deliveryLocal.updateMany({
+      where: {
+        id: deliveryId,
+        empresaId,
+        repartidorId: userId,
+        estado: EstadoDeliveryLocal.EN_CAMINO,
+      },
+      data: { ultimaPosicion: { lat, lon }, posicionEn: new Date() },
+    });
+    return { ok: r.count > 0 };
+  }
+
   /** Entregas del repartidor autenticado (activas primero, últimas 50). */
   async misEntregas(empresaId: string, userId: string) {
     await this.verificarRepartidor(empresaId, userId);
@@ -316,10 +346,24 @@ export class DeliveryLocalService {
       enCaminoEn: d.enCaminoEn,
       entregadoEn: d.entregadoEn,
       canceladoEn: d.canceladoEn,
+      // Posición del repartidor SOLO mientras va en camino (privacidad:
+      // fuera de la entrega activa jamás se expone dónde está).
+      posicion:
+        d.estado === EstadoDeliveryLocal.EN_CAMINO && d.ultimaPosicion
+          ? { ...(d.ultimaPosicion as object), en: d.posicionEn }
+          : null,
+      // Coordenadas del destino (si el pedido las trae — F2 bot/WhatsApp).
+      destino: d.coordenadas ?? null,
     };
   }
 
   // ── Helpers ──
+
+  /** Link público de seguimiento (página web con timeline + mapa en vivo). */
+  private urlTracking(token: string): string {
+    const base = process.env.WEB_PUBLIC_URL ?? 'https://syncronize.net.pe';
+    return `${base}/tracking/${token}`;
+  }
 
   private cargar(deliveryId: string) {
     return this.prisma.deliveryLocal.findUniqueOrThrow({

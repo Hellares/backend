@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '../auth/guards';
 import {
   AccionDeliveryDto,
   CancelarDeliveryDto,
+  ReportarPosicionDto,
   SolicitarDeliveryDto,
 } from './dto/delivery-local.dto';
 
@@ -94,6 +95,25 @@ export class DeliveryLocalController {
     @CurrentUser() user: any,
   ) {
     return this.service.marcarEntregado(dto.empresaId, id, user.sub);
+  }
+
+  /** GPS: posición del repartidor en camino (best-effort, alta frecuencia). */
+  @Post(':id/posicion')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reportar posición GPS del repartidor' })
+  posicion(
+    @Param('id') id: string,
+    @Body() dto: ReportarPosicionDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.reportarPosicion(
+      dto.empresaId,
+      id,
+      user.sub,
+      dto.lat,
+      dto.lon,
+    );
   }
 
   /** Cancelar (staff). */

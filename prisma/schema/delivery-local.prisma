@@ -48,6 +48,11 @@ model DeliveryLocal {
   // Seguimiento público del cliente (sin login): /tracking/<token>.
   trackingToken String @unique @default(cuid())
 
+  // GPS en vivo (F3): última posición del repartidor {lat, lon}. Solo se
+  // reporta/expone mientras EN_CAMINO; al ENTREGADO se deja de emitir.
+  ultimaPosicion Json?
+  posicionEn     DateTime?
+
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
