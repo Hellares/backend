@@ -37,6 +37,11 @@ describe('RepartidoresService', () => {
           .mockImplementation(({ data }: any) =>
             Promise.resolve({ id: 'p1', ...data }),
           ),
+        update: jest
+          .fn()
+          .mockImplementation(({ where, data }: any) =>
+            Promise.resolve({ id: where.id, ...data }),
+          ),
       },
       usuario: {
         findUnique: jest.fn().mockResolvedValue(null),
