@@ -789,6 +789,9 @@ export class VentaService {
       // Envío liviano: solo el flag de rótulo impreso para que el badge
       // "Envío" de la card pueda mostrar "Envío · IMP" (relación 1:1).
       envio: { select: { rotuloImpresoEn: true } },
+      // Delivery local liviano: el badge de la card muestra "Delivery" (con
+      // su estado) en vez de "Envío" cuando la venta va con repartidor.
+      deliveryLocal: { select: { estado: true } },
       // Órdenes de servicio cobradas por la venta (badge "OS-XXXXX" en la
       // card). Solo trae filas para líneas con ordenServicioId — para
       // ventas normales devuelve []. findAll lo aplana a `ordenesServicio`
