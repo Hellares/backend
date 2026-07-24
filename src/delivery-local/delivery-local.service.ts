@@ -302,7 +302,9 @@ export class DeliveryLocalService {
 
   // ── Pool EXTERNO (repartidores freelance de Syncronize, R1) ──
 
-  /** Freelance APROBADO — o fuera. */
+  /** Freelance APROBADO y con celular VERIFICADO — o fuera. El doble
+   *  candado vive AQUÍ (no solo en la UI): aprobar en el admin no basta
+   *  si nunca demostró que el celular es suyo (OTP). */
   private async verificarFreelance(usuarioId: string) {
     if (!usuarioId) throw new BadRequestException('usuario obligatorio');
     const rep = await this.prisma.repartidorSyncronize.findUnique({
@@ -311,6 +313,11 @@ export class DeliveryLocalService {
     if (!rep || rep.estado !== EstadoRepartidorSyncronize.APROBADO) {
       throw new ForbiddenException(
         'No eres repartidor aprobado de Syncronize',
+      );
+    }
+    if (!rep.celularVerificado) {
+      throw new ForbiddenException(
+        'Verifica tu celular (código de WhatsApp) para empezar a tomar pedidos',
       );
     }
     return rep;

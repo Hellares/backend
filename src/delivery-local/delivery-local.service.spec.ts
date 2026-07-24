@@ -290,6 +290,7 @@ describe('DeliveryLocalService', () => {
       id: 'rep1',
       usuarioId: FREELANCE,
       estado: EstadoRepartidorSyncronize.APROBADO,
+      celularVerificado: true,
       nombreCompleto: 'RAYZA PEREZ QUISPE',
       zonas: ['Chiclayo'],
       entregasCompletadas: 0,
@@ -301,6 +302,18 @@ describe('DeliveryLocalService', () => {
         repAprobado({ estado: EstadoRepartidorSyncronize.PENDIENTE }),
       );
       await expect(service.poolExterno(FREELANCE)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('APROBADO pero SIN celular verificado → Forbidden (candado en el server, no solo en la UI)', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(
+        repAprobado({ celularVerificado: false }),
+      );
+      await expect(service.poolExterno(FREELANCE)).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(service.tomarExterno('d1', FREELANCE)).rejects.toThrow(
         ForbiddenException,
       );
     });
