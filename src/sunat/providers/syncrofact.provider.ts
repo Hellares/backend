@@ -179,7 +179,9 @@ export class SyncrofactProvider implements FacturacionProvider {
             }))
           : [],
       })),
-      metadata: data.config ?? undefined,
+      // company_id del token: lo usa "probar conexión" para auto-capturar el
+      // companyId del emisor socio (evita heredar el del principal).
+      metadata: { ...(data.config ?? {}), companyId: data.company_id },
     };
   }
 

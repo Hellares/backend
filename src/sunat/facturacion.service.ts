@@ -187,12 +187,11 @@ export class FacturacionService {
       proveedorActivo: emisor.proveedorActivo ?? config.proveedorActivo,
       proveedorRuta: emisor.proveedorRuta ?? config.proveedorRuta,
       proveedorToken: emisor.proveedorToken ?? config.proveedorToken,
-      proveedorConfig: (() => {
-        const base = (config.proveedorConfig as Record<string, any> | null) ?? null;
-        const propio = (emisor.proveedorConfig as Record<string, any> | null) ?? null;
-        if (!base && !propio) return null;
-        return { ...(base ?? {}), ...(propio ?? {}) };
-      })(),
+      // SIN merge con la config del principal: heredar su companyId con el
+      // token del socio produce "No está autorizado para emitir..." en
+      // Syncrofact. El emisor socio es autónomo (token = su company).
+      proveedorConfig:
+        (emisor.proveedorConfig as Record<string, any> | null) ?? null,
       facturacionActiva: emisor.facturacionActiva,
       resolucionSunat: emisor.resolucionSunat ?? config.resolucionSunat,
     };
@@ -1559,6 +1558,9 @@ export class FacturacionService {
         ok: true,
         proveedor: dto.proveedorActivo,
         mensaje: `Conexión exitosa. ${branches.length} sucursal(es) encontrada(s).`,
+        // Company del token en el proveedor: el form de emisores lo persiste
+        // en proveedorConfig.companyId al guardar.
+        companyId: (info.metadata as any)?.companyId ?? null,
         branches,
       };
     } catch (err: any) {

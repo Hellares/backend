@@ -33,6 +33,8 @@ export interface ProbarConexionResponse {
   ok: boolean;
   mensaje: string;
   proveedor: ProveedorFacturacion;
+  /** Company del token en el proveedor (Syncrofact). */
+  companyId?: number | null;
   branches?: Array<{
     branchIdProveedor: number;
     codigo: string;
