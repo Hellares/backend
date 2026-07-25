@@ -125,6 +125,18 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getVentasPorMarca(empresaId, query);
   }
 
+  @Get('reposicion')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Reposicion sugerida: velocidad 30d vs stock actual (por variante)' })
+  @ApiResponse({ status: 200, description: 'Reposicion sugerida obtenida' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getReposicionSugerida(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getReposicionSugerida(empresaId, query);
+  }
+
   @Get('horas-pico')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Ventas por hora del dia y dia de semana (hora Peru)' })

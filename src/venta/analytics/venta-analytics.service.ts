@@ -816,6 +816,138 @@ export class VentaAnalyticsService {
   }
 
   /**
+   * Reposición sugerida: velocidad de venta de los ÚLTIMOS 30 DÍAS (fija e
+   * independiente del periodo del dashboard — un filtro "Hoy" haría ruido)
+   * cruzada con el stock actual → días de cobertura y cantidad a comprar
+   * para 15 días. La cobertura es POR VARIANTE cuando existe (la talla que
+   * se agota no se ve a nivel producto). Solo respeta el filtro de sede.
+   */
+  async getReposicionSugerida(
+    empresaId: string,
+    query: VentaAnalyticsQueryDto,
+  ) {
+    this.logger.log('Obteniendo reposición sugerida');
+
+    const DIAS_VELOCIDAD = 30;
+    const DIAS_OBJETIVO = 15;
+    const desde = new Date(Date.now() - DIAS_VELOCIDAD * 24 * 60 * 60 * 1000);
+
+    const whereVenta: Prisma.VentaWhereInput = {
+      empresaId,
+      estado: { notIn: [EstadoVenta.BORRADOR, EstadoVenta.ANULADA] },
+      fechaVenta: { gte: desde },
+      ...(query.sedeId ? { sedeId: query.sedeId } : {}),
+    };
+
+    const detalles = await this.prisma.ventaDetalle.findMany({
+      where: { venta: whereVenta, productoId: { not: null } },
+      select: {
+        productoId: true,
+        varianteId: true,
+        cantidad: true,
+        producto: { select: { nombre: true } },
+        variante: { select: { nombre: true } },
+      },
+    });
+
+    // Agrupar por variante cuando existe; si no, por producto base
+    const vendidos = new Map<
+      string,
+      {
+        productoId: string;
+        varianteId: string | null;
+        nombre: string;
+        cantidad30d: number;
+      }
+    >();
+    for (const d of detalles) {
+      if (!d.productoId) continue;
+      const key = d.varianteId ?? `P:${d.productoId}`;
+      const existing = vendidos.get(key) || {
+        productoId: d.productoId,
+        varianteId: d.varianteId ?? null,
+        nombre: d.variante?.nombre
+          ? `${d.producto?.nombre ?? ''} — ${d.variante.nombre}`
+          : (d.producto?.nombre ?? ''),
+        cantidad30d: 0,
+      };
+      existing.cantidad30d += d.cantidad.toNumber();
+      vendidos.set(key, existing);
+    }
+    if (vendidos.size === 0) return [];
+
+    // Stock actual: ramificar producto base vs variante — las filas de
+    // ProductoStock viven en UNO de los dos ejes, nunca AND de ambos.
+    const items = [...vendidos.values()];
+    const productoIds = [
+      ...new Set(items.filter((v) => !v.varianteId).map((v) => v.productoId)),
+    ];
+    const varianteIds = [
+      ...new Set(
+        items
+          .filter((v) => v.varianteId)
+          .map((v) => v.varianteId as string),
+      ),
+    ];
+    const whereSede = query.sedeId ? { sedeId: query.sedeId } : {};
+
+    const [stockBase, stockVariantes] = await Promise.all([
+      productoIds.length
+        ? this.prisma.productoStock.findMany({
+            where: { empresaId, productoId: { in: productoIds }, ...whereSede },
+            select: { productoId: true, stockActual: true },
+          })
+        : Promise.resolve([]),
+      varianteIds.length
+        ? this.prisma.productoStock.findMany({
+            where: { empresaId, varianteId: { in: varianteIds }, ...whereSede },
+            select: { varianteId: true, stockActual: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    // Sin filtro de sede el stock se suma entre sedes
+    const stockDe = new Map<string, number>();
+    for (const s of stockBase) {
+      if (!s.productoId) continue;
+      const k = `P:${s.productoId}`;
+      stockDe.set(k, (stockDe.get(k) ?? 0) + s.stockActual);
+    }
+    for (const s of stockVariantes) {
+      if (!s.varianteId) continue;
+      stockDe.set(s.varianteId, (stockDe.get(s.varianteId) ?? 0) + s.stockActual);
+    }
+
+    return [...vendidos.entries()]
+      .map(([key, v]) => {
+        const stock = stockDe.get(key);
+        // Sin fila de stock = sin control de inventario (servicio/combo) → fuera
+        if (stock == null) return null;
+        const ventaDiaria = v.cantidad30d / DIAS_VELOCIDAD;
+        if (ventaDiaria <= 0) return null;
+        const diasCobertura = stock / ventaDiaria;
+        const nivel =
+          diasCobertura <= 7 ? 'CRITICO' : diasCobertura <= 15 ? 'BAJO' : 'OK';
+        return {
+          productoId: v.productoId,
+          varianteId: v.varianteId,
+          nombre: v.nombre,
+          ventaDiaria: round2(ventaDiaria),
+          stockActual: stock,
+          diasCobertura: round2(diasCobertura),
+          nivel,
+          sugeridoComprar: Math.max(
+            0,
+            Math.ceil(ventaDiaria * DIAS_OBJETIVO - stock),
+          ),
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => a.diasCobertura - b.diasCobertura)
+      .slice(0, 15);
+  }
+
+  /**
    * Distribución horaria de las ventas en hora Perú (UTC-5): por hora del
    * día (0-23) y por día de semana (1=Lun…7=Dom). Para decidir horarios
    * de personal y cobertura de delivery.

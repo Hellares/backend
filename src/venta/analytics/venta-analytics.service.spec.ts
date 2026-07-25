@@ -464,6 +464,76 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
   });
 });
 
+describe('VentaAnalyticsService.getReposicionSugerida', () => {
+  it('cruza velocidad 30d con stock (rama variante y rama producto) y clasifica', async () => {
+    const detalles = [
+      // Variante v1: 60 und. en 30d = 2/día; stock 6 → 3 días (CRITICO)
+      {
+        productoId: 'p1',
+        varianteId: 'v1',
+        cantidad: dec(60),
+        producto: { nombre: 'Polo' },
+        variante: { nombre: 'Talla M' },
+      },
+      // Producto base p2: 15 und. = 0.5/día; stock 30 → 60 días (OK)
+      {
+        productoId: 'p2',
+        varianteId: null,
+        cantidad: dec(15),
+        producto: { nombre: 'Gorra' },
+        variante: null,
+      },
+      // p3 sin fila de stock → excluido
+      {
+        productoId: 'p3',
+        varianteId: null,
+        cantidad: dec(10),
+        producto: { nombre: 'Servicio' },
+        variante: null,
+      },
+    ];
+    const stockFindMany = jest
+      .fn()
+      // 1ª llamada: rama producto base
+      .mockResolvedValueOnce([{ productoId: 'p2', stockActual: 30 }])
+      // 2ª llamada: rama variante (2 sedes → se suman)
+      .mockResolvedValueOnce([
+        { varianteId: 'v1', stockActual: 4 },
+        { varianteId: 'v1', stockActual: 2 },
+      ]);
+    const service = mkService({
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue(detalles) },
+      productoStock: { findMany: stockFindMany },
+    });
+
+    const result = await service.getReposicionSugerida('emp1', {} as any);
+
+    expect(result).toHaveLength(2);
+    // Ordenado por menos cobertura primero
+    expect(result[0]).toMatchObject({
+      varianteId: 'v1',
+      nombre: 'Polo — Talla M',
+      ventaDiaria: 2,
+      stockActual: 6,
+      diasCobertura: 3,
+      nivel: 'CRITICO',
+      sugeridoComprar: 24, // 2/día × 15 días − 6
+    });
+    expect(result[1]).toMatchObject({
+      productoId: 'p2',
+      nombre: 'Gorra',
+      diasCobertura: 60,
+      nivel: 'OK',
+      sugeridoComprar: 0,
+    });
+    // Rama producto NUNCA filtra por varianteId y viceversa
+    expect(stockFindMany.mock.calls[0][0].where.productoId).toEqual({ in: ['p2', 'p3'] });
+    expect(stockFindMany.mock.calls[0][0].where.varianteId).toBeUndefined();
+    expect(stockFindMany.mock.calls[1][0].where.varianteId).toEqual({ in: ['v1'] });
+    expect(stockFindMany.mock.calls[1][0].where.productoId).toBeUndefined();
+  });
+});
+
 describe('VentaAnalyticsService.getHorasPico', () => {
   it('bucketiza por hora y día de semana en hora Perú (UTC-5)', async () => {
     const ventas = [
