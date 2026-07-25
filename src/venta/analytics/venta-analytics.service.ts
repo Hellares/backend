@@ -816,6 +816,50 @@ export class VentaAnalyticsService {
   }
 
   /**
+   * Distribución horaria de las ventas en hora Perú (UTC-5): por hora del
+   * día (0-23) y por día de semana (1=Lun…7=Dom). Para decidir horarios
+   * de personal y cobertura de delivery.
+   */
+  async getHorasPico(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo horas pico');
+
+    const where = this.buildVentaWhere(empresaId, query);
+    const ventas = await this.prisma.venta.findMany({
+      where,
+      select: { fechaVenta: true, total: true },
+    });
+
+    const porHora = Array.from({ length: 24 }, (_, hora) => ({
+      hora,
+      cantidad: 0,
+      monto: 0,
+    }));
+    const porDiaSemana = Array.from({ length: 7 }, (_, i) => ({
+      dia: i + 1,
+      cantidad: 0,
+      monto: 0,
+    }));
+
+    for (const v of ventas) {
+      // Shift fijo -5h y getters UTC: independiente del TZ del servidor
+      const peru = new Date(v.fechaVenta.getTime() - 5 * 60 * 60 * 1000);
+      const hora = peru.getUTCHours();
+      const diaJs = peru.getUTCDay(); // 0=Dom
+      const dia = diaJs === 0 ? 7 : diaJs; // 1=Lun … 7=Dom
+      const monto = v.total.toNumber();
+      porHora[hora].cantidad += 1;
+      porHora[hora].monto += monto;
+      porDiaSemana[dia - 1].cantidad += 1;
+      porDiaSemana[dia - 1].monto += monto;
+    }
+
+    return {
+      porHora: porHora.map((h) => ({ ...h, monto: round2(h.monto) })),
+      porDiaSemana: porDiaSemana.map((d) => ({ ...d, monto: round2(d.monto) })),
+    };
+  }
+
+  /**
    * Distribución de pagos por método (fuente de verdad: tabla PagoVenta —
    * una venta MIXTO aporta a cada método por separado). Ventas a crédito
    * sin pagos aún no aparecen: es distribución de lo COBRADO.

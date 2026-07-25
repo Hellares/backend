@@ -464,6 +464,31 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
   });
 });
 
+describe('VentaAnalyticsService.getHorasPico', () => {
+  it('bucketiza por hora y día de semana en hora Perú (UTC-5)', async () => {
+    const ventas = [
+      // 2026-07-20 = lunes. 15:30 UTC = 10:30 Perú (lunes)
+      { fechaVenta: new Date('2026-07-20T15:30:00Z'), total: dec(100) },
+      // 03:00 UTC del lunes = 22:00 Perú del DOMINGO 19 (dia 7)
+      { fechaVenta: new Date('2026-07-20T03:00:00Z'), total: dec(50) },
+      // Otra a las 10:xx Perú del lunes — acumula en la misma hora
+      { fechaVenta: new Date('2026-07-20T15:45:00Z'), total: dec(25) },
+    ];
+    const service = mkService({
+      venta: { findMany: jest.fn().mockResolvedValue(ventas) },
+    });
+
+    const result = await service.getHorasPico('emp1', {} as any);
+
+    expect(result.porHora).toHaveLength(24);
+    expect(result.porHora[10]).toEqual({ hora: 10, cantidad: 2, monto: 125 });
+    expect(result.porHora[22]).toEqual({ hora: 22, cantidad: 1, monto: 50 });
+    expect(result.porDiaSemana).toHaveLength(7);
+    expect(result.porDiaSemana[0]).toEqual({ dia: 1, cantidad: 2, monto: 125 }); // lunes
+    expect(result.porDiaSemana[6]).toEqual({ dia: 7, cantidad: 1, monto: 50 }); // domingo
+  });
+});
+
 describe('VentaAnalyticsService.getMetodosPago', () => {
   it('agrupa pagos por método ordenado por monto', async () => {
     const groupBy = jest.fn().mockResolvedValue([

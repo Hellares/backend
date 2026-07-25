@@ -125,6 +125,18 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getVentasPorMarca(empresaId, query);
   }
 
+  @Get('horas-pico')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Ventas por hora del dia y dia de semana (hora Peru)' })
+  @ApiResponse({ status: 200, description: 'Horas pico obtenidas' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getHorasPico(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getHorasPico(empresaId, query);
+  }
+
   @Get('metodos-pago')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Distribucion de pagos cobrados por metodo' })
