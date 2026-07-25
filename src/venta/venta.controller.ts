@@ -153,6 +153,8 @@ export class VentaController {
     // completo (compat); con `limit` → { data, hasMore, nextCursor,
     // resumen } donde resumen agrega TODO el set filtrado por estado.
     @Query('canalVenta') canalVenta?: string,
+    @Query('tipoEntrega') tipoEntrega?: string,
+    @Query('entregaBusqueda') entregaBusqueda?: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
   ) {
@@ -166,6 +168,8 @@ export class VentaController {
       userId,
       userRole,
       canalVenta,
+      tipoEntrega,
+      entregaBusqueda,
       limit: limit ? parseInt(limit, 10) : undefined,
       cursor,
     });

@@ -3190,11 +3190,22 @@ export class VentaService {
       // transaccionales — ver cotizaciones). Compat: sin `limit` responde el
       // array completo de siempre (clientes viejos no mandan limit).
       canalVenta?: string;
+      // Tipo de entrega: ENVIO (agencia) | DELIVERY (repartidor local,
+      // no cancelado) | FISICA (ninguno). entregaBusqueda filtra dentro
+      // de la entrega (agencia/destino/dirección/distrito).
+      tipoEntrega?: string;
+      entregaBusqueda?: string;
       limit?: number;
       cursor?: string;
     },
   ) {
     const where: Prisma.VentaWhereInput = { empresaId };
+    const andPush = (cond: Prisma.VentaWhereInput) => {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        cond,
+      ];
+    };
 
     // Vendedor solo ve ventas originadas de sus cotizaciones
     if (filtros?.userRole === Rol.VENDEDOR && filtros?.userId) {
@@ -3212,6 +3223,58 @@ export class VentaService {
     // totales/conteos inconsistentes (solo vería las páginas cargadas).
     if (filtros?.canalVenta) {
       where.canalVenta = filtros.canalVenta as Prisma.EnumCanalVentaFilter['equals'];
+    }
+
+    // Tipo de entrega — mismo criterio que los chips de la card: DELIVERY
+    // manda (si no está cancelado), luego ENVIO; FISICA = ninguno de los dos.
+    if (filtros?.tipoEntrega === 'ENVIO') {
+      where.conEnvio = true;
+    } else if (filtros?.tipoEntrega === 'DELIVERY') {
+      where.deliveryLocal = { is: { estado: { not: 'CANCELADO' } } };
+    } else if (filtros?.tipoEntrega === 'FISICA') {
+      where.conEnvio = false;
+      andPush({
+        OR: [
+          { deliveryLocal: null },
+          { deliveryLocal: { is: { estado: 'CANCELADO' } } },
+        ],
+      });
+    }
+
+    // Búsqueda dentro de la entrega: agencia/destino del envío o
+    // dirección/distrito del delivery. Con tipo elegido busca solo en sus
+    // campos; sin tipo, en ambos.
+    if (filtros?.entregaBusqueda?.trim()) {
+      const q = {
+        contains: filtros.entregaBusqueda.trim(),
+        mode: 'insensitive' as const,
+      };
+      const enEnvio: Prisma.VentaWhereInput = {
+        envio: {
+          is: {
+            OR: [
+              { agenciaNombre: q },
+              { agenciaDireccion: q },
+              { destinoDepartamento: q },
+              { destinoProvincia: q },
+            ],
+          },
+        },
+      };
+      const enDelivery: Prisma.VentaWhereInput = {
+        deliveryLocal: {
+          is: {
+            OR: [{ direccion: q }, { distrito: q }, { referencia: q }],
+          },
+        },
+      };
+      andPush(
+        filtros.tipoEntrega === 'ENVIO'
+          ? enEnvio
+          : filtros.tipoEntrega === 'DELIVERY'
+            ? enDelivery
+            : { OR: [enEnvio, enDelivery] },
+      );
     }
 
     if (filtros?.fechaDesde || filtros?.fechaHasta) {
