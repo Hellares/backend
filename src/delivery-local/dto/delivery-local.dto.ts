@@ -55,6 +55,37 @@ export class SolicitarDeliveryDto {
   destinoLon?: number;
 }
 
+/**
+ * Editar la dirección de entrega (staff): se eligió una equivocada o el
+ * cliente pidió otro punto. Si no llega pin nuevo, el anterior se descarta
+ * (apuntaba a la dirección vieja). No permitido en ENTREGADO/CANCELADO.
+ */
+export class ActualizarDireccionDeliveryDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  direccion: string;
+
+  @IsOptional()
+  @IsString()
+  referencia?: string;
+
+  @IsOptional()
+  @IsString()
+  distrito?: string;
+
+  @IsOptional()
+  @IsNumber()
+  destinoLat?: number;
+
+  @IsOptional()
+  @IsNumber()
+  destinoLon?: number;
+}
+
 /** Acciones del repartidor (tomar / en-camino / entregado). */
 export class AccionDeliveryDto {
   @IsString()

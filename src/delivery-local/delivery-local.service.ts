@@ -10,12 +10,14 @@ import {
   EstadoDeliveryLocal,
   EstadoRepartidorSyncronize,
   EstadoVenta,
+  Prisma,
   Rol,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { EvolutionApiService } from '../whatsapp/evolution-api.service';
 import {
+  ActualizarDireccionDeliveryDto,
   CancelarDeliveryDto,
   SolicitarDeliveryDto,
 } from './dto/delivery-local.dto';
@@ -175,6 +177,86 @@ export class DeliveryLocalService {
     }
 
     return delivery;
+  }
+
+  /**
+   * Edita la DIRECCIÓN de entrega (staff): dirección equivocada o el
+   * cliente pidió otro punto. Válido mientras el delivery no esté
+   * ENTREGADO/CANCELADO; si ya fue tomado o va en camino, el repartidor
+   * recibe push con la dirección nueva. Sin pin nuevo, el anterior se
+   * descarta (apuntaba al lugar viejo — navegar ahí sería peor que nada).
+   */
+  async actualizarDireccion(
+    userId: string,
+    deliveryId: string,
+    dto: ActualizarDireccionDeliveryDto,
+  ) {
+    await this.verificarStaff(dto.empresaId, userId);
+
+    const delivery = await this.prisma.deliveryLocal.findFirst({
+      where: { id: deliveryId, empresaId: dto.empresaId },
+      select: {
+        id: true,
+        estado: true,
+        repartidorId: true,
+        destinatarioCelular: true,
+      },
+    });
+    if (!delivery) throw new NotFoundException('Delivery no encontrado');
+    if (
+      delivery.estado === EstadoDeliveryLocal.ENTREGADO ||
+      delivery.estado === EstadoDeliveryLocal.CANCELADO
+    ) {
+      throw new BadRequestException(
+        `No se puede editar la dirección de un delivery ${delivery.estado}`,
+      );
+    }
+
+    const tienePin = dto.destinoLat != null && dto.destinoLon != null;
+    await this.prisma.deliveryLocal.update({
+      where: { id: deliveryId },
+      data: {
+        direccion: dto.direccion,
+        referencia: dto.referencia ?? null,
+        distrito: dto.distrito ?? null,
+        coordenadas: tienePin
+          ? { lat: dto.destinoLat, lon: dto.destinoLon }
+          : Prisma.JsonNull,
+      },
+    });
+
+    // La dirección corregida también alimenta el geocoder propio.
+    if (tienePin) {
+      void this.registrarDireccionFrecuente({
+        empresaId: dto.empresaId,
+        texto: dto.direccion,
+        referencia: dto.referencia,
+        distrito: dto.distrito,
+        lat: dto.destinoLat!,
+        lon: dto.destinoLon!,
+        telefono: delivery.destinatarioCelular,
+      });
+    }
+
+    // Repartidor ya asignado: avisarle YA (podría estar yendo al punto viejo).
+    if (
+      delivery.repartidorId &&
+      (delivery.estado === EstadoDeliveryLocal.TOMADO ||
+        delivery.estado === EstadoDeliveryLocal.EN_CAMINO)
+    ) {
+      void this.notificaciones
+        .enviarAUsuarios(
+          [delivery.repartidorId],
+          '📍 Dirección de entrega ACTUALIZADA',
+          `${dto.direccion}${dto.distrito ? ` — ${dto.distrito}` : ''}. Revisa el pedido antes de seguir.`,
+          { tipo: 'SISTEMA', empresaId: dto.empresaId },
+        )
+        .catch((e) =>
+          this.logger.warn(`Aviso cambio dirección: ${(e as Error).message}`),
+        );
+    }
+
+    return this.cargar(deliveryId);
   }
 
   // ── Geocoder propio (Fase 1): direcciones confirmadas ──

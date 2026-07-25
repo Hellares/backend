@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -13,6 +14,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards';
 import {
   AccionDeliveryDto,
+  ActualizarDireccionDeliveryDto,
   CancelarDeliveryDto,
   EntregarDeliveryDto,
   ReportarPosicionDto,
@@ -37,6 +39,23 @@ export class DeliveryLocalController {
   @ApiOperation({ summary: 'Solicitar delivery local para una venta pagada' })
   solicitar(@Body() dto: SolicitarDeliveryDto, @CurrentUser() user: any) {
     return this.service.solicitar(user.sub, dto);
+  }
+
+  /**
+   * Edita la dirección de entrega (staff): dirección equivocada o el
+   * cliente pidió otro punto. Si el delivery ya fue tomado/va en camino,
+   * el repartidor recibe push con la dirección nueva.
+   */
+  @Patch(':id/direccion')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Editar dirección de entrega del delivery' })
+  actualizarDireccion(
+    @Param('id') id: string,
+    @Body() dto: ActualizarDireccionDeliveryDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.actualizarDireccion(user.sub, id, dto);
   }
 
   /**

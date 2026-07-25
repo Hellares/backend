@@ -3494,6 +3494,7 @@ export class VentaService {
     const deliveryLocal = await this.prisma.deliveryLocal.findUnique({
       where: { ventaId: id },
       select: {
+        id: true, // para editar la dirección desde el detalle
         estado: true,
         destinatarioNombre: true,
         destinatarioCelular: true,
