@@ -589,13 +589,15 @@ export class FacturacionService {
     tipo?: string;
     sunatStatus?: string;
     sedeId?: string;
+    // Multi-RUC: RUC del emisor del comprobante (principal o socio)
+    rucEmisor?: string;
     fechaDesde?: string;
     fechaHasta?: string;
     busqueda?: string;
     page: number;
     limit: number;
   }) {
-    const { tipo, sunatStatus, sedeId, fechaDesde, fechaHasta, busqueda, page, limit } = filtros;
+    const { tipo, sunatStatus, sedeId, rucEmisor, fechaDesde, fechaHasta, busqueda, page, limit } = filtros;
     const skip = (page - 1) * limit;
 
     const where: any = { empresaId };
@@ -604,6 +606,7 @@ export class FacturacionService {
     if (sunatStatus) where.sunatStatus = sunatStatus;
     // Multi-sede: filtra por la sede emisora del comprobante.
     if (sedeId) where.sedeId = sedeId;
+    if (rucEmisor) where.rucEmisor = rucEmisor;
 
     if (fechaDesde || fechaHasta) {
       where.fechaEmision = {};
@@ -641,6 +644,7 @@ export class FacturacionService {
           sunatCodigo: true,
           intentosEnvio: true,
           enlaceProveedor: true,
+          rucEmisor: true,
           sunatPdfUrl: true,
           anulado: true,
           motivoNota: true,

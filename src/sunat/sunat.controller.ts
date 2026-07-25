@@ -48,6 +48,7 @@ export class SunatController {
     @Query('tipo') tipo?: string,
     @Query('sunatStatus') sunatStatus?: string,
     @Query('sedeId') sedeId?: string,
+    @Query('rucEmisor') rucEmisor?: string,
     @Query('fechaDesde') fechaDesde?: string,
     @Query('fechaHasta') fechaHasta?: string,
     @Query('busqueda') busqueda?: string,
@@ -55,7 +56,7 @@ export class SunatController {
     @Query('limit') limit?: string,
   ) {
     return this.facturacionService.listarComprobantes(empresaId, {
-      tipo, sunatStatus, sedeId, fechaDesde, fechaHasta, busqueda,
+      tipo, sunatStatus, sedeId, rucEmisor, fechaDesde, fechaHasta, busqueda,
       page: parseInt(page || '1', 10),
       limit: parseInt(limit || '20', 10),
     });
