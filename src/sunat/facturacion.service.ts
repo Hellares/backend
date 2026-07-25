@@ -1392,7 +1392,7 @@ export class FacturacionService {
       where: { empresaId, sunatStatus: 'PROCESANDO' },
       select: {
         id: true, tipoComprobante: true, serie: true, correlativo: true,
-        sedeId: true, proveedorEmisor: true,
+        sedeId: true, proveedorEmisor: true, rucEmisor: true,
       },
       take: MAX_POR_CALL,
       orderBy: { actualizadoEn: 'asc' }, // procesa los más antiguos primero
@@ -1415,18 +1415,19 @@ export class FacturacionService {
     const idsAceptados: string[] = [];
     const idsRechazados: string[] = [];
 
-    // Agrupar por (sedeId, tipoComprobante, proveedorEmisor). Cada combinación
-    // usa un provider/config distinto y tipo_documento SUNAT distinto.
+    // Agrupar por (sedeId, tipoComprobante, proveedorEmisor, rucEmisor). Cada
+    // combinación usa provider/config distinto y tipo_documento SUNAT distinto.
+    // Multi-RUC: los comprobantes del socio se consultan con SUS credenciales.
     const grupos = new Map<string, typeof pendientes>();
     for (const c of pendientes) {
-      const key = `${c.sedeId ?? '_'}|${c.tipoComprobante}|${c.proveedorEmisor ?? '_'}`;
+      const key = `${c.sedeId ?? '_'}|${c.tipoComprobante}|${c.proveedorEmisor ?? '_'}|${c.rucEmisor ?? '_'}`;
       const arr = grupos.get(key) ?? [];
       arr.push(c);
       grupos.set(key, arr);
     }
 
     for (const [key, comprobantes] of grupos) {
-      const [sedeId, tipoComprobante, proveedor] = key.split('|');
+      const [sedeId, tipoComprobante, proveedor, rucEmisor] = key.split('|');
 
       if (this.providerFactory.isArchivado(proveedor as any)) {
         for (const c of comprobantes) {
@@ -1457,10 +1458,14 @@ export class FacturacionService {
         continue;
       }
 
-      const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId === '_' ? null : sedeId);
+      const config = await this.overlayEmisor(
+        empresaId,
+        rucEmisor === '_' ? null : rucEmisor,
+        await this.getConfigFacturacionEfectiva(empresaId, sedeId === '_' ? null : sedeId),
+      );
       if (!config.facturacionActiva) {
         for (const c of comprobantes) {
-          resumen.errores.push({ comprobanteId: c.id, error: 'Facturación desactivada para esta sede' });
+          resumen.errores.push({ comprobanteId: c.id, error: 'Facturación desactivada para este emisor' });
         }
         continue;
       }
