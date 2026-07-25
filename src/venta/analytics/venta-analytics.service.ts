@@ -74,6 +74,22 @@ export class VentaAnalyticsService {
     );
   }
 
+  private nombreMarca(
+    marca: {
+      nombreLocal: string | null;
+      nombrePersonalizado: string | null;
+      marcaMaestra: { nombre: string } | null;
+    } | null,
+  ): string {
+    if (!marca) return 'Sin marca';
+    return (
+      marca.nombreLocal ??
+      marca.nombrePersonalizado ??
+      marca.marcaMaestra?.nombre ??
+      'Sin marca'
+    );
+  }
+
   private getPeriodoKey(fecha: Date, periodo?: PeriodoAgrupacion): string {
     // Convertir a hora Perú para agrupar correctamente
     const utc = new Date(fecha);
@@ -423,6 +439,73 @@ export class VentaAnalyticsService {
         cantidadVendida: round2(c.cantidadVendida),
         ingresoTotal: round2(c.ingresoTotal),
         productosDistintos: c.productos.size,
+      }))
+      .sort((a, b) => b.ingresoTotal - a.ingresoTotal);
+  }
+
+  async getVentasPorMarca(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo ventas por marca');
+
+    const where = this.buildVentaWhere(empresaId, query);
+
+    const detalles = await this.prisma.ventaDetalle.findMany({
+      where: {
+        venta: where,
+        productoId: { not: null },
+      },
+      select: {
+        productoId: true,
+        cantidad: true,
+        total: true,
+        producto: {
+          select: {
+            empresaMarcaId: true,
+            empresaMarca: {
+              select: {
+                nombreLocal: true,
+                nombrePersonalizado: true,
+                marcaMaestra: { select: { nombre: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const agrupado = new Map<
+      string,
+      {
+        marcaId: string | null;
+        marca: string;
+        cantidadVendida: number;
+        ingresoTotal: number;
+        productos: Set<string>;
+      }
+    >();
+
+    for (const d of detalles) {
+      const marcaId = d.producto?.empresaMarcaId ?? null;
+      const key = marcaId ?? 'SIN_MARCA';
+      const existing = agrupado.get(key) || {
+        marcaId,
+        marca: this.nombreMarca(d.producto?.empresaMarca ?? null),
+        cantidadVendida: 0,
+        ingresoTotal: 0,
+        productos: new Set<string>(),
+      };
+      existing.cantidadVendida += d.cantidad.toNumber();
+      existing.ingresoTotal += d.total.toNumber();
+      if (d.productoId) existing.productos.add(d.productoId);
+      agrupado.set(key, existing);
+    }
+
+    return Array.from(agrupado.values())
+      .map((m) => ({
+        marcaId: m.marcaId,
+        marca: m.marca,
+        cantidadVendida: round2(m.cantidadVendida),
+        ingresoTotal: round2(m.ingresoTotal),
+        productosDistintos: m.productos.size,
       }))
       .sort((a, b) => b.ingresoTotal - a.ingresoTotal);
   }

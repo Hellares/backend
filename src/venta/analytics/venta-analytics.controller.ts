@@ -113,6 +113,18 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getVentasPorCategoria(empresaId, query);
   }
 
+  @Get('ventas-por-marca')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Ventas agrupadas por marca de producto' })
+  @ApiResponse({ status: 200, description: 'Ventas por marca obtenidas' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getVentasPorMarca(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getVentasPorMarca(empresaId, query);
+  }
+
   @Get('comparativo')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Comparativo de ventas entre periodos' })

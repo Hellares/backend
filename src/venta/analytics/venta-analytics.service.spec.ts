@@ -217,6 +217,67 @@ describe('VentaAnalyticsService.getVentasPorCanal', () => {
   });
 });
 
+describe('VentaAnalyticsService.getVentasPorMarca', () => {
+  it('agrupa por marca (local > personalizado > maestra) y agrupa sin marca aparte', async () => {
+    const detalles = [
+      {
+        productoId: 'p1',
+        cantidad: dec(2),
+        total: dec(100),
+        producto: {
+          empresaMarcaId: 'm1',
+          empresaMarca: {
+            nombreLocal: null,
+            nombrePersonalizado: null,
+            marcaMaestra: { nombre: 'Nike' },
+          },
+        },
+      },
+      {
+        productoId: 'p2',
+        cantidad: dec(1),
+        total: dec(200),
+        producto: {
+          empresaMarcaId: 'm1',
+          empresaMarca: {
+            nombreLocal: null,
+            nombrePersonalizado: null,
+            marcaMaestra: { nombre: 'Nike' },
+          },
+        },
+      },
+      {
+        productoId: 'p3',
+        cantidad: dec(4),
+        total: dec(40),
+        producto: { empresaMarcaId: null, empresaMarca: null },
+      },
+    ];
+    const service = mkService({
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue(detalles) },
+    });
+
+    const result = await service.getVentasPorMarca('emp1', {} as any);
+
+    expect(result).toEqual([
+      {
+        marcaId: 'm1',
+        marca: 'Nike',
+        cantidadVendida: 3,
+        ingresoTotal: 300,
+        productosDistintos: 2,
+      },
+      {
+        marcaId: null,
+        marca: 'Sin marca',
+        cantidadVendida: 4,
+        ingresoTotal: 40,
+        productosDistintos: 1,
+      },
+    ]);
+  });
+});
+
 describe('VentaAnalyticsService.getVentasPorCategoria', () => {
   it('agrupa por categoría con productos distintos y agrupa sin categoría aparte', async () => {
     const detalles = [
