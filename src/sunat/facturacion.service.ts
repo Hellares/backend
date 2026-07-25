@@ -269,6 +269,52 @@ export class FacturacionService {
 
   // ── CRUD de emisores socio (multi-RUC) ──
 
+  /**
+   * Autocompleta proveedorConfig del emisor consultando al proveedor con SUS
+   * credenciales: companyId = company del token; branchId si hay una sola
+   * sucursal. El usuario nunca digita estos ids. Si el proveedor no responde,
+   * se guarda igual (probar conexión / sincronizar series lo completan luego).
+   */
+  private async autoResolverConfigProveedor(
+    empresaId: string,
+    p: {
+      proveedorRuta?: string | null;
+      proveedorToken?: string | null;
+      proveedorConfig?: Record<string, any> | null;
+    },
+  ): Promise<Record<string, any> | undefined> {
+    const cfg = { ...((p.proveedorConfig as Record<string, any> | null) ?? {}) };
+    if (!p.proveedorRuta || !p.proveedorToken) {
+      return Object.keys(cfg).length ? cfg : undefined;
+    }
+    if (cfg.companyId != null && cfg.branchId != null) return cfg;
+    try {
+      const global = await this.prisma.configuracionFacturacion.findUnique({
+        where: { empresaId },
+        select: { proveedorActivo: true },
+      });
+      const provider = this.providerFactory.get(
+        global?.proveedorActivo ?? ProveedorFacturacion.SYNCROFACT,
+      );
+      if (typeof provider.obtenerSeries !== 'function') {
+        return Object.keys(cfg).length ? cfg : undefined;
+      }
+      const info = await provider.obtenerSeries({
+        proveedorRuta: p.proveedorRuta,
+        proveedorToken: p.proveedorToken,
+        proveedorConfig: null,
+      } as any);
+      const companyId = (info.metadata as any)?.companyId;
+      if (cfg.companyId == null && companyId != null) cfg.companyId = companyId;
+      if (cfg.branchId == null && info.branches?.length === 1) {
+        cfg.branchId = info.branches[0].branchIdProveedor;
+      }
+    } catch (err: any) {
+      this.logger.warn(`autoResolverConfigProveedor: ${err?.message}`);
+    }
+    return Object.keys(cfg).length ? cfg : undefined;
+  }
+
   async listarEmisoresAdmin(empresaId: string) {
     return this.prisma.emisorFacturacion.findMany({
       where: { empresaId, isActive: true },
@@ -288,6 +334,7 @@ export class FacturacionService {
     if (empresa?.ruc === dto.ruc) {
       throw new BadRequestException('Ese RUC es el emisor principal de la empresa');
     }
+    const proveedorConfig = await this.autoResolverConfigProveedor(empresaId, dto);
     const emisor = await this.prisma.emisorFacturacion.upsert({
       where: { empresaId_ruc: { empresaId, ruc: dto.ruc } },
       create: {
@@ -297,7 +344,7 @@ export class FacturacionService {
         direccionFiscal: dto.direccionFiscal,
         proveedorRuta: dto.proveedorRuta,
         proveedorToken: dto.proveedorToken,
-        proveedorConfig: dto.proveedorConfig,
+        proveedorConfig,
         facturacionActiva: dto.facturacionActiva ?? false,
         resolucionSunat: dto.resolucionSunat,
       },
@@ -307,7 +354,7 @@ export class FacturacionService {
         direccionFiscal: dto.direccionFiscal,
         proveedorRuta: dto.proveedorRuta,
         proveedorToken: dto.proveedorToken,
-        proveedorConfig: dto.proveedorConfig,
+        proveedorConfig,
         facturacionActiva: dto.facturacionActiva ?? false,
         resolucionSunat: dto.resolucionSunat,
         isActive: true,
@@ -331,6 +378,15 @@ export class FacturacionService {
       where: { id: emisorId, empresaId },
     });
     if (!emisor) throw new NotFoundException('Emisor no encontrado');
+    // Autocompletar companyId/branchId con las credenciales EFECTIVAS
+    // (las nuevas del dto o las ya guardadas).
+    const proveedorConfig = await this.autoResolverConfigProveedor(empresaId, {
+      proveedorRuta: dto.proveedorRuta ?? emisor.proveedorRuta,
+      proveedorToken: dto.proveedorToken ?? emisor.proveedorToken,
+      proveedorConfig:
+        dto.proveedorConfig ??
+        (emisor.proveedorConfig as Record<string, any> | null),
+    });
     const actualizado = await this.prisma.emisorFacturacion.update({
       where: { id: emisorId },
       data: {
@@ -338,7 +394,7 @@ export class FacturacionService {
         direccionFiscal: dto.direccionFiscal,
         proveedorRuta: dto.proveedorRuta,
         proveedorToken: dto.proveedorToken,
-        proveedorConfig: dto.proveedorConfig,
+        proveedorConfig,
         facturacionActiva: dto.facturacionActiva,
         resolucionSunat: dto.resolucionSunat,
       },
