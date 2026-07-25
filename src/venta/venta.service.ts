@@ -3226,19 +3226,28 @@ export class VentaService {
     }
 
     // Tipo de entrega — mismo criterio que los chips de la card: DELIVERY
-    // manda (si no está cancelado), luego ENVIO; FISICA = ninguno de los dos.
+    // manda (si no está cancelado), luego ENVIO. Sin envío ni delivery, el
+    // canal decide: presencial (POS/COTIZACION) = FISICA; remoto
+    // (ONLINE/WHATSAPP_IA) = RECOJO en tienda. Las restricciones de canal
+    // van por AND para no pisar el filtro canalVenta del usuario.
+    const sinDeliveryActivo: Prisma.VentaWhereInput = {
+      OR: [
+        { deliveryLocal: null },
+        { deliveryLocal: { is: { estado: 'CANCELADO' } } },
+      ],
+    };
     if (filtros?.tipoEntrega === 'ENVIO') {
       where.conEnvio = true;
     } else if (filtros?.tipoEntrega === 'DELIVERY') {
       where.deliveryLocal = { is: { estado: { not: 'CANCELADO' } } };
     } else if (filtros?.tipoEntrega === 'FISICA') {
       where.conEnvio = false;
-      andPush({
-        OR: [
-          { deliveryLocal: null },
-          { deliveryLocal: { is: { estado: 'CANCELADO' } } },
-        ],
-      });
+      andPush({ canalVenta: { in: ['POS', 'COTIZACION'] } });
+      andPush(sinDeliveryActivo);
+    } else if (filtros?.tipoEntrega === 'RECOJO') {
+      where.conEnvio = false;
+      andPush({ canalVenta: { in: ['ONLINE', 'WHATSAPP_IA'] } });
+      andPush(sinDeliveryActivo);
     }
 
     // Búsqueda dentro de la entrega: agencia/destino del envío o
