@@ -85,7 +85,7 @@ export class SorteosEmpresaController {
   }
 
   @Get('analytics/dashboard')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({
     summary:
       'Dashboard de analytics de sorteos: resumen, canales, top sorteos/jugadores, premios y zonas',

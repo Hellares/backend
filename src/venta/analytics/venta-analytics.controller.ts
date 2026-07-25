@@ -25,6 +25,9 @@ export class VentaAnalyticsController {
     private readonly ventaAnalyticsService: VentaAnalyticsService,
   ) {}
 
+  // El dashboard PERSONAL del vendedor mantiene VIEW_VENTAS: cada
+  // vendedor/cajero ve SUS números. Las estadísticas de EMPRESA (resto de
+  // endpoints) exigen VIEW_STATISTICS (admins/contador — cajeros NO).
   @Get('dashboard-vendedor')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Dashboard personalizado del vendedor' })
@@ -42,7 +45,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('resumen')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Resumen general de ventas' })
   @ApiResponse({ status: 200, description: 'Resumen obtenido exitosamente' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -54,7 +57,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('ventas-periodo')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Ventas agrupadas por periodo' })
   @ApiResponse({ status: 200, description: 'Datos por periodo obtenidos' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -66,7 +69,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('top-productos')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Top productos mas vendidos' })
   @ApiResponse({ status: 200, description: 'Top productos obtenidos' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -78,7 +81,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('top-clientes')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Top clientes por monto de compras' })
   @ApiResponse({ status: 200, description: 'Top clientes obtenidos' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -90,7 +93,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('ventas-por-canal')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Distribucion de ventas por canal y por envio' })
   @ApiResponse({ status: 200, description: 'Distribucion por canal obtenida' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -102,7 +105,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('ventas-por-categoria')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Ventas agrupadas por categoria de producto' })
   @ApiResponse({ status: 200, description: 'Ventas por categoria obtenidas' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -114,7 +117,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('ventas-por-marca')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Ventas agrupadas por marca de producto' })
   @ApiResponse({ status: 200, description: 'Ventas por marca obtenidas' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -126,7 +129,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('proyeccion')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Proyeccion de cierre del mes actual (ritmo por dia de semana)' })
   @ApiResponse({ status: 200, description: 'Proyeccion obtenida' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -138,7 +141,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('dashboard')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Dashboard consolidado: todas las secciones de estadisticas en una respuesta' })
   @ApiResponse({ status: 200, description: 'Dashboard obtenido' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -150,7 +153,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('reposicion')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Reposicion sugerida: velocidad 30d vs stock actual (por variante)' })
   @ApiResponse({ status: 200, description: 'Reposicion sugerida obtenida' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -162,7 +165,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('horas-pico')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Ventas por hora del dia y dia de semana (hora Peru)' })
   @ApiResponse({ status: 200, description: 'Horas pico obtenidas' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -174,7 +177,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('metodos-pago')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Distribucion de pagos cobrados por metodo' })
   @ApiResponse({ status: 200, description: 'Metodos de pago obtenidos' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -186,7 +189,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('entregas')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Distribucion por tipo de entrega + zonas top de envio/delivery' })
   @ApiResponse({ status: 200, description: 'Analytics de entregas obtenido' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -198,7 +201,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('ventas-por-proveedor')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Ventas agrupadas por proveedor del producto (vinculo preferido)' })
   @ApiResponse({ status: 200, description: 'Ventas por proveedor obtenidas' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -210,7 +213,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('comparativo')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Comparativo de ventas entre periodos' })
   @ApiResponse({ status: 200, description: 'Comparativo obtenido' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -222,7 +225,7 @@ export class VentaAnalyticsController {
   }
 
   @Get('alertas')
-  @RequiresPermission(Permission.VIEW_VENTAS)
+  @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Alertas de ventas' })
   @ApiResponse({ status: 200, description: 'Alertas obtenidas' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
