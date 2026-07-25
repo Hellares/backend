@@ -32,6 +32,7 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     moneda: 'PEN',
     metodoPago: 'YAPE',
     transaccionExternaId: null,
+    tipoEntrega: 'ENVIO_DOMICILIO',
     sedeRetiroId: null,
   };
 
@@ -119,6 +120,9 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       sedeId: 'sede-1',
       vendedorId: USUARIO,
       canalVenta: 'ONLINE',
+      // El tipo de entrega del pedido viaja a la venta (estadísticas
+      // envío/recojo del canal ONLINE dependen de este flag).
+      conEnvio: true,
       codigo: 'VTA-SED-100',
       nombreCliente: 'Juan Pérez',
       estado: 'PAGADA_COMPLETA',
@@ -159,6 +163,20 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     expect(upd.codigoSeguimiento).toBe('TRK-1');
     expect(upd.enviadoEn).toBeInstanceOf(Date);
     expect(upd.ventaId).toBe('venta-1');
+  });
+
+  it('ENVIADO con pedido RETIRO_TIENDA → la venta nace sin envío (recojo)', async () => {
+    prisma.pedidoMarketplace.findFirst
+      .mockResolvedValueOnce({ ...pedidoBase, tipoEntrega: 'RETIRO_TIENDA' })
+      .mockResolvedValueOnce({
+        ...pedidoBase,
+        tipoEntrega: 'RETIRO_TIENDA',
+        detalles: [{ productoId: 'prod-1', varianteId: null, cantidad: 2 }],
+      });
+
+    await service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'ENVIADO' } as any);
+
+    expect(prisma.venta.create.mock.calls[0][0].data.conEnvio).toBe(false);
   });
 
   it('ENVIADO → la liberación de reserva se acota a lo reservado (no negativa)', async () => {

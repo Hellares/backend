@@ -694,6 +694,10 @@ export class PedidoMarketplaceEmpresaService {
               sedeId: sedeVentaId,
               vendedorId: usuarioId,
               canalVenta: CanalVenta.ONLINE,
+              // Propagar el tipo de entrega del pedido: sin esto toda venta
+              // online nacía conEnvio=false y el filtro envío/recojo de
+              // estadísticas no distinguía nada en el canal ONLINE.
+              conEnvio: pedido.tipoEntrega === 'ENVIO_DOMICILIO',
               codigo: codigoVenta,
               nombreCliente: pedido.nombreComprador,
               emailCliente: pedido.emailComprador,
