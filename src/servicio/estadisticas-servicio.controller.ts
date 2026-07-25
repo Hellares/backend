@@ -31,6 +31,22 @@ export class EstadisticasServicioController {
     private readonly estadisticasService: EstadisticasServicioService,
   ) {}
 
+  @Get('estadisticas/dashboard')
+  @RequiresPermission(Permission.VIEW_STATISTICS)
+  @ApiOperation({
+    summary:
+      'Dashboard consolidado de OS: KPIs, embudo, tecnicos, equipos, calidad',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getDashboard(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: QueryEstadisticasDto,
+  ) {
+    if (!empresaId)
+      throw new BadRequestException('x-tenant-id es requerido');
+    return this.estadisticasService.getDashboard(empresaId, query);
+  }
+
   @Get('estadisticas')
   @RequiresPermission(Permission.VIEW_STATISTICS)
   @ApiOperation({ summary: 'Obtener estadísticas de órdenes de servicio' })
