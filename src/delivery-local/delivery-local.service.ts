@@ -386,17 +386,10 @@ export class DeliveryLocalService {
     const lon = coords?.lon != null ? Number(coords.lon) : null;
     const codigo = delivery.venta?.codigo ?? '';
 
-    const texto =
-      `📍 *Entrega ${codigo}*\n` +
-      `${delivery.direccion}` +
-      (delivery.referencia ? `\nRef: ${delivery.referencia}` : '') +
-      (delivery.distrito ? `\nZona: ${delivery.distrito}` : '') +
-      (lat != null && lon != null
-        ? `\nMapa: https://maps.google.com/?q=${lat},${lon}`
-        : '');
-
-    // Pin nativo primero (tocable en el chat); si Evolution no lo soporta,
-    // el texto con el link de Maps ya cubre la ubicación.
+    // Pin nativo primero (tocable en el chat); solo si falla, el texto
+    // lleva el link de Maps como respaldo — con pin, el link duplicaría
+    // el mapa en el chat.
+    let pinEnviado = false;
     if (lat != null && lon != null) {
       try {
         await this.evolution.sendLocation({
@@ -407,17 +400,29 @@ export class DeliveryLocalService {
           name: `Entrega ${codigo}`.trim(),
           address: delivery.direccion,
         });
+        pinEnviado = true;
       } catch (e) {
         this.logger.warn(
           `sendLocation falló (fallback a texto): ${(e as Error).message}`,
         );
       }
     }
+
+    const texto =
+      `📍 *Entrega ${codigo}*\n` +
+      `${delivery.direccion}` +
+      (delivery.referencia ? `\nRef: ${delivery.referencia}` : '') +
+      (delivery.distrito ? `\nZona: ${delivery.distrito}` : '') +
+      (!pinEnviado && lat != null && lon != null
+        ? `\nMapa: https://maps.google.com/?q=${lat},${lon}`
+        : '');
+
     try {
       await this.evolution.sendText({
         instanceName: iw.instanceName,
         number: celular,
         text: texto,
+        linkPreview: false,
       });
     } catch (e: any) {
       const msg = String(e?.message ?? '');

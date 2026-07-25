@@ -224,10 +224,12 @@ export class EvolutionApiService {
     instanceName: string;
     number: string;
     text: string;
+    linkPreview?: boolean;
   }) {
     return this.request('POST', `/message/sendText/${args.instanceName}`, {
       number: args.number,
       text: args.text,
+      ...(args.linkPreview != null ? { linkPreview: args.linkPreview } : {}),
     });
   }
 
