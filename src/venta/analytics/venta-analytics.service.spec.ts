@@ -333,6 +333,65 @@ describe('VentaAnalyticsService.getVentasPorMarca', () => {
   });
 });
 
+describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', () => {
+  it('reporta anuladas (aparte, sin sumar al monto) y devoluciones procesadas', async () => {
+    const aggregate = jest
+      .fn()
+      // 1ª llamada: agregado normal (excluye anuladas por el where)
+      .mockResolvedValueOnce({
+        _count: { id: 10 },
+        _sum: { total: dec(1000) },
+        _avg: { total: dec(100) },
+      })
+      // 2ª llamada: agregado de ANULADAS
+      .mockResolvedValueOnce({
+        _count: { id: 2 },
+        _sum: { total: dec(150) },
+      });
+    const service = mkService({
+      venta: { aggregate, count: jest.fn().mockResolvedValue(3) },
+      devolucion: { count: jest.fn().mockResolvedValue(4) },
+      devolucionItem: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { cantidad: 7 } }),
+      },
+    });
+
+    const result = await service.getResumenGeneral('emp1', {} as any);
+
+    expect(result.montoTotal).toBe(1000); // sin las anuladas
+    expect(result.ventasAnuladas).toBe(2);
+    expect(result.montoAnulado).toBe(150);
+    expect(result.devoluciones).toBe(4);
+    expect(result.itemsDevueltos).toBe(7);
+    // El agregado de anuladas filtra estado ANULADA con los mismos filtros
+    expect(aggregate.mock.calls[1][0].where.estado).toBe('ANULADA');
+  });
+
+  it('devoluciones: solo PROCESADAS de cliente (ventaId not null)', async () => {
+    const devolucionCount = jest.fn().mockResolvedValue(0);
+    const service = mkService({
+      venta: {
+        aggregate: jest.fn().mockResolvedValue({
+          _count: { id: 0 },
+          _sum: { total: null },
+          _avg: { total: null },
+        }),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      devolucion: { count: devolucionCount },
+      devolucionItem: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { cantidad: null } }),
+      },
+    });
+
+    await service.getResumenGeneral('emp1', {} as any);
+
+    const whereDev = devolucionCount.mock.calls[0][0].where;
+    expect(whereDev.estado).toBe('PROCESADA');
+    expect(whereDev.ventaId).toEqual({ not: null });
+  });
+});
+
 describe('VentaAnalyticsService.getEntregasAnalytics', () => {
   it('clasifica por tipo (delivery manda, luego envío, canal decide el resto) y agrupa zonas', async () => {
     const ventas = [

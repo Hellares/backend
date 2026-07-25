@@ -132,7 +132,33 @@ export class VentaAnalyticsService {
       estado: EstadoVenta.PAGADA_COMPLETA,
     };
 
-    const [aggregate, ventasBorrador, ventasPagadasCompleta] = await Promise.all([
+    // Anuladas del mismo periodo/filtros — informativo: NO suman al monto
+    // total (buildVentaWhere ya las excluye de todos los agregados).
+    const whereAnulada: Prisma.VentaWhereInput = {
+      ...where,
+      estado: EstadoVenta.ANULADA,
+    };
+
+    // Devoluciones de cliente PROCESADAS en el periodo. El modelo no guarda
+    // un monto directo (depende de la acción por item), así que el KPI es
+    // cantidad de devoluciones + items devueltos.
+    const dateFilter = this.buildDateFilter(query);
+    const whereDevolucion: Prisma.DevolucionWhereInput = {
+      empresaId,
+      estado: 'PROCESADA',
+      ventaId: { not: null },
+      ...(query.sedeId ? { sedeId: query.sedeId } : {}),
+      ...(dateFilter ? { procesadoEn: dateFilter } : {}),
+    };
+
+    const [
+      aggregate,
+      ventasBorrador,
+      ventasPagadasCompleta,
+      anuladas,
+      devoluciones,
+      itemsDevueltos,
+    ] = await Promise.all([
       this.prisma.venta.aggregate({
         where,
         _count: { id: true },
@@ -141,6 +167,16 @@ export class VentaAnalyticsService {
       }),
       this.prisma.venta.count({ where: whereBorrador }),
       this.prisma.venta.count({ where: wherePagada }),
+      this.prisma.venta.aggregate({
+        where: whereAnulada,
+        _count: { id: true },
+        _sum: { total: true },
+      }),
+      this.prisma.devolucion.count({ where: whereDevolucion }),
+      this.prisma.devolucionItem.aggregate({
+        where: { devolucion: whereDevolucion },
+        _sum: { cantidad: true },
+      }),
     ]);
 
     const totalVentas = aggregate._count.id;
@@ -154,6 +190,10 @@ export class VentaAnalyticsService {
       ventasBorrador,
       ventasPagadasCompleta,
       ticketPromedio: totalVentas > 0 ? montoTotal / totalVentas : 0,
+      ventasAnuladas: anuladas._count.id,
+      montoAnulado: round2(anuladas._sum.total?.toNumber() ?? 0),
+      devoluciones,
+      itemsDevueltos: itemsDevueltos._sum.cantidad ?? 0,
     };
   }
 
