@@ -393,8 +393,20 @@ export class VentaAnalyticsService {
       }
     >();
 
+    // El mismo cliente puede aparecer con clienteId en unas ventas y solo
+    // con el nombre (snapshot) en otras, o con el nombre escrito distinto
+    // (mayúsculas/espacios). Sin normalizar salía repetido en el top.
+    const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+    const idPorNombre = new Map<string, string>();
     for (const v of ventas) {
-      const key = v.clienteId ?? v.nombreCliente;
+      if (v.clienteId) idPorNombre.set(norm(v.nombreCliente), v.clienteId);
+    }
+
+    for (const v of ventas) {
+      const key =
+        v.clienteId ??
+        idPorNombre.get(norm(v.nombreCliente)) ??
+        `NOMBRE:${norm(v.nombreCliente)}`;
       const existing = agrupado.get(key) || {
         clienteId: v.clienteId,
         nombre: v.nombreCliente,
@@ -403,6 +415,8 @@ export class VentaAnalyticsService {
       };
       existing.totalCompras += 1;
       existing.montoTotal += v.total.toNumber();
+      // Si una venta posterior trae el clienteId del mismo bucket, guardarlo
+      existing.clienteId ??= v.clienteId;
       agrupado.set(key, existing);
     }
 

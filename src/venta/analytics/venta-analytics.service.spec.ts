@@ -333,6 +333,39 @@ describe('VentaAnalyticsService.getVentasPorMarca', () => {
   });
 });
 
+describe('VentaAnalyticsService.getTopClientes — dedupe', () => {
+  it('fusiona al mismo cliente con/sin clienteId y con el nombre escrito distinto', async () => {
+    const ventas = [
+      { clienteId: 'c1', nombreCliente: 'Juan Perez', total: dec(100) },
+      // Sin clienteId pero mismo nombre (otra capitalización/espacios)
+      { clienteId: null, nombreCliente: 'JUAN PEREZ', total: dec(50) },
+      { clienteId: null, nombreCliente: '  juan   perez ', total: dec(25) },
+      // Otro cliente real
+      { clienteId: 'c2', nombreCliente: 'Maria Lopez', total: dec(80) },
+      // Solo nombre, sin cliente registrado
+      { clienteId: null, nombreCliente: 'Pedro Diaz', total: dec(10) },
+    ];
+    const service = mkService({
+      venta: { findMany: jest.fn().mockResolvedValue(ventas) },
+    });
+
+    const result = await service.getTopClientes('emp1', {} as any);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toMatchObject({
+      clienteId: 'c1',
+      totalCompras: 3,
+      montoTotal: 175,
+    });
+    expect(result[1]).toMatchObject({ clienteId: 'c2', montoTotal: 80 });
+    expect(result[2]).toMatchObject({
+      clienteId: null,
+      nombre: 'Pedro Diaz',
+      montoTotal: 10,
+    });
+  });
+});
+
 describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', () => {
   it('reporta anuladas (aparte, sin sumar al monto) y devoluciones procesadas', async () => {
     const aggregate = jest
