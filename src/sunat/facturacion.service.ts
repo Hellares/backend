@@ -167,7 +167,7 @@ export class FacturacionService {
   // ── Emisores: listar RUCs disponibles ──
 
   async listarEmisores(empresaId: string) {
-    const [config, empresa, sedes] = await Promise.all([
+    const [config, empresa, sedes, sedePrincipal] = await Promise.all([
       this.prisma.configuracionFacturacion.findUnique({
         where: { empresaId },
         select: { facturacionActiva: true },
@@ -180,6 +180,13 @@ export class FacturacionService {
         where: { empresaId, rucSede: { not: null }, isActive: true },
         select: { id: true, nombre: true, rucSede: true, razonSocialSede: true, facturacionActiva: true },
       }),
+      // Sede representativa del emisor PRINCIPAL (sin RUC propio): sus series
+      // son las que se previsualizan/sincronizan para ese RUC.
+      this.prisma.sede.findFirst({
+        where: { empresaId, rucSede: null, isActive: true },
+        orderBy: { creadoEn: 'asc' },
+        select: { id: true },
+      }),
     ]);
 
     const emisores: Array<{
@@ -190,6 +197,8 @@ export class FacturacionService {
       nombreComercial: string | null;
       sedeNombre: string | null;
       activo: boolean;
+      // Sede cuyas series representan a este emisor (preview/sync de series).
+      sedeIdSeries: string | null;
     }> = [];
 
     // Emisor principal (empresa — fuente de verdad para RUC)
@@ -202,6 +211,7 @@ export class FacturacionService {
         nombreComercial: empresa.nombre || null,
         sedeNombre: null,
         activo: config?.facturacionActiva ?? false,
+        sedeIdSeries: sedePrincipal?.id ?? null,
       });
     }
 
@@ -215,6 +225,7 @@ export class FacturacionService {
         nombreComercial: null,
         sedeNombre: sede.nombre,
         activo: sede.facturacionActiva ?? false,
+        sedeIdSeries: sede.id,
       });
     }
 
