@@ -3352,7 +3352,26 @@ export class VentaService {
       where: { ventaId: id },
     });
 
-    return { ...venta, devoluciones, envio };
+    // Delivery local completo (dirección, referencia, tarifa, estado…) —
+    // el detalle lo muestra para poder revisar lo publicado; el listado
+    // solo trae el estado.
+    const deliveryLocal = await this.prisma.deliveryLocal.findUnique({
+      where: { ventaId: id },
+      select: {
+        estado: true,
+        destinatarioNombre: true,
+        destinatarioCelular: true,
+        direccion: true,
+        referencia: true,
+        distrito: true,
+        coordenadas: true,
+        costoDelivery: true,
+        repartidorId: true,
+        entregadoEn: true,
+      },
+    });
+
+    return { ...venta, devoluciones, envio, deliveryLocal };
   }
 
   /**
