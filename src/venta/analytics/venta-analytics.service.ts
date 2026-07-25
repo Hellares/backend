@@ -510,6 +510,96 @@ export class VentaAnalyticsService {
       .sort((a, b) => b.ingresoTotal - a.ingresoTotal);
   }
 
+  async getVentasPorProveedor(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo ventas por proveedor');
+
+    const where = this.buildVentaWhere(empresaId, query);
+
+    const detalles = await this.prisma.ventaDetalle.findMany({
+      where: {
+        venta: where,
+        productoId: { not: null },
+      },
+      select: {
+        productoId: true,
+        cantidad: true,
+        total: true,
+      },
+    });
+
+    const productoIds = [
+      ...new Set(detalles.map((d) => d.productoId).filter(Boolean)),
+    ] as string[];
+
+    // Proveedor↔producto es N:M (ProveedorProducto). La venta no registra de
+    // qué proveedor salió el stock, así que se atribuye al vínculo preferido
+    // (esPreferido) y como fallback al más antiguo. Sin vínculo → "Sin proveedor".
+    const vinculos = productoIds.length
+      ? await this.prisma.proveedorProducto.findMany({
+          where: {
+            empresaId,
+            productoId: { in: productoIds },
+            isActive: true,
+          },
+          select: {
+            productoId: true,
+            proveedorId: true,
+            proveedor: { select: { nombre: true, nombreComercial: true } },
+          },
+          orderBy: [{ esPreferido: 'desc' }, { creadoEn: 'asc' }],
+        })
+      : [];
+
+    const proveedorDe = new Map<
+      string,
+      { proveedorId: string; nombre: string }
+    >();
+    for (const v of vinculos) {
+      if (!v.productoId || proveedorDe.has(v.productoId)) continue;
+      proveedorDe.set(v.productoId, {
+        proveedorId: v.proveedorId,
+        nombre: v.proveedor.nombreComercial ?? v.proveedor.nombre,
+      });
+    }
+
+    const agrupado = new Map<
+      string,
+      {
+        proveedorId: string | null;
+        proveedor: string;
+        cantidadVendida: number;
+        ingresoTotal: number;
+        productos: Set<string>;
+      }
+    >();
+
+    for (const d of detalles) {
+      const vinculo = d.productoId ? proveedorDe.get(d.productoId) : undefined;
+      const key = vinculo?.proveedorId ?? 'SIN_PROVEEDOR';
+      const existing = agrupado.get(key) || {
+        proveedorId: vinculo?.proveedorId ?? null,
+        proveedor: vinculo?.nombre ?? 'Sin proveedor',
+        cantidadVendida: 0,
+        ingresoTotal: 0,
+        productos: new Set<string>(),
+      };
+      existing.cantidadVendida += d.cantidad.toNumber();
+      existing.ingresoTotal += d.total.toNumber();
+      if (d.productoId) existing.productos.add(d.productoId);
+      agrupado.set(key, existing);
+    }
+
+    return Array.from(agrupado.values())
+      .map((p) => ({
+        proveedorId: p.proveedorId,
+        proveedor: p.proveedor,
+        cantidadVendida: round2(p.cantidadVendida),
+        ingresoTotal: round2(p.ingresoTotal),
+        productosDistintos: p.productos.size,
+      }))
+      .sort((a, b) => b.ingresoTotal - a.ingresoTotal);
+  }
+
   async getComparativoVentas(empresaId: string, query: VentaAnalyticsQueryDto) {
     this.logger.log('Obteniendo comparativo de ventas');
 

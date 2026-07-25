@@ -278,6 +278,84 @@ describe('VentaAnalyticsService.getVentasPorMarca', () => {
   });
 });
 
+describe('VentaAnalyticsService.getVentasPorProveedor', () => {
+  it('atribuye al proveedor del vínculo (preferido primero) y agrupa sin proveedor aparte', async () => {
+    const detalles = [
+      { productoId: 'p1', cantidad: dec(2), total: dec(100) },
+      { productoId: 'p2', cantidad: dec(1), total: dec(50) },
+      { productoId: 'p3', cantidad: dec(3), total: dec(30) },
+    ];
+    // p1 con dos vínculos: el preferido llega primero por el orderBy.
+    const vinculos = [
+      {
+        productoId: 'p1',
+        proveedorId: 'prov1',
+        proveedor: { nombre: 'Distribuidora Andina SAC', nombreComercial: 'Andina' },
+      },
+      {
+        productoId: 'p1',
+        proveedorId: 'prov2',
+        proveedor: { nombre: 'Otro SAC', nombreComercial: null },
+      },
+      {
+        productoId: 'p2',
+        proveedorId: 'prov2',
+        proveedor: { nombre: 'Otro SAC', nombreComercial: null },
+      },
+    ];
+    const findManyVinculos = jest.fn().mockResolvedValue(vinculos);
+    const service = mkService({
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue(detalles) },
+      proveedorProducto: { findMany: findManyVinculos },
+    });
+
+    const result = await service.getVentasPorProveedor('emp1', {} as any);
+
+    expect(result).toEqual([
+      {
+        proveedorId: 'prov1',
+        proveedor: 'Andina',
+        cantidadVendida: 2,
+        ingresoTotal: 100,
+        productosDistintos: 1,
+      },
+      {
+        proveedorId: 'prov2',
+        proveedor: 'Otro SAC',
+        cantidadVendida: 1,
+        ingresoTotal: 50,
+        productosDistintos: 1,
+      },
+      {
+        proveedorId: null,
+        proveedor: 'Sin proveedor',
+        cantidadVendida: 3,
+        ingresoTotal: 30,
+        productosDistintos: 1,
+      },
+    ]);
+    // El lookup de vínculos ordena preferido primero y filtra activos
+    expect(findManyVinculos.mock.calls[0][0].orderBy).toEqual([
+      { esPreferido: 'desc' },
+      { creadoEn: 'asc' },
+    ]);
+    expect(findManyVinculos.mock.calls[0][0].where.isActive).toBe(true);
+  });
+
+  it('sin detalles no consulta vínculos y devuelve vacío', async () => {
+    const findManyVinculos = jest.fn();
+    const service = mkService({
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue([]) },
+      proveedorProducto: { findMany: findManyVinculos },
+    });
+
+    const result = await service.getVentasPorProveedor('emp1', {} as any);
+
+    expect(result).toEqual([]);
+    expect(findManyVinculos).not.toHaveBeenCalled();
+  });
+});
+
 describe('VentaAnalyticsService.getVentasPorCategoria', () => {
   it('agrupa por categoría con productos distintos y agrupa sin categoría aparte', async () => {
     const detalles = [
