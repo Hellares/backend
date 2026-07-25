@@ -131,6 +131,18 @@ export class ReportarPosicionDto {
   lon: number;
 }
 
+/** Compartir la ubicación de entrega por WhatsApp (desde la instancia de
+ *  la empresa) a cualquier celular — sin salir del app. */
+export class CompartirUbicacionDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  celular: string;
+}
+
 export class CancelarDeliveryDto {
   @IsString()
   @IsNotEmpty()

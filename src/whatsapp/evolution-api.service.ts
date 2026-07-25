@@ -230,4 +230,22 @@ export class EvolutionApiService {
       text: args.text,
     });
   }
+
+  /** Ubicación NATIVA de WhatsApp (pin tocable en el chat, abre el mapa). */
+  async sendLocation(args: {
+    instanceName: string;
+    number: string;
+    latitude: number;
+    longitude: number;
+    name?: string;
+    address?: string;
+  }) {
+    return this.request('POST', `/message/sendLocation/${args.instanceName}`, {
+      number: args.number,
+      latitude: args.latitude,
+      longitude: args.longitude,
+      name: args.name ?? '',
+      address: args.address ?? '',
+    });
+  }
 }

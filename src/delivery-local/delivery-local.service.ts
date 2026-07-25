@@ -19,6 +19,7 @@ import { EvolutionApiService } from '../whatsapp/evolution-api.service';
 import {
   ActualizarDireccionDeliveryDto,
   CancelarDeliveryDto,
+  CompartirUbicacionDto,
   SolicitarDeliveryDto,
 } from './dto/delivery-local.dto';
 
@@ -332,6 +333,88 @@ export class DeliveryLocalService {
     }
 
     return this.cargar(deliveryId);
+  }
+
+  /**
+   * Comparte la ubicación de entrega por WhatsApp a CUALQUIER celular (el
+   * empleado que reparte, un familiar del cliente…) — sale de la instancia
+   * de WhatsApp de la empresa, sin salir del app. Con pin manda la
+   * ubicación NATIVA (tocable, abre el mapa) + texto con los datos; sin
+   * pin, solo el texto con la dirección.
+   */
+  async compartirUbicacion(
+    userId: string,
+    deliveryId: string,
+    dto: CompartirUbicacionDto,
+  ) {
+    await this.verificarStaff(dto.empresaId, userId);
+
+    const celular = dto.celular.replace(/\D/g, '');
+    if (celular.length < 9) {
+      throw new BadRequestException('Celular inválido (mínimo 9 dígitos)');
+    }
+
+    const delivery = await this.prisma.deliveryLocal.findFirst({
+      where: { id: deliveryId, empresaId: dto.empresaId },
+      select: {
+        direccion: true,
+        referencia: true,
+        distrito: true,
+        coordenadas: true,
+        venta: { select: { codigo: true } },
+      },
+    });
+    if (!delivery) throw new NotFoundException('Delivery no encontrado');
+
+    const iw = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId: dto.empresaId },
+      select: { instanceName: true, estado: true, habilitado: true },
+    });
+    if (!iw?.habilitado || String(iw.estado) !== 'CONECTADO') {
+      throw new BadRequestException(
+        'El WhatsApp de la empresa no está conectado — conéctalo en Integraciones',
+      );
+    }
+
+    const coords = delivery.coordenadas as { lat?: number; lon?: number } | null;
+    const lat = coords?.lat != null ? Number(coords.lat) : null;
+    const lon = coords?.lon != null ? Number(coords.lon) : null;
+    const codigo = delivery.venta?.codigo ?? '';
+
+    const texto =
+      `📍 *Entrega ${codigo}*\n` +
+      `${delivery.direccion}` +
+      (delivery.referencia ? `\nRef: ${delivery.referencia}` : '') +
+      (delivery.distrito ? `\nZona: ${delivery.distrito}` : '') +
+      (lat != null && lon != null
+        ? `\nMapa: https://maps.google.com/?q=${lat},${lon}`
+        : '');
+
+    // Pin nativo primero (tocable en el chat); si Evolution no lo soporta,
+    // el texto con el link de Maps ya cubre la ubicación.
+    if (lat != null && lon != null) {
+      try {
+        await this.evolution.sendLocation({
+          instanceName: iw.instanceName,
+          number: celular,
+          latitude: lat,
+          longitude: lon,
+          name: `Entrega ${codigo}`.trim(),
+          address: delivery.direccion,
+        });
+      } catch (e) {
+        this.logger.warn(
+          `sendLocation falló (fallback a texto): ${(e as Error).message}`,
+        );
+      }
+    }
+    await this.evolution.sendText({
+      instanceName: iw.instanceName,
+      number: celular,
+      text: texto,
+    });
+
+    return { ok: true };
   }
 
   // ── Geocoder propio (Fase 1): direcciones confirmadas ──

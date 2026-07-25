@@ -16,6 +16,7 @@ import {
   AccionDeliveryDto,
   ActualizarDireccionDeliveryDto,
   CancelarDeliveryDto,
+  CompartirUbicacionDto,
   EntregarDeliveryDto,
   ReportarPosicionDto,
   SolicitarDeliveryDto,
@@ -39,6 +40,22 @@ export class DeliveryLocalController {
   @ApiOperation({ summary: 'Solicitar delivery local para una venta pagada' })
   solicitar(@Body() dto: SolicitarDeliveryDto, @CurrentUser() user: any) {
     return this.service.solicitar(user.sub, dto);
+  }
+
+  /**
+   * Comparte la ubicación de entrega por WhatsApp (instancia de la
+   * empresa) a cualquier celular — pin nativo + texto, sin salir del app.
+   */
+  @Post(':id/compartir-ubicacion')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Compartir ubicación de entrega por WhatsApp' })
+  compartirUbicacion(
+    @Param('id') id: string,
+    @Body() dto: CompartirUbicacionDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.compartirUbicacion(user.sub, id, dto);
   }
 
   /** Delivery INTERNO: el empleado sale con el pedido (staff marca). */
