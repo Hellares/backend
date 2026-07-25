@@ -637,6 +637,104 @@ export class VentaAnalyticsService {
       .sort((a, b) => b.ingresoTotal - a.ingresoTotal);
   }
 
+  /**
+   * Métricas de entrega: distribución por tipo (mismo criterio que el
+   * filtro del listado: delivery activo manda, luego envío; sin ambos el
+   * canal decide física vs recojo) + zonas top de envíos por agencia
+   * (destino) y de delivery local (distrito).
+   */
+  async getEntregasAnalytics(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo analytics de entregas');
+
+    const where = this.buildVentaWhere(empresaId, query);
+
+    const [ventas, envios, deliveries] = await Promise.all([
+      this.prisma.venta.findMany({
+        where,
+        select: {
+          total: true,
+          conEnvio: true,
+          canalVenta: true,
+          deliveryLocal: { select: { estado: true } },
+        },
+      }),
+      this.prisma.ventaEnvio.findMany({
+        where: { venta: { is: where } },
+        select: {
+          destinoDepartamento: true,
+          destinoProvincia: true,
+          venta: { select: { total: true } },
+        },
+      }),
+      this.prisma.deliveryLocal.findMany({
+        where: { estado: { not: 'CANCELADO' }, venta: { is: where } },
+        select: { distrito: true, venta: { select: { total: true } } },
+      }),
+    ]);
+
+    const porTipo = new Map<string, { cantidad: number; monto: number }>();
+    for (const v of ventas) {
+      const tipo =
+        v.deliveryLocal && v.deliveryLocal.estado !== 'CANCELADO'
+          ? 'DELIVERY'
+          : v.conEnvio
+            ? 'ENVIO'
+            : v.canalVenta === 'ONLINE' || v.canalVenta === 'WHATSAPP_IA'
+              ? 'RECOJO'
+              : 'FISICA';
+      const e = porTipo.get(tipo) || { cantidad: 0, monto: 0 };
+      e.cantidad += 1;
+      e.monto += v.total.toNumber();
+      porTipo.set(tipo, e);
+    }
+
+    const agruparZonas = (filas: Array<{ zona: string; total: number }>) => {
+      const zonas = new Map<string, { cantidad: number; monto: number }>();
+      for (const f of filas) {
+        const e = zonas.get(f.zona) || { cantidad: 0, monto: 0 };
+        e.cantidad += 1;
+        e.monto += f.total;
+        zonas.set(f.zona, e);
+      }
+      return Array.from(zonas.entries())
+        .map(([zona, e]) => ({
+          zona,
+          cantidad: e.cantidad,
+          monto: round2(e.monto),
+        }))
+        .sort((a, b) => b.cantidad - a.cantidad)
+        .slice(0, 10);
+    };
+
+    // Orden fijo de tipos: el color sigue a la entidad en el gráfico
+    const ordenTipos = ['ENVIO', 'DELIVERY', 'RECOJO', 'FISICA'];
+
+    return {
+      porTipoEntrega: ordenTipos
+        .filter((t) => porTipo.has(t))
+        .map((t) => ({
+          tipo: t,
+          cantidad: porTipo.get(t)!.cantidad,
+          monto: round2(porTipo.get(t)!.monto),
+        })),
+      zonasEnvio: agruparZonas(
+        envios.map((e) => ({
+          zona:
+            [e.destinoDepartamento, e.destinoProvincia]
+              .filter((s) => s && s.trim())
+              .join(' / ') || 'Sin destino',
+          total: e.venta?.total.toNumber() ?? 0,
+        })),
+      ),
+      zonasDelivery: agruparZonas(
+        deliveries.map((d) => ({
+          zona: d.distrito?.trim() || 'Sin distrito',
+          total: d.venta?.total.toNumber() ?? 0,
+        })),
+      ),
+    };
+  }
+
   async getComparativoVentas(empresaId: string, query: VentaAnalyticsQueryDto) {
     this.logger.log('Obteniendo comparativo de ventas');
 

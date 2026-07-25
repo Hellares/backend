@@ -125,6 +125,18 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getVentasPorMarca(empresaId, query);
   }
 
+  @Get('entregas')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Distribucion por tipo de entrega + zonas top de envio/delivery' })
+  @ApiResponse({ status: 200, description: 'Analytics de entregas obtenido' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getEntregasAnalytics(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getEntregasAnalytics(empresaId, query);
+  }
+
   @Get('ventas-por-proveedor')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Ventas agrupadas por proveedor del producto (vinculo preferido)' })

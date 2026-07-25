@@ -333,6 +333,67 @@ describe('VentaAnalyticsService.getVentasPorMarca', () => {
   });
 });
 
+describe('VentaAnalyticsService.getEntregasAnalytics', () => {
+  it('clasifica por tipo (delivery manda, luego envío, canal decide el resto) y agrupa zonas', async () => {
+    const ventas = [
+      // delivery activo aunque tenga conEnvio → DELIVERY
+      { total: dec(50), conEnvio: true, canalVenta: 'POS', deliveryLocal: { estado: 'EN_CAMINO' } },
+      // delivery cancelado + conEnvio → ENVIO
+      { total: dec(100), conEnvio: true, canalVenta: 'POS', deliveryLocal: { estado: 'CANCELADO' } },
+      // canal remoto sin envío ni delivery → RECOJO
+      { total: dec(30), conEnvio: false, canalVenta: 'WHATSAPP_IA', deliveryLocal: null },
+      // presencial sin nada → FISICA
+      { total: dec(20), conEnvio: false, canalVenta: 'POS', deliveryLocal: null },
+      { total: dec(40), conEnvio: false, canalVenta: 'COTIZACION', deliveryLocal: null },
+    ];
+    const envios = [
+      {
+        destinoDepartamento: 'La Libertad',
+        destinoProvincia: 'Trujillo',
+        venta: { total: dec(100) },
+      },
+      {
+        destinoDepartamento: 'La Libertad',
+        destinoProvincia: 'Trujillo',
+        venta: { total: dec(60) },
+      },
+      {
+        destinoDepartamento: 'Lima',
+        destinoProvincia: null,
+        venta: { total: dec(80) },
+      },
+    ];
+    const deliveries = [
+      { distrito: 'MOCHE', venta: { total: dec(50) } },
+      { distrito: 'MOCHE', venta: { total: dec(25) } },
+      { distrito: null, venta: { total: dec(10) } },
+    ];
+    const service = mkService({
+      venta: { findMany: jest.fn().mockResolvedValue(ventas) },
+      ventaEnvio: { findMany: jest.fn().mockResolvedValue(envios) },
+      deliveryLocal: { findMany: jest.fn().mockResolvedValue(deliveries) },
+    });
+
+    const result = await service.getEntregasAnalytics('emp1', {} as any);
+
+    // Orden fijo ENVIO→DELIVERY→RECOJO→FISICA
+    expect(result.porTipoEntrega).toEqual([
+      { tipo: 'ENVIO', cantidad: 1, monto: 100 },
+      { tipo: 'DELIVERY', cantidad: 1, monto: 50 },
+      { tipo: 'RECOJO', cantidad: 1, monto: 30 },
+      { tipo: 'FISICA', cantidad: 2, monto: 60 },
+    ]);
+    expect(result.zonasEnvio).toEqual([
+      { zona: 'La Libertad / Trujillo', cantidad: 2, monto: 160 },
+      { zona: 'Lima', cantidad: 1, monto: 80 },
+    ]);
+    expect(result.zonasDelivery).toEqual([
+      { zona: 'MOCHE', cantidad: 2, monto: 75 },
+      { zona: 'Sin distrito', cantidad: 1, monto: 10 },
+    ]);
+  });
+});
+
 describe('VentaAnalyticsService.getVentasPorProveedor', () => {
   it('atribuye al proveedor del vínculo (preferido primero) y agrupa sin proveedor aparte', async () => {
     const detalles = [
