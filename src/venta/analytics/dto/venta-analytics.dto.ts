@@ -1,5 +1,6 @@
-import { IsOptional, IsString, IsEnum, IsDateString } from 'class-validator';
+import { IsOptional, IsString, IsEnum, IsDateString, IsIn, IsNumberString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { CanalVenta } from '@prisma/client';
 
 export enum PeriodoAgrupacion {
   DIARIO = 'DIARIO',
@@ -33,6 +34,36 @@ export class VentaAnalyticsQueryDto {
   @IsOptional()
   @IsString()
   productoId?: string;
+
+  @ApiPropertyOptional({ description: 'ID de la categoria (EmpresaCategoria)' })
+  @IsOptional()
+  @IsString()
+  categoriaId?: string;
+
+  @ApiPropertyOptional({ description: 'Canal de venta', enum: CanalVenta })
+  @IsOptional()
+  @IsEnum(CanalVenta)
+  canalVenta?: CanalVenta;
+
+  @ApiPropertyOptional({ description: "Filtrar por envio: 'true' (con envio) | 'false' (venta fisica)" })
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  conEnvio?: string;
+
+  @ApiPropertyOptional({ description: 'Orden del ranking: DESC = mas vendidos (default), ASC = menos vendidos' })
+  @IsOptional()
+  @IsIn(['ASC', 'DESC'])
+  orden?: 'ASC' | 'DESC';
+
+  @ApiPropertyOptional({ description: 'Criterio de orden: INGRESO (default) | CANTIDAD' })
+  @IsOptional()
+  @IsIn(['INGRESO', 'CANTIDAD'])
+  ordenarPor?: 'INGRESO' | 'CANTIDAD';
+
+  @ApiPropertyOptional({ description: 'Maximo de filas del ranking (1-100, default 10)' })
+  @IsOptional()
+  @IsNumberString()
+  limit?: string;
 
   @ApiPropertyOptional({
     description: 'Periodo de agrupacion',

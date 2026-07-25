@@ -42,11 +42,36 @@ export class VentaAnalyticsService {
 
     if (query.sedeId) where.sedeId = query.sedeId;
     if (query.clienteId) where.clienteId = query.clienteId;
+    if (query.canalVenta) where.canalVenta = query.canalVenta;
+    if (query.conEnvio === 'true') where.conEnvio = true;
+    if (query.conEnvio === 'false') where.conEnvio = false;
 
     const dateFilter = this.buildDateFilter(query);
     if (dateFilter) where.fechaVenta = dateFilter;
 
     return where;
+  }
+
+  private parseLimit(query: VentaAnalyticsQueryDto, fallback = 10): number {
+    const parsed = query.limit ? parseInt(query.limit, 10) : NaN;
+    if (Number.isNaN(parsed)) return fallback;
+    return Math.min(Math.max(parsed, 1), 100);
+  }
+
+  private nombreCategoria(
+    cat: {
+      nombreLocal: string | null;
+      nombrePersonalizado: string | null;
+      categoriaMaestra: { nombre: string } | null;
+    } | null,
+  ): string {
+    if (!cat) return 'Sin categoria';
+    return (
+      cat.nombreLocal ??
+      cat.nombrePersonalizado ??
+      cat.categoriaMaestra?.nombre ??
+      'Sin categoria'
+    );
   }
 
   private getPeriodoKey(fecha: Date, periodo?: PeriodoAgrupacion): string {
@@ -161,6 +186,9 @@ export class VentaAnalyticsService {
         venta: where,
         productoId: { not: null },
         ...(query.productoId ? { productoId: query.productoId } : {}),
+        ...(query.categoriaId
+          ? { producto: { empresaCategoriaId: query.categoriaId } }
+          : {}),
       },
       select: {
         productoId: true,
@@ -171,6 +199,14 @@ export class VentaAnalyticsService {
           select: {
             nombre: true,
             codigoEmpresa: true,
+            empresaCategoriaId: true,
+            empresaCategoria: {
+              select: {
+                nombreLocal: true,
+                nombrePersonalizado: true,
+                categoriaMaestra: { select: { nombre: true } },
+              },
+            },
           },
         },
       },
@@ -182,6 +218,8 @@ export class VentaAnalyticsService {
         productoId: string;
         nombre: string;
         codigo: string;
+        categoriaId: string | null;
+        categoria: string;
         cantidadVendida: number;
         ingresoTotal: number;
         sumaPrecio: number;
@@ -195,6 +233,8 @@ export class VentaAnalyticsService {
         productoId: d.productoId,
         nombre: d.producto?.nombre ?? '',
         codigo: d.producto?.codigoEmpresa ?? '',
+        categoriaId: d.producto?.empresaCategoriaId ?? null,
+        categoria: this.nombreCategoria(d.producto?.empresaCategoria ?? null),
         cantidadVendida: 0,
         ingresoTotal: 0,
         sumaPrecio: 0,
@@ -207,11 +247,18 @@ export class VentaAnalyticsService {
       agrupado.set(d.productoId, existing);
     }
 
+    const orden = query.orden ?? 'DESC';
+    const criterio = query.ordenarPor ?? 'INGRESO';
+    const valorDe = (p: { cantidadVendida: number; ingresoTotal: number }) =>
+      criterio === 'CANTIDAD' ? p.cantidadVendida : p.ingresoTotal;
+
     return Array.from(agrupado.values())
       .map((p) => ({
         productoId: p.productoId,
         nombre: p.nombre,
         codigo: p.codigo,
+        categoriaId: p.categoriaId,
+        categoria: p.categoria,
         cantidadVendida: round2(p.cantidadVendida),
         ingresoTotal: round2(p.ingresoTotal),
         precioPromedio:
@@ -219,8 +266,10 @@ export class VentaAnalyticsService {
             ? round2(p.sumaPrecio / p.count)
             : 0,
       }))
-      .sort((a, b) => b.ingresoTotal - a.ingresoTotal)
-      .slice(0, limit);
+      .sort((a, b) =>
+        orden === 'ASC' ? valorDe(a) - valorDe(b) : valorDe(b) - valorDe(a),
+      )
+      .slice(0, this.parseLimit(query, limit));
   }
 
   async getTopClientes(
@@ -272,7 +321,110 @@ export class VentaAnalyticsService {
         montoTotal: round2(c.montoTotal),
       }))
       .sort((a, b) => b.montoTotal - a.montoTotal)
-      .slice(0, limit);
+      .slice(0, this.parseLimit(query, limit));
+  }
+
+  async getVentasPorCanal(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo ventas por canal');
+
+    const where = this.buildVentaWhere(empresaId, query);
+
+    const [porCanal, porEnvio] = await Promise.all([
+      this.prisma.venta.groupBy({
+        by: ['canalVenta'],
+        where,
+        _count: { id: true },
+        _sum: { total: true },
+      }),
+      this.prisma.venta.groupBy({
+        by: ['conEnvio'],
+        where,
+        _count: { id: true },
+        _sum: { total: true },
+      }),
+    ]);
+
+    return {
+      porCanal: porCanal
+        .map((g) => ({
+          canal: g.canalVenta,
+          cantidad: g._count.id,
+          monto: round2(g._sum.total?.toNumber() ?? 0),
+        }))
+        .sort((a, b) => b.monto - a.monto),
+      porEnvio: porEnvio.map((g) => ({
+        conEnvio: g.conEnvio,
+        cantidad: g._count.id,
+        monto: round2(g._sum.total?.toNumber() ?? 0),
+      })),
+    };
+  }
+
+  async getVentasPorCategoria(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo ventas por categoria');
+
+    const where = this.buildVentaWhere(empresaId, query);
+
+    const detalles = await this.prisma.ventaDetalle.findMany({
+      where: {
+        venta: where,
+        productoId: { not: null },
+      },
+      select: {
+        productoId: true,
+        cantidad: true,
+        total: true,
+        producto: {
+          select: {
+            empresaCategoriaId: true,
+            empresaCategoria: {
+              select: {
+                nombreLocal: true,
+                nombrePersonalizado: true,
+                categoriaMaestra: { select: { nombre: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const agrupado = new Map<
+      string,
+      {
+        categoriaId: string | null;
+        categoria: string;
+        cantidadVendida: number;
+        ingresoTotal: number;
+        productos: Set<string>;
+      }
+    >();
+
+    for (const d of detalles) {
+      const categoriaId = d.producto?.empresaCategoriaId ?? null;
+      const key = categoriaId ?? 'SIN_CATEGORIA';
+      const existing = agrupado.get(key) || {
+        categoriaId,
+        categoria: this.nombreCategoria(d.producto?.empresaCategoria ?? null),
+        cantidadVendida: 0,
+        ingresoTotal: 0,
+        productos: new Set<string>(),
+      };
+      existing.cantidadVendida += d.cantidad.toNumber();
+      existing.ingresoTotal += d.total.toNumber();
+      if (d.productoId) existing.productos.add(d.productoId);
+      agrupado.set(key, existing);
+    }
+
+    return Array.from(agrupado.values())
+      .map((c) => ({
+        categoriaId: c.categoriaId,
+        categoria: c.categoria,
+        cantidadVendida: round2(c.cantidadVendida),
+        ingresoTotal: round2(c.ingresoTotal),
+        productosDistintos: c.productos.size,
+      }))
+      .sort((a, b) => b.ingresoTotal - a.ingresoTotal);
   }
 
   async getComparativoVentas(empresaId: string, query: VentaAnalyticsQueryDto) {

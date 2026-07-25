@@ -89,6 +89,30 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getTopClientes(empresaId, query);
   }
 
+  @Get('ventas-por-canal')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Distribucion de ventas por canal y por envio' })
+  @ApiResponse({ status: 200, description: 'Distribucion por canal obtenida' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getVentasPorCanal(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getVentasPorCanal(empresaId, query);
+  }
+
+  @Get('ventas-por-categoria')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Ventas agrupadas por categoria de producto' })
+  @ApiResponse({ status: 200, description: 'Ventas por categoria obtenidas' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getVentasPorCategoria(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getVentasPorCategoria(empresaId, query);
+  }
+
   @Get('comparativo')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Comparativo de ventas entre periodos' })
