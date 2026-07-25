@@ -1669,6 +1669,16 @@ export class FacturacionService {
       );
     }
 
+    // Multi-RUC: la nota se emite con el MISMO RUC que el origen. Si el
+    // origen es de un emisor socio, la serie NC/ND y el correlativo salen
+    // del EmisorFacturacion (sus series en el proveedor), no de la sede.
+    const emisorSocio = origen.rucEmisor
+      ? await this.prisma.emisorFacturacion.findUnique({
+          where: { empresaId_ruc: { empresaId, ruc: origen.rucEmisor } },
+          select: { id: true },
+        })
+      : null;
+
     return this.prisma.$transaction(async (tx) => {
       // Lock sede para serie/correlativo (atómico: increment + read en un solo UPDATE).
       // SUNAT exige series distintas según el documento afectado (regla validada en CDR):
@@ -1686,18 +1696,33 @@ export class FacturacionService {
         : (esBoletaOrigen ? 'serieNotaDebitoBoleta' : 'serieNotaDebito');
 
       // Lock con FOR UPDATE, luego increment atómico para evitar race conditions
-      const [sedeLocked] = await tx.$queryRaw<any[]>`
-        SELECT id, "${Prisma.raw(campoSerie)}" as serie, "${Prisma.raw(campoUltimo)}" as ultimo
-        FROM "Sede" WHERE id = ${dto.sedeId} AND "empresaId" = ${empresaId} FOR UPDATE
-      `;
-      if (!sedeLocked) throw new BadRequestException('Sede no encontrada o no pertenece a esta empresa');
+      let sedeLocked: any;
+      if (emisorSocio) {
+        [sedeLocked] = await tx.$queryRaw<any[]>`
+          SELECT id, "${Prisma.raw(campoSerie)}" as serie, "${Prisma.raw(campoUltimo)}" as ultimo
+          FROM "EmisorFacturacion" WHERE id = ${emisorSocio.id} AND "empresaId" = ${empresaId} FOR UPDATE
+        `;
+        if (!sedeLocked) throw new BadRequestException('Emisor del comprobante origen no encontrado');
+      } else {
+        [sedeLocked] = await tx.$queryRaw<any[]>`
+          SELECT id, "${Prisma.raw(campoSerie)}" as serie, "${Prisma.raw(campoUltimo)}" as ultimo
+          FROM "Sede" WHERE id = ${dto.sedeId} AND "empresaId" = ${empresaId} FOR UPDATE
+        `;
+        if (!sedeLocked) throw new BadRequestException('Sede no encontrada o no pertenece a esta empresa');
+      }
 
       // Increment atómico: evita race condition si 2 requests concurrentes pasan el lock
-      const sedeActualizada = await tx.sede.update({
-        where: { id: dto.sedeId },
-        data: { [campoUltimo]: { increment: 1 } },
-        select: { [campoUltimo]: true },
-      });
+      const sedeActualizada = emisorSocio
+        ? await tx.emisorFacturacion.update({
+            where: { id: emisorSocio.id },
+            data: { [campoUltimo]: { increment: 1 } },
+            select: { [campoUltimo]: true },
+          })
+        : await tx.sede.update({
+            where: { id: dto.sedeId },
+            data: { [campoUltimo]: { increment: 1 } },
+            select: { [campoUltimo]: true },
+          });
       const nuevoCorrelativo: number = (sedeActualizada as any)[campoUltimo];
 
       // Serie desde la Sede (no hardcoded) — respeta configuración del usuario

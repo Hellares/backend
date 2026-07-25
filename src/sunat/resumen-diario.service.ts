@@ -64,12 +64,21 @@ export class ResumenDiarioService {
         sunatStatus: true,
         anulado: true,
         proveedorEmisor: true,
+        rucEmisor: true,
         fechaEmision: true,
         cdrResponse: true,
       },
     });
 
     const mapaComp = new Map(comprobantes.map((c) => [c.id, c]));
+
+    // Multi-RUC: el RC se envía con credenciales del emisor PRINCIPAL —
+    // boletas de un emisor socio no pueden entrar (irían a otra company).
+    const empresaRc = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: { ruc: true },
+    });
+    const rucPrincipal = empresaRc?.ruc ?? null;
 
     const errores: string[] = [];
     let proveedorRef: string | null = null;
@@ -93,6 +102,13 @@ export class ResumenDiarioService {
       }
       if (c.anulado) {
         errores.push(`${c.codigoGenerado}: ya está anulado`);
+        continue;
+      }
+      if (c.rucEmisor && rucPrincipal && c.rucEmisor !== rucPrincipal) {
+        errores.push(
+          `${c.codigoGenerado}: emitido con RUC ${c.rucEmisor} (emisor socio). ` +
+          `El RC solo soporta el emisor principal por ahora — anúlala con Nota de Crédito.`,
+        );
         continue;
       }
       // Plazo 3 días desde fechaEmision

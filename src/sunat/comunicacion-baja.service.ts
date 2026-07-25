@@ -86,6 +86,7 @@ export class ComunicacionBajaService {
         sunatStatus: true,
         anulado: true,
         proveedorEmisor: true,
+        rucEmisor: true,
         notasRelacionadas: {
           where: { sunatStatus: 'ACEPTADO', anulado: false },
           select: { id: true, codigoGenerado: true },
@@ -95,6 +96,14 @@ export class ComunicacionBajaService {
 
     const mapaComp = new Map(comprobantes.map((c) => [c.id, c]));
     const ids = dto.detalles.map((d) => d.comprobanteId);
+
+    // Multi-RUC: la CDB se envía con credenciales del emisor PRINCIPAL —
+    // documentos de un emisor socio no pueden entrar (irían a otra company).
+    const empresaCdb = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: { ruc: true },
+    });
+    const rucPrincipal = empresaCdb?.ruc ?? null;
 
     const errores: string[] = [];
     let proveedorRef: string | null = null;
@@ -126,6 +135,13 @@ export class ComunicacionBajaService {
       }
       if (c.anulado) {
         errores.push(`${c.codigoGenerado}: ya está anulado`);
+        continue;
+      }
+      if (c.rucEmisor && rucPrincipal && c.rucEmisor !== rucPrincipal) {
+        errores.push(
+          `${c.codigoGenerado}: emitido con RUC ${c.rucEmisor} (emisor socio). ` +
+          `La CDB solo soporta el emisor principal por ahora — use Nota de Crédito.`,
+        );
         continue;
       }
       // Facturas con NC/ND aceptadas no pueden ir a baja

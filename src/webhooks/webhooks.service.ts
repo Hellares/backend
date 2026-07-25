@@ -608,11 +608,12 @@ export class WebhooksService {
 
     // Resolver empresaId de Syncronize desde el companyId de Syncrofact.
     // Lo guardamos en ConfiguracionFacturacion.proveedorConfig.companyId.
-    const empresaId = await this.resolverEmpresaId(companyIdSyncrofact);
-    if (!empresaId) {
+    const emisorResuelto = await this.resolverEmpresaId(companyIdSyncrofact);
+    if (!emisorResuelto) {
       this.logger.warn(`Webhook recibido para companyId=${companyIdSyncrofact} sin empresa Syncronize asociada`);
       return { ok: true, accion: 'ignorado' };
     }
+    const { empresaId, rucEmisor } = emisorResuelto;
 
     // Eventos de Comunicación de Baja: actualizan ComunicacionBaja, no ComprobanteElectronico.
     if (EVENTOS_BAJA.has(event)) {
@@ -626,7 +627,7 @@ export class WebhooksService {
 
     // Localizar el comprobante: preferir referencia_interna (nuestro id),
     // fallback a numero + empresaId.
-    const comprobante = await this.buscarComprobante(empresaId, data.referencia_interna, data.numero);
+    const comprobante = await this.buscarComprobante(empresaId, data.referencia_interna, data.numero, rucEmisor);
     if (!comprobante) {
       this.logger.warn(`Webhook ${event} — comprobante no encontrado (empresa=${empresaId}, num=${data.numero}, ref=${data.referencia_interna})`);
       return { ok: true, accion: 'no_encontrado' };
@@ -841,15 +842,23 @@ export class WebhooksService {
    * Encuentra la empresa Syncronize cuyo proveedorConfig.companyId coincida
    * con el enviado en el webhook (por Sede o por ConfiguracionFacturacion global).
    */
-  private async resolverEmpresaId(companyIdSyncrofact: number): Promise<string | null> {
-    // 1) Buscar en ConfiguracionFacturacion (nivel empresa)
+  private async resolverEmpresaId(
+    companyIdSyncrofact: number,
+  ): Promise<{ empresaId: string; rucEmisor: string | null } | null> {
+    // 1) Buscar en ConfiguracionFacturacion (nivel empresa → RUC principal)
     const config = await this.prisma.configuracionFacturacion.findFirst({
       where: {
         proveedorConfig: { path: ['companyId'], equals: companyIdSyncrofact },
       },
       select: { empresaId: true },
     });
-    if (config) return config.empresaId;
+    if (config) {
+      const empresa = await this.prisma.empresa.findUnique({
+        where: { id: config.empresaId },
+        select: { ruc: true },
+      });
+      return { empresaId: config.empresaId, rucEmisor: empresa?.ruc ?? null };
+    }
 
     // 2) Emisor socio (multi-RUC): su company de Syncrofact vive en
     //    EmisorFacturacion.proveedorConfig.companyId.
@@ -857,18 +866,20 @@ export class WebhooksService {
       where: {
         proveedorConfig: { path: ['companyId'], equals: companyIdSyncrofact },
       },
-      select: { empresaId: true },
+      select: { empresaId: true, ruc: true },
     });
-    if (emisor) return emisor.empresaId;
+    if (emisor) return { empresaId: emisor.empresaId, rucEmisor: emisor.ruc };
 
     // 3) Fallback legacy: Sede con companyId propio (modelo viejo)
     const sede = await this.prisma.sede.findFirst({
       where: {
         proveedorConfig: { path: ['companyId'], equals: companyIdSyncrofact },
       },
-      select: { empresaId: true },
+      select: { empresaId: true, rucSede: true },
     });
-    return sede?.empresaId ?? null;
+    return sede
+      ? { empresaId: sede.empresaId, rucEmisor: sede.rucSede ?? null }
+      : null;
   }
 
   /**
@@ -879,6 +890,7 @@ export class WebhooksService {
     empresaId: string,
     referenciaInterna: string | undefined,
     numero: string | undefined,
+    rucEmisor?: string | null,
   ): Promise<{ id: string; sunatStatus: string } | null> {
     if (referenciaInterna) {
       const c = await this.prisma.comprobanteElectronico.findFirst({
@@ -888,11 +900,19 @@ export class WebhooksService {
       if (c) return c;
     }
     if (numero) {
-      // "F002-00000002" → serie="F002", correlativo="00000002"
+      // "F002-00000002" → serie="F002", correlativo="00000002".
+      // Multi-RUC: serie+correlativo pueden repetirse entre emisores (socio
+      // B002-1 vs principal B002-1) → filtrar por el RUC de la company que
+      // disparó el webhook.
       const [serie, correlativo] = numero.split('-');
       if (serie && correlativo) {
         const c = await this.prisma.comprobanteElectronico.findFirst({
-          where: { empresaId, serie, correlativo },
+          where: {
+            empresaId,
+            serie,
+            correlativo,
+            ...(rucEmisor ? { rucEmisor } : {}),
+          },
           select: { id: true, sunatStatus: true },
         });
         if (c) return c;
