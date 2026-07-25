@@ -175,6 +175,61 @@ describe('VentaAnalyticsService.getTopProductos — ranking', () => {
     expect(porId['p2'].categoria).toBe('Sin categoria');
   });
 
+  it('desglosa por variante y agrupa lo vendido sin variante como "Sin variante"', async () => {
+    const conVariantes = [
+      {
+        productoId: 'p1',
+        varianteId: 'v1',
+        cantidad: dec(2),
+        total: dec(60),
+        precioUnitario: dec(30),
+        producto: { nombre: 'Polo', codigoEmpresa: 'C1', empresaCategoriaId: null, empresaCategoria: null },
+        variante: { nombre: 'Talla M' },
+      },
+      {
+        productoId: 'p1',
+        varianteId: 'v2',
+        cantidad: dec(1),
+        total: dec(100),
+        precioUnitario: dec(100),
+        producto: { nombre: 'Polo', codigoEmpresa: 'C1', empresaCategoriaId: null, empresaCategoria: null },
+        variante: { nombre: 'Talla L' },
+      },
+      {
+        productoId: 'p1',
+        varianteId: null,
+        cantidad: dec(5),
+        total: dec(50),
+        precioUnitario: dec(10),
+        producto: { nombre: 'Polo', codigoEmpresa: 'C1', empresaCategoriaId: null, empresaCategoria: null },
+        variante: null,
+      },
+    ];
+    const service = mkService({
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue(conVariantes) },
+    });
+
+    const result = await service.getTopProductos('emp1', {} as any);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].cantidadVendida).toBe(8);
+    expect(result[0].ingresoTotal).toBe(210);
+    // Ordenado por ingreso desc dentro del producto
+    expect(result[0].variantes).toEqual([
+      { varianteId: 'v2', nombre: 'Talla L', cantidadVendida: 1, ingresoTotal: 100 },
+      { varianteId: 'v1', nombre: 'Talla M', cantidadVendida: 2, ingresoTotal: 60 },
+      { varianteId: null, nombre: 'Sin variante', cantidadVendida: 5, ingresoTotal: 50 },
+    ]);
+  });
+
+  it('producto sin variantes devuelve variantes vacio (sin bucket redundante)', async () => {
+    const result = await mkTopService().getTopProductos('emp1', {} as any);
+
+    for (const p of result) {
+      expect(p.variantes).toEqual([]);
+    }
+  });
+
   it('acumula cantidades e ingresos de detalles repetidos del mismo producto', async () => {
     const service = mkService({
       ventaDetalle: {

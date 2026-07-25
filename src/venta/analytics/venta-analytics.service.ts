@@ -208,6 +208,7 @@ export class VentaAnalyticsService {
       },
       select: {
         productoId: true,
+        varianteId: true,
         cantidad: true,
         total: true,
         precioUnitario: true,
@@ -225,6 +226,7 @@ export class VentaAnalyticsService {
             },
           },
         },
+        variante: { select: { nombre: true } },
       },
     });
 
@@ -240,6 +242,15 @@ export class VentaAnalyticsService {
         ingresoTotal: number;
         sumaPrecio: number;
         count: number;
+        variantes: Map<
+          string,
+          {
+            varianteId: string | null;
+            nombre: string;
+            cantidadVendida: number;
+            ingresoTotal: number;
+          }
+        >;
       }
     >();
 
@@ -255,11 +266,25 @@ export class VentaAnalyticsService {
         ingresoTotal: 0,
         sumaPrecio: 0,
         count: 0,
+        variantes: new Map(),
       };
       existing.cantidadVendida += d.cantidad.toNumber();
       existing.ingresoTotal += d.total.toNumber();
       existing.sumaPrecio += d.precioUnitario.toNumber();
       existing.count += 1;
+
+      // Desglose por variante; los detalles sin variante van al bucket BASE
+      const vKey = d.varianteId ?? 'BASE';
+      const vExisting = existing.variantes.get(vKey) || {
+        varianteId: d.varianteId ?? null,
+        nombre: d.variante?.nombre ?? 'Sin variante',
+        cantidadVendida: 0,
+        ingresoTotal: 0,
+      };
+      vExisting.cantidadVendida += d.cantidad.toNumber();
+      vExisting.ingresoTotal += d.total.toNumber();
+      existing.variantes.set(vKey, vExisting);
+
       agrupado.set(d.productoId, existing);
     }
 
@@ -281,6 +306,18 @@ export class VentaAnalyticsService {
           p.count > 0
             ? round2(p.sumaPrecio / p.count)
             : 0,
+        // Solo el bucket BASE = producto sin variantes → sin desglose
+        variantes:
+          p.variantes.size === 1 && p.variantes.has('BASE')
+            ? []
+            : Array.from(p.variantes.values())
+                .map((v) => ({
+                  varianteId: v.varianteId,
+                  nombre: v.nombre,
+                  cantidadVendida: round2(v.cantidadVendida),
+                  ingresoTotal: round2(v.ingresoTotal),
+                }))
+                .sort((a, b) => b.ingresoTotal - a.ingresoTotal),
       }))
       .sort((a, b) =>
         orden === 'ASC' ? valorDe(a) - valorDe(b) : valorDe(b) - valorDe(a),
