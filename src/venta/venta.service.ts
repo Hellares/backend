@@ -1974,7 +1974,10 @@ export class VentaService {
       { timeout: Math.max(30000, dto.detalles.length * 1000 + 15000) },
     );
 
-    await this.invalidateProductCache(empresaId);
+    // Fire-and-forget: el SCAN de Redis no debe retrasar la respuesta del
+    // cobro (el cajero está esperando el ticket). La ínfima ventana de
+    // caché stale ya existía entre el commit y la invalidación.
+    void this.invalidateProductCache(empresaId);
 
     // Notificar realtime — los cajeros de la empresa ven el stock
     // actualizado en sus cards en <3s. Enviamos un solo evento por
@@ -3161,7 +3164,8 @@ export class VentaService {
     { timeout: 30000 },
     );
 
-    await this.invalidateProductCache(empresaId);
+    // Fire-and-forget: no retrasar la respuesta por el SCAN de Redis
+    void this.invalidateProductCache(empresaId);
 
     // Fire-after-commit: enviar comprobante a Nubefact
     if (result.comprobanteIdGenerado) {
