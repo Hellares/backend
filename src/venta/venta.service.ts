@@ -786,9 +786,17 @@ export class VentaService {
       comprobante: {
         select: { tipoComprobante: true, codigoGenerado: true, sunatStatus: true },
       },
-      // Envío liviano: solo el flag de rótulo impreso para que el badge
-      // "Envío" de la card pueda mostrar "Envío · IMP" (relación 1:1).
-      envio: { select: { rotuloImpresoEn: true } },
+      // Envío liviano: flag de rótulo impreso + agencia/destino para que la
+      // card muestre "Envío · IMP" y la línea de agencia (relación 1:1).
+      envio: {
+        select: {
+          rotuloImpresoEn: true,
+          agenciaNombre: true,
+          destinoDepartamento: true,
+          destinoProvincia: true,
+          agenciaDireccion: true,
+        },
+      },
       // Delivery local liviano: el badge de la card muestra "Delivery" (con
       // su estado) en vez de "Envío" cuando la venta va con repartidor.
       deliveryLocal: { select: { estado: true } },
