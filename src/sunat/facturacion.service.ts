@@ -1601,6 +1601,7 @@ export class FacturacionService {
         ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
         ultimoNumeroGuiaRemision: true,
         proveedorActivo: true, proveedorConfig: true,
+        proveedorToken: true, rucSede: true,
         seriesSincronizadasEn: true,
       },
     });
@@ -1724,6 +1725,12 @@ export class FacturacionService {
       sedeId: sede.id,
       sedeNombre: sede.nombre,
       rucEmpresa: empresa?.ruc ?? null,
+      // Emisor EFECTIVO al que pertenecen las series mostradas: con multi-RUC
+      // la sede-socio tiene rucSede + token propio; sin token propio, las
+      // series consultadas son las del emisor principal (token global).
+      rucEmisor: config.ruc,
+      razonSocialEmisor: config.razonSocial,
+      credencialesPropias: !!sede.proveedorToken,
       proveedorActivo: config.proveedorActivo,
       seriesSincronizadasEn: sede.seriesSincronizadasEn,
       branches,

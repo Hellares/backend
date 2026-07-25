@@ -35,6 +35,12 @@ export interface SincronizacionPreviewResponse {
   sedeId: string;
   sedeNombre: string;
   rucEmpresa: string | null;
+  /** Emisor EFECTIVO de las series mostradas (sede.rucSede ?? empresa.ruc). */
+  rucEmisor: string | null;
+  razonSocialEmisor: string | null;
+  /** true = la sede consulta con token propio (empresa socio); false = usa
+   *  el token global → las series listadas son del emisor PRINCIPAL. */
+  credencialesPropias: boolean;
   proveedorActivo: string;
   seriesSincronizadasEn: Date | null;
   branches: BranchPreviewInfo[];
