@@ -349,9 +349,14 @@ export class DeliveryLocalService {
   ) {
     await this.verificarStaff(dto.empresaId, userId);
 
-    const celular = dto.celular.replace(/\D/g, '');
+    let celular = dto.celular.replace(/\D/g, '');
     if (celular.length < 9) {
       throw new BadRequestException('Celular inválido (mínimo 9 dígitos)');
+    }
+    // WhatsApp exige código de país: 9 dígitos peruanos → 51XXXXXXXXX
+    // (sin él, Evolution responde jid exists:false).
+    if (celular.length === 9 && celular.startsWith('9')) {
+      celular = `51${celular}`;
     }
 
     const delivery = await this.prisma.deliveryLocal.findFirst({
