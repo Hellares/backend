@@ -797,9 +797,11 @@ export class VentaService {
           agenciaDireccion: true,
         },
       },
-      // Delivery local liviano: el badge de la card muestra "Delivery" (con
-      // su estado) en vez de "Envío" cuando la venta va con repartidor.
-      deliveryLocal: { select: { estado: true } },
+      // Delivery local liviano: estado para el badge "Delivery" de la card
+      // + dirección/distrito para la línea de chips (igual que el envío).
+      deliveryLocal: {
+        select: { estado: true, direccion: true, distrito: true },
+      },
       // Órdenes de servicio cobradas por la venta (badge "OS-XXXXX" en la
       // card). Solo trae filas para líneas con ordenServicioId — para
       // ventas normales devuelve []. findAll lo aplana a `ordenesServicio`
