@@ -1144,6 +1144,7 @@ export class VentaAnalyticsService {
       horasPico,
       reposicion,
       proyeccion,
+      porEmisor,
     ] = await Promise.all([
       this.getResumenGeneral(empresaId, query),
       this.getVentasPorPeriodo(empresaId, query),
@@ -1161,6 +1162,7 @@ export class VentaAnalyticsService {
       this.getHorasPico(empresaId, query),
       this.getReposicionSugerida(empresaId, query),
       this.getProyeccionMes(empresaId, query),
+      this.getVentasPorEmisor(empresaId, query),
     ]);
 
     return {
@@ -1180,6 +1182,74 @@ export class VentaAnalyticsService {
       horasPico,
       reposicion,
       proyeccion,
+      porEmisor,
+    };
+  }
+
+  /**
+   * Ventas por EMISOR (multi-RUC): agrupa por el RUC con el que salió el
+   * comprobante electrónico. Los Tickets (nota de venta, sin comprobante)
+   * van en `sinComprobante`. `multiEmisor` indica si la empresa tiene
+   * emisores socio registrados (la UI oculta la sección si no los hay).
+   */
+  async getVentasPorEmisor(empresaId: string, query: VentaAnalyticsQueryDto) {
+    const where = this.buildVentaWhere(empresaId, query);
+
+    const [ventas, empresa, emisoresDb] = await Promise.all([
+      this.prisma.venta.findMany({
+        where,
+        select: {
+          total: true,
+          comprobante: { select: { rucEmisor: true } },
+        },
+      }),
+      this.prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: { ruc: true, razonSocial: true, nombre: true },
+      }),
+      this.prisma.emisorFacturacion.findMany({
+        where: { empresaId },
+        select: { ruc: true, razonSocial: true },
+      }),
+    ]);
+
+    const nombres = new Map<string, string>();
+    if (empresa?.ruc) {
+      nombres.set(empresa.ruc, empresa.razonSocial || empresa.nombre || 'Principal');
+    }
+    for (const e of emisoresDb) nombres.set(e.ruc, e.razonSocial);
+
+    const acc = new Map<string, { ventas: number; monto: number }>();
+    const sinComprobante = { ventas: 0, monto: 0 };
+    for (const v of ventas) {
+      const monto = Number(v.total);
+      const ruc = v.comprobante?.rucEmisor ?? null;
+      if (!ruc) {
+        sinComprobante.ventas++;
+        sinComprobante.monto += monto;
+        continue;
+      }
+      const cur = acc.get(ruc) ?? { ventas: 0, monto: 0 };
+      cur.ventas++;
+      cur.monto += monto;
+      acc.set(ruc, cur);
+    }
+
+    return {
+      emisores: [...acc.entries()]
+        .map(([ruc, s]) => ({
+          ruc,
+          razonSocial: nombres.get(ruc) ?? ruc,
+          esPrincipal: ruc === empresa?.ruc,
+          ventas: s.ventas,
+          monto: round2(s.monto),
+        }))
+        .sort((a, b) => b.monto - a.monto),
+      sinComprobante: {
+        ventas: sinComprobante.ventas,
+        monto: round2(sinComprobante.monto),
+      },
+      multiEmisor: emisoresDb.length > 0,
     };
   }
 

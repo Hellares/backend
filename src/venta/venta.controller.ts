@@ -155,6 +155,7 @@ export class VentaController {
     @Query('canalVenta') canalVenta?: string,
     @Query('tipoEntrega') tipoEntrega?: string,
     @Query('entregaBusqueda') entregaBusqueda?: string,
+    @Query('rucEmisor') rucEmisor?: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
   ) {
@@ -170,6 +171,7 @@ export class VentaController {
       canalVenta,
       tipoEntrega,
       entregaBusqueda,
+      rucEmisor,
       limit: limit ? parseInt(limit, 10) : undefined,
       cursor,
     });

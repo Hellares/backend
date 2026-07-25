@@ -539,6 +539,7 @@ describe('VentaAnalyticsService.getDashboard', () => {
       getHorasPico: marcador('horas'),
       getReposicionSugerida: marcador('reposicion'),
       getProyeccionMes: marcador('proyeccion'),
+      getVentasPorEmisor: marcador('porEmisor'),
     };
     Object.assign(service, spies);
 
@@ -564,6 +565,7 @@ describe('VentaAnalyticsService.getDashboard', () => {
         'horasPico',
         'reposicion',
         'proyeccion',
+        'porEmisor',
       ].sort(),
     );
     // Ranking pedido dos veces: más vendidos (DESC) y menos vendidos (ASC)

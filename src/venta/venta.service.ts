@@ -3247,6 +3247,9 @@ export class VentaService {
       // de la entrega (agencia/destino/dirección/distrito).
       tipoEntrega?: string;
       entregaBusqueda?: string;
+      // Multi-RUC: filtra por el RUC emisor del comprobante. Valor especial
+      // 'SIN_COMPROBANTE' = ventas Ticket (sin comprobante electrónico).
+      rucEmisor?: string;
       limit?: number;
       cursor?: string;
     },
@@ -3275,6 +3278,13 @@ export class VentaService {
     // totales/conteos inconsistentes (solo vería las páginas cargadas).
     if (filtros?.canalVenta) {
       where.canalVenta = filtros.canalVenta as Prisma.EnumCanalVentaFilter['equals'];
+    }
+
+    // Emisor (multi-RUC): el emisor vive en el comprobante de la venta.
+    if (filtros?.rucEmisor === 'SIN_COMPROBANTE') {
+      where.comprobante = null;
+    } else if (filtros?.rucEmisor) {
+      where.comprobante = { is: { rucEmisor: filtros.rucEmisor } };
     }
 
     // Tipo de entrega — mismo criterio que los chips de la card: DELIVERY
