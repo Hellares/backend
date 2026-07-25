@@ -21,7 +21,7 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { EstadoSorteo } from '@prisma/client';
+import { EstadoSorteo, TipoSorteo } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -29,6 +29,7 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SorteosService } from './sorteos.service';
+import { SorteosAnalyticsService } from './sorteos-analytics.service';
 import {
   ActualizarPremioCatalogoDto,
   CambiarEstadoParticipanteDto,
@@ -49,7 +50,10 @@ import {
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class SorteosEmpresaController {
-  constructor(private readonly service: SorteosService) {}
+  constructor(
+    private readonly service: SorteosService,
+    private readonly analytics: SorteosAnalyticsService,
+  ) {}
 
   @Post()
   @RequiresPermission(Permission.MANAGE_VENTAS)
@@ -77,6 +81,26 @@ export class SorteosEmpresaController {
       estado,
       page: page ? parseInt(page) : 1,
       limit: limit ? parseInt(limit) : 20,
+    });
+  }
+
+  @Get('analytics/dashboard')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({
+    summary:
+      'Dashboard de analytics de sorteos: resumen, canales, top sorteos/jugadores, premios y zonas',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async analyticsDashboard(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('fechaInicio') fechaInicio?: string,
+    @Query('fechaFin') fechaFin?: string,
+    @Query('tipo') tipo?: TipoSorteo,
+  ) {
+    return this.analytics.getDashboard(empresaId, {
+      fechaInicio,
+      fechaFin,
+      tipo,
     });
   }
 

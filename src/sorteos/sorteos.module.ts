@@ -8,6 +8,7 @@ import { ClientesModule } from '../clientes/clientes.module';
 import { ConsultasExternasModule } from '../consultas-externas/consultas-externas.module';
 import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
 import { SorteosService } from './sorteos.service';
+import { SorteosAnalyticsService } from './sorteos-analytics.service';
 import {
   MisPremiosController,
   SorteosEmpresaController,
@@ -25,7 +26,7 @@ import {
     IntegracionYapeModule,
   ],
   controllers: [SorteosEmpresaController, MisPremiosController],
-  providers: [SorteosService],
+  providers: [SorteosService, SorteosAnalyticsService],
   exports: [SorteosService],
 })
 export class SorteosModule {}
