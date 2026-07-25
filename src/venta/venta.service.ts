@@ -1757,9 +1757,12 @@ export class VentaService {
             serieBoleta: string;
             ultimoNumeroFactura: number;
             ultimoNumeroBoleta: number;
+            rucEmisor: string | null;
           }>
-        >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
-          FROM "Sede" WHERE id = ${sedeIdFacturacion} FOR UPDATE`;
+        >`SELECT s.id, s."serieFactura", s."serieBoleta", s."ultimoNumeroFactura", s."ultimoNumeroBoleta",
+            COALESCE(s."rucSede", e.ruc) AS "rucEmisor"
+          FROM "Sede" s JOIN "Empresa" e ON e.id = s."empresaId"
+          WHERE s.id = ${sedeIdFacturacion} FOR UPDATE OF s`;
 
         if (sedeLocked) {
           const serie = tipoComprobante === 'FACTURA'
@@ -1787,6 +1790,7 @@ export class VentaService {
               ventaId: venta.id,
               empresaId,
               sedeId: dto.sedeFacturacionId || dto.sedeId,
+              rucEmisor: sedeLocked.rucEmisor,
               clienteId: dto.clienteId,
               clienteEmpresaId: dto.clienteEmpresaId,
               tipoComprobante: tipoComprobante as any,
@@ -2110,9 +2114,12 @@ export class VentaService {
         serieBoleta: string;
         ultimoNumeroFactura: number;
         ultimoNumeroBoleta: number;
+        rucEmisor: string | null;
       }>
-    >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
-        FROM "Sede" WHERE id = ${sedeIdFacturacion} FOR UPDATE`;
+    >`SELECT s.id, s."serieFactura", s."serieBoleta", s."ultimoNumeroFactura", s."ultimoNumeroBoleta",
+        COALESCE(s."rucSede", e.ruc) AS "rucEmisor"
+      FROM "Sede" s JOIN "Empresa" e ON e.id = s."empresaId"
+      WHERE s.id = ${sedeIdFacturacion} FOR UPDATE OF s`;
 
     if (!sedeLocked) return null;
 
@@ -2144,6 +2151,7 @@ export class VentaService {
         ventaId: p.ventaId,
         empresaId: p.empresaId,
         sedeId: p.sedeFacturacionId || p.sedeId,
+        rucEmisor: sedeLocked.rucEmisor,
         clienteId: p.cliente.clienteId,
         clienteEmpresaId: p.cliente.clienteEmpresaId,
         tipoComprobante: p.tipoComprobante as any,
@@ -2977,9 +2985,12 @@ export class VentaService {
           serieBoleta: string;
           ultimoNumeroFactura: number;
           ultimoNumeroBoleta: number;
+          rucEmisor: string | null;
         }>
-      >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
-        FROM "Sede" WHERE id = ${cotizacion.sedeId} FOR UPDATE`;
+      >`SELECT s.id, s."serieFactura", s."serieBoleta", s."ultimoNumeroFactura", s."ultimoNumeroBoleta",
+          COALESCE(s."rucSede", e.ruc) AS "rucEmisor"
+        FROM "Sede" s JOIN "Empresa" e ON e.id = s."empresaId"
+        WHERE s.id = ${cotizacion.sedeId} FOR UPDATE OF s`;
 
       if (!sedeLocked) {
         this.logger.warn(`Sede ${cotizacion.sedeId} no encontrada, comprobante no generado`);
@@ -3018,6 +3029,7 @@ export class VentaService {
             ventaId: venta.id,
             empresaId,
             sedeId: venta.sedeId,
+            rucEmisor: sedeLocked.rucEmisor,
             clienteId: clienteVenta.clienteId,
             clienteEmpresaId: clienteVenta.clienteEmpresaId,
             tipoComprobante: tipoComprobante as any,
@@ -5212,9 +5224,11 @@ export class VentaService {
     const ventaResult = await this.prisma.$transaction(async (tx) => {
       // Lock sede para concurrencia de serie/correlativo
       const [sedeLocked] = await tx.$queryRaw<
-        Array<{ id: string; serieFactura: string; serieBoleta: string; ultimoNumeroFactura: number; ultimoNumeroBoleta: number }>
-      >`SELECT id, "serieFactura", "serieBoleta", "ultimoNumeroFactura", "ultimoNumeroBoleta"
-        FROM "Sede" WHERE id = ${venta.sedeId} FOR UPDATE`;
+        Array<{ id: string; serieFactura: string; serieBoleta: string; ultimoNumeroFactura: number; ultimoNumeroBoleta: number; rucEmisor: string | null }>
+      >`SELECT s.id, s."serieFactura", s."serieBoleta", s."ultimoNumeroFactura", s."ultimoNumeroBoleta",
+          COALESCE(s."rucSede", e.ruc) AS "rucEmisor"
+        FROM "Sede" s JOIN "Empresa" e ON e.id = s."empresaId"
+        WHERE s.id = ${venta.sedeId} FOR UPDATE OF s`;
 
       if (!sedeLocked) throw new BadRequestException('Sede no encontrada');
 
@@ -5245,6 +5259,7 @@ export class VentaService {
           ventaId: venta.id,
           empresaId,
           sedeId: venta.sedeId,
+          rucEmisor: sedeLocked.rucEmisor,
           clienteId: venta.clienteId,
           clienteEmpresaId: venta.clienteEmpresaId,
           tipoComprobante: dto.tipoComprobante as any,

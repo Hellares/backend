@@ -1536,6 +1536,8 @@ export class FacturacionService {
       const nota = await tx.comprobanteElectronico.create({
         data: {
           empresaId,
+          // La nota se emite con el MISMO RUC que el comprobante afectado.
+          rucEmisor: origen.rucEmisor,
           clienteId: origen.clienteId,
           clienteEmpresaId: origen.clienteEmpresaId,
           tipoComprobante: tipoNota as any,
@@ -1658,16 +1660,16 @@ export class FacturacionService {
       counts.set(`${tipoDoc}:${serie}`, count);
     }
 
-    // MAX(correlativo) por (tipoComprobante, serie) en TODA la empresa.
-    // La unique constraint en ComprobanteElectronico es (empresaId, tipoComprobante,
-    // serie, correlativo) — sin sedeId — así que para detectar conflictos hay que
-    // mirar todas las sedes de la empresa, no solo la sede que se está sincronizando.
+    // MAX(correlativo) por (tipoComprobante, serie) DEL MISMO EMISOR.
+    // La unique constraint es (empresaId, rucEmisor, tipoComprobante, serie,
+    // correlativo): con multi-RUC el socio puede usar F001 aunque el principal
+    // también la tenga — solo chocan comprobantes del mismo RUC emisor.
     const maxPorSerie = new Map<string, number>();
     const maxRows = await this.prisma.$queryRaw<
       Array<{ tipoComprobante: string; serie: string; max: number | null }>
     >`SELECT "tipoComprobante"::text, serie, MAX(CAST(correlativo AS INTEGER)) as max
        FROM "ComprobanteElectronico"
-       WHERE "empresaId" = ${empresaId}
+       WHERE "empresaId" = ${empresaId} AND "rucEmisor" = ${config.ruc}
        GROUP BY "tipoComprobante", serie`;
     for (const row of maxRows) {
       if (row.serie && row.max != null) {
@@ -1829,10 +1831,10 @@ export class FacturacionService {
           continue;
         }
 
-        // Rechazar CONFLICTO 2: hay comprobantes en BD (de cualquier sede de la
-        // empresa) con la serie destino y correlativo > proveedor. Aplicar bajaría
-        // el contador y la próxima emisión chocaría con la unique constraint
-        // (empresaId, tipoComprobante, serie, correlativo).
+        // Rechazar CONFLICTO 2: hay comprobantes en BD DEL MISMO EMISOR con la
+        // serie destino y correlativo > proveedor. Aplicar bajaría el contador
+        // y la próxima emisión chocaría con la unique constraint
+        // (empresaId, rucEmisor, tipoComprobante, serie, correlativo).
         const tipoComp = TIPO_DOC_A_COMPROBANTE[sel.tipoDocumento];
         let maxBdEnSerieDestino = 0;
         if (tipoComp && sel.serieProveedor) {
@@ -1840,6 +1842,7 @@ export class FacturacionService {
             SELECT MAX(CAST(correlativo AS INTEGER)) as max
             FROM "ComprobanteElectronico"
             WHERE "empresaId" = ${empresaId}
+              AND "rucEmisor" = ${config.ruc}
               AND "tipoComprobante" = ${tipoComp}::"TipoComprobante"
               AND serie = ${sel.serieProveedor}`;
           maxBdEnSerieDestino = Number(maxRow?.max ?? 0);

@@ -105,6 +105,10 @@ model ComprobanteElectronico {
   // Proveedor que emitió este comprobante. Se graba al crear y nunca cambia
   // para garantizar que envío/consulta/anulación usen el mismo proveedor.
   proveedorEmisor     ProveedorFacturacion?
+  // RUC con el que se emitió (multi-RUC): rucSede de la sede-socio o el RUC
+  // de la empresa. Serie+correlativo son únicos POR EMISOR ante SUNAT, no por
+  // empresa — el socio puede usar F001 aunque el principal también la tenga.
+  rucEmisor           String?
   tipoComprobante     TipoComprobante
   serie               String
   correlativo         String
@@ -174,8 +178,8 @@ model ComprobanteElectronico {
   ventaId             String?                   @unique
   venta               Venta?                    @relation(fields: [ventaId], references: [id])
 
-  @@unique([empresaId, tipoComprobante, serie, correlativo])
-  @@unique([empresaId, codigoGenerado])
+  @@unique([empresaId, rucEmisor, tipoComprobante, serie, correlativo], map: "ComprobanteElectronico_empresa_emisor_tipo_serie_corr_key")
+  @@unique([empresaId, rucEmisor, codigoGenerado], map: "ComprobanteElectronico_empresa_emisor_codigo_key")
   // FK indexes
   @@index([empresaId])
   @@index([sedeId])
