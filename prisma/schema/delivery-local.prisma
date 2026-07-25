@@ -62,6 +62,13 @@ model DeliveryLocal {
   distrito            String?
   coordenadas         Json? // {lat, lon} — F2: ubicación compartida por WhatsApp
 
+  // Delivery INTERNO: lo lleva un empleado de la empresa — se cobra la
+  // tarifa igual, pero NO se publica al pool ni se notifica repartidores;
+  // el staff avanza los estados (SOLICITADO → EN_CAMINO → ENTREGADO, sin
+  // PIN — es personal de confianza).
+  esInterno        Boolean @default(false)
+  encargadoInterno String? // nombre del empleado que lo lleva (informativo)
+
   // Tarifa que cobra el REPARTIDOR al entregar (default: Sede.tarifaDeliveryLocal).
   costoDelivery Decimal @default(0) @db.Decimal(10, 2)
 

@@ -3505,6 +3505,8 @@ export class VentaService {
         costoDelivery: true,
         repartidorId: true,
         entregadoEn: true,
+        esInterno: true,
+        encargadoInterno: true,
       },
     });
 

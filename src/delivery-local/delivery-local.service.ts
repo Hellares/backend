@@ -152,15 +152,21 @@ export class DeliveryLocalService {
             ? { lat: dto.destinoLat, lon: dto.destinoLon }
             : undefined,
         costoDelivery: costo,
+        // Interno: lo lleva un empleado — NO se publica al pool.
+        esInterno: dto.esInterno ?? false,
+        encargadoInterno: dto.esInterno ? (dto.encargadoInterno ?? null) : null,
       },
     });
 
-    // Push a los repartidores de la empresa — best-effort, jamás rompe la solicitud.
-    void this.avisarRepartidores(
-      dto.empresaId,
-      `${venta.codigo} para entregar en ${dto.distrito ?? dto.direccion}` +
-        (costo > 0 ? ` — tarifa S/ ${costo.toFixed(2)}` : ''),
-    );
+    // Push a los repartidores de la empresa — best-effort, jamás rompe la
+    // solicitud. Los INTERNOS no se publican: nadie del pool debe verlos.
+    if (!dto.esInterno) {
+      void this.avisarRepartidores(
+        dto.empresaId,
+        `${venta.codigo} para entregar en ${dto.distrito ?? dto.direccion}` +
+          (costo > 0 ? ` — tarifa S/ ${costo.toFixed(2)}` : ''),
+      );
+    }
 
     // Geocoder propio: la dirección confirmada con pin alimenta la búsqueda
     // local del picker — fire-and-forget, jamás rompe la solicitud.
@@ -176,6 +182,75 @@ export class DeliveryLocalService {
       });
     }
 
+    return delivery;
+  }
+
+  // ── Delivery INTERNO: transiciones del STAFF (sin pool, sin PIN) ──
+
+  /**
+   * El empleado sale con el pedido (staff marca). SOLICITADO → EN_CAMINO
+   * directo (no hay TOMADO: no existe repartidor del pool). Sin PIN — es
+   * personal de confianza. El cliente recibe WhatsApp con su tracking.
+   */
+  async marcarEnCaminoInterno(
+    empresaId: string,
+    deliveryId: string,
+    userId: string,
+  ) {
+    await this.verificarStaff(empresaId, userId);
+    const r = await this.prisma.deliveryLocal.updateMany({
+      where: {
+        id: deliveryId,
+        empresaId,
+        esInterno: true,
+        estado: EstadoDeliveryLocal.SOLICITADO,
+      },
+      data: { estado: EstadoDeliveryLocal.EN_CAMINO, enCaminoEn: new Date() },
+    });
+    if (r.count === 0) {
+      throw new ConflictException(
+        'El delivery no es interno o ya no está por salir',
+      );
+    }
+    const delivery = await this.cargar(deliveryId);
+    const costo = Number(delivery.costoDelivery);
+    void this.avisarCliente(
+      delivery,
+      `🛵 ¡Tu pedido ${delivery.venta?.codigo ?? ''} va en camino a tu dirección!` +
+        (costo > 0
+          ? ` Al recibirlo, paga S/ ${costo.toFixed(2)} del delivery a quien te lo entrega.`
+          : '') +
+        `\n📍 Sigue tu pedido aquí: ${this.urlTracking(delivery.trackingToken)}`,
+    );
+    return delivery;
+  }
+
+  /** El empleado entregó (staff marca). EN_CAMINO → ENTREGADO, sin PIN. */
+  async marcarEntregadoInterno(
+    empresaId: string,
+    deliveryId: string,
+    userId: string,
+  ) {
+    await this.verificarStaff(empresaId, userId);
+    const r = await this.prisma.deliveryLocal.updateMany({
+      where: {
+        id: deliveryId,
+        empresaId,
+        esInterno: true,
+        estado: EstadoDeliveryLocal.EN_CAMINO,
+      },
+      data: { estado: EstadoDeliveryLocal.ENTREGADO, entregadoEn: new Date() },
+    });
+    if (r.count === 0) {
+      throw new ConflictException(
+        'El delivery no es interno o no está en camino',
+      );
+    }
+    const delivery = await this.cargar(deliveryId);
+    void this.avisarCliente(
+      delivery,
+      `✅ ¡Pedido ${delivery.venta?.codigo ?? ''} entregado! Gracias por tu compra 🙌`,
+    );
     return delivery;
   }
 
@@ -424,6 +499,7 @@ export class DeliveryLocalService {
       where: {
         empresaId,
         estado: EstadoDeliveryLocal.SOLICITADO,
+        esInterno: false, // los internos los lleva un empleado — no al pool
         ...(sedeId ? { sedeId } : {}),
       },
       include: { venta: { select: { codigo: true } } },
@@ -445,6 +521,7 @@ export class DeliveryLocalService {
         empresaId,
         estado: EstadoDeliveryLocal.SOLICITADO,
         repartidorId: null,
+        esInterno: false, // interno = lo lleva un empleado, no se toma
       },
       data: {
         estado: EstadoDeliveryLocal.TOMADO,
@@ -639,6 +716,7 @@ export class DeliveryLocalService {
       where: {
         empresaId: { in: empresas.map((e) => e.id) },
         estado: EstadoDeliveryLocal.SOLICITADO,
+        esInterno: false, // los internos los lleva un empleado — no al pool
       },
       include: { venta: { select: { codigo: true, total: true } } },
       orderBy: { creadoEn: 'asc' },
@@ -683,6 +761,9 @@ export class DeliveryLocalService {
       include: { venta: { select: { total: true } } },
     });
     if (!delivery) throw new NotFoundException('Delivery no encontrado');
+    if (delivery.esInterno) {
+      throw new ForbiddenException('Este delivery lo lleva la propia empresa');
+    }
 
     const empresa = await this.prisma.empresa.findUnique({
       where: { id: delivery.empresaId },
@@ -731,6 +812,7 @@ export class DeliveryLocalService {
         id: deliveryId,
         estado: EstadoDeliveryLocal.SOLICITADO,
         repartidorId: null,
+        esInterno: false,
       },
       data: {
         estado: EstadoDeliveryLocal.TOMADO,

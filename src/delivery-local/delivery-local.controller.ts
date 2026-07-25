@@ -41,6 +41,32 @@ export class DeliveryLocalController {
     return this.service.solicitar(user.sub, dto);
   }
 
+  /** Delivery INTERNO: el empleado sale con el pedido (staff marca). */
+  @Post(':id/interno/en-camino')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Interno: marcar en camino (staff, sin PIN)' })
+  enCaminoInterno(
+    @Param('id') id: string,
+    @Body() dto: AccionDeliveryDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.marcarEnCaminoInterno(dto.empresaId, id, user.sub);
+  }
+
+  /** Delivery INTERNO: el empleado entregó (staff marca, sin PIN). */
+  @Post(':id/interno/entregado')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Interno: marcar entregado (staff, sin PIN)' })
+  entregadoInterno(
+    @Param('id') id: string,
+    @Body() dto: AccionDeliveryDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.marcarEntregadoInterno(dto.empresaId, id, user.sub);
+  }
+
   /**
    * Edita la dirección de entrega (staff): dirección equivocada o el
    * cliente pidió otro punto. Si el delivery ya fue tomado/va en camino,

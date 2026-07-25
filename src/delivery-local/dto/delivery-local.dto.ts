@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -53,6 +54,17 @@ export class SolicitarDeliveryDto {
   @IsOptional()
   @IsNumber()
   destinoLon?: number;
+
+  /** Delivery INTERNO: lo lleva un empleado — NO se publica al pool ni se
+   *  notifica repartidores; el staff avanza los estados (sin PIN). */
+  @IsOptional()
+  @IsBoolean()
+  esInterno?: boolean;
+
+  /** Nombre del empleado que lo lleva (informativo). */
+  @IsOptional()
+  @IsString()
+  encargadoInterno?: string;
 }
 
 /**
