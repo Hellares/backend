@@ -413,11 +413,22 @@ export class DeliveryLocalService {
         );
       }
     }
-    await this.evolution.sendText({
-      instanceName: iw.instanceName,
-      number: celular,
-      text: texto,
-    });
+    try {
+      await this.evolution.sendText({
+        instanceName: iw.instanceName,
+        number: celular,
+        text: texto,
+      });
+    } catch (e: any) {
+      const msg = String(e?.message ?? '');
+      if (msg.includes('exists":false')) {
+        throw new BadRequestException(
+          `El número ${dto.celular} no tiene WhatsApp — verifícalo`,
+        );
+      }
+      this.logger.warn(`compartirUbicacion sendText: ${msg}`);
+      throw new BadRequestException('No se pudo enviar el WhatsApp');
+    }
 
     return { ok: true };
   }
