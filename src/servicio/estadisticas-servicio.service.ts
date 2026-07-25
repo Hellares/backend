@@ -38,28 +38,55 @@ export class EstadisticasServicioService {
       if (query.fechaHasta) where.creadoEn.lte = new Date(query.fechaHasta);
     }
 
-    const ordenes = await this.prisma.ordenServicio.findMany({
-      where,
-      select: {
-        estado: true,
-        tipoServicio: true,
-        prioridad: true,
-        costoTotal: true,
-        adelanto: true,
-        creadoEn: true,
-        actualizadoEn: true,
-        fechaEntrega: true,
-        cantidadReingresos: true,
-        tipoEquipo: true,
-        marcaEquipo: true,
-        tecnicoId: true,
-        tecnico: {
+    // Tercerizaciones del periodo (por fechaSolicitud): las ENVIADAS (yo
+    // tercerizo a otro taller) y las RECIBIDAS (otro taller me manda).
+    const whereTerceriza: any = {};
+    if (where.creadoEn) whereTerceriza.fechaSolicitud = where.creadoEn;
+
+    const [ordenes, tercerizadasEnviadas, tercerizadasRecibidas] =
+      await Promise.all([
+        this.prisma.ordenServicio.findMany({
+          where,
           select: {
-            persona: { select: { nombres: true, apellidos: true } },
+            estado: true,
+            tipoServicio: true,
+            prioridad: true,
+            costoTotal: true,
+            adelanto: true,
+            creadoEn: true,
+            actualizadoEn: true,
+            fechaEntrega: true,
+            cantidadReingresos: true,
+            tipoEquipo: true,
+            marcaEquipo: true,
+            tecnicoId: true,
+            tecnico: {
+              select: {
+                persona: { select: { nombres: true, apellidos: true } },
+              },
+            },
           },
-        },
-      },
-    });
+        }),
+        this.prisma.tercerizacionServicio.findMany({
+          where: { ...whereTerceriza, empresaOrigenId: empresaId },
+          select: {
+            estado: true,
+            precioB2B: true,
+            pagadoB2B: true,
+            empresaDestino: { select: { nombre: true } },
+            ordenOrigen: { select: { costoTotal: true } },
+          },
+        }),
+        this.prisma.tercerizacionServicio.findMany({
+          where: { ...whereTerceriza, empresaDestinoId: empresaId },
+          select: {
+            estado: true,
+            precioB2B: true,
+            pagadoB2B: true,
+            empresaOrigen: { select: { nombre: true } },
+          },
+        }),
+      ]);
 
     const cerrados = EstadisticasServicioService.ESTADOS_CERRADOS;
     const exitosas: EstadoOrdenServicio[] = [
@@ -228,6 +255,107 @@ export class EstadisticasServicioService {
         .map(([equipo, cantidad]) => ({ equipo, cantidad }))
         .sort((a, b) => b.cantidad - a.cantidad)
         .slice(0, 10),
+      tercerizaciones: this.resumirTercerizaciones(
+        tercerizadasEnviadas,
+        tercerizadasRecibidas,
+      ),
+    };
+  }
+
+  /**
+   * Resumen B2B de tercerizaciones:
+   *  - ENVIADAS: costoB2B = lo que pago a otros talleres; ganancia
+   *    estimada = Σ (costoTotal al cliente − precioB2B) cuando ambos
+   *    existen; porPagarB2B = precios acordados aún no pagados.
+   *  - RECIBIDAS: ingresoB2B = Σ precioB2B; porCobrarB2B = no pagados.
+   *  RECHAZADO/CANCELADO quedan fuera del dinero (solo cuentan en estados).
+   */
+  private resumirTercerizaciones(
+    enviadas: Array<{
+      estado: string;
+      precioB2B: unknown;
+      pagadoB2B: boolean;
+      empresaDestino: { nombre: string } | null;
+      ordenOrigen: { costoTotal: unknown } | null;
+    }>,
+    recibidas: Array<{
+      estado: string;
+      precioB2B: unknown;
+      pagadoB2B: boolean;
+      empresaOrigen: { nombre: string } | null;
+    }>,
+  ) {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const num = (v: unknown) => (v == null ? 0 : Number(v));
+    const muertas = ['RECHAZADO', 'CANCELADO'];
+
+    const porEstado = (
+      filas: Array<{ estado: string }>,
+    ): Array<{ estado: string; cantidad: number }> => {
+      const m = new Map<string, number>();
+      for (const f of filas) m.set(f.estado, (m.get(f.estado) ?? 0) + 1);
+      return [...m.entries()]
+        .map(([estado, cantidad]) => ({ estado, cantidad }))
+        .sort((a, b) => b.cantidad - a.cantidad);
+    };
+
+    let costoB2B = 0;
+    let gananciaEstimada = 0;
+    let porPagarB2B = 0;
+    const partners = new Map<string, { enviadas: number; recibidas: number }>();
+
+    for (const t of enviadas) {
+      const nombre = t.empresaDestino?.nombre ?? 'Desconocido';
+      const p = partners.get(nombre) ?? { enviadas: 0, recibidas: 0 };
+      p.enviadas += 1;
+      partners.set(nombre, p);
+      if (muertas.includes(t.estado)) continue;
+      const precio = num(t.precioB2B);
+      costoB2B += precio;
+      const costoCliente = num(t.ordenOrigen?.costoTotal);
+      if (precio > 0 && costoCliente > 0) {
+        gananciaEstimada += costoCliente - precio;
+      }
+      if (precio > 0 && !t.pagadoB2B) porPagarB2B += precio;
+    }
+
+    let ingresoB2B = 0;
+    let porCobrarB2B = 0;
+    for (const t of recibidas) {
+      const nombre = t.empresaOrigen?.nombre ?? 'Desconocido';
+      const p = partners.get(nombre) ?? { enviadas: 0, recibidas: 0 };
+      p.recibidas += 1;
+      partners.set(nombre, p);
+      if (muertas.includes(t.estado)) continue;
+      const precio = num(t.precioB2B);
+      ingresoB2B += precio;
+      if (precio > 0 && !t.pagadoB2B) porCobrarB2B += precio;
+    }
+
+    return {
+      enviadas: {
+        total: enviadas.length,
+        porEstado: porEstado(enviadas),
+        costoB2B: r2(costoB2B),
+        gananciaEstimada: r2(gananciaEstimada),
+        porPagarB2B: r2(porPagarB2B),
+      },
+      recibidas: {
+        total: recibidas.length,
+        porEstado: porEstado(recibidas),
+        ingresoB2B: r2(ingresoB2B),
+        porCobrarB2B: r2(porCobrarB2B),
+      },
+      partners: [...partners.entries()]
+        .map(([nombre, p]) => ({
+          nombre,
+          enviadas: p.enviadas,
+          recibidas: p.recibidas,
+        }))
+        .sort(
+          (a, b) => b.enviadas + b.recibidas - (a.enviadas + a.recibidas),
+        )
+        .slice(0, 5),
     };
   }
 

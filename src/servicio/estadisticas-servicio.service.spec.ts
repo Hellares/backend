@@ -64,6 +64,7 @@ describe('EstadisticasServicioService.getDashboard', () => {
     ];
     const service = mkService({
       ordenServicio: { findMany: jest.fn().mockResolvedValue(ordenes) },
+      tercerizacionServicio: { findMany: jest.fn().mockResolvedValue([]) },
     });
 
     const result = await service.getDashboard('emp1', {} as never);
@@ -113,6 +114,7 @@ describe('EstadisticasServicioService.getDashboard', () => {
   it('sin órdenes responde el shape vacío sin dividir por cero', async () => {
     const service = mkService({
       ordenServicio: { findMany: jest.fn().mockResolvedValue([]) },
+      tercerizacionServicio: { findMany: jest.fn().mockResolvedValue([]) },
     });
 
     const result = await service.getDashboard('emp1', {} as never);
@@ -121,5 +123,71 @@ describe('EstadisticasServicioService.getDashboard', () => {
     expect(result.resumen.reingresosPct).toBe(0);
     expect(result.resumen.tiempoPromedioResolucionHoras).toBeNull();
     expect(result.porEstado).toEqual([]);
+    expect(result.tercerizaciones.enviadas.total).toBe(0);
+    expect(result.tercerizaciones.recibidas.total).toBe(0);
+  });
+
+  it('tercerizaciones: separa enviadas/recibidas, dinero B2B y partners', async () => {
+    const enviadas = [
+      // Completada: pagué 100, cobré 250 al cliente → ganancia 150; ya pagada
+      {
+        estado: 'COMPLETADO',
+        precioB2B: dec(100),
+        pagadoB2B: true,
+        empresaDestino: { nombre: 'Taller Sur' },
+        ordenOrigen: { costoTotal: dec(250) },
+      },
+      // En proceso sin pagar → porPagar 80
+      {
+        estado: 'EN_PROCESO',
+        precioB2B: dec(80),
+        pagadoB2B: false,
+        empresaDestino: { nombre: 'Taller Sur' },
+        ordenOrigen: { costoTotal: null },
+      },
+      // Rechazada: fuera del dinero, cuenta solo en estados
+      {
+        estado: 'RECHAZADO',
+        precioB2B: dec(999),
+        pagadoB2B: false,
+        empresaDestino: { nombre: 'Taller Norte' },
+        ordenOrigen: { costoTotal: dec(999) },
+      },
+    ];
+    const recibidas = [
+      {
+        estado: 'COMPLETADO',
+        precioB2B: dec(120),
+        pagadoB2B: false,
+        empresaOrigen: { nombre: 'Taller Norte' },
+      },
+    ];
+    const tercerizacionFindMany = jest
+      .fn()
+      .mockResolvedValueOnce(enviadas)
+      .mockResolvedValueOnce(recibidas);
+    const service = mkService({
+      ordenServicio: { findMany: jest.fn().mockResolvedValue([]) },
+      tercerizacionServicio: { findMany: tercerizacionFindMany },
+    });
+
+    const result = await service.getDashboard('emp1', {} as never);
+
+    expect(result.tercerizaciones.enviadas).toMatchObject({
+      total: 3,
+      costoB2B: 180, // 100 + 80 (la rechazada no cuenta)
+      gananciaEstimada: 150, // 250 - 100
+      porPagarB2B: 80,
+    });
+    expect(result.tercerizaciones.recibidas).toMatchObject({
+      total: 1,
+      ingresoB2B: 120,
+      porCobrarB2B: 120,
+    });
+    // Partners consolidados en ambas direcciones
+    expect(result.tercerizaciones.partners).toEqual([
+      { nombre: 'Taller Sur', enviadas: 2, recibidas: 0 },
+      { nombre: 'Taller Norte', enviadas: 1, recibidas: 1 },
+    ]);
   });
 });
