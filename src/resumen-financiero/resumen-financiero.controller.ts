@@ -36,4 +36,31 @@ export class ResumenFinancieroController {
   ) {
     return this.service.getGraficoDiario(empresaId, query.fechaDesde, query.fechaHasta, query.sedeId);
   }
+
+  @Get('dashboard')
+  @RequiresPermission(Permission.VIEW_REPORTS)
+  @ApiOperation({
+    summary:
+      'Resumen + grafico diario en una sola respuesta (dashboard empresa)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getDashboard(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: QueryResumenFinancieroDto,
+  ) {
+    // El dashboard del app pedia resumen y grafico por separado — dos
+    // round-trips moviles que ademas van DESPUES del contexto de empresa.
+    // Aca el fan-out corre server-side. Endpoints sueltos quedan por
+    // compatibilidad (los usa tambien la pagina de Resumen Financiero).
+    const [resumen, graficoDiario] = await Promise.all([
+      this.service.getResumen(empresaId, query),
+      this.service.getGraficoDiario(
+        empresaId,
+        query.fechaDesde,
+        query.fechaHasta,
+        query.sedeId,
+      ),
+    ]);
+    return { resumen, graficoDiario };
+  }
 }
