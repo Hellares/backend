@@ -16,6 +16,33 @@ enum EstadoDeliveryLocal {
   CANCELADO
 }
 
+// Geocoder PROPIO (Fase 1): cada dirección CONFIRMADA con pin (delivery
+// creado) alimenta la búsqueda local del picker — los lugares reales de la
+// zona ("Mz B Lt 5", mercados, referencias) que los geocoders externos no
+// conocen. La base crece sola con el uso; Fase 2 agrega Google como
+// fallback y sus confirmaciones también aterrizan aquí.
+model DireccionFrecuente {
+  id               String   @id @default(cuid())
+  empresaId        String
+  // Texto tal como lo confirmó el usuario + normalizado (minúsculas, sin
+  // tildes) para la búsqueda por similitud/trigram.
+  texto            String
+  textoNormalizado String
+  referencia       String?
+  distrito         String?
+  lat              Decimal  @db.Decimal(10, 7)
+  lon              Decimal  @db.Decimal(10, 7)
+  // Celular del destinatario: habilita "direcciones recientes del cliente".
+  telefonoCliente  String?
+  usos             Int      @default(1)
+  ultimoUsoEn      DateTime @default(now())
+  creadoEn         DateTime @default(now())
+  empresa          Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, textoNormalizado])
+  @@index([empresaId, telefonoCliente])
+}
+
 model DeliveryLocal {
   id        String @id @default(cuid())
   empresaId String

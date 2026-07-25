@@ -71,6 +71,7 @@ model Empresa {
   componentes              Componente[]
   comprobantes             ComprobanteElectronico[]
   emisoresFacturacion      EmisorFacturacion[]
+  direccionesFrecuentes    DireccionFrecuente[]
   comunicacionesBaja       ComunicacionBaja[]
   resumenesDiarios         ResumenDiario[]
   configuracionCampos      ConfiguracionCamposServicio[]

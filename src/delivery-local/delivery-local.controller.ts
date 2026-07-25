@@ -39,6 +39,23 @@ export class DeliveryLocalController {
     return this.service.solicitar(user.sub, dto);
   }
 
+  /**
+   * Geocoder propio (Fase 1): busca en las direcciones confirmadas de la
+   * empresa (trigram) + recientes del cliente por celular. Lo consulta el
+   * picker de ubicación ANTES de caer a geocoders externos.
+   */
+  @Get('direcciones/buscar')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Buscar direcciones frecuentes (geocoder propio)' })
+  buscarDirecciones(
+    @Query('empresaId') empresaId: string,
+    @Query('q') q?: string,
+    @Query('telefono') telefono?: string,
+  ) {
+    return this.service.buscarDirecciones(empresaId, q, telefono);
+  }
+
   /** Pool de deliveries disponibles para tomar (repartidor). */
   @Get('disponibles')
   @UseGuards(JwtAuthGuard)

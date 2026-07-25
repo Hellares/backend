@@ -160,7 +160,126 @@ export class DeliveryLocalService {
         (costo > 0 ? ` — tarifa S/ ${costo.toFixed(2)}` : ''),
     );
 
+    // Geocoder propio: la dirección confirmada con pin alimenta la búsqueda
+    // local del picker — fire-and-forget, jamás rompe la solicitud.
+    if (dto.destinoLat != null && dto.destinoLon != null) {
+      void this.registrarDireccionFrecuente({
+        empresaId: dto.empresaId,
+        texto: dto.direccion,
+        referencia: dto.referencia,
+        distrito: dto.distrito,
+        lat: dto.destinoLat,
+        lon: dto.destinoLon,
+        telefono: dto.destinatarioCelular ?? venta.telefonoCliente,
+      });
+    }
+
     return delivery;
+  }
+
+  // ── Geocoder propio (Fase 1): direcciones confirmadas ──
+
+  /** Normaliza para búsqueda: minúsculas, sin tildes, espacios colapsados. */
+  private normalizarDireccion(texto: string): string {
+    return texto
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Registra/refuerza una dirección confirmada. Upsert por texto
+   * normalizado: repetirla incrementa `usos` (rankea mejor en la búsqueda)
+   * y refresca pin/teléfono. Silencioso ante cualquier error.
+   */
+  private async registrarDireccionFrecuente(p: {
+    empresaId: string;
+    texto: string;
+    referencia?: string | null;
+    distrito?: string | null;
+    lat: number;
+    lon: number;
+    telefono?: string | null;
+  }) {
+    try {
+      const textoNormalizado = this.normalizarDireccion(p.texto);
+      if (textoNormalizado.length < 5) return;
+      await this.prisma.direccionFrecuente.upsert({
+        where: {
+          empresaId_textoNormalizado: {
+            empresaId: p.empresaId,
+            textoNormalizado,
+          },
+        },
+        create: {
+          empresaId: p.empresaId,
+          texto: p.texto.trim(),
+          textoNormalizado,
+          referencia: p.referencia ?? null,
+          distrito: p.distrito ?? null,
+          lat: p.lat,
+          lon: p.lon,
+          telefonoCliente: p.telefono ?? null,
+        },
+        update: {
+          usos: { increment: 1 },
+          ultimoUsoEn: new Date(),
+          lat: p.lat,
+          lon: p.lon,
+          ...(p.referencia ? { referencia: p.referencia } : {}),
+          ...(p.distrito ? { distrito: p.distrito } : {}),
+          ...(p.telefono ? { telefonoCliente: p.telefono } : {}),
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`registrarDireccionFrecuente: ${e?.message}`);
+    }
+  }
+
+  /**
+   * Búsqueda del picker: direcciones recientes del CLIENTE (por celular) +
+   * coincidencias por trigram/ILIKE rankeadas por similitud y usos.
+   */
+  async buscarDirecciones(empresaId: string, q?: string, telefono?: string) {
+    const qNorm = this.normalizarDireccion(q ?? '');
+    const [delCliente, coincidencias] = await Promise.all([
+      telefono?.trim()
+        ? this.prisma.direccionFrecuente.findMany({
+            where: { empresaId, telefonoCliente: telefono.trim() },
+            orderBy: { ultimoUsoEn: 'desc' },
+            take: 3,
+          })
+        : Promise.resolve([]),
+      qNorm.length >= 3
+        ? this.prisma.$queryRaw<any[]>`
+            SELECT id, texto, referencia, distrito, lat, lon, usos
+            FROM "DireccionFrecuente"
+            WHERE "empresaId" = ${empresaId}
+              AND ("textoNormalizado" ILIKE ${'%' + qNorm + '%'}
+                   OR similarity("textoNormalizado", ${qNorm}) > 0.3)
+            ORDER BY ("textoNormalizado" ILIKE ${'%' + qNorm + '%'}) DESC,
+                     similarity("textoNormalizado", ${qNorm}) DESC,
+                     usos DESC
+            LIMIT 8`
+        : Promise.resolve([]),
+    ]);
+
+    // Decimal serializa como string en JSON → convertir a número.
+    const mapear = (d: any) => ({
+      id: d.id,
+      texto: d.texto,
+      referencia: d.referencia ?? null,
+      distrito: d.distrito ?? null,
+      lat: Number(d.lat),
+      lon: Number(d.lon),
+      usos: Number(d.usos ?? 0),
+    });
+    return {
+      delCliente: (delCliente as any[]).map(mapear),
+      coincidencias: (coincidencias as any[]).map(mapear),
+    };
   }
 
   /** Pool de deliveries SOLICITADOS (visibles para tomar). */
