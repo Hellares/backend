@@ -125,6 +125,18 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getVentasPorMarca(empresaId, query);
   }
 
+  @Get('metodos-pago')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Distribucion de pagos cobrados por metodo' })
+  @ApiResponse({ status: 200, description: 'Metodos de pago obtenidos' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getMetodosPago(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getMetodosPago(empresaId, query);
+  }
+
   @Get('entregas')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Distribucion por tipo de entrega + zonas top de envio/delivery' })

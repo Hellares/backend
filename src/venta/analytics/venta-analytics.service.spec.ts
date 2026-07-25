@@ -230,6 +230,35 @@ describe('VentaAnalyticsService.getTopProductos — ranking', () => {
     }
   });
 
+  it('calcula margen total y % por producto desde margenSnapshot × cantidad', async () => {
+    const conMargen = [
+      {
+        productoId: 'p1',
+        cantidad: dec(2),
+        total: dec(100),
+        precioUnitario: dec(50),
+        margenSnapshot: dec(20), // 20 × 2 = 40
+        producto: { nombre: 'Prod', codigoEmpresa: 'C1', empresaCategoriaId: null, empresaCategoria: null },
+      },
+      {
+        productoId: 'p1',
+        cantidad: dec(1),
+        total: dec(50),
+        precioUnitario: dec(50),
+        margenSnapshot: dec(10), // 10 × 1 = 10
+        producto: { nombre: 'Prod', codigoEmpresa: 'C1', empresaCategoriaId: null, empresaCategoria: null },
+      },
+    ];
+    const service = mkService({
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue(conMargen) },
+    });
+
+    const result = await service.getTopProductos('emp1', {} as any);
+
+    expect(result[0].margenTotal).toBe(50);
+    expect(result[0].margenPorcentaje).toBe(33.33); // 50 / 150
+  });
+
   it('acumula cantidades e ingresos de detalles repetidos del mismo producto', async () => {
     const service = mkService({
       ventaDetalle: {
@@ -387,6 +416,13 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
       devolucionItem: {
         aggregate: jest.fn().mockResolvedValue({ _sum: { cantidad: 7 } }),
       },
+      ventaDetalle: {
+        // margen unitario 10 × 2 und. + 5 × 4 und. = 40 de utilidad
+        findMany: jest.fn().mockResolvedValue([
+          { margenSnapshot: dec(10), cantidad: dec(2) },
+          { margenSnapshot: dec(5), cantidad: dec(4) },
+        ]),
+      },
     });
 
     const result = await service.getResumenGeneral('emp1', {} as any);
@@ -396,6 +432,8 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
     expect(result.montoAnulado).toBe(150);
     expect(result.devoluciones).toBe(4);
     expect(result.itemsDevueltos).toBe(7);
+    expect(result.utilidadBruta).toBe(40);
+    expect(result.margenPorcentaje).toBe(4); // 40 / 1000
     // El agregado de anuladas filtra estado ANULADA con los mismos filtros
     expect(aggregate.mock.calls[1][0].where.estado).toBe('ANULADA');
   });
@@ -415,6 +453,7 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
       devolucionItem: {
         aggregate: jest.fn().mockResolvedValue({ _sum: { cantidad: null } }),
       },
+      ventaDetalle: { findMany: jest.fn().mockResolvedValue([]) },
     });
 
     await service.getResumenGeneral('emp1', {} as any);
@@ -422,6 +461,28 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
     const whereDev = devolucionCount.mock.calls[0][0].where;
     expect(whereDev.estado).toBe('PROCESADA');
     expect(whereDev.ventaId).toEqual({ not: null });
+  });
+});
+
+describe('VentaAnalyticsService.getMetodosPago', () => {
+  it('agrupa pagos por método ordenado por monto', async () => {
+    const groupBy = jest.fn().mockResolvedValue([
+      { metodoPago: 'EFECTIVO', _count: { id: 5 }, _sum: { monto: dec(80) } },
+      { metodoPago: 'YAPE', _count: { id: 3 }, _sum: { monto: dec(200) } },
+    ]);
+    const service = mkService({ pagoVenta: { groupBy } });
+
+    const result = await service.getMetodosPago('emp1', {} as any);
+
+    expect(result).toEqual([
+      { metodo: 'YAPE', cantidad: 3, monto: 200 },
+      { metodo: 'EFECTIVO', cantidad: 5, monto: 80 },
+    ]);
+    // Los pagos se filtran por la venta (excluye anuladas/borrador)
+    const wherePago = groupBy.mock.calls[0][0].where;
+    expect(wherePago.venta.is.estado).toEqual({
+      notIn: ['BORRADOR', 'ANULADA'],
+    });
   });
 });
 

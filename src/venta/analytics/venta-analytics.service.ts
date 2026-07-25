@@ -158,6 +158,7 @@ export class VentaAnalyticsService {
       anuladas,
       devoluciones,
       itemsDevueltos,
+      detallesMargen,
     ] = await Promise.all([
       this.prisma.venta.aggregate({
         where,
@@ -177,11 +178,23 @@ export class VentaAnalyticsService {
         where: { devolucion: whereDevolucion },
         _sum: { cantidad: true },
       }),
+      // Utilidad bruta: margenSnapshot es POR UNIDAD (precio - descuento -
+      // costo al momento de la venta) → utilidad = Σ margen × cantidad.
+      this.prisma.ventaDetalle.findMany({
+        where: { venta: where },
+        select: { margenSnapshot: true, cantidad: true },
+      }),
     ]);
 
     const totalVentas = aggregate._count.id;
     const montoTotal = aggregate._sum.total?.toNumber() ?? 0;
     const promedioPorVenta = aggregate._avg.total?.toNumber() ?? 0;
+
+    const utilidadBruta = detallesMargen.reduce(
+      (sum, d) =>
+        sum + (d.margenSnapshot?.toNumber() ?? 0) * d.cantidad.toNumber(),
+      0,
+    );
 
     return {
       totalVentas,
@@ -194,6 +207,9 @@ export class VentaAnalyticsService {
       montoAnulado: round2(anuladas._sum.total?.toNumber() ?? 0),
       devoluciones,
       itemsDevueltos: itemsDevueltos._sum.cantidad ?? 0,
+      utilidadBruta: round2(utilidadBruta),
+      margenPorcentaje:
+        montoTotal > 0 ? round2((utilidadBruta / montoTotal) * 100) : 0,
     };
   }
 
@@ -252,6 +268,7 @@ export class VentaAnalyticsService {
         cantidad: true,
         total: true,
         precioUnitario: true,
+        margenSnapshot: true,
         producto: {
           select: {
             nombre: true,
@@ -280,6 +297,7 @@ export class VentaAnalyticsService {
         categoria: string;
         cantidadVendida: number;
         ingresoTotal: number;
+        margenTotal: number;
         sumaPrecio: number;
         count: number;
         variantes: Map<
@@ -304,12 +322,15 @@ export class VentaAnalyticsService {
         categoria: this.nombreCategoria(d.producto?.empresaCategoria ?? null),
         cantidadVendida: 0,
         ingresoTotal: 0,
+        margenTotal: 0,
         sumaPrecio: 0,
         count: 0,
         variantes: new Map(),
       };
       existing.cantidadVendida += d.cantidad.toNumber();
       existing.ingresoTotal += d.total.toNumber();
+      existing.margenTotal +=
+        (d.margenSnapshot?.toNumber() ?? 0) * d.cantidad.toNumber();
       existing.sumaPrecio += d.precioUnitario.toNumber();
       existing.count += 1;
 
@@ -342,6 +363,11 @@ export class VentaAnalyticsService {
         categoria: p.categoria,
         cantidadVendida: round2(p.cantidadVendida),
         ingresoTotal: round2(p.ingresoTotal),
+        margenTotal: round2(p.margenTotal),
+        margenPorcentaje:
+          p.ingresoTotal > 0
+            ? round2((p.margenTotal / p.ingresoTotal) * 100)
+            : 0,
         precioPromedio:
           p.count > 0
             ? round2(p.sumaPrecio / p.count)
@@ -787,6 +813,32 @@ export class VentaAnalyticsService {
         })),
       ),
     };
+  }
+
+  /**
+   * Distribución de pagos por método (fuente de verdad: tabla PagoVenta —
+   * una venta MIXTO aporta a cada método por separado). Ventas a crédito
+   * sin pagos aún no aparecen: es distribución de lo COBRADO.
+   */
+  async getMetodosPago(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo distribución por método de pago');
+
+    const where = this.buildVentaWhere(empresaId, query);
+
+    const grupos = await this.prisma.pagoVenta.groupBy({
+      by: ['metodoPago'],
+      where: { venta: { is: where } },
+      _count: { id: true },
+      _sum: { monto: true },
+    });
+
+    return grupos
+      .map((g) => ({
+        metodo: g.metodoPago,
+        cantidad: g._count.id,
+        monto: round2(g._sum.monto?.toNumber() ?? 0),
+      }))
+      .sort((a, b) => b.monto - a.monto);
   }
 
   async getComparativoVentas(empresaId: string, query: VentaAnalyticsQueryDto) {
