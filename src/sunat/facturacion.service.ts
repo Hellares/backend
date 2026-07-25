@@ -1820,18 +1820,12 @@ export class FacturacionService {
         const serieActual = (sedeLock as any)[meta.campoSerie] as string | null;
         const correlativoActual = (sedeLock as any)[meta.campoContador] as number;
 
-        // Rechazar CONFLICTO 1: correlativo local de la sede > proveedor.
-        if (
-          serieActual === sel.serieProveedor &&
-          correlativoActual > sel.correlativoProveedor
-        ) {
-          errores.push(
-            `${meta.nombre} (${serieActual}): correlativo local ${correlativoActual} > proveedor ${sel.correlativoProveedor}. Resuelva manualmente.`,
-          );
-          continue;
-        }
+        // NOTA multi-RUC: un contador local > proveedor SIN comprobantes de
+        // este emisor en BD es herencia de otro RUC (sede reconvertida a
+        // socio) — es seguro alinearlo hacia abajo. El único rechazo real es
+        // el CONFLICTO por comprobantes DEL MISMO EMISOR (abajo).
 
-        // Rechazar CONFLICTO 2: hay comprobantes en BD DEL MISMO EMISOR con la
+        // Rechazar CONFLICTO: hay comprobantes en BD DEL MISMO EMISOR con la
         // serie destino y correlativo > proveedor. Aplicar bajaría el contador
         // y la próxima emisión chocaría con la unique constraint
         // (empresaId, rucEmisor, tipoComprobante, serie, correlativo).
@@ -1988,11 +1982,17 @@ export class FacturacionService {
     } else if (maxCorrelativoBdEnSerieDestino > (correlativoProveedor ?? 0)) {
       accion = 'CONFLICTO';
       mensaje =
-        `BD tiene comprobantes ${serieProveedor}-${maxCorrelativoBdEnSerieDestino} pero proveedor está en ${correlativoProveedor ?? 0}. ` +
+        `Este emisor ya tiene comprobantes ${serieProveedor}-${maxCorrelativoBdEnSerieDestino} pero el proveedor está en ${correlativoProveedor ?? 0}. ` +
         `Aplicar bajaría el contador y produciría choque de unique constraint. Resuelva manualmente.`;
     } else {
-      accion = 'CONFLICTO';
-      mensaje = `Correlativo local (${correlativoLocal}) es mayor al del proveedor (${correlativoProveedor}). Resuelva manualmente antes de aplicar.`;
+      // Contador local por encima del proveedor pero SIN comprobantes de ESTE
+      // emisor que lo respalden: herencia de cuando la sede emitía con otro
+      // RUC (multi-RUC, sede reconvertida a socio). Alinear al proveedor es
+      // seguro — la unicidad de correlativos es por RUC emisor.
+      accion = 'ACTUALIZAR_CORRELATIVO';
+      mensaje =
+        `Contador local (${correlativoLocal}) heredado de otro emisor, sin comprobantes de este RUC: ` +
+        `se alineará al proveedor (${correlativoProveedor ?? 0})`;
     }
 
     return {
