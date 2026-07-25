@@ -851,7 +851,17 @@ export class WebhooksService {
     });
     if (config) return config.empresaId;
 
-    // 2) Fallback: buscar en Sede (multi-sede con companyId propio)
+    // 2) Emisor socio (multi-RUC): su company de Syncrofact vive en
+    //    EmisorFacturacion.proveedorConfig.companyId.
+    const emisor = await this.prisma.emisorFacturacion.findFirst({
+      where: {
+        proveedorConfig: { path: ['companyId'], equals: companyIdSyncrofact },
+      },
+      select: { empresaId: true },
+    });
+    if (emisor) return emisor.empresaId;
+
+    // 3) Fallback legacy: Sede con companyId propio (modelo viejo)
     const sede = await this.prisma.sede.findFirst({
       where: {
         proveedorConfig: { path: ['companyId'], equals: companyIdSyncrofact },
