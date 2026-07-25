@@ -239,6 +239,59 @@ export class DeliveryLocalService {
   }
 
   /**
+   * Fase 2: geocodificación con Google como FALLBACK cuando la base propia
+   * no matchea. La llamada sale del BACKEND con key restringida por IP del
+   * VPS — nunca viaja en el APK. El botón del picker dispara UNA llamada
+   * por búsqueda (sin autocomplete): 10K gratis/mes + cuota diaria dura en
+   * Google Cloud. Lo que el usuario confirme aterriza en DireccionFrecuente
+   * (dato propio, almacenable sin límite).
+   */
+  async geocodificarGoogle(q?: string) {
+    const key = process.env.GOOGLE_GEOCODING_API_KEY;
+    if (!key) {
+      throw new BadRequestException(
+        'Búsqueda con Google no configurada (falta GOOGLE_GEOCODING_API_KEY)',
+      );
+    }
+    const query = (q ?? '').trim();
+    if (query.length < 3) return { resultados: [] };
+
+    const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+    url.searchParams.set('address', query);
+    url.searchParams.set('key', key);
+    url.searchParams.set('region', 'pe');
+    url.searchParams.set('language', 'es');
+    url.searchParams.set('components', 'country:PE');
+
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      const body: any = await r.json();
+      if (body.status !== 'OK' && body.status !== 'ZERO_RESULTS') {
+        // OVER_QUERY_LIMIT / REQUEST_DENIED / etc: visible para diagnóstico.
+        this.logger.warn(
+          `Geocoding Google ${body.status}: ${body.error_message ?? ''}`,
+        );
+        throw new BadRequestException(`Google Geocoding: ${body.status}`);
+      }
+      const resultados = ((body.results ?? []) as any[])
+        .slice(0, 5)
+        .map((res) => ({
+          nombre: String(res.formatted_address ?? ''),
+          lat: Number(res.geometry?.location?.lat),
+          lon: Number(res.geometry?.location?.lng),
+        }))
+        .filter(
+          (x) => x.nombre && Number.isFinite(x.lat) && Number.isFinite(x.lon),
+        );
+      return { resultados };
+    } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
+      this.logger.warn(`Geocoding Google error: ${e?.message}`);
+      throw new BadRequestException('No se pudo consultar Google');
+    }
+  }
+
+  /**
    * Búsqueda del picker: direcciones recientes del CLIENTE (por celular) +
    * coincidencias por trigram/ILIKE rankeadas por similitud y usos.
    */

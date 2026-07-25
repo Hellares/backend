@@ -56,6 +56,19 @@ export class DeliveryLocalController {
     return this.service.buscarDirecciones(empresaId, q, telefono);
   }
 
+  /**
+   * Fase 2: geocodificación Google server-side (key restringida por IP,
+   * nunca en el APK). El picker la dispara por BOTÓN cuando la base propia
+   * no encuentra la dirección.
+   */
+  @Get('direcciones/geocode')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Geocodificar dirección con Google (fallback)' })
+  geocodificar(@Query('q') q?: string) {
+    return this.service.geocodificarGoogle(q);
+  }
+
   /** Pool de deliveries disponibles para tomar (repartidor). */
   @Get('disponibles')
   @UseGuards(JwtAuthGuard)
