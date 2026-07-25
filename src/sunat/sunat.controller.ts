@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Put,
+  Delete,
   Param,
   Body,
   Headers,
@@ -18,6 +19,7 @@ import { CrearNotaDto } from './dto/crear-nota.dto';
 import { ConfiguracionFacturacionDto } from './dto/configuracion-facturacion.dto';
 import { ProbarConexionDto } from './dto/probar-conexion.dto';
 import { PreviewSincronizacionQueryDto, AplicarSincronizacionDto } from './dto/sincronizar-series.dto';
+import { CrearEmisorDto, ActualizarEmisorDto } from './dto/emisor-facturacion.dto';
 
 @ApiTags('SUNAT / Facturación Electrónica')
 @Controller('sunat')
@@ -87,9 +89,51 @@ export class SunatController {
 
   // ── Listar emisores disponibles (RUCs configurados) ──
   @Get('emisores')
-  @ApiOperation({ summary: 'Listar emisores disponibles (empresa + sedes con RUC propio)' })
+  @ApiOperation({ summary: 'Listar emisores disponibles (empresa + emisores socio)' })
   async listarEmisores(@Headers('x-tenant-id') empresaId: string) {
     return this.facturacionService.listarEmisores(empresaId);
+  }
+
+  // ── CRUD de emisores socio (multi-RUC a nivel empresa) ──
+
+  @Get('emisores/admin')
+  @ApiOperation({ summary: 'Listar emisores socio con su configuración completa' })
+  async listarEmisoresAdmin(@Headers('x-tenant-id') empresaId: string) {
+    return this.facturacionService.listarEmisoresAdmin(empresaId);
+  }
+
+  @Post('emisores')
+  @ApiOperation({ summary: 'Registrar un emisor socio (RUC adicional de la empresa)' })
+  async crearEmisor(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CrearEmisorDto,
+    @Req() req: any,
+  ) {
+    const userId = req?.user?.sub || req?.user?.id;
+    return this.facturacionService.crearEmisor(empresaId, dto, userId);
+  }
+
+  @Put('emisores/:id')
+  @ApiOperation({ summary: 'Actualizar un emisor socio' })
+  async actualizarEmisor(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') emisorId: string,
+    @Body() dto: ActualizarEmisorDto,
+    @Req() req: any,
+  ) {
+    const userId = req?.user?.sub || req?.user?.id;
+    return this.facturacionService.actualizarEmisor(empresaId, emisorId, dto, userId);
+  }
+
+  @Delete('emisores/:id')
+  @ApiOperation({ summary: 'Desactivar un emisor socio' })
+  async desactivarEmisor(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') emisorId: string,
+    @Req() req: any,
+  ) {
+    const userId = req?.user?.sub || req?.user?.id;
+    return this.facturacionService.desactivarEmisor(empresaId, emisorId, userId);
   }
 
   // ── Consultar estado en SUNAT ──
@@ -193,7 +237,7 @@ export class SunatController {
     @Headers('x-tenant-id') empresaId: string,
     @Query() query: PreviewSincronizacionQueryDto,
   ) {
-    return this.facturacionService.previewSincronizacionSeries(empresaId, query.sedeId);
+    return this.facturacionService.previewSincronizacionSeries(empresaId, query.sedeId, query.emisorId);
   }
 
   @Post('series/sincronizar')

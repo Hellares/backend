@@ -164,10 +164,44 @@ export class FacturacionService {
     };
   }
 
+  /**
+   * Multi-RUC: si el comprobante fue emitido por un EmisorFacturacion (socio),
+   * superpone SU identidad fiscal y SUS credenciales sobre la config recibida.
+   * Para comprobantes del RUC principal devuelve la config intacta.
+   */
+  private async overlayEmisor(
+    empresaId: string,
+    rucEmisor: string | null | undefined,
+    config: Awaited<ReturnType<FacturacionService['getConfigFacturacionEfectiva']>>,
+  ) {
+    if (!rucEmisor || config.ruc === rucEmisor) return config;
+    const emisor = await this.prisma.emisorFacturacion.findUnique({
+      where: { empresaId_ruc: { empresaId, ruc: rucEmisor } },
+    });
+    if (!emisor) return config;
+    return {
+      ...config,
+      ruc: emisor.ruc,
+      razonSocial: emisor.razonSocial,
+      direccionFiscal: emisor.direccionFiscal ?? config.direccionFiscal,
+      proveedorActivo: emisor.proveedorActivo ?? config.proveedorActivo,
+      proveedorRuta: emisor.proveedorRuta ?? config.proveedorRuta,
+      proveedorToken: emisor.proveedorToken ?? config.proveedorToken,
+      proveedorConfig: (() => {
+        const base = (config.proveedorConfig as Record<string, any> | null) ?? null;
+        const propio = (emisor.proveedorConfig as Record<string, any> | null) ?? null;
+        if (!base && !propio) return null;
+        return { ...(base ?? {}), ...(propio ?? {}) };
+      })(),
+      facturacionActiva: emisor.facturacionActiva,
+      resolucionSunat: emisor.resolucionSunat ?? config.resolucionSunat,
+    };
+  }
+
   // ── Emisores: listar RUCs disponibles ──
 
   async listarEmisores(empresaId: string) {
-    const [config, empresa, sedes, sedePrincipal] = await Promise.all([
+    const [config, empresa, emisoresDb, sedePrincipal] = await Promise.all([
       this.prisma.configuracionFacturacion.findUnique({
         where: { empresaId },
         select: { facturacionActiva: true },
@@ -176,14 +210,15 @@ export class FacturacionService {
         where: { id: empresaId },
         select: { ruc: true, razonSocial: true, nombre: true },
       }),
-      this.prisma.sede.findMany({
-        where: { empresaId, rucSede: { not: null }, isActive: true },
-        select: { id: true, nombre: true, rucSede: true, razonSocialSede: true, facturacionActiva: true },
+      this.prisma.emisorFacturacion.findMany({
+        where: { empresaId, isActive: true },
+        orderBy: { creadoEn: 'asc' },
+        select: { id: true, ruc: true, razonSocial: true, facturacionActiva: true },
       }),
-      // Sede representativa del emisor PRINCIPAL (sin RUC propio): sus series
-      // son las que se previsualizan/sincronizan para ese RUC.
+      // Sede representativa del emisor PRINCIPAL: sus series (por sede) son
+      // las que se previsualizan/sincronizan para ese RUC.
       this.prisma.sede.findFirst({
-        where: { empresaId, rucSede: null, isActive: true },
+        where: { empresaId, isActive: true },
         orderBy: { creadoEn: 'asc' },
         select: { id: true },
       }),
@@ -191,13 +226,14 @@ export class FacturacionService {
 
     const emisores: Array<{
       id: string | null;
-      tipo: 'EMPRESA' | 'SEDE';
+      tipo: 'EMPRESA' | 'EMISOR';
       ruc: string;
       razonSocial: string;
       nombreComercial: string | null;
       sedeNombre: string | null;
       activo: boolean;
-      // Sede cuyas series representan a este emisor (preview/sync de series).
+      // Sede cuyas series representan al emisor PRINCIPAL (series por sede).
+      // Los emisores socio no la usan: sus series viven en el propio emisor.
       sedeIdSeries: string | null;
     }> = [];
 
@@ -215,21 +251,122 @@ export class FacturacionService {
       });
     }
 
-    // Emisores por sede (con RUC propio)
-    for (const sede of sedes) {
+    // Emisores socio (multi-RUC, a nivel empresa)
+    for (const e of emisoresDb) {
       emisores.push({
-        id: sede.id,
-        tipo: 'SEDE',
-        ruc: sede.rucSede!,
-        razonSocial: sede.razonSocialSede || '',
+        id: e.id,
+        tipo: 'EMISOR',
+        ruc: e.ruc,
+        razonSocial: e.razonSocial,
         nombreComercial: null,
-        sedeNombre: sede.nombre,
-        activo: sede.facturacionActiva ?? false,
-        sedeIdSeries: sede.id,
+        sedeNombre: null,
+        activo: e.facturacionActiva,
+        sedeIdSeries: null,
       });
     }
 
     return emisores;
+  }
+
+  // ── CRUD de emisores socio (multi-RUC) ──
+
+  async listarEmisoresAdmin(empresaId: string) {
+    return this.prisma.emisorFacturacion.findMany({
+      where: { empresaId, isActive: true },
+      orderBy: { creadoEn: 'asc' },
+    });
+  }
+
+  async crearEmisor(empresaId: string, dto: {
+    ruc: string; razonSocial: string; direccionFiscal?: string;
+    proveedorRuta?: string; proveedorToken?: string;
+    proveedorConfig?: Record<string, any>;
+    facturacionActiva?: boolean; resolucionSunat?: string;
+  }, userId?: string) {
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId }, select: { ruc: true },
+    });
+    if (empresa?.ruc === dto.ruc) {
+      throw new BadRequestException('Ese RUC es el emisor principal de la empresa');
+    }
+    const emisor = await this.prisma.emisorFacturacion.upsert({
+      where: { empresaId_ruc: { empresaId, ruc: dto.ruc } },
+      create: {
+        empresaId,
+        ruc: dto.ruc,
+        razonSocial: dto.razonSocial,
+        direccionFiscal: dto.direccionFiscal,
+        proveedorRuta: dto.proveedorRuta,
+        proveedorToken: dto.proveedorToken,
+        proveedorConfig: dto.proveedorConfig,
+        facturacionActiva: dto.facturacionActiva ?? false,
+        resolucionSunat: dto.resolucionSunat,
+      },
+      // Re-crear un emisor desactivado con el mismo RUC lo reactiva.
+      update: {
+        razonSocial: dto.razonSocial,
+        direccionFiscal: dto.direccionFiscal,
+        proveedorRuta: dto.proveedorRuta,
+        proveedorToken: dto.proveedorToken,
+        proveedorConfig: dto.proveedorConfig,
+        facturacionActiva: dto.facturacionActiva ?? false,
+        resolucionSunat: dto.resolucionSunat,
+        isActive: true,
+      },
+    });
+    this.auditService.log({
+      usuarioId: userId, empresaId, accion: 'CONFIG_ACTUALIZADA',
+      entidad: 'EmisorFacturacion', entidadId: emisor.id,
+      detalle: `Emisor registrado: ${dto.ruc} — ${dto.razonSocial}`,
+    });
+    return emisor;
+  }
+
+  async actualizarEmisor(empresaId: string, emisorId: string, dto: {
+    razonSocial?: string; direccionFiscal?: string;
+    proveedorRuta?: string; proveedorToken?: string;
+    proveedorConfig?: Record<string, any>;
+    facturacionActiva?: boolean; resolucionSunat?: string;
+  }, userId?: string) {
+    const emisor = await this.prisma.emisorFacturacion.findFirst({
+      where: { id: emisorId, empresaId },
+    });
+    if (!emisor) throw new NotFoundException('Emisor no encontrado');
+    const actualizado = await this.prisma.emisorFacturacion.update({
+      where: { id: emisorId },
+      data: {
+        razonSocial: dto.razonSocial,
+        direccionFiscal: dto.direccionFiscal,
+        proveedorRuta: dto.proveedorRuta,
+        proveedorToken: dto.proveedorToken,
+        proveedorConfig: dto.proveedorConfig,
+        facturacionActiva: dto.facturacionActiva,
+        resolucionSunat: dto.resolucionSunat,
+      },
+    });
+    this.auditService.log({
+      usuarioId: userId, empresaId, accion: 'CONFIG_ACTUALIZADA',
+      entidad: 'EmisorFacturacion', entidadId: emisorId,
+      detalle: `Emisor actualizado: ${emisor.ruc}`,
+    });
+    return actualizado;
+  }
+
+  async desactivarEmisor(empresaId: string, emisorId: string, userId?: string) {
+    const emisor = await this.prisma.emisorFacturacion.findFirst({
+      where: { id: emisorId, empresaId },
+    });
+    if (!emisor) throw new NotFoundException('Emisor no encontrado');
+    await this.prisma.emisorFacturacion.update({
+      where: { id: emisorId },
+      data: { isActive: false, facturacionActiva: false },
+    });
+    this.auditService.log({
+      usuarioId: userId, empresaId, accion: 'CONFIG_ACTUALIZADA',
+      entidad: 'EmisorFacturacion', entidadId: emisorId,
+      detalle: `Emisor desactivado: ${emisor.ruc}`,
+    });
+    return { ok: true };
   }
 
   // ── Reporte de Correlativos ──
@@ -562,7 +699,13 @@ export class FacturacionService {
       // Resolver sedeId: del comprobante directo, o de la venta asociada
       const sedeId = comprobante.sedeId || comprobante.venta?.sedeId || null;
 
-      const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId);
+      // Config de la sede + overlay del emisor (multi-RUC): un comprobante
+      // del socio se envía con las credenciales y la identidad del socio.
+      const config = await this.overlayEmisor(
+        empresaId,
+        comprobante.rucEmisor,
+        await this.getConfigFacturacionEfectiva(empresaId, sedeId),
+      );
       if (!config.facturacionActiva || !config.proveedorRuta || !config.proveedorToken) {
         this.logger.log(`Facturación no configurada/activa para empresa ${empresaId}, omitiendo envío`);
         return;
@@ -989,7 +1132,7 @@ export class FacturacionService {
       where: { id: comprobanteId, empresaId },
       select: {
         id: true, tipoComprobante: true, serie: true, correlativo: true,
-        sedeId: true, proveedorEmisor: true, cdrResponse: true,
+        sedeId: true, proveedorEmisor: true, cdrResponse: true, rucEmisor: true,
       },
     });
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
@@ -1000,7 +1143,11 @@ export class FacturacionService {
       );
     }
 
-    const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
+    const config = await this.overlayEmisor(
+      empresaId,
+      comprobante.rucEmisor,
+      await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId),
+    );
     if (!config.facturacionActiva) throw new BadRequestException('Facturación no configurada');
 
     const provider = this.providerFactory.get(comprobante.proveedorEmisor);
@@ -1054,7 +1201,11 @@ export class FacturacionService {
       );
     }
 
-    const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
+    const config = await this.overlayEmisor(
+      empresaId,
+      comprobante.rucEmisor,
+      await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId),
+    );
     const provider = this.providerFactory.get(comprobante.proveedorEmisor);
     const result = await provider.anular(comprobante as any, motivo, config as any);
 
@@ -1078,7 +1229,7 @@ export class FacturacionService {
       where: { id: comprobanteId, empresaId },
       select: {
         id: true, tipoComprobante: true, serie: true, correlativo: true,
-        sedeId: true, proveedorEmisor: true,
+        sedeId: true, proveedorEmisor: true, rucEmisor: true,
       },
     });
     if (!comprobante) throw new NotFoundException('Comprobante no encontrado');
@@ -1089,7 +1240,11 @@ export class FacturacionService {
       );
     }
 
-    const config = await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId);
+    const config = await this.overlayEmisor(
+      empresaId,
+      comprobante.rucEmisor,
+      await this.getConfigFacturacionEfectiva(empresaId, comprobante.sedeId),
+    );
     const provider = this.providerFactory.get(comprobante.proveedorEmisor);
     return provider.consultarAnulacion(comprobante as any, config as any);
   }
@@ -1599,30 +1754,53 @@ export class FacturacionService {
    */
   async previewSincronizacionSeries(
     empresaId: string,
-    sedeId: string,
+    sedeId?: string | null,
+    emisorId?: string | null,
   ): Promise<SincronizacionPreviewResponse> {
-    const sede = await this.prisma.sede.findFirst({
-      where: { id: sedeId, empresaId },
-      select: {
-        id: true, nombre: true, empresaId: true,
-        serieFactura: true, serieBoleta: true,
-        serieNotaCredito: true, serieNotaCreditoBoleta: true,
-        serieNotaDebito: true, serieNotaDebitoBoleta: true,
-        serieGuiaRemision: true,
-        ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
-        ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
-        ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
-        ultimoNumeroGuiaRemision: true,
-        proveedorActivo: true, proveedorConfig: true,
-        proveedorToken: true, rucSede: true,
-        seriesSincronizadasEn: true,
-      },
-    });
-    if (!sede) throw new NotFoundException('Sede no encontrada');
+    if (!sedeId && !emisorId) {
+      throw new BadRequestException('Falta sedeId o emisorId');
+    }
 
-    const config = await this.getConfigFacturacionEfectiva(empresaId, sedeId);
+    // Target del sync: emisor socio (series propias, a nivel empresa) o sede
+    // (series por sede del RUC principal). Comparten nombres de campos.
+    let emisor: any = null;
+    let sede: any = null;
+    if (emisorId) {
+      emisor = await this.prisma.emisorFacturacion.findFirst({
+        where: { id: emisorId, empresaId },
+      });
+      if (!emisor) throw new NotFoundException('Emisor no encontrado');
+    } else {
+      sede = await this.prisma.sede.findFirst({
+        where: { id: sedeId!, empresaId },
+        select: {
+          id: true, nombre: true, empresaId: true,
+          serieFactura: true, serieBoleta: true,
+          serieNotaCredito: true, serieNotaCreditoBoleta: true,
+          serieNotaDebito: true, serieNotaDebitoBoleta: true,
+          serieGuiaRemision: true,
+          ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
+          ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
+          ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
+          ultimoNumeroGuiaRemision: true,
+          proveedorActivo: true, proveedorConfig: true,
+          proveedorToken: true,
+          seriesSincronizadasEn: true,
+        },
+      });
+      if (!sede) throw new NotFoundException('Sede no encontrada');
+    }
+    const target: any = emisor ?? sede;
+
+    const config = emisor
+      ? await this.overlayEmisor(
+          empresaId,
+          emisor.ruc,
+          await this.getConfigFacturacionEfectiva(empresaId, null),
+        )
+      : await this.getConfigFacturacionEfectiva(empresaId, sedeId);
     if (!config.facturacionActiva) {
-      throw new BadRequestException('La facturación no está activa para esta sede');
+      throw new BadRequestException('La facturación no está activa para este emisor');
     }
     if (this.providerFactory.isArchivado(config.proveedorActivo)) {
       throw new BadRequestException(
@@ -1653,12 +1831,13 @@ export class FacturacionService {
       select: { ruc: true },
     });
 
-    // branchId actual de la sede en el proveedor (si está configurado)
-    const branchIdActual = (sede.proveedorConfig as any)?.branchId ?? null;
+    // branchId actual del target en el proveedor (si está configurado)
+    const branchIdActual = (target.proveedorConfig as any)?.branchId ?? null;
 
-    // Pre-contar comprobantes por serie local (para warnings de REEMPLAZAR_SERIE)
+    // Pre-contar comprobantes por serie local (para warnings de REEMPLAZAR_SERIE):
+    // sede → lo emitido desde esa sede; emisor → lo emitido con ese RUC.
     const seriesLocales = TIPO_DOC_A_SEDE
-      .map((t) => ({ tipoDoc: t.tipoDoc, serie: (sede as any)[t.campoSerie] as string | null }))
+      .map((t) => ({ tipoDoc: t.tipoDoc, serie: (target as any)[t.campoSerie] as string | null }))
       .filter((s) => s.serie);
 
     const counts = new Map<string, number>();
@@ -1666,7 +1845,9 @@ export class FacturacionService {
       const tipoComp = TIPO_DOC_A_COMPROBANTE[tipoDoc];
       if (!serie || !tipoComp) continue;
       const count = await this.prisma.comprobanteElectronico.count({
-        where: { empresaId, sedeId, tipoComprobante: tipoComp as any, serie },
+        where: emisor
+          ? { empresaId, rucEmisor: emisor.ruc, tipoComprobante: tipoComp as any, serie }
+          : { empresaId, sedeId: sedeId!, tipoComprobante: tipoComp as any, serie },
       });
       counts.set(`${tipoDoc}:${serie}`, count);
     }
@@ -1690,8 +1871,8 @@ export class FacturacionService {
 
     const branches = info.branches.map((b) => {
       const diffs: DiffSerie[] = TIPO_DOC_A_SEDE.map((t) => {
-        const serieLocal = (sede as any)[t.campoSerie] as string | null;
-        const correlativoLocal = (sede as any)[t.campoContador] as number;
+        const serieLocal = (target as any)[t.campoSerie] as string | null;
+        const correlativoLocal = (target as any)[t.campoContador] as number;
         // Para tipoDoc 07 (NC) y 08 (ND) hay dos series distintas según el documento
         // afectado. Filtramos por prefijo de serie para diferenciar FC* vs BC* y
         // FD* vs BD*. Si no hay prefijo, simplemente match por tipo de documento.
@@ -1735,17 +1916,18 @@ export class FacturacionService {
 
     return {
       empresaId,
-      sedeId: sede.id,
-      sedeNombre: sede.nombre,
+      sedeId: sede?.id ?? null,
+      emisorId: emisor?.id ?? null,
+      sedeNombre: sede?.nombre ?? emisor?.razonSocial ?? '',
       rucEmpresa: empresa?.ruc ?? null,
-      // Emisor EFECTIVO al que pertenecen las series mostradas: con multi-RUC
-      // la sede-socio tiene rucSede + token propio; sin token propio, las
-      // series consultadas son las del emisor principal (token global).
+      // Emisor EFECTIVO al que pertenecen las series mostradas.
       rucEmisor: config.ruc,
       razonSocialEmisor: config.razonSocial,
-      credencialesPropias: !!sede.proveedorToken,
+      // Emisor socio sin token propio → consulta con credenciales del
+      // principal: las series listadas NO serían del socio (warning en UI).
+      credencialesPropias: emisor ? !!emisor.proveedorToken : true,
       proveedorActivo: config.proveedorActivo,
-      seriesSincronizadasEn: sede.seriesSincronizadasEn,
+      seriesSincronizadasEn: target.seriesSincronizadasEn,
       branches,
       metadata: info.metadata,
     };
@@ -1763,26 +1945,37 @@ export class FacturacionService {
     if (!dto.selecciones?.length) {
       throw new BadRequestException('No hay selecciones para aplicar');
     }
+    if (!dto.sedeId && !dto.emisorId) {
+      throw new BadRequestException('Falta sedeId o emisorId');
+    }
 
-    const sede = await this.prisma.sede.findFirst({
-      where: { id: dto.sedeId, empresaId },
-      select: {
-        id: true, empresaId: true, proveedorConfig: true,
-        serieFactura: true, serieBoleta: true,
-        serieNotaCredito: true, serieNotaCreditoBoleta: true,
-        serieNotaDebito: true, serieNotaDebitoBoleta: true,
-        serieGuiaRemision: true,
-        ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
-        ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
-        ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
-        ultimoNumeroGuiaRemision: true,
-      },
-    });
-    if (!sede) throw new NotFoundException('Sede no encontrada');
+    // Target: emisor socio (series propias) o sede (series del RUC principal)
+    const esEmisor = !!dto.emisorId;
+    let emisorRuc: string | null = null;
+    if (esEmisor) {
+      const emisor = await this.prisma.emisorFacturacion.findFirst({
+        where: { id: dto.emisorId!, empresaId },
+        select: { id: true, ruc: true },
+      });
+      if (!emisor) throw new NotFoundException('Emisor no encontrado');
+      emisorRuc = emisor.ruc;
+    } else {
+      const sede = await this.prisma.sede.findFirst({
+        where: { id: dto.sedeId!, empresaId },
+        select: { id: true },
+      });
+      if (!sede) throw new NotFoundException('Sede no encontrada');
+    }
 
-    const config = await this.getConfigFacturacionEfectiva(empresaId, dto.sedeId);
+    const config = esEmisor
+      ? await this.overlayEmisor(
+          empresaId,
+          emisorRuc,
+          await this.getConfigFacturacionEfectiva(empresaId, null),
+        )
+      : await this.getConfigFacturacionEfectiva(empresaId, dto.sedeId);
     if (!config.facturacionActiva) {
-      throw new BadRequestException('La facturación no está activa para esta sede');
+      throw new BadRequestException('La facturación no está activa para este emisor');
     }
     if (this.providerFactory.isArchivado(config.proveedorActivo)) {
       throw new BadRequestException(this.providerFactory.mensajeArchivado(config.proveedorActivo));
@@ -1791,25 +1984,36 @@ export class FacturacionService {
     const aplicaciones = dto.selecciones.filter((s) => s.accion === 'APLICAR');
     const omitidos = dto.selecciones.length - aplicaciones.length;
 
+    const camposSeries = {
+      serieFactura: true, serieBoleta: true,
+      serieNotaCredito: true, serieNotaCreditoBoleta: true,
+      serieNotaDebito: true, serieNotaDebitoBoleta: true,
+      serieGuiaRemision: true,
+      ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
+      ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
+      ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
+      ultimoNumeroGuiaRemision: true,
+      proveedorConfig: true,
+    } as const;
+
     // Para validar CONFLICTO, releer correlativos locales bajo lock al aplicar.
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Sede" WHERE id = ${dto.sedeId} AND "empresaId" = ${empresaId} FOR UPDATE`;
-
-      const sedeLock = await tx.sede.findUnique({
-        where: { id: dto.sedeId },
-        select: {
-          serieFactura: true, serieBoleta: true,
-          serieNotaCredito: true, serieNotaCreditoBoleta: true,
-          serieNotaDebito: true, serieNotaDebitoBoleta: true,
-          serieGuiaRemision: true,
-          ultimoNumeroFactura: true, ultimoNumeroBoleta: true,
-          ultimoNumeroNotaCredito: true, ultimoNumeroNotaCreditoBoleta: true,
-          ultimoNumeroNotaDebito: true, ultimoNumeroNotaDebitoBoleta: true,
-          ultimoNumeroGuiaRemision: true,
-          proveedorConfig: true,
-        },
-      });
-      if (!sedeLock) throw new NotFoundException('Sede no encontrada');
+      let sedeLock: any;
+      if (esEmisor) {
+        await tx.$queryRaw`SELECT id FROM "EmisorFacturacion" WHERE id = ${dto.emisorId} AND "empresaId" = ${empresaId} FOR UPDATE`;
+        sedeLock = await tx.emisorFacturacion.findUnique({
+          where: { id: dto.emisorId! },
+          select: camposSeries,
+        });
+        if (!sedeLock) throw new NotFoundException('Emisor no encontrado');
+      } else {
+        await tx.$queryRaw`SELECT id FROM "Sede" WHERE id = ${dto.sedeId} AND "empresaId" = ${empresaId} FOR UPDATE`;
+        sedeLock = await tx.sede.findUnique({
+          where: { id: dto.sedeId! },
+          select: camposSeries,
+        });
+        if (!sedeLock) throw new NotFoundException('Sede no encontrada');
+      }
 
       const errores: string[] = [];
       const cambios: ResultadoAplicarSincronizacion['cambios'] = [];
@@ -1905,7 +2109,14 @@ export class FacturacionService {
       updateData.seriesSincronizadasEn = new Date();
 
       if (Object.keys(updateData).length > 0) {
-        await tx.sede.update({ where: { id: dto.sedeId }, data: updateData });
+        if (esEmisor) {
+          await tx.emisorFacturacion.update({
+            where: { id: dto.emisorId! },
+            data: updateData,
+          });
+        } else {
+          await tx.sede.update({ where: { id: dto.sedeId! }, data: updateData });
+        }
       }
 
       // Audit log (fuera del lock, pero dentro del tx)
@@ -1913,8 +2124,8 @@ export class FacturacionService {
         usuarioId: userId,
         empresaId,
         accion: 'SERIES_SINCRONIZADAS',
-        entidad: 'Sede',
-        entidadId: dto.sedeId,
+        entidad: esEmisor ? 'EmisorFacturacion' : 'Sede',
+        entidadId: (esEmisor ? dto.emisorId : dto.sedeId)!,
         detalle: `Sincronizadas ${cambios.length} series con proveedor ${config.proveedorActivo}`,
         metadata: { cambios, branchIdProveedor: branchIdAplicado, omitidos, errores },
       });
@@ -1923,7 +2134,7 @@ export class FacturacionService {
         aplicados: cambios.length,
         omitidos,
         rechazados: errores.length,
-        sedeId: dto.sedeId,
+        sedeId: (esEmisor ? dto.emisorId : dto.sedeId)!,
         branchIdProveedor: branchIdAplicado,
         cambios,
         errores,

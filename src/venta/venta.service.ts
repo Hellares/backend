@@ -1356,6 +1356,9 @@ export class VentaService {
             sedeFacturacionIdDiferido: opts?.diferirComprobante
               ? dto.sedeFacturacionId ?? null
               : null,
+            emisorIdDiferido: opts?.diferirComprobante
+              ? dto.emisorId ?? null
+              : null,
             tipoDocumentoClienteDiferido: opts?.diferirComprobante
               ? dto.tipoDocumentoCliente ?? null
               : null,
@@ -1748,37 +1751,17 @@ export class VentaService {
           throw new BadRequestException(validacionDoc.error);
         }
 
-        // Usar sede de facturación si se especificó (multi-RUC), sino la sede operativa
-        const sedeIdFacturacion = dto.sedeFacturacionId || dto.sedeId;
-        const [sedeLocked] = await tx.$queryRaw<
-          Array<{
-            id: string;
-            serieFactura: string;
-            serieBoleta: string;
-            ultimoNumeroFactura: number;
-            ultimoNumeroBoleta: number;
-            rucEmisor: string | null;
-          }>
-        >`SELECT s.id, s."serieFactura", s."serieBoleta", s."ultimoNumeroFactura", s."ultimoNumeroBoleta",
-            COALESCE(s."rucSede", e.ruc) AS "rucEmisor"
-          FROM "Sede" s JOIN "Empresa" e ON e.id = s."empresaId"
-          WHERE s.id = ${sedeIdFacturacion} FOR UPDATE OF s`;
+        // Fuente de serie/correlativo: EMISOR socio (multi-RUC) o sede
+        const fuente = await this.resolverSerieCorrelativo(tx, {
+          empresaId,
+          tipoComprobante,
+          emisorId: dto.emisorId,
+          sedeId: dto.sedeFacturacionId || dto.sedeId,
+        });
 
-        if (sedeLocked) {
-          const serie = tipoComprobante === 'FACTURA'
-            ? sedeLocked.serieFactura
-            : sedeLocked.serieBoleta;
-
-          // Increment atómico para evitar race conditions en concurrencia
-          const campoContador = tipoComprobante === 'FACTURA' ? 'ultimoNumeroFactura' : 'ultimoNumeroBoleta';
-          const sedeActualizada = await tx.sede.update({
-            where: { id: sedeLocked.id },
-            data: { [campoContador]: { increment: 1 } },
-            select: { [campoContador]: true },
-          });
-          const nuevoCorrelativo: number = (sedeActualizada as any)[campoContador];
-
-          const correlativo = String(nuevoCorrelativo);
+        if (fuente) {
+          const serie = fuente.serie;
+          const correlativo = String(fuente.correlativo);
 
           const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
@@ -1789,8 +1772,10 @@ export class VentaService {
             data: {
               ventaId: venta.id,
               empresaId,
-              sedeId: dto.sedeFacturacionId || dto.sedeId,
-              rucEmisor: sedeLocked.rucEmisor,
+              // Con emisor socio, la sede del comprobante es la que VENDE
+              // (el emisor no es una sede); legacy: sedeFacturacionId.
+              sedeId: dto.emisorId ? dto.sedeId : (dto.sedeFacturacionId || dto.sedeId),
+              rucEmisor: fuente.rucEmisor,
               clienteId: dto.clienteId,
               clienteEmpresaId: dto.clienteEmpresaId,
               tipoComprobante: tipoComprobante as any,
@@ -2067,6 +2052,81 @@ export class VentaService {
    * reciben como parámetro (al crear = dto.pagos; al finalizar Yape = el pago
    * Yape confirmado). Devuelve null si la sede no tiene serie configurada.
    */
+  /**
+   * Multi-RUC: resuelve serie + correlativo con lock e incremento atómico.
+   * Con `emisorId` → EmisorFacturacion (socio, series a nivel empresa);
+   * sin él → la Sede (punto de emisión del RUC principal). Devuelve null si
+   * la sede no existe; lanza si el emisor elegido no es válido (mejor cortar
+   * que emitir en silencio con otro RUC).
+   */
+  private async resolverSerieCorrelativo(
+    tx: any,
+    p: {
+      empresaId: string;
+      tipoComprobante: string;
+      emisorId?: string | null;
+      sedeId: string;
+    },
+  ): Promise<{ serie: string; correlativo: number; rucEmisor: string | null } | null> {
+    const esFactura = p.tipoComprobante === 'FACTURA';
+    const campoContador = esFactura ? 'ultimoNumeroFactura' : 'ultimoNumeroBoleta';
+
+    if (p.emisorId) {
+      const [emisorLocked] = await tx.$queryRaw<
+        Array<{
+          id: string;
+          ruc: string;
+          serieFactura: string;
+          serieBoleta: string;
+          facturacionActiva: boolean;
+        }>
+      >`SELECT id, ruc, "serieFactura", "serieBoleta", "facturacionActiva"
+        FROM "EmisorFacturacion"
+        WHERE id = ${p.emisorId} AND "empresaId" = ${p.empresaId} AND "isActive" = true
+        FOR UPDATE`;
+      if (!emisorLocked) {
+        throw new BadRequestException('El emisor de facturación elegido no es válido');
+      }
+      if (!emisorLocked.facturacionActiva) {
+        throw new BadRequestException('El emisor de facturación elegido no está activo');
+      }
+      const actualizado = await tx.emisorFacturacion.update({
+        where: { id: emisorLocked.id },
+        data: { [campoContador]: { increment: 1 } },
+        select: { [campoContador]: true },
+      });
+      return {
+        serie: esFactura ? emisorLocked.serieFactura : emisorLocked.serieBoleta,
+        correlativo: (actualizado as any)[campoContador],
+        rucEmisor: emisorLocked.ruc,
+      };
+    }
+
+    const [sedeLocked] = await tx.$queryRaw<
+      Array<{
+        id: string;
+        serieFactura: string;
+        serieBoleta: string;
+        rucEmisor: string | null;
+      }>
+    >`SELECT s.id, s."serieFactura", s."serieBoleta",
+        COALESCE(s."rucSede", e.ruc) AS "rucEmisor"
+      FROM "Sede" s JOIN "Empresa" e ON e.id = s."empresaId"
+      WHERE s.id = ${p.sedeId} FOR UPDATE OF s`;
+    if (!sedeLocked) return null;
+
+    const sedeActualizada = await tx.sede.update({
+      where: { id: sedeLocked.id },
+      data: { [campoContador]: { increment: 1 } },
+      select: { [campoContador]: true },
+    });
+    return {
+      serie: esFactura ? sedeLocked.serieFactura : sedeLocked.serieBoleta,
+      correlativo: (sedeActualizada as any)[campoContador],
+      rucEmisor: sedeLocked.rucEmisor,
+    };
+  }
+
   private async _emitirComprobante(
     tx: any,
     p: {
@@ -2085,6 +2145,7 @@ export class VentaService {
         emailCliente?: string | null;
       };
       sedeFacturacionId?: string | null;
+      emisorId?: string | null;
       sedeId: string;
       moneda?: string | null;
       pagos?: Array<{ metodoPago: string; monto: number; referencia?: string | null }>;
@@ -2105,42 +2166,17 @@ export class VentaService {
       throw new BadRequestException(validacionDoc.error);
     }
 
-    // Usar sede de facturación si se especificó (multi-RUC), sino la sede operativa
-    const sedeIdFacturacion = p.sedeFacturacionId || p.sedeId;
-    const [sedeLocked] = await tx.$queryRaw<
-      Array<{
-        id: string;
-        serieFactura: string;
-        serieBoleta: string;
-        ultimoNumeroFactura: number;
-        ultimoNumeroBoleta: number;
-        rucEmisor: string | null;
-      }>
-    >`SELECT s.id, s."serieFactura", s."serieBoleta", s."ultimoNumeroFactura", s."ultimoNumeroBoleta",
-        COALESCE(s."rucSede", e.ruc) AS "rucEmisor"
-      FROM "Sede" s JOIN "Empresa" e ON e.id = s."empresaId"
-      WHERE s.id = ${sedeIdFacturacion} FOR UPDATE OF s`;
-
-    if (!sedeLocked) return null;
-
-    const serie =
-      p.tipoComprobante === 'FACTURA'
-        ? sedeLocked.serieFactura
-        : sedeLocked.serieBoleta;
-
-    // Increment atómico para evitar race conditions en concurrencia
-    const campoContador =
-      p.tipoComprobante === 'FACTURA'
-        ? 'ultimoNumeroFactura'
-        : 'ultimoNumeroBoleta';
-    const sedeActualizada = await tx.sede.update({
-      where: { id: sedeLocked.id },
-      data: { [campoContador]: { increment: 1 } },
-      select: { [campoContador]: true },
+    // Fuente de serie/correlativo: EMISOR socio (multi-RUC) o sede
+    const fuente = await this.resolverSerieCorrelativo(tx, {
+      empresaId: p.empresaId,
+      tipoComprobante: p.tipoComprobante,
+      emisorId: p.emisorId,
+      sedeId: p.sedeFacturacionId || p.sedeId,
     });
-    const nuevoCorrelativo: number = (sedeActualizada as any)[campoContador];
+    if (!fuente) return null;
 
-    const correlativo = String(nuevoCorrelativo);
+    const serie = fuente.serie;
+    const correlativo = String(fuente.correlativo);
     const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
 
     // Calcular totales tributarios por tipo de afectación
@@ -2150,8 +2186,8 @@ export class VentaService {
       data: {
         ventaId: p.ventaId,
         empresaId: p.empresaId,
-        sedeId: p.sedeFacturacionId || p.sedeId,
-        rucEmisor: sedeLocked.rucEmisor,
+        sedeId: p.emisorId ? p.sedeId : (p.sedeFacturacionId || p.sedeId),
+        rucEmisor: fuente.rucEmisor,
         clienteId: p.cliente.clienteId,
         clienteEmpresaId: p.cliente.clienteEmpresaId,
         tipoComprobante: p.tipoComprobante as any,
@@ -4217,6 +4253,7 @@ export class VentaService {
                 emailCliente: venta.emailCliente,
               },
               sedeFacturacionId: venta.sedeFacturacionIdDiferido,
+              emisorId: venta.emisorIdDiferido,
               sedeId: venta.sedeId,
               moneda: venta.moneda,
               pagos: pagosVenta,

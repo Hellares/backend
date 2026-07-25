@@ -32,7 +32,9 @@ export interface BranchPreviewInfo {
 
 export interface SincronizacionPreviewResponse {
   empresaId: string;
-  sedeId: string;
+  sedeId: string | null;
+  /** Target emisor socio (multi-RUC); null cuando el target es una sede. */
+  emisorId: string | null;
   sedeNombre: string;
   rucEmpresa: string | null;
   /** Emisor EFECTIVO de las series mostradas (sede.rucSede ?? empresa.ruc). */

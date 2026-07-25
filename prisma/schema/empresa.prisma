@@ -70,6 +70,7 @@ model Empresa {
   actualizadoEn            DateTime                      @updatedAt
   componentes              Componente[]
   comprobantes             ComprobanteElectronico[]
+  emisoresFacturacion      EmisorFacturacion[]
   comunicacionesBaja       ComunicacionBaja[]
   resumenesDiarios         ResumenDiario[]
   configuracionCampos      ConfiguracionCamposServicio[]

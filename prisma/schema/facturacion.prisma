@@ -96,6 +96,53 @@ model ConfiguracionFacturacion {
   @@index([empresaId])
 }
 
+// Emisor de facturación adicional (multi-RUC) a NIVEL EMPRESA: identidad
+// fiscal con credenciales y series propias, desacoplada de las sedes.
+// Cualquier sede puede emitir con cualquier emisor. El RUC principal de la
+// empresa NO vive aquí (sigue en Empresa + ConfiguracionFacturacion, con
+// series por sede); aquí van solo los RUC socio.
+model EmisorFacturacion {
+  id                String                @id @default(cuid())
+  empresaId         String
+  ruc               String
+  razonSocial       String
+  direccionFiscal   String?
+  // Credenciales del proveedor (Syncrofact: token = company del socio)
+  proveedorActivo   ProveedorFacturacion? // null = hereda el de la config global
+  proveedorRuta     String?
+  proveedorToken    String?
+  proveedorConfig   Json? // ej. { branchId } en Syncrofact
+  facturacionActiva Boolean               @default(false)
+  resolucionSunat   String?
+
+  // Series y correlativos DEL EMISOR (compartidos por todas las sedes que
+  // emitan con él — Syncrofact administra un solo juego por company).
+  serieFactura           String  @default("F001")
+  serieBoleta            String  @default("B001")
+  serieNotaCredito       String  @default("FC01")
+  serieNotaCreditoBoleta String  @default("BC01")
+  serieNotaDebito        String  @default("FD01")
+  serieNotaDebitoBoleta  String  @default("BD01")
+  serieGuiaRemision      String?
+
+  ultimoNumeroFactura           Int @default(0)
+  ultimoNumeroBoleta            Int @default(0)
+  ultimoNumeroNotaCredito       Int @default(0)
+  ultimoNumeroNotaCreditoBoleta Int @default(0)
+  ultimoNumeroNotaDebito       Int @default(0)
+  ultimoNumeroNotaDebitoBoleta Int @default(0)
+  ultimoNumeroGuiaRemision     Int @default(0)
+
+  seriesSincronizadasEn DateTime?
+  isActive              Boolean   @default(true)
+  creadoEn              DateTime  @default(now())
+  actualizadoEn         DateTime  @updatedAt
+  empresa               Empresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, ruc])
+  @@index([empresaId])
+}
+
 model ComprobanteElectronico {
   id                  String                    @id @default(cuid())
   empresaId           String

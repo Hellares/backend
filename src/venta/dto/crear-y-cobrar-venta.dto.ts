@@ -160,10 +160,15 @@ export class CrearYCobrarVentaDto {
   @IsString()
   tipoDocumentoCliente?: string;
 
-  @ApiPropertyOptional({ description: 'ID de la sede emisora (si difiere de la sede operativa). Para multi-RUC.' })
+  @ApiPropertyOptional({ description: 'ID de la sede emisora (si difiere de la sede operativa). Multi-RUC legacy.' })
   @IsOptional()
   @IsString()
   sedeFacturacionId?: string;
+
+  @ApiPropertyOptional({ description: 'EmisorFacturacion (RUC socio) con el que se emite. Multi-RUC.' })
+  @IsOptional()
+  @IsString()
+  emisorId?: string;
 
   @ApiPropertyOptional({ description: 'Condicion de pago', example: 'CONTADO' })
   @IsOptional()

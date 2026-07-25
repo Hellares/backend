@@ -91,7 +91,8 @@ model Venta {
   // hoy vive solo en el DTO (el resto de datos del cliente ya están en columnas
   // de Venta). Null en ventas normales. Ver VentaService.finalizarVentaYape.
   tipoComprobanteDiferido      String? // BOLETA | FACTURA (TICKET no emite)
-  sedeFacturacionIdDiferido    String? // sede emisora (multi-RUC); null = sedeId
+  sedeFacturacionIdDiferido    String? // sede emisora (multi-RUC legacy); null = sedeId
+  emisorIdDiferido             String? // EmisorFacturacion elegido (multi-RUC); null = principal
   tipoDocumentoClienteDiferido String? // 1=DNI, 6=RUC, etc.
   // Marca que la venta es un cobro Yape/Plin DIFERIDO (nació CONFIRMADA sin
   // comprobante, esperando el pago). Sirve incluso para TICKET (donde los

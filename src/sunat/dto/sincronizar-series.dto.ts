@@ -3,9 +3,15 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class PreviewSincronizacionQueryDto {
-  @ApiProperty({ description: 'ID de la sede a sincronizar' })
+  @ApiPropertyOptional({ description: 'Sede a sincronizar (series del RUC principal)' })
+  @IsOptional()
   @IsString()
-  sedeId: string;
+  sedeId?: string;
+
+  @ApiPropertyOptional({ description: 'Emisor socio a sincronizar (multi-RUC, series propias)' })
+  @IsOptional()
+  @IsString()
+  emisorId?: string;
 }
 
 export class SeleccionSerieDto {
@@ -27,9 +33,15 @@ export class SeleccionSerieDto {
 }
 
 export class AplicarSincronizacionDto {
-  @ApiProperty({ description: 'ID de la sede' })
+  @ApiPropertyOptional({ description: 'ID de la sede (series del RUC principal)' })
+  @IsOptional()
   @IsString()
-  sedeId: string;
+  sedeId?: string;
+
+  @ApiPropertyOptional({ description: 'ID del emisor socio (multi-RUC)' })
+  @IsOptional()
+  @IsString()
+  emisorId?: string;
 
   @ApiProperty({ type: [SeleccionSerieDto] })
   @IsArray()
