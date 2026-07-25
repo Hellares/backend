@@ -464,6 +464,56 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
   });
 });
 
+describe('VentaAnalyticsService.getProyeccionMes', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('proyecta el cierre con ritmo por día de semana (hora Perú)', async () => {
+    // Miércoles 22 jul 2026, 15:00 Perú. Historia: S/70 diarios los 14
+    // días previos (8–21 jul), nada antes ni hoy.
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-22T20:00:00Z'));
+    const MS_H = 3600 * 1000;
+    const ventas = Array.from({ length: 14 }, (_, i) => ({
+      // mediodía Perú del día (22 - 14 + i) de julio
+      fechaVenta: new Date(Date.UTC(2026, 6, 8 + i) + 17 * MS_H),
+      total: dec(70),
+    }));
+    const service = mkService({
+      venta: { findMany: jest.fn().mockResolvedValue(ventas) },
+    });
+
+    const result = await service.getProyeccionMes('emp1', {} as any);
+
+    expect(result.suficiente).toBe(true);
+    expect(result.diasHistoria).toBe(14);
+    expect(result.diasTranscurridos).toBe(22);
+    expect(result.diasEnMes).toBe(31);
+    expect(result.ventasActual).toBe(980); // 14 × 70
+    // Restante: hoy (70) + días 23..31 (9 × 70) = 700
+    expect(result.proyeccionCierre).toBe(1680);
+    // 2 semanas idénticas → variabilidad 0 → banda plana
+    expect(result.proyeccionMin).toBe(1680);
+    expect(result.proyeccionMax).toBe(1680);
+    expect(result.mesAnterior).toBe(0);
+    expect(result.variacionPct).toBeNull();
+  });
+
+  it('con menos de 7 días de historia responde suficiente=false', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-22T20:00:00Z'));
+    const MS_H = 3600 * 1000;
+    const ventas = [
+      { fechaVenta: new Date(Date.UTC(2026, 6, 20) + 17 * MS_H), total: dec(50) },
+    ];
+    const service = mkService({
+      venta: { findMany: jest.fn().mockResolvedValue(ventas) },
+    });
+
+    const result = await service.getProyeccionMes('emp1', {} as any);
+
+    expect(result.suficiente).toBe(false);
+    expect(result.diasHistoria).toBe(2);
+  });
+});
+
 describe('VentaAnalyticsService.getDashboard', () => {
   it('consolida todas las secciones y pide los dos rankings (DESC y ASC)', async () => {
     const service = mkService({});
@@ -488,6 +538,7 @@ describe('VentaAnalyticsService.getDashboard', () => {
       getMetodosPago: marcador('metodos'),
       getHorasPico: marcador('horas'),
       getReposicionSugerida: marcador('reposicion'),
+      getProyeccionMes: marcador('proyeccion'),
     };
     Object.assign(service, spies);
 
@@ -512,6 +563,7 @@ describe('VentaAnalyticsService.getDashboard', () => {
         'metodosPago',
         'horasPico',
         'reposicion',
+        'proyeccion',
       ].sort(),
     );
     // Ranking pedido dos veces: más vendidos (DESC) y menos vendidos (ASC)

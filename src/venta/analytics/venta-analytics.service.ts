@@ -992,6 +992,132 @@ export class VentaAnalyticsService {
   }
 
   /**
+   * Proyección de cierre del MES CALENDARIO actual (hora Perú), con ritmo
+   * por día de semana: promedio de lo vendido cada Lun/Mar/… en las últimas
+   * 8 semanas × los días que faltan. La banda min–max sale de la
+   * variabilidad real de las semanas históricas. Solo respeta sedeId —
+   * es una proyección del negocio, no del filtro visual.
+   */
+  async getProyeccionMes(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo proyección de cierre de mes');
+
+    const MS_H = 3600 * 1000;
+    const VENTANA_DIAS = 56; // 8 semanas de historia
+    // Calendario Perú: shift -5h y getters UTC (independiente del TZ server)
+    const peruHoy = new Date(Date.now() - 5 * MS_H);
+    const y = peruHoy.getUTCFullYear();
+    const m = peruHoy.getUTCMonth();
+    const d = peruHoy.getUTCDate();
+    const diasEnMes = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    // Instantes UTC de los bordes (día Perú arranca a las 05:00 UTC)
+    const utcDe = (yy: number, mm: number, dd: number) =>
+      new Date(Date.UTC(yy, mm, dd) + 5 * MS_H);
+    const inicioMes = utcDe(y, m, 1);
+    const inicioMesAnterior = utcDe(y, m - 1, 1);
+    const inicioVentana = utcDe(y, m, d - (VENTANA_DIAS - 1));
+    const desde =
+      inicioVentana < inicioMesAnterior ? inicioVentana : inicioMesAnterior;
+
+    const ventas = await this.prisma.venta.findMany({
+      where: {
+        empresaId,
+        estado: { notIn: [EstadoVenta.BORRADOR, EstadoVenta.ANULADA] },
+        fechaVenta: { gte: desde },
+        ...(query.sedeId ? { sedeId: query.sedeId } : {}),
+      },
+      select: { fechaVenta: true, total: true },
+    });
+
+    // Buckets por día calendario Perú ('yyyy-mm-dd' → monto)
+    const porDia = new Map<string, number>();
+    const keyDe = (fecha: Date) => {
+      const p = new Date(fecha.getTime() - 5 * MS_H);
+      return `${p.getUTCFullYear()}-${p.getUTCMonth()}-${p.getUTCDate()}`;
+    };
+    let mesActual = 0;
+    let mesAnterior = 0;
+    for (const v of ventas) {
+      const monto = v.total.toNumber();
+      porDia.set(keyDe(v.fechaVenta), (porDia.get(keyDe(v.fechaVenta)) ?? 0) + monto);
+      if (v.fechaVenta >= inicioMes) mesActual += monto;
+      else if (v.fechaVenta >= inicioMesAnterior) mesAnterior += monto;
+    }
+
+    // Historia efectiva: desde la primera venta de la ventana hasta AYER
+    // (hoy es parcial). Los días sin ventas cuentan como 0.
+    const montoDelDia = (offset: number) => {
+      const dia = new Date(Date.UTC(y, m, d + offset));
+      return {
+        dow: dia.getUTCDay(),
+        monto:
+          porDia.get(
+            `${dia.getUTCFullYear()}-${dia.getUTCMonth()}-${dia.getUTCDate()}`,
+          ) ?? 0,
+      };
+    };
+    let primerOffset = -(VENTANA_DIAS - 1);
+    while (primerOffset <= -1 && montoDelDia(primerOffset).monto === 0) {
+      primerOffset++;
+    }
+    const diasHistoria = -primerOffset; // días completos con historia
+    if (diasHistoria < 7) {
+      return { suficiente: false, diasHistoria, ventasActual: round2(mesActual) };
+    }
+
+    // Promedio por día de semana sobre la historia efectiva
+    const sumaDow = Array.from({ length: 7 }, () => ({ suma: 0, n: 0 }));
+    for (let off = primerOffset; off <= -1; off++) {
+      const { dow, monto } = montoDelDia(off);
+      sumaDow[dow].suma += monto;
+      sumaDow[dow].n += 1;
+    }
+    const promedioDow = sumaDow.map((s) => (s.n > 0 ? s.suma / s.n : 0));
+
+    // Restante del mes: días después de hoy + lo que le falte a hoy
+    const dowHoy = new Date(Date.UTC(y, m, d)).getUTCDay();
+    const ventasHoy = montoDelDia(0).monto;
+    let restante = Math.max(0, promedioDow[dowHoy] - ventasHoy);
+    for (let dia = d + 1; dia <= diasEnMes; dia++) {
+      restante += promedioDow[new Date(Date.UTC(y, m, dia)).getUTCDay()];
+    }
+
+    // Banda: coeficiente de variación de las semanas completas históricas
+    const semanas: number[] = [];
+    for (let fin = -1; fin - 6 >= primerOffset; fin -= 7) {
+      let s = 0;
+      for (let off = fin - 6; off <= fin; off++) s += montoDelDia(off).monto;
+      semanas.push(s);
+    }
+    let cv = 0.25; // sin semanas suficientes: banda genérica ±25%
+    if (semanas.length >= 2) {
+      const prom = semanas.reduce((a, b) => a + b, 0) / semanas.length;
+      if (prom > 0) {
+        const varianza =
+          semanas.reduce((a, b) => a + (b - prom) * (b - prom), 0) /
+          semanas.length;
+        cv = Math.min(0.5, Math.sqrt(varianza) / prom);
+      }
+    }
+
+    const proyeccion = mesActual + restante;
+    return {
+      suficiente: true,
+      diasHistoria,
+      diasTranscurridos: d,
+      diasEnMes,
+      ventasActual: round2(mesActual),
+      proyeccionCierre: round2(proyeccion),
+      proyeccionMin: round2(mesActual + restante * (1 - cv)),
+      proyeccionMax: round2(mesActual + restante * (1 + cv)),
+      mesAnterior: round2(mesAnterior),
+      variacionPct:
+        mesAnterior > 0
+          ? round2(((proyeccion - mesAnterior) / mesAnterior) * 100)
+          : null,
+    };
+  }
+
+  /**
    * Dashboard consolidado: todas las secciones de estadísticas en UNA
    * respuesta. El app hacía 15 requests paralelos — cada uno pagaba
    * round-trip móvil + auth + tenant; acá el fan-out corre server-side
@@ -1017,6 +1143,7 @@ export class VentaAnalyticsService {
       metodosPago,
       horasPico,
       reposicion,
+      proyeccion,
     ] = await Promise.all([
       this.getResumenGeneral(empresaId, query),
       this.getVentasPorPeriodo(empresaId, query),
@@ -1033,6 +1160,7 @@ export class VentaAnalyticsService {
       this.getMetodosPago(empresaId, query),
       this.getHorasPico(empresaId, query),
       this.getReposicionSugerida(empresaId, query),
+      this.getProyeccionMes(empresaId, query),
     ]);
 
     return {
@@ -1051,6 +1179,7 @@ export class VentaAnalyticsService {
       metodosPago,
       horasPico,
       reposicion,
+      proyeccion,
     };
   }
 

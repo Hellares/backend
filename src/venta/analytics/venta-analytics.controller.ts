@@ -125,6 +125,18 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getVentasPorMarca(empresaId, query);
   }
 
+  @Get('proyeccion')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Proyeccion de cierre del mes actual (ritmo por dia de semana)' })
+  @ApiResponse({ status: 200, description: 'Proyeccion obtenida' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getProyeccionMes(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getProyeccionMes(empresaId, query);
+  }
+
   @Get('dashboard')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Dashboard consolidado: todas las secciones de estadisticas en una respuesta' })
