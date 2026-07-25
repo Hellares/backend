@@ -125,6 +125,18 @@ export class VentaAnalyticsController {
     return this.ventaAnalyticsService.getVentasPorMarca(empresaId, query);
   }
 
+  @Get('dashboard')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Dashboard consolidado: todas las secciones de estadisticas en una respuesta' })
+  @ApiResponse({ status: 200, description: 'Dashboard obtenido' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getDashboard(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: VentaAnalyticsQueryDto,
+  ) {
+    return this.ventaAnalyticsService.getDashboard(empresaId, query);
+  }
+
   @Get('reposicion')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Reposicion sugerida: velocidad 30d vs stock actual (por variante)' })

@@ -992,6 +992,69 @@ export class VentaAnalyticsService {
   }
 
   /**
+   * Dashboard consolidado: todas las secciones de estadísticas en UNA
+   * respuesta. El app hacía 15 requests paralelos — cada uno pagaba
+   * round-trip móvil + auth + tenant; acá el fan-out corre server-side
+   * contra la BD local. Los endpoints individuales siguen vivos por
+   * compatibilidad con APKs viejos.
+   */
+  async getDashboard(empresaId: string, query: VentaAnalyticsQueryDto) {
+    this.logger.log('Obteniendo dashboard consolidado de ventas');
+
+    const [
+      resumen,
+      ventasPeriodo,
+      topProductos,
+      menosVendidos,
+      topClientes,
+      comparativo,
+      alertas,
+      porCanal,
+      porCategoria,
+      porMarca,
+      porProveedor,
+      entregas,
+      metodosPago,
+      horasPico,
+      reposicion,
+    ] = await Promise.all([
+      this.getResumenGeneral(empresaId, query),
+      this.getVentasPorPeriodo(empresaId, query),
+      this.getTopProductos(empresaId, { ...query, orden: 'DESC' }),
+      this.getTopProductos(empresaId, { ...query, orden: 'ASC' }),
+      this.getTopClientes(empresaId, query),
+      this.getComparativoVentas(empresaId, query),
+      this.getAlertasVentas(empresaId, query.sedeId),
+      this.getVentasPorCanal(empresaId, query),
+      this.getVentasPorCategoria(empresaId, query),
+      this.getVentasPorMarca(empresaId, query),
+      this.getVentasPorProveedor(empresaId, query),
+      this.getEntregasAnalytics(empresaId, query),
+      this.getMetodosPago(empresaId, query),
+      this.getHorasPico(empresaId, query),
+      this.getReposicionSugerida(empresaId, query),
+    ]);
+
+    return {
+      resumen,
+      ventasPeriodo,
+      topProductos,
+      menosVendidos,
+      topClientes,
+      comparativo,
+      alertas,
+      porCanal,
+      porCategoria,
+      porMarca,
+      porProveedor,
+      entregas,
+      metodosPago,
+      horasPico,
+      reposicion,
+    };
+  }
+
+  /**
    * Distribución de pagos por método (fuente de verdad: tabla PagoVenta —
    * una venta MIXTO aporta a cada método por separado). Ventas a crédito
    * sin pagos aún no aparecen: es distribución de lo COBRADO.

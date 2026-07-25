@@ -464,6 +464,64 @@ describe('VentaAnalyticsService.getResumenGeneral — anuladas y devoluciones', 
   });
 });
 
+describe('VentaAnalyticsService.getDashboard', () => {
+  it('consolida todas las secciones y pide los dos rankings (DESC y ASC)', async () => {
+    const service = mkService({});
+    const marcador = (nombre: string) =>
+      jest.fn().mockResolvedValue({ seccion: nombre });
+
+    const spies = {
+      getResumenGeneral: marcador('resumen'),
+      getVentasPorPeriodo: marcador('periodo'),
+      getTopProductos: jest
+        .fn()
+        .mockImplementation((_e: string, q: any) =>
+          Promise.resolve([{ orden: q.orden }])),
+      getTopClientes: marcador('clientes'),
+      getComparativoVentas: marcador('comparativo'),
+      getAlertasVentas: marcador('alertas'),
+      getVentasPorCanal: marcador('canal'),
+      getVentasPorCategoria: marcador('categoria'),
+      getVentasPorMarca: marcador('marca'),
+      getVentasPorProveedor: marcador('proveedor'),
+      getEntregasAnalytics: marcador('entregas'),
+      getMetodosPago: marcador('metodos'),
+      getHorasPico: marcador('horas'),
+      getReposicionSugerida: marcador('reposicion'),
+    };
+    Object.assign(service, spies);
+
+    const result = await service.getDashboard('emp1', {
+      sedeId: 'sede-9',
+    } as any);
+
+    expect(Object.keys(result).sort()).toEqual(
+      [
+        'resumen',
+        'ventasPeriodo',
+        'topProductos',
+        'menosVendidos',
+        'topClientes',
+        'comparativo',
+        'alertas',
+        'porCanal',
+        'porCategoria',
+        'porMarca',
+        'porProveedor',
+        'entregas',
+        'metodosPago',
+        'horasPico',
+        'reposicion',
+      ].sort(),
+    );
+    // Ranking pedido dos veces: más vendidos (DESC) y menos vendidos (ASC)
+    expect(result.topProductos).toEqual([{ orden: 'DESC' }]);
+    expect(result.menosVendidos).toEqual([{ orden: 'ASC' }]);
+    // Alertas recibe la sede del filtro
+    expect(spies.getAlertasVentas).toHaveBeenCalledWith('emp1', 'sede-9');
+  });
+});
+
 describe('VentaAnalyticsService.getReposicionSugerida', () => {
   it('cruza velocidad 30d con stock (rama variante y rama producto) y clasifica', async () => {
     const detalles = [
