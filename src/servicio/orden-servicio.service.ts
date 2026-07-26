@@ -1382,6 +1382,7 @@ export class OrdenServicioService {
    * y web dynamic-fields-form):
    * - OPCION_MULTIPLE / CHECKBOX_MULTIPLE → array<string>
    * - PATRON_DESBLOQUEO → "0-1-2-5-8" (índices 0-8 del grid 3x3)
+   * - CODIGO_BARRAS → string tal cual lo entregó el lector/cámara
    * - INSPECCION_VISUAL → JSON-string {silueta, puntos[]}
    * - OBJETO → mapa de subcampos
    * - ARCHIVO → boolean (switch); se toleran URLs legacy
@@ -1459,6 +1460,13 @@ export class OrdenServicioService {
         }
         break;
       }
+      case TipoCampoServicio.CODIGO_BARRAS:
+        // Escaneado con la cámara o tecleado por un lector físico (que se
+        // comporta como teclado). El contenido depende del simbolismo del
+        // código, así que solo se exige texto: validarlo más (largo de un
+        // IMEI, dígito verificador) rompería etiquetas internas y SKUs.
+        if (typeof valor !== 'string') fail('un texto (código escaneado)');
+        break;
       case TipoCampoServicio.PATRON_DESBLOQUEO:
         if (typeof valor !== 'string' || !/^[0-8](-[0-8])*$/.test(valor)) {
           fail('un patrón de desbloqueo válido (índices 0-8)');
