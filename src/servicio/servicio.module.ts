@@ -26,7 +26,7 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule, forwardRef(() => AvisoMantenimientoModule), CajaModule, WhatsappModule],
+  imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule, forwardRef(() => AvisoMantenimientoModule), CajaModule, forwardRef(() => WhatsappModule)],
   controllers: [
     ConfiguracionCamposController,
     ServicioController,

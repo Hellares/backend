@@ -130,6 +130,7 @@ export class OrdenServicioService {
     private avisoMantenimientoService: AvisoMantenimientoService,
     private notificacionService: NotificacionService,
     private cajaService: CajaService,
+    @Inject(forwardRef(() => EvolutionApiService))
     private readonly evolution: EvolutionApiService,
   ) {}
 
