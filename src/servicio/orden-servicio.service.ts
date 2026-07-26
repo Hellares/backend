@@ -1488,6 +1488,27 @@ export class OrdenServicioService {
         if (Number.isNaN(Number(valor))) fail('un monto');
         break;
       }
+      case TipoCampoServicio.PLACA_VEHICULO:
+        // Formatos peruanos conviven (ABC-123, A1B-234, viejos de 6): se
+        // exige texto y largo razonable, no un patrón — rechazar una placa
+        // legítima por formato es peor que aceptar una mal tipeada.
+        if (typeof valor !== 'string' || valor.trim().length > 12) {
+          fail('una placa');
+        }
+        break;
+      case TipoCampoServicio.LICENCIA_CONDUCIR:
+        if (typeof valor !== 'string') fail('un número de licencia');
+        break;
+      case TipoCampoServicio.FOTO:
+        // URL del archivo en el storage, igual que FIRMA.
+        if (typeof valor !== 'string') fail('la URL de la foto');
+        break;
+      case TipoCampoServicio.PRODUCTO_CATALOGO:
+        // Se guarda el NOMBRE del producto elegido (texto), no su id: la
+        // orden documenta lo que se usó y no debe romperse si el producto
+        // se borra del catálogo después.
+        if (typeof valor !== 'string') fail('un producto');
+        break;
       case TipoCampoServicio.PIN_CLAVE:
         // Se guarda tal cual: un PIN puede empezar en 0 y ser alfanumérico.
         if (typeof valor !== 'string') fail('un texto (PIN o clave)');

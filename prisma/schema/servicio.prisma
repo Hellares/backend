@@ -353,6 +353,10 @@ enum TipoCampoServicio {
   FIRMA
   DOCUMENTO_IDENTIDAD
   TABLA
+  PLACA_VEHICULO
+  LICENCIA_CONDUCIR
+  FOTO
+  PRODUCTO_CATALOGO
 }
 
 enum CategoriaCampo {
