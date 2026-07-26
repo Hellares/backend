@@ -1383,6 +1383,10 @@ export class OrdenServicioService {
    * - OPCION_MULTIPLE / CHECKBOX_MULTIPLE → array<string>
    * - PATRON_DESBLOQUEO → "0-1-2-5-8" (índices 0-8 del grid 3x3)
    * - CODIGO_BARRAS → string tal cual lo entregó el lector/cámara
+   * - PIN_CLAVE → string (puede empezar en 0; nunca se normaliza)
+   * - MONEDA → number (o string numérico)
+   * - FIRMA → string, URL del PNG en el storage
+   * - DOCUMENTO_IDENTIDAD → string de 8 / 9 / 11 dígitos
    * - INSPECCION_VISUAL → JSON-string {silueta, puntos[]}
    * - OBJETO → mapa de subcampos
    * - ARCHIVO → boolean (switch); se toleran URLs legacy
@@ -1460,6 +1464,28 @@ export class OrdenServicioService {
         }
         break;
       }
+      case TipoCampoServicio.MONEDA: {
+        if (typeof valor !== 'number' && typeof valor !== 'string') {
+          fail('un monto');
+        }
+        if (Number.isNaN(Number(valor))) fail('un monto');
+        break;
+      }
+      case TipoCampoServicio.PIN_CLAVE:
+        // Se guarda tal cual: un PIN puede empezar en 0 y ser alfanumérico.
+        if (typeof valor !== 'string') fail('un texto (PIN o clave)');
+        break;
+      case TipoCampoServicio.FIRMA:
+        // URL del PNG subido al storage; el trazo no viaja en la orden.
+        if (typeof valor !== 'string') fail('la URL de la firma');
+        break;
+      case TipoCampoServicio.DOCUMENTO_IDENTIDAD:
+        // DNI (8), CE (9) o RUC (11). Solo dígitos y largo: el nombre lo
+        // resuelve RENIEC/SUNAT en el cliente, aquí no se re-consulta.
+        if (typeof valor !== 'string' || !/^\d{8}$|^\d{9}$|^\d{11}$/.test(valor)) {
+          fail('un DNI (8), CE (9) o RUC (11 dígitos)');
+        }
+        break;
       case TipoCampoServicio.CODIGO_BARRAS:
         // Escaneado con la cámara o tecleado por un lector físico (que se
         // comporta como teclado). El contenido depende del simbolismo del

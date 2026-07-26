@@ -1,0 +1,5 @@
+-- AlterEnum
+ALTER TYPE "TipoCampoServicio" ADD VALUE 'PIN_CLAVE';
+ALTER TYPE "TipoCampoServicio" ADD VALUE 'MONEDA';
+ALTER TYPE "TipoCampoServicio" ADD VALUE 'FIRMA';
+ALTER TYPE "TipoCampoServicio" ADD VALUE 'DOCUMENTO_IDENTIDAD';
