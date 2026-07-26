@@ -738,7 +738,14 @@ export class FacturacionService {
               esCredito: true,
               metodoPago: true,
               cuotas: {
-                select: { numero: true, monto: true, fechaVencimiento: true },
+                // saldoPendiente: un crédito con TODAS las cuotas cobradas se
+                // emite como Contado (ver esCreditoConCuotas en los mappers).
+                select: {
+                  numero: true,
+                  monto: true,
+                  fechaVencimiento: true,
+                  saldoPendiente: true,
+                },
                 orderBy: { numero: 'asc' },
               },
               pagos: {

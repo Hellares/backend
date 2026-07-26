@@ -44,7 +44,13 @@ interface ComprobanteData {
   venta?: {
     descuento?: any;
     esCredito?: boolean;
-    cuotas?: Array<{ numero: number; monto: any; fechaVencimiento: Date }>;
+    /** `saldoPendiente` decide si el crédito sigue vivo; ausente = se asume pendiente. */
+    cuotas?: Array<{
+      numero: number;
+      monto: any;
+      fechaVencimiento: Date;
+      saldoPendiente?: any;
+    }>;
   } | null;
 }
 
@@ -251,7 +257,12 @@ export class NubefactMapper {
   /** Datos de venta a crédito (cuotas) */
   private static buildCreditoData(comprobante: ComprobanteData) {
     const venta = comprobante.venta;
-    if (!venta?.esCredito || !venta.cuotas?.length) {
+    // Sin cuotas, o con todas ya cobradas (Ticket a crédito facturado al
+    // terminar de pagar), el documento es CONTADO: no queda saldo que declarar.
+    const quedaSaldo = (venta?.cuotas ?? []).some(
+      (c) => c.saldoPendiente == null || Number(c.saldoPendiente) > 0.005,
+    );
+    if (!venta?.esCredito || !quedaSaldo) {
       return { condiciones_de_pago: 'Contado', venta_al_credito: [] as any[] };
     }
 

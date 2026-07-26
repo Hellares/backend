@@ -4884,7 +4884,10 @@ export class VentaService {
     const montoInteresTotal = round2(montoCredito * (porcentajeInteres / 100));
     const totalConInteres = montoCredito + montoInteresTotal;
 
-    const intervaloDias = Math.floor(plazoDias / numeroCuotas);
+    // Intervalo entre vencimientos. Mínimo 1 día: con plazo < cuotas la
+    // división daba 0 y TODAS las cuotas vencían el mismo día (hoy). El app
+    // manda plazo = frecuencia × cuotas, pero la API acepta cualquier combo.
+    const intervaloDias = Math.max(1, Math.floor(plazoDias / numeroCuotas));
     const montoCuota = Math.floor((totalConInteres / numeroCuotas) * 100) / 100;
     const resto = round2(totalConInteres - montoCuota * numeroCuotas);
 

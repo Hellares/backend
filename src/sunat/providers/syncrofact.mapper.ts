@@ -47,7 +47,13 @@ interface ComprobanteData {
   venta?: {
     descuento?: any;
     esCredito?: boolean;
-    cuotas?: Array<{ numero: number; monto: any; fechaVencimiento: Date }>;
+    /** `saldoPendiente` decide si el crédito sigue vivo; ausente = se asume pendiente. */
+    cuotas?: Array<{
+      numero: number;
+      monto: any;
+      fechaVencimiento: Date;
+      saldoPendiente?: any;
+    }>;
     /** Pago único legacy: si no hay `pagos[]` pero sí `metodoPago`, se sintetiza un pago virtual sin banco/referencia. */
     metodoPago?: string | null;
     /** Pagos individuales — fuente principal para construir medios_pago en Fase 2. */
@@ -284,9 +290,28 @@ export class SyncrofactMapper {
    * Una venta es "a crédito" para SUNAT solo si tiene cuotas pendientes. Un
    * crédito pagado por adelantado en su totalidad (0 cuotas) es CONTADO: no se
    * manda `forma_pago_cuotas` (rechazo) y SÍ corresponde reportar `medios_pago`.
+   *
+   * Mismo criterio cuando las cuotas EXISTEN pero ya se cobraron todas: es el
+   * caso del Ticket a crédito que se factura recién al terminar de pagar
+   * (pagos diarios/semanales). Mandarlo como Credito emitiría un comprobante
+   * con todas las fechas de pago en el pasado y sin saldo pendiente.
    */
   private static esCreditoConCuotas(venta: ComprobanteData['venta']): boolean {
-    return venta?.esCredito === true && (venta?.cuotas?.length ?? 0) > 0;
+    return venta?.esCredito === true && this.tieneCuotasPendientes(venta);
+  }
+
+  /**
+   * Queda saldo por cobrar en alguna cuota. Si el llamador no trae
+   * `saldoPendiente` (contratos legacy) se asume pendiente: con eso el
+   * comportamiento previo —mandar TODAS las cuotas sumando el total— se
+   * conserva intacto, incluido el crédito con adelanto inicial (sus primeras
+   * cuotas nacen pagadas y aun así el documento va como Credito).
+   */
+  private static tieneCuotasPendientes(venta: ComprobanteData['venta']): boolean {
+    const cuotas = venta?.cuotas ?? [];
+    return cuotas.some(
+      (c) => c.saldoPendiente == null || Number(c.saldoPendiente) > 0.005,
+    );
   }
 
   private static buildMediosPago(comprobante: ComprobanteData): SyncrofactMedioPago[] | null {

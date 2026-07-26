@@ -79,6 +79,74 @@ describe('SyncrofactMapper.toInvoiceRequest — forma de pago crédito/contado',
     expect(body.forma_pago_tipo).toBe('Contado');
     expect(body.forma_pago_cuotas).toBeUndefined();
   });
+
+  // Ticket a crédito que se factura recién cuando el cliente termina de pagar
+  // (pagos diarios/semanales): las cuotas EXISTEN pero ya no deben nada. Ir
+  // como Credito emitiría fechas de pago pasadas y sin saldo que declarar.
+  it('crédito con TODAS las cuotas cobradas → Contado (factura al terminar de pagar)', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      baseComprobante({
+        esCredito: true,
+        metodoPago: 'EFECTIVO',
+        cuotas: [
+          { numero: 1, monto: 25, fechaVencimiento: new Date('2026-07-01'), saldoPendiente: 0 },
+          { numero: 2, monto: 25, fechaVencimiento: new Date('2026-07-08'), saldoPendiente: 0 },
+        ],
+      }),
+      config,
+    );
+    expect(body.forma_pago_tipo).toBe('Contado');
+    expect(body.forma_pago_cuotas).toBeUndefined();
+  });
+
+  it('crédito con UNA cuota aún pendiente → Credito con TODAS las cuotas (suman el total)', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      baseComprobante({
+        esCredito: true,
+        cuotas: [
+          { numero: 1, monto: 25, fechaVencimiento: new Date('2026-07-01'), saldoPendiente: 0 },
+          { numero: 2, monto: 25, fechaVencimiento: new Date('2026-07-08'), saldoPendiente: 25 },
+        ],
+      }),
+      config,
+    );
+    expect(body.forma_pago_tipo).toBe('Credito');
+    // El adelanto NO recorta el array: SUNAT exige que las cuotas sumen el total
+    expect(body.forma_pago_cuotas).toHaveLength(2);
+    const suma = body.forma_pago_cuotas!.reduce((s, c) => s + Number(c.monto), 0);
+    expect(suma).toBe(50);
+  });
+
+  it('cuotas sin saldoPendiente (contrato legacy) → se asumen pendientes: Credito', () => {
+    const body = SyncrofactMapper.toInvoiceRequest(
+      baseComprobante({
+        esCredito: true,
+        cuotas: [{ numero: 1, monto: 50, fechaVencimiento: new Date('2026-08-29') }],
+      }),
+      config,
+    );
+    expect(body.forma_pago_tipo).toBe('Credito');
+    expect(body.forma_pago_cuotas).toHaveLength(1);
+  });
+
+  // Pagos diarios: 30 cuotas viajan completas y deben sumar exactamente el
+  // total (el resto del redondeo va en la última, igual que generarCuotas).
+  it('30 cuotas diarias → las manda todas y suman exacto el total', () => {
+    const cuotas = Array.from({ length: 30 }, (_, i) => ({
+      numero: i + 1,
+      monto: i === 29 ? 1.77 : 1.66,
+      fechaVencimiento: new Date(2026, 6, i + 1),
+      saldoPendiente: i === 29 ? 1.77 : 1.66,
+    }));
+    const body = SyncrofactMapper.toInvoiceRequest(
+      { ...baseComprobante({ esCredito: true, cuotas }), total: 49.91 },
+      config,
+    );
+    expect(body.forma_pago_tipo).toBe('Credito');
+    expect(body.forma_pago_cuotas).toHaveLength(30);
+    const suma = body.forma_pago_cuotas!.reduce((s, c) => s + Number(c.monto), 0);
+    expect(Math.round(suma * 100) / 100).toBe(49.91);
+  });
 });
 
 /**

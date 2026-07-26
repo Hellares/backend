@@ -205,6 +205,74 @@ describe('VentaService.crearYCobrar', () => {
     expect(tx.venta.create).toHaveBeenCalled();
   });
 
+  // ── Frecuencia de pago del crédito (diario / semanal / cada 3 días) ──
+  // El app manda `plazoCredito = frecuencia × numeroCuotas`; el backend saca
+  // el intervalo con `plazo ÷ cuotas`, así que debe caer exacto en la
+  // frecuencia elegida. Casos reales: el cliente que abona todos los días o
+  // cada semana.
+  const cuotasGeneradas = () =>
+    tx.cuotaVenta.createMany.mock.calls[0][0].data as Array<{
+      numero: number;
+      monto: number;
+      fechaVencimiento: Date;
+    }>;
+
+  const diasEntre = (a: Date, b: Date) =>
+    Math.round((b.getTime() - a.getTime()) / 86400000);
+
+  const cobrarACredito = (numeroCuotas: number, plazoCredito: number) =>
+    service.crearYCobrar(
+      'emp-1',
+      dtoBase({
+        esCredito: true,
+        numeroCuotas,
+        plazoCredito,
+        montoRecibido: undefined,
+        pagos: undefined,
+      }) as any,
+      'caj-1',
+    );
+
+  it.each([
+    ['semanal', 4, 28, 7],
+    ['diario', 20, 20, 1],
+    ['cada 3 dias', 10, 30, 3],
+    ['quincenal', 6, 90, 15],
+  ])(
+    'crédito %s: %i cuotas con plazo %i → vencimientos cada %i día(s)',
+    async (_label, numeroCuotas, plazoCredito, intervaloEsperado) => {
+      await cobrarACredito(numeroCuotas as number, plazoCredito as number);
+
+      const cuotas = cuotasGeneradas();
+      expect(cuotas).toHaveLength(numeroCuotas as number);
+
+      // Separación constante entre vencimientos consecutivos
+      for (let i = 1; i < cuotas.length; i++) {
+        expect(
+          diasEntre(cuotas[i - 1].fechaVencimiento, cuotas[i].fechaVencimiento),
+        ).toBe(intervaloEsperado);
+      }
+      // Las cuotas SIEMPRE suman el total del documento (requisito SUNAT)
+      const suma = cuotas.reduce((s, c) => s + Number(c.monto), 0);
+      expect(Math.round(suma * 100) / 100).toBe(50);
+    },
+  );
+
+  it('plazo menor que el número de cuotas: NO vencen todas el mismo día (intervalo mínimo 1)', async () => {
+    // Combinación que la API acepta aunque el app ya no la produzca (plazo 7
+    // con 12 cuotas): antes floor(7/12)=0 y las 12 cuotas vencían hoy.
+    await cobrarACredito(12, 7);
+
+    const cuotas = cuotasGeneradas();
+    for (let i = 1; i < cuotas.length; i++) {
+      expect(
+        diasEntre(cuotas[i - 1].fechaVencimiento, cuotas[i].fechaVencimiento),
+      ).toBe(1);
+    }
+    const fechas = new Set(cuotas.map((c) => c.fechaVencimiento.getTime()));
+    expect(fechas.size).toBe(12);
+  });
+
   it('sin caja abierta (POS): rechaza antes de crear nada', async () => {
     prisma.caja.findFirst.mockResolvedValue(null);
     await expect(
