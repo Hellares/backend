@@ -28,12 +28,23 @@ export class ConfiguracionCamposService {
         plantillaId: dto.plantillaId ?? null,
         nombre: dto.nombre,
       },
+      select: { id: true, isActive: true },
     });
 
-    if (existing) {
+    if (existing?.isActive) {
       throw new BadRequestException(
         `Ya existe un campo con el nombre "${dto.nombre}"`,
       );
+    }
+
+    // Existía pero ELIMINADO: se revive con la definición nueva. El borrado
+    // es lógico y el unique NO distingue activos, así que la fila muerta
+    // dejaba el nombre bloqueado para siempre.
+    if (existing) {
+      return this.prisma.configuracionCamposServicio.update({
+        where: { id: existing.id },
+        data: { ...dto, empresaId, isActive: true },
+      });
     }
 
     // Si no se proporciona orden, asignar el siguiente
@@ -99,12 +110,24 @@ export class ConfiguracionCamposService {
           nombre: dto.nombre,
           id: { not: id },
         },
+        select: { id: true, isActive: true },
       });
 
-      if (existing) {
+      if (existing?.isActive) {
         throw new BadRequestException(
           `Ya existe un campo con el nombre "${dto.nombre}"`,
         );
+      }
+
+      // El choque es contra un campo ELIMINADO, que solo estaba reservando
+      // el nombre por el unique (empresaId, plantillaId, nombre) — que no
+      // mira isActive. Se descarta esa definición muerta para liberarlo.
+      // Nada apunta a estas filas por id: los valores capturados viven en
+      // `datosPersonalizados` de cada orden, indexados por NOMBRE.
+      if (existing) {
+        await this.prisma.configuracionCamposServicio.delete({
+          where: { id: existing.id },
+        });
       }
     }
 
