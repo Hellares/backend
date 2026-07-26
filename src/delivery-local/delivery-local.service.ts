@@ -338,9 +338,9 @@ export class DeliveryLocalService {
   /**
    * Comparte la ubicación de entrega por WhatsApp a CUALQUIER celular (el
    * empleado que reparte, un familiar del cliente…) — sale de la instancia
-   * de WhatsApp de la empresa, sin salir del app. Con pin manda la
-   * ubicación NATIVA (tocable, abre el mapa) + texto con los datos; sin
-   * pin, solo el texto con la dirección.
+   * de WhatsApp de la empresa, sin salir del app. Con pin manda SOLO la
+   * ubicación NATIVA (tocable, abre el mapa) con dirección/ref/zona en el
+   * address; sin pin (o si sendLocation falla), un texto con los datos.
    */
   async compartirUbicacion(
     userId: string,
@@ -386,9 +386,14 @@ export class DeliveryLocalService {
     const lon = coords?.lon != null ? Number(coords.lon) : null;
     const codigo = delivery.venta?.codigo ?? '';
 
-    // Pin nativo primero (tocable en el chat); solo si falla, el texto
-    // lleva el link de Maps como respaldo — con pin, el link duplicaría
-    // el mapa en el chat.
+    // UN SOLO mensaje: el pin nativo carga título, dirección, ref y zona
+    // en address — dos mensajes seguidos a un número frío arriesgan baneo.
+    // El texto queda solo como fallback (sin coords o sendLocation caído).
+    const direccionCompleta =
+      `${delivery.direccion}` +
+      (delivery.referencia ? ` — Ref: ${delivery.referencia}` : '') +
+      (delivery.distrito ? ` — ${delivery.distrito}` : '');
+
     let pinEnviado = false;
     if (lat != null && lon != null) {
       try {
@@ -398,41 +403,47 @@ export class DeliveryLocalService {
           latitude: lat,
           longitude: lon,
           name: `Entrega ${codigo}`.trim(),
-          address: delivery.direccion,
+          address: direccionCompleta,
         });
         pinEnviado = true;
-      } catch (e) {
-        this.logger.warn(
-          `sendLocation falló (fallback a texto): ${(e as Error).message}`,
-        );
+      } catch (e: any) {
+        const msg = String(e?.message ?? '');
+        if (msg.includes('exists":false')) {
+          throw new BadRequestException(
+            `El número ${dto.celular} no tiene WhatsApp — verifícalo`,
+          );
+        }
+        this.logger.warn(`sendLocation falló (fallback a texto): ${msg}`);
       }
     }
 
-    const texto =
-      `📍 *Entrega ${codigo}*\n` +
-      `${delivery.direccion}` +
-      (delivery.referencia ? `\nRef: ${delivery.referencia}` : '') +
-      (delivery.distrito ? `\nZona: ${delivery.distrito}` : '') +
-      (!pinEnviado && lat != null && lon != null
-        ? `\nMapa: https://maps.google.com/?q=${lat},${lon}`
-        : '');
+    if (!pinEnviado) {
+      const texto =
+        `📍 *Entrega ${codigo}*\n` +
+        `${delivery.direccion}` +
+        (delivery.referencia ? `\nRef: ${delivery.referencia}` : '') +
+        (delivery.distrito ? `\nZona: ${delivery.distrito}` : '') +
+        (lat != null && lon != null
+          ? `\nMapa: https://maps.google.com/?q=${lat},${lon}`
+          : '');
 
-    try {
-      await this.evolution.sendText({
-        instanceName: iw.instanceName,
-        number: celular,
-        text: texto,
-        linkPreview: false,
-      });
-    } catch (e: any) {
-      const msg = String(e?.message ?? '');
-      if (msg.includes('exists":false')) {
-        throw new BadRequestException(
-          `El número ${dto.celular} no tiene WhatsApp — verifícalo`,
-        );
+      try {
+        await this.evolution.sendText({
+          instanceName: iw.instanceName,
+          number: celular,
+          text: texto,
+          linkPreview: false,
+        });
+      } catch (e: any) {
+        const msg = String(e?.message ?? '');
+        if (msg.includes('exists":false')) {
+          throw new BadRequestException(
+            `El número ${dto.celular} no tiene WhatsApp — verifícalo`,
+          );
+        }
+        this.logger.warn(`compartirUbicacion sendText: ${msg}`);
+        throw new BadRequestException('No se pudo enviar el WhatsApp');
       }
-      this.logger.warn(`compartirUbicacion sendText: ${msg}`);
-      throw new BadRequestException('No se pudo enviar el WhatsApp');
     }
 
     return { ok: true };

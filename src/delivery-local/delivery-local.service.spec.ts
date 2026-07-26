@@ -55,7 +55,10 @@ describe('DeliveryLocalService', () => {
       },
     };
     notificaciones = { enviarAUsuarios: jest.fn().mockResolvedValue(undefined) };
-    evolution = { sendText: jest.fn().mockResolvedValue(undefined) };
+    evolution = {
+      sendText: jest.fn().mockResolvedValue(undefined),
+      sendLocation: jest.fn().mockResolvedValue(undefined),
+    };
     service = new DeliveryLocalService(prisma, notificaciones, evolution);
   });
 
@@ -552,6 +555,97 @@ describe('DeliveryLocalService', () => {
       await expect(
         service.cancelar(VENDEDOR, 'd1', { empresaId: EMPRESA }),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('compartirUbicacion', () => {
+    const conWhatsapp = () =>
+      prisma.integracionWhatsapp.findUnique.mockResolvedValue({
+        instanceName: 'inst1',
+        estado: 'CONECTADO',
+        habilitado: true,
+      });
+
+    const deliveryConPin = (over: Record<string, unknown> = {}) =>
+      prisma.deliveryLocal.findFirst.mockResolvedValue({
+        direccion: 'Av. Balta 123',
+        referencia: 'portón verde',
+        distrito: 'Chiclayo',
+        coordenadas: { lat: -6.7714, lon: -79.8409 },
+        venta: { codigo: 'VTA-1' },
+        ...over,
+      });
+
+    it('con pin: UN SOLO mensaje — sendLocation con dirección/ref/zona en address, SIN sendText', async () => {
+      conRol(Rol.EMPRESA_ADMIN);
+      conWhatsapp();
+      deliveryConPin();
+
+      await service.compartirUbicacion(VENDEDOR, 'd1', {
+        empresaId: EMPRESA,
+        celular: '904773029',
+      });
+
+      expect(evolution.sendLocation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          number: '51904773029',
+          name: 'Entrega VTA-1',
+          address: 'Av. Balta 123 — Ref: portón verde — Chiclayo',
+        }),
+      );
+      // Dos mensajes seguidos arriesgan baneo del número de la empresa.
+      expect(evolution.sendText).not.toHaveBeenCalled();
+    });
+
+    it('sin coordenadas: solo texto con los datos, sin link de Maps', async () => {
+      conRol(Rol.EMPRESA_ADMIN);
+      conWhatsapp();
+      deliveryConPin({ coordenadas: null });
+
+      await service.compartirUbicacion(VENDEDOR, 'd1', {
+        empresaId: EMPRESA,
+        celular: '904773029',
+      });
+
+      expect(evolution.sendLocation).not.toHaveBeenCalled();
+      const args = evolution.sendText.mock.calls[0][0];
+      expect(args.text).toContain('Av. Balta 123');
+      expect(args.text).toContain('Zona: Chiclayo');
+      expect(args.text).not.toContain('maps.google.com');
+      expect(args.linkPreview).toBe(false);
+    });
+
+    it('sendLocation caído: fallback a texto CON link de Maps (preview off)', async () => {
+      conRol(Rol.EMPRESA_ADMIN);
+      conWhatsapp();
+      deliveryConPin();
+      evolution.sendLocation.mockRejectedValue(new Error('boom'));
+
+      await service.compartirUbicacion(VENDEDOR, 'd1', {
+        empresaId: EMPRESA,
+        celular: '904773029',
+      });
+
+      const args = evolution.sendText.mock.calls[0][0];
+      expect(args.text).toContain('maps.google.com/?q=-6.7714,-79.8409');
+      expect(args.linkPreview).toBe(false);
+    });
+
+    it('número sin WhatsApp (exists:false en sendLocation) → BadRequest, sin reintentar por texto', async () => {
+      conRol(Rol.EMPRESA_ADMIN);
+      conWhatsapp();
+      deliveryConPin();
+      evolution.sendLocation.mockRejectedValue(
+        new Error('Evolution 400: {"exists":false}'),
+      );
+
+      await expect(
+        service.compartirUbicacion(VENDEDOR, 'd1', {
+          empresaId: EMPRESA,
+          celular: '904773029',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(evolution.sendText).not.toHaveBeenCalled();
     });
   });
 });
