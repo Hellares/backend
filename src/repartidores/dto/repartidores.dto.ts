@@ -68,3 +68,16 @@ export class ResolverAprobacionDto {
   @IsNotEmpty()
   motivo?: string;
 }
+
+/**
+ * Vinculación del WhatsApp de la PLATAFORMA. El QR siempre sirve; el
+ * pairing code solo se puede pedir si Evolution sabe a qué número va, por
+ * eso el número es opcional (el panel lo manda prellenado con el actual).
+ */
+export class ConectarWhatsappPlataformaDto {
+  /** Celular peruano de 9 dígitos, sin el 51. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^9\d{8}$/, { message: 'Celular inválido (9 dígitos)' })
+  numero?: string;
+}

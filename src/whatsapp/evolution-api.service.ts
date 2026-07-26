@@ -118,9 +118,14 @@ export class EvolutionApiService {
     });
   }
 
-  /** QR para vincular: { base64, code, pairingCode }. */
-  async connect(instanceName: string): Promise<any> {
-    return this.request('GET', `/instance/connect/${instanceName}`);
+  /**
+   * QR para vincular: { base64, code, pairingCode }. Con `numero`
+   * (formato 51XXXXXXXXX) Evolution devuelve además el pairing code, que
+   * evita escanear: se escribe en el teléfono.
+   */
+  async connect(instanceName: string, numero?: string): Promise<any> {
+    const qs = numero ? `?number=${encodeURIComponent(numero)}` : '';
+    return this.request('GET', `/instance/connect/${instanceName}${qs}`);
   }
 
   /** 'open' | 'connecting' | 'close' — null si la instancia no existe. */

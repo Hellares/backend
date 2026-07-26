@@ -15,6 +15,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards';
 import {
   ActualizarPerfilRepartidorDto,
+  ConectarWhatsappPlataformaDto,
   RegistroRepartidorDto,
   ResolverAprobacionDto,
   VerificarOtpDto,
@@ -86,6 +87,36 @@ export class RepartidoresController {
       user.sub,
       estado ? (estado as EstadoRepartidorSyncronize) : undefined,
     );
+  }
+
+  // WhatsApp de la plataforma. Declarado ANTES de las rutas 'admin/:id/*'
+  // para que 'whatsapp' no se coma como un id.
+
+  @Get('admin/whatsapp')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Estado del WhatsApp de la plataforma (OTP/avisos)' })
+  whatsappEstado(@CurrentUser() user: any) {
+    return this.service.whatsappEstado(user.sub);
+  }
+
+  @Post('admin/whatsapp/conectar')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'QR / código para vincular el WhatsApp de plataforma' })
+  whatsappConectar(
+    @Body() dto: ConectarWhatsappPlataformaDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.whatsappConectar(user.sub, dto.numero);
+  }
+
+  @Post('admin/whatsapp/logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Cerrar la sesión de WhatsApp de la plataforma' })
+  whatsappLogout(@CurrentUser() user: any) {
+    return this.service.whatsappLogout(user.sub);
   }
 
   @Post('admin/:id/aprobar')

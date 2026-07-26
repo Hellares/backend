@@ -302,6 +302,92 @@ export class RepartidoresService {
     return rep;
   }
 
+  // ── WhatsApp de la PLATAFORMA (super admin) ──
+
+  /**
+   * Instancia Evolution con la que la plataforma manda los OTP y los avisos
+   * a los repartidores. NO pertenece a ninguna empresa: no tiene fila en
+   * IntegracionWhatsapp, así que su estado se consulta directo a Evolution.
+   */
+  private get instanciaPlataforma(): string | null {
+    return process.env.SYNCRONIZE_WA_INSTANCE || null;
+  }
+
+  async whatsappEstado(adminUserId: string) {
+    await this.verificarSuperAdmin(adminUserId);
+    const instancia = this.instanciaPlataforma;
+    if (!instancia) {
+      return {
+        instancia: null,
+        configurada: false,
+        estado: null,
+        numero: null,
+        perfil: null,
+      };
+    }
+    // 'open' | 'connecting' | 'close'; null = la instancia ya no existe.
+    const estado = await this.evolution
+      .connectionState(instancia)
+      .catch(() => null);
+    const info =
+      estado === null
+        ? null
+        : await this.evolution.fetchInstance(instancia).catch(() => null);
+    const jid: unknown = info?.ownerJid ?? info?.owner ?? null;
+    return {
+      instancia,
+      configurada: true,
+      estado,
+      numero: typeof jid === 'string' ? jid.split('@')[0] : null,
+      perfil: (info?.profileName as string) ?? null,
+    };
+  }
+
+  /**
+   * Devuelve el QR (y el pairing code si se pasa el número) para vincular.
+   * Ambos caducan en pocos minutos: pedirlos con el celular en la mano.
+   */
+  async whatsappConectar(adminUserId: string, numero?: string) {
+    await this.verificarSuperAdmin(adminUserId);
+    const instancia = this.exigirInstanciaPlataforma();
+    const estado = await this.evolution
+      .connectionState(instancia)
+      .catch(() => null);
+    if (estado === 'open') {
+      return { yaConectada: true, pairingCode: null, qrBase64: null };
+    }
+    const r = await this.evolution.connect(
+      instancia,
+      numero ? `51${numero}` : undefined,
+    );
+    return {
+      yaConectada: false,
+      pairingCode: r?.pairingCode ?? r?.qrcode?.pairingCode ?? null,
+      qrBase64: r?.base64 ?? r?.qrcode?.base64 ?? null,
+    };
+  }
+
+  /**
+   * Cierra la sesión de WhatsApp de la plataforma. Mientras esté cerrada,
+   * el OTP del registro freelance queda inerte (el código igual se guarda y
+   * la verificación pasa a ser manual del admin al aprobar).
+   */
+  async whatsappLogout(adminUserId: string) {
+    await this.verificarSuperAdmin(adminUserId);
+    await this.evolution.logout(this.exigirInstanciaPlataforma());
+    return { ok: true };
+  }
+
+  private exigirInstanciaPlataforma(): string {
+    const instancia = this.instanciaPlataforma;
+    if (!instancia) {
+      throw new BadRequestException(
+        'Este ambiente no tiene SYNCRONIZE_WA_INSTANCE configurada',
+      );
+    }
+    return instancia;
+  }
+
   // ── Helpers ──
 
   private async cargarPorUsuario(usuarioId: string) {

@@ -73,7 +73,18 @@ describe('RepartidoresService', () => {
         apellidoMaterno: 'QUISPE',
       }),
     };
-    evolution = { sendText: jest.fn().mockResolvedValue(undefined) };
+    evolution = {
+      sendText: jest.fn().mockResolvedValue(undefined),
+      connectionState: jest.fn().mockResolvedValue('open'),
+      fetchInstance: jest.fn().mockResolvedValue({
+        ownerJid: '51922059365@s.whatsapp.net',
+        profileName: 'Syncronize',
+      }),
+      connect: jest
+        .fn()
+        .mockResolvedValue({ pairingCode: 'ABCD1234', base64: 'QR==' }),
+      logout: jest.fn().mockResolvedValue(undefined),
+    };
     service = new RepartidoresService(prisma, consultas, evolution);
   });
 
@@ -174,6 +185,94 @@ describe('RepartidoresService', () => {
       const data = prisma.repartidorSyncronize.update.mock.calls[0][0].data;
       expect(data.estado).toBe(EstadoRepartidorSyncronize.APROBADO);
       expect(data.aprobadoPor).toBe('admin1');
+    });
+  });
+
+  // El WhatsApp de la PLATAFORMA (el que manda los OTP) no es de ninguna
+  // empresa: vive en un env y su estado se lee directo de Evolution.
+  describe('whatsapp de plataforma (solo super admin)', () => {
+    const ENV = process.env.SYNCRONIZE_WA_INSTANCE;
+
+    beforeEach(() => {
+      process.env.SYNCRONIZE_WA_INSTANCE = 'syncronize_plataforma';
+      prisma.usuario.findUnique.mockResolvedValue({
+        rolGlobal: Rol.SUPER_ADMIN,
+      });
+    });
+
+    afterAll(() => {
+      if (ENV === undefined) delete process.env.SYNCRONIZE_WA_INSTANCE;
+      else process.env.SYNCRONIZE_WA_INSTANCE = ENV;
+    });
+
+    it('usuario sin rol super admin → Forbidden', async () => {
+      prisma.usuario.findUnique.mockResolvedValue({ rolGlobal: Rol.CAJERO });
+      await expect(service.whatsappEstado('user-comun')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(evolution.connectionState).not.toHaveBeenCalled();
+    });
+
+    it('sin env configurada → configurada:false y NO consulta Evolution', async () => {
+      delete process.env.SYNCRONIZE_WA_INSTANCE;
+      const r = await service.whatsappEstado('admin1');
+      expect(r.configurada).toBe(false);
+      expect(r.estado).toBeNull();
+      expect(evolution.connectionState).not.toHaveBeenCalled();
+    });
+
+    it('conectada → devuelve el número sin el sufijo del JID', async () => {
+      const r = await service.whatsappEstado('admin1');
+      expect(r.estado).toBe('open');
+      expect(r.numero).toBe('51922059365');
+      expect(r.perfil).toBe('Syncronize');
+      expect(r.instancia).toBe('syncronize_plataforma');
+    });
+
+    it('instancia inexistente (404) → estado null y no pide fetchInstance', async () => {
+      evolution.connectionState.mockResolvedValue(null);
+      const r = await service.whatsappEstado('admin1');
+      expect(r.estado).toBeNull();
+      expect(evolution.fetchInstance).not.toHaveBeenCalled();
+    });
+
+    it('conectar con sesión viva → yaConectada, sin regenerar código', async () => {
+      const r = await service.whatsappConectar('admin1');
+      expect(r.yaConectada).toBe(true);
+      expect(evolution.connect).not.toHaveBeenCalled();
+    });
+
+    it('conectar caída → antepone 51 al número y devuelve código + QR', async () => {
+      evolution.connectionState.mockResolvedValue('close');
+      const r = await service.whatsappConectar('admin1', '922059365');
+      expect(evolution.connect).toHaveBeenCalledWith(
+        'syncronize_plataforma',
+        '51922059365',
+      );
+      expect(r.pairingCode).toBe('ABCD1234');
+      expect(r.qrBase64).toBe('QR==');
+    });
+
+    it('conectar sin número → connect sin número (solo QR)', async () => {
+      evolution.connectionState.mockResolvedValue('close');
+      await service.whatsappConectar('admin1');
+      expect(evolution.connect).toHaveBeenCalledWith(
+        'syncronize_plataforma',
+        undefined,
+      );
+    });
+
+    it('logout cierra la instancia de plataforma', async () => {
+      await service.whatsappLogout('admin1');
+      expect(evolution.logout).toHaveBeenCalledWith('syncronize_plataforma');
+    });
+
+    it('logout sin env → BadRequest', async () => {
+      delete process.env.SYNCRONIZE_WA_INSTANCE;
+      await expect(service.whatsappLogout('admin1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(evolution.logout).not.toHaveBeenCalled();
     });
   });
 });
