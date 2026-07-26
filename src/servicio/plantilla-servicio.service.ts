@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -152,6 +153,22 @@ export class PlantillaServicioService {
   async addCampo(empresaId: string, plantillaId: string, campoData: any) {
     await this.findOne(empresaId, plantillaId);
 
+    // El unique es (empresaId, plantillaId, nombre) y NO distingue activos
+    // de inactivos. Sin este chequeo el choque salía como 500 opaco, y el
+    // caso "elimino el campo y lo vuelvo a agregar" era imposible: el
+    // borrado es lógico, así que la fila seguía ocupando el nombre.
+    const existente = await this.prisma.configuracionCamposServicio.findFirst({
+      where: { empresaId, plantillaId, nombre: campoData.nombre },
+      select: { id: true, isActive: true, tipoCampo: true, orden: true },
+    });
+
+    if (existente?.isActive) {
+      throw new ConflictException(
+        `Ya existe un campo "${campoData.nombre}" en esta plantilla ` +
+          `(tipo ${existente.tipoCampo}). Edítalo si quieres cambiarle el tipo.`,
+      );
+    }
+
     // Auto-orden
     if (campoData.orden === undefined) {
       const maxOrden = await this.prisma.configuracionCamposServicio.findFirst({
@@ -160,6 +177,16 @@ export class PlantillaServicioService {
         select: { orden: true },
       });
       campoData.orden = (maxOrden?.orden ?? 0) + 1;
+    }
+
+    // Existía pero desactivado: se revive con la definición nueva. Es lo que
+    // el usuario quiere decir al re-agregarlo, y evita obligarlo a inventar
+    // otro nombre por una fila que ya no ve.
+    if (existente) {
+      return this.prisma.configuracionCamposServicio.update({
+        where: { id: existente.id },
+        data: { ...campoData, isActive: true },
+      });
     }
 
     return this.prisma.configuracionCamposServicio.create({
