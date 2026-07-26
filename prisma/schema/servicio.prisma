@@ -352,6 +352,7 @@ enum TipoCampoServicio {
   MONEDA
   FIRMA
   DOCUMENTO_IDENTIDAD
+  TABLA
 }
 
 enum CategoriaCampo {

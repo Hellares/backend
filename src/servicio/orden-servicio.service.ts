@@ -1387,6 +1387,7 @@ export class OrdenServicioService {
    * - MONEDA → number (o string numérico)
    * - FIRMA → string, URL del PNG en el storage
    * - DOCUMENTO_IDENTIDAD → string de 8 / 9 / 11 dígitos
+   * - TABLA → array de filas {columna: valor}; columnas en `opciones`
    * - INSPECCION_VISUAL → JSON-string {silueta, puntos[]}
    * - OBJETO → mapa de subcampos
    * - ARCHIVO → boolean (switch); se toleran URLs legacy
@@ -1461,6 +1462,22 @@ export class OrdenServicioService {
           !ops.includes(valor as string)
         ) {
           fail('una de las opciones configuradas');
+        }
+        break;
+      }
+      case TipoCampoServicio.TABLA: {
+        // Lista de filas; cada fila es un objeto {columna: valor}. Las
+        // columnas se definen en `opciones` (misma forma que OBJETO), pero
+        // NO se exige que la fila las traiga todas: una celda vacía es
+        // legítima y el usuario llena la tabla de a poco.
+        if (!Array.isArray(valor)) fail('una lista de filas');
+        const filas = valor as unknown[];
+        if (
+          filas.some(
+            (f) => typeof f !== 'object' || f === null || Array.isArray(f),
+          )
+        ) {
+          fail('filas con formato {columna: valor}');
         }
         break;
       }
