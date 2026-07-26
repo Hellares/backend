@@ -22,10 +22,11 @@ import { ModeloEquipoService } from './modelo-equipo.service';
 import { ModeloEquipoController } from './modelo-equipo.controller';
 import { AvisoMantenimientoModule } from '../aviso-mantenimiento/aviso-mantenimiento.module';
 import { CajaModule } from '../caja/caja.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule, forwardRef(() => AvisoMantenimientoModule), CajaModule],
+  imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule, forwardRef(() => AvisoMantenimientoModule), CajaModule, WhatsappModule],
   controllers: [
     ConfiguracionCamposController,
     ServicioController,

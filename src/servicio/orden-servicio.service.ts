@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   Inject,
   forwardRef,
   BadRequestException,
@@ -7,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EvolutionApiService } from '../whatsapp/evolution-api.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AvisoMantenimientoService } from '../aviso-mantenimiento/aviso-mantenimiento.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
@@ -119,6 +121,8 @@ const ORDEN_SERVICIO_DETAIL_INCLUDE = {
 
 @Injectable()
 export class OrdenServicioService {
+  private readonly logger = new Logger(OrdenServicioService.name);
+
   constructor(
     private prisma: PrismaService,
     private configuracionCodigosService: ConfiguracionCodigosService,
@@ -126,6 +130,7 @@ export class OrdenServicioService {
     private avisoMantenimientoService: AvisoMantenimientoService,
     private notificacionService: NotificacionService,
     private cajaService: CajaService,
+    private readonly evolution: EvolutionApiService,
   ) {}
 
   /** Mapea el string libre `metodoPagoAdelanto` al enum de caja (fallback EFECTIVO). */
@@ -770,7 +775,69 @@ export class OrdenServicioService {
       'status_changed',
     ).catch(OrdenServicioService.logNotifFallida('cambio de estado'));
 
+    // WhatsApp al cliente, solo si el usuario marcó "comunicar al cliente".
+    // Antes esto abría wa.me en el celular del técnico y había que darle
+    // enviar a mano; con la instancia Evolution de la empresa sale solo.
+    if (dto.comunicarCliente) {
+      void this.enviarWhatsappCambioEstado(
+        empresaId,
+        updatedOrden,
+        estadoLabel,
+      );
+    }
+
     return updatedOrden;
+  }
+
+  /**
+   * Avisa al cliente por WhatsApp desde la instancia Evolution de la EMPRESA.
+   *
+   * Best-effort en todo: sin integración conectada, sin teléfono o si
+   * Evolution falla, NO se toca la transición — el cambio de estado ya está
+   * guardado y no puede deshacerse por un mensaje.
+   */
+  private async enviarWhatsappCambioEstado(
+    empresaId: string,
+    orden: any,
+    estadoLabel: string,
+  ): Promise<void> {
+    try {
+      const telefono: string | undefined =
+        orden.cliente?.persona?.telefono ?? orden.cliente?.telefono;
+      if (!telefono) return;
+
+      const integracion = await this.prisma.integracionWhatsapp.findFirst({
+        where: { empresaId, estado: 'CONECTADO' },
+        select: { instanceName: true },
+      });
+      if (!integracion) return;
+
+      const empresa = await this.prisma.empresa.findUnique({
+        where: { id: empresaId },
+        select: { nombre: true },
+      });
+
+      const nombre = orden.cliente?.persona?.nombres?.split(' ')?.[0] ?? '';
+      const saludo = nombre ? `Hola ${nombre}!` : 'Hola!';
+      const texto =
+        `${saludo}\n\nTu orden *${orden.codigo}* en ` +
+        `${empresa?.nombre ?? 'nuestro taller'} cambió de estado:\n` +
+        `*${estadoLabel}*`;
+
+      // Peruano de 9 dígitos → Evolution exige el código de país.
+      const limpio = telefono.replace(/\D/g, '');
+      const numero = limpio.length === 9 ? `51${limpio}` : limpio;
+
+      await this.evolution.sendText({
+        instanceName: integracion.instanceName,
+        number: numero,
+        text: texto,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `WhatsApp cambio de estado ${orden?.codigo}: ${(e as Error).message}`,
+      );
+    }
   }
 
   async findHistorial(empresaId: string, ordenId: string) {
