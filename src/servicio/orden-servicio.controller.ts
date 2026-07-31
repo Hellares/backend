@@ -24,6 +24,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { OrdenSedeAccessGuard } from './guards/orden-sede-access.guard';
 import {
   RequiresPermission,
   Permission,
@@ -132,6 +133,7 @@ export class OrdenServicioController {
   // ─── Mensajes del técnico/empresa ───
 
   @Get(':id/mensajes/no-leidos')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({
     summary: 'Contar mensajes no leídos del cliente (sin marcarlos leídos)',
@@ -146,6 +148,7 @@ export class OrdenServicioController {
   }
 
   @Get(':id/mensajes')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar mensajes de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -158,6 +161,7 @@ export class OrdenServicioController {
   }
 
   @Post(':id/mensajes')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Enviar mensaje como técnico/empresa' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -185,6 +189,7 @@ export class OrdenServicioController {
   }
 
   @Get('cobrables')
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({
     summary:
@@ -194,12 +199,14 @@ export class OrdenServicioController {
   findCobrables(
     @Headers('x-tenant-id') empresaId: string,
     @Query('search') search?: string,
+    @Query('sedeId') sedeId?: string,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
-    return this.ordenServicioService.findCobrables(empresaId, search);
+    return this.ordenServicioService.findCobrables(empresaId, search, sedeId);
   }
 
   @Get(':id')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Obtener una orden de servicio' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -212,6 +219,7 @@ export class OrdenServicioController {
   }
 
   @Put(':id')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Actualizar una orden de servicio' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -226,6 +234,7 @@ export class OrdenServicioController {
   }
 
   @Post(':id/adelantos')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({
     summary: 'Registrar un NUEVO abono de adelanto (se SUMA al total)',
@@ -242,6 +251,7 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/adelantos/:adelantoId/anular')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Anular un abono de adelanto (devuelve a caja)' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -256,6 +266,7 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/estado')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Cambiar estado de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -275,6 +286,7 @@ export class OrdenServicioController {
   }
 
   @Get(':id/historial')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Obtener historial de cambios de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -287,6 +299,7 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/tecnico')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Asignar técnico a una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -304,6 +317,7 @@ export class OrdenServicioController {
   }
 
   @Post(':id/componentes')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Agregar componente a una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -317,6 +331,7 @@ export class OrdenServicioController {
   }
 
   @Get(':id/componentes')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar componentes de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -329,6 +344,7 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/componentes/:componenteId')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Actualizar componente de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -342,6 +358,7 @@ export class OrdenServicioController {
   }
 
   @Delete(':id/componentes/:componenteId')
+  @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Eliminar componente de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })

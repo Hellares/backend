@@ -2204,11 +2204,15 @@ export class OrdenServicioService {
    * Órdenes cobrables para el selector de Venta Rápida: REPARADO/LISTO_ENTREGA
    * con saldo > 0 y sin venta vinculada. Payload liviano.
    */
-  async findCobrables(empresaId: string, search?: string) {
+  async findCobrables(empresaId: string, search?: string, sedeId?: string) {
     const searchTrim = search?.trim();
     const ordenes = await this.prisma.ordenServicio.findMany({
       where: {
         empresaId,
+        // Multi-sede: la venta se emite con la serie de la sede de la CAJA, y el
+        // adelanto ya se asentó en la caja de la sede de la ORDEN. Si el selector
+        // ofrece órdenes de otra sede, el cobro cruza plata entre sedes.
+        ...(sedeId ? { sedeId } : {}),
         estado: { in: OrdenServicioService.ESTADOS_COBRABLES },
         // Sin filtro de costoTotal: una orden de solo repuestos (costoTotal null)
         // igual es cobrable por el total facturable; se filtra abajo por > 0.
