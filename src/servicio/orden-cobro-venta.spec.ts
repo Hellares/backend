@@ -17,7 +17,8 @@ import { OrdenServicioService } from './orden-servicio.service';
  * - Solo se cobran órdenes REPARADO/LISTO_ENTREGA con saldo > 0.
  * - precioUnitario de la línea === saldo pendiente vigente (409 si divergen).
  * - Una orden solo se cobra una vez (409 ORDEN_YA_COBRADA).
- * - El cobro marca ENTREGADO + historial + componentes EN_USO.
+ * - El cobro marca FINALIZADO + historial + componentes EN_USO, y NO toca
+ *   fechaEntrega (la entrega física se registra aparte).
  * - La anulación de la venta revierte a LISTO_ENTREGA y libera el candado.
  */
 
@@ -273,7 +274,6 @@ describe('OrdenServicioService.marcarOrdenesCobradasPorVenta', () => {
           // Al cobrarse vía venta, la orden queda FINALIZADA (pagada + cerrada).
           estado: EstadoOrdenServicio.FINALIZADO,
           comprobanteId: 'comp-1',
-          fechaEntrega: expect.any(Date),
         }),
       }),
     );

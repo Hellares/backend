@@ -2048,10 +2048,16 @@ export class OrdenServicioService {
   }
 
   /**
-   * Marca las órdenes como ENTREGADO tras el cobro vía venta POS.
+   * Marca las órdenes como FINALIZADO tras el cobro vía venta POS.
    * Llamar DENTRO de la transacción de la venta, después de crear la venta
-   * y el comprobante. Replica los efectos de la transición a ENTREGADO:
-   * fechaEntrega, estadoDiagnostico, historial y componentes → EN_USO.
+   * y el comprobante. Efectos: estado, estadoDiagnostico, historial y
+   * componentes → EN_USO.
+   *
+   * 🔴 NO toca `fechaEntrega`: cobrar y entregar son cosas distintas. Es
+   * habitual que el cliente pague y se lleve el equipo otro día, y estampar
+   * la fecha acá la falseaba (además de adelantar el aviso de mantenimiento,
+   * que se ancla en ella). La entrega física se registra aparte con
+   * `registrarEntrega`.
    */
   async marcarOrdenesCobradasPorVenta(
     tx: Prisma.TransactionClient,
@@ -2074,8 +2080,9 @@ export class OrdenServicioService {
         where: { id: orden.id },
         data: {
           // Al cobrarse, la orden queda FINALIZADA automáticamente (pagada + cerrada).
+          // `fechaEntrega` queda NULL a propósito: marca la entrega física y la
+          // pone `registrarEntrega`. Null aquí = "cobrada, equipo sin retirar".
           estado: EstadoOrdenServicio.FINALIZADO,
-          fechaEntrega: new Date(),
           comprobanteId: comprobante?.id ?? null,
           ...(orden.estadoDiagnostico &&
           orden.estadoDiagnostico !== EstadoDiagnostico.COMPLETADO
@@ -2111,30 +2118,15 @@ export class OrdenServicioService {
   }
 
   /**
-   * Efectos post-commit del cobro vía venta: push al cliente + aviso de
-   * mantenimiento. Fire-and-forget (el caller hace .catch).
+   * Efectos post-commit del cobro vía venta: push al cliente.
+   * Fire-and-forget (el caller hace .catch).
+   *
+   * El aviso de mantenimiento NO se crea acá: se ancla en `fechaEntrega`, así
+   * que sale recién cuando el cliente retira el equipo (`registrarEntrega`).
+   * Contarlo desde el pago adelantaba el recordatorio.
    */
   async procesarPostCobroOrdenes(empresaId: string, ordenes: any[]) {
     for (const orden of ordenes) {
-      // Aviso de mantenimiento (solo clientes persona, igual que transitionEstado)
-      if (orden.incluirAvisoMantenimiento && orden.clienteId) {
-        try {
-          await this.avisoMantenimientoService.crearAvisoParaOrden({
-            id: orden.id,
-            empresaId,
-            clienteId: orden.clienteId,
-            tipoServicio: orden.tipoServicio,
-            tipoEquipo: orden.tipoEquipo,
-            marcaEquipo: orden.marcaEquipo,
-            fechaEntrega: orden.fechaEntrega,
-            actualizadoEn: orden.actualizadoEn,
-            fechaAvisoPersonalizado: orden.fechaAvisoPersonalizado,
-          });
-        } catch {
-          // No bloquear por el aviso
-        }
-      }
-
       const servicioNombre = orden.servicio?.nombre ?? 'Servicio';
       await this.notificarClienteOrden(
         orden.clienteId,
@@ -2145,6 +2137,85 @@ export class OrdenServicioService {
         'status_changed',
       ).catch(OrdenServicioService.logNotifFallida('finalización post-cobro'));
     }
+  }
+
+  /**
+   * Registra la ENTREGA FÍSICA del equipo al cliente.
+   *
+   * Es un hecho separado del cobro: el cliente paga en Venta Rápida (la orden
+   * queda FINALIZADO) y puede llevarse el equipo otro día. Hasta entonces el
+   * equipo sigue en el taller y hay que poder verlo.
+   *
+   * NO cambia el estado: la orden ya está FINALIZADA por el cobro. La señal es
+   * `fechaEntrega` (null = cobrada, sin retirar). En el historial sí se anota
+   * como ENTREGADO para que la línea de tiempo muestre la entrega.
+   */
+  async registrarEntrega(
+    empresaId: string,
+    id: string,
+    usuarioId: string,
+    notas?: string,
+  ) {
+    const orden = await this.prisma.ordenServicio.findFirst({
+      where: { id, empresaId },
+      select: { id: true, estado: true, fechaEntrega: true },
+    });
+    if (!orden) throw new NotFoundException('Orden de servicio no encontrada');
+
+    if (orden.fechaEntrega) {
+      throw new BadRequestException(
+        'Esta orden ya figura como entregada. Si el equipo volvió, registrá un reingreso.',
+      );
+    }
+    if (orden.estado !== EstadoOrdenServicio.FINALIZADO) {
+      throw new BadRequestException(
+        `Solo se registra la entrega de una orden ya cobrada. Estado actual: "${orden.estado}".`,
+      );
+    }
+
+    const notaLimpia = notas?.trim();
+    const [actualizada] = await this.prisma.$transaction([
+      this.prisma.ordenServicio.update({
+        where: { id },
+        data: { fechaEntrega: new Date() },
+        include: ORDEN_SERVICIO_FULL_INCLUDE,
+      }),
+      this.prisma.historialOrdenServicio.create({
+        data: {
+          ordenServicioId: id,
+          estadoAnterior: orden.estado,
+          // El estado de la orden NO cambia; esto es el evento para la línea
+          // de tiempo, que se rotula por `estadoNuevo`.
+          estadoNuevo: EstadoOrdenServicio.ENTREGADO,
+          notas: notaLimpia
+            ? `Equipo entregado al cliente — ${notaLimpia}`
+            : 'Equipo entregado al cliente',
+          creadoPor: usuarioId,
+        },
+      }),
+    ]);
+
+    // El aviso de mantenimiento se ancla en fechaEntrega: recién ahora que el
+    // equipo volvió a manos del cliente tiene sentido contarlo. Best-effort.
+    if (actualizada.incluirAvisoMantenimiento && actualizada.clienteId) {
+      try {
+        await this.avisoMantenimientoService.crearAvisoParaOrden({
+          id: actualizada.id,
+          empresaId,
+          clienteId: actualizada.clienteId,
+          tipoServicio: actualizada.tipoServicio,
+          tipoEquipo: actualizada.tipoEquipo,
+          marcaEquipo: actualizada.marcaEquipo,
+          fechaEntrega: actualizada.fechaEntrega,
+          actualizadoEn: actualizada.actualizadoEn,
+          fechaAvisoPersonalizado: actualizada.fechaAvisoPersonalizado,
+        });
+      } catch {
+        // No bloquear la entrega por el aviso
+      }
+    }
+
+    return actualizada;
   }
 
   /**

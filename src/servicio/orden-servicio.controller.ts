@@ -285,6 +285,29 @@ export class OrdenServicioController {
     );
   }
 
+  @Patch(':id/entregar')
+  @UseGuards(OrdenSedeAccessGuard)
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiOperation({
+    summary:
+      'Registrar la entrega física del equipo (la orden ya cobrada sigue FINALIZADA; marca fechaEntrega)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  registrarEntrega(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @CurrentUser('sub') usuarioId: string,
+    @Body('notas') notas?: string,
+  ) {
+    if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    return this.ordenServicioService.registrarEntrega(
+      empresaId,
+      id,
+      usuarioId,
+      notas,
+    );
+  }
+
   @Get(':id/historial')
   @UseGuards(OrdenSedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
