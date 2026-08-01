@@ -144,6 +144,14 @@ export class CreateOrdenServicioDto {
   @IsString()
   metodoPagoAdelanto?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Fecha PACTADA de entrega con el cliente (ISO 8601). Es el compromiso, no la entrega real (fechaEntrega)',
+  })
+  @IsOptional()
+  @IsDateString()
+  fechaPrometida?: string;
+
   @ApiPropertyOptional({ description: 'Incluir en sistema de avisos de mantenimiento', default: true })
   @IsOptional()
   @IsBoolean()

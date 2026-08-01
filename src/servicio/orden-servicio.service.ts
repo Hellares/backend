@@ -446,7 +446,8 @@ export class OrdenServicioService {
       dto.sedeId,
     );
 
-    const { empresaId, fechaAvisoPersonalizado, ...restDto } = dto;
+    const { empresaId, fechaAvisoPersonalizado, fechaPrometida, ...restDto } =
+      dto;
 
     // Transacción: la orden y el registro del adelanto en caja son atómicos
     // (si falla caja, no queda una orden con adelanto sin rastro de dinero).
@@ -459,6 +460,9 @@ export class OrdenServicioService {
           estado: EstadoOrdenServicio.RECIBIDO,
           fechaAvisoPersonalizado: fechaAvisoPersonalizado
             ? new Date(fechaAvisoPersonalizado)
+            : undefined,
+          fechaPrometida: fechaPrometida
+            ? new Date(fechaPrometida)
             : undefined,
         },
         include: ORDEN_SERVICIO_FULL_INCLUDE,

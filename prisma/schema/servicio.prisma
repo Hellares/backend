@@ -207,6 +207,10 @@ model OrdenServicio {
   descuento                 Decimal?                 @db.Decimal(10, 2)
   metodoPagoAdelanto        String?
   tiempoEstimado            Int?
+  /// Fecha PACTADA con el cliente ("se lo tengo para el viernes"). Es el
+  /// compromiso, no la entrega real: esa es `fechaEntrega`. Se compara contra
+  /// hoy para marcar órdenes atrasadas.
+  fechaPrometida            DateTime?
   fechaEntrega              DateTime?
   estado                    EstadoOrdenServicio      @default(RECIBIDO)
   estadoDiagnostico         EstadoDiagnostico        @default(PENDIENTE)
