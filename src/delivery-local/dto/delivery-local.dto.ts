@@ -152,3 +152,14 @@ export class CancelarDeliveryDto {
   @IsString()
   motivo?: string;
 }
+
+/**
+ * Enlace acortado de Google Maps que el cliente compartió por WhatsApp
+ * (`maps.app.goo.gl/...`), para que el server siga la redirección y saque
+ * las coordenadas.
+ */
+export class ResolverEnlaceUbicacionDto {
+  @IsString()
+  @IsNotEmpty()
+  url: string;
+}

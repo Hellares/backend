@@ -19,6 +19,7 @@ import {
   CompartirUbicacionDto,
   EntregarDeliveryDto,
   ReportarPosicionDto,
+  ResolverEnlaceUbicacionDto,
   SolicitarDeliveryDto,
 } from './dto/delivery-local.dto';
 
@@ -129,6 +130,22 @@ export class DeliveryLocalController {
   @ApiOperation({ summary: 'Geocodificar dirección con Google (fallback)' })
   geocodificar(@Query('q') q?: string) {
     return this.service.geocodificarGoogle(q);
+  }
+
+  /**
+   * Convierte un enlace ACORTADO de Maps (`maps.app.goo.gl/...`) en
+   * coordenadas siguiendo la redirección. Lo llama la app cuando el cliente
+   * comparte su ubicación por WhatsApp y el enlace viene acortado.
+   *
+   * Va por POST y no por GET porque la URL entera como query param termina
+   * escrita en los logs de acceso.
+   */
+  @Post('direcciones/resolver-enlace')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Resolver enlace acortado de Google Maps' })
+  resolverEnlace(@Body() dto: ResolverEnlaceUbicacionDto) {
+    return this.service.resolverEnlaceUbicacion(dto.url);
   }
 
   /** Pool de deliveries disponibles para tomar (repartidor). */

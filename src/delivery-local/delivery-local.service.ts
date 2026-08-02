@@ -22,6 +22,11 @@ import {
   CompartirUbicacionDto,
   SolicitarDeliveryDto,
 } from './dto/delivery-local.dto';
+import {
+  EnlaceMapsError,
+  esEnlaceAcortado,
+  resolverEnlaceAcortado,
+} from './enlace-maps.util';
 
 /**
  * Delivery local F1 — repartidores propios de la empresa.
@@ -518,6 +523,33 @@ export class DeliveryLocalService {
    * Google Cloud. Lo que el usuario confirme aterriza en DireccionFrecuente
    * (dato propio, almacenable sin límite).
    */
+  /**
+   * Resuelve un enlace ACORTADO de Google Maps a coordenadas.
+   *
+   * Lo consume la app cuando el cliente comparte su ubicación por WhatsApp
+   * y el enlace viene como `maps.app.goo.gl/...`: ahí las coordenadas no
+   * están en la URL, solo aparecen al seguir la redirección.
+   */
+  async resolverEnlaceUbicacion(url: string) {
+    const limpia = (url ?? '').trim();
+    if (!esEnlaceAcortado(limpia)) {
+      throw new BadRequestException(
+        'El enlace no es un acortador de Google Maps',
+      );
+    }
+    try {
+      const { lat, lon } = await resolverEnlaceAcortado(limpia);
+      return { lat, lon };
+    } catch (e: any) {
+      if (e instanceof EnlaceMapsError) {
+        this.logger.warn(`Resolver enlace Maps: ${e.message}`);
+        throw new BadRequestException(e.message);
+      }
+      this.logger.warn(`Resolver enlace Maps error: ${e?.message}`);
+      throw new BadRequestException('No se pudo resolver el enlace');
+    }
+  }
+
   async geocodificarGoogle(q?: string) {
     const key = process.env.GOOGLE_GEOCODING_API_KEY;
     if (!key) {
@@ -812,13 +844,48 @@ export class DeliveryLocalService {
   }
 
   /**
+   * Normaliza y deja el texto listo para buscar PALABRAS COMPLETAS: la
+   * puntuación pasa a espacio y el resultado va envuelto en espacios, para
+   * que `includes(' lima ')` no matchee dentro de "salimas".
+   */
+  private static tokenizarZona(texto: string): string {
+    return ` ${DeliveryLocalService.normalizarZona(texto)
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()} `;
+  }
+
+  /**
+   * ¿Alguna zona declarada por el repartidor aparece en el destino?
+   *
+   * Compara por CONTENCIÓN contra `distrito` + `direccion`, no por
+   * igualdad. El motivo es real: el geocoder autocompleta el distrito con
+   * el nivel más granular que encuentra (el barrio, "MIRAMAR") mientras el
+   * repartidor declara el distrito o la provincia ("TRUJILLO"). Con
+   * igualdad exacta ese pedido no lo veía NADIE, aunque la dirección
+   * completa —"MIRAMAR, SALAVERRY, TRUJILLO"— contiene ambos niveles.
+   */
+  private static zonaCoincide(
+    zonas: string[],
+    distrito?: string | null,
+    direccion?: string | null,
+  ): boolean {
+    const heno = DeliveryLocalService.tokenizarZona(
+      [distrito, direccion].filter(Boolean).join(' '),
+    );
+    return zonas.some((z) => {
+      const aguja = DeliveryLocalService.tokenizarZona(z).trim();
+      return aguja.length > 0 && heno.includes(` ${aguja} `);
+    });
+  }
+
+  /**
    * Pool del freelance: deliveries SOLICITADOS de empresas con OPT-IN,
    * en SUS zonas, y que no superen el tope de mercadería que cada
    * empresa confía a externos. Sin zonas declaradas → pool vacío.
    */
   async poolExterno(usuarioId: string) {
     const rep = await this.verificarFreelance(usuarioId);
-    const zonas = rep.zonas.map(DeliveryLocalService.normalizarZona);
+    const zonas = rep.zonas;
     if (zonas.length === 0) return [];
 
     const empresas = await this.prisma.empresa.findMany({
@@ -848,10 +915,8 @@ export class DeliveryLocalService {
     const nombres = new Map(empresas.map((e) => [e.id, e.nombre]));
 
     return deliveries
-      .filter(
-        (d) =>
-          d.distrito &&
-          zonas.includes(DeliveryLocalService.normalizarZona(d.distrito)),
+      .filter((d) =>
+        DeliveryLocalService.zonaCoincide(zonas, d.distrito, d.direccion),
       )
       .filter((d) => {
         const tope = topes.get(d.empresaId);
@@ -889,10 +954,12 @@ export class DeliveryLocalService {
         'Esta empresa no trabaja con repartidores externos',
       );
     }
-    const zonas = rep.zonas.map(DeliveryLocalService.normalizarZona);
     if (
-      !delivery.distrito ||
-      !zonas.includes(DeliveryLocalService.normalizarZona(delivery.distrito))
+      !DeliveryLocalService.zonaCoincide(
+        rep.zonas,
+        delivery.distrito,
+        delivery.direccion,
+      )
     ) {
       throw new ForbiddenException('Este pedido está fuera de tus zonas');
     }

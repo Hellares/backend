@@ -447,6 +447,97 @@ describe('DeliveryLocalService', () => {
       });
     });
 
+    // Regresión 08-01: el geocoder autocompletaba el distrito con el BARRIO
+    // ("MIRAMAR") mientras los repartidores declaran distrito o provincia
+    // ("TRUJILLO"), y con igualdad exacta ese pedido no lo veía NADIE.
+    it('pool: la zona matchea contra la DIRECCIÓN aunque el distrito sea el barrio', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(
+        repAprobado({ zonas: ['Trujillo'] }),
+      );
+      prisma.empresa.findMany.mockResolvedValue([
+        { id: 'empA', nombre: 'TIENDA A', montoMaxDeliveryExterno: null },
+      ]);
+      prisma.deliveryLocal.findMany.mockResolvedValue([
+        {
+          id: 'd1',
+          empresaId: 'empA',
+          distrito: 'MIRAMAR',
+          direccion: 'MIRAMAR, SALAVERRY, TRUJILLO',
+          venta: { codigo: 'VTA-1', total: '15' },
+        },
+      ]);
+      const pool = await service.poolExterno(FREELANCE);
+      expect(pool.map((d: any) => d.id)).toEqual(['d1']);
+    });
+
+    it('pool: la contención es por palabra completa (no matchea substrings)', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(
+        repAprobado({ zonas: ['Lima'] }),
+      );
+      prisma.empresa.findMany.mockResolvedValue([
+        { id: 'empA', nombre: 'TIENDA A', montoMaxDeliveryExterno: null },
+      ]);
+      prisma.deliveryLocal.findMany.mockResolvedValue([
+        {
+          id: 'd1',
+          empresaId: 'empA',
+          distrito: 'Salimas',
+          direccion: 'AV SALIMAS 123',
+          venta: { codigo: 'VTA-1', total: '15' },
+        },
+      ]);
+      expect(await service.poolExterno(FREELANCE)).toEqual([]);
+    });
+
+    it('tomarExterno: acepta el pedido si la zona está en la dirección', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(
+        repAprobado({ zonas: ['Trujillo'], entregasCompletadas: 50 }),
+      );
+      prisma.deliveryLocal.findUnique.mockResolvedValue({
+        id: 'd1',
+        empresaId: 'empA',
+        distrito: 'MIRAMAR',
+        direccion: 'MIRAMAR, SALAVERRY, TRUJILLO',
+        venta: { total: '15' },
+      });
+      prisma.empresa.findUnique.mockResolvedValue({
+        aceptaRepartidoresExternos: true,
+        montoMaxDeliveryExterno: null,
+      });
+      prisma.deliveryLocal.count = jest.fn().mockResolvedValue(0);
+      prisma.deliveryLocal.updateMany.mockResolvedValue({ count: 1 });
+      prisma.deliveryLocal.findUniqueOrThrow.mockResolvedValue({
+        id: 'd1',
+        empresaId: 'empA',
+        destinatarioCelular: '51904773029',
+        trackingToken: 'tok1',
+        venta: { codigo: 'VTA-1' },
+      });
+
+      await service.tomarExterno('d1', FREELANCE);
+      expect(prisma.deliveryLocal.updateMany).toHaveBeenCalled();
+    });
+
+    it('tomarExterno: fuera de zona sigue siendo Forbidden', async () => {
+      prisma.repartidorSyncronize.findUnique.mockResolvedValue(
+        repAprobado({ zonas: ['Trujillo'] }),
+      );
+      prisma.deliveryLocal.findUnique.mockResolvedValue({
+        id: 'd1',
+        empresaId: 'empA',
+        distrito: 'MIRAFLORES',
+        direccion: 'MIRAFLORES, LIMA',
+        venta: { total: '15' },
+      });
+      prisma.empresa.findUnique.mockResolvedValue({
+        aceptaRepartidoresExternos: true,
+        montoMaxDeliveryExterno: null,
+      });
+      await expect(service.tomarExterno('d1', FREELANCE)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
     it('tomarExterno: empresa sin opt-in → Forbidden', async () => {
       prisma.repartidorSyncronize.findUnique.mockResolvedValue(repAprobado());
       prisma.deliveryLocal.findUnique.mockResolvedValue({
