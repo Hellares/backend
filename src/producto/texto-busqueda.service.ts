@@ -44,7 +44,14 @@ export class TextoBusquedaService {
                LEFT JOIN "CategoriaMaestra" cm ON cm."id" = c."categoriaMaestraId"
               WHERE c."id" = p."empresaCategoriaId")
           ))),
-          "actualizadoEn" = now()
+          -- 🔴 UTC OBLIGATORIO, no \`now()\` pelado. La sesión de Postgres
+          -- corre en America/Lima y la columna es \`timestamp SIN zona\`, así
+          -- que \`now()\` guarda hora local: cinco horas ANTES de lo que
+          -- escribe Prisma, que usa UTC. Con eso el \`actualizadoEn\`
+          -- RETROCEDE al editar y el producto deja de aparecer en el sync
+          -- diferencial — el cambio no llega nunca al celular, sin ningún
+          -- error visible. Verificado en beta el 08-02.
+          "actualizadoEn" = timezone('UTC', now())
       WHERE ${filtro}
     `;
   }

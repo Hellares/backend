@@ -47,6 +47,12 @@ export class ProductoAtributoService {
    * por join. Por eso, al renombrarlo, hay que:
    *  1. "Tocar" el actualizadoEn de los productos afectados (base + vía variante)
    *     para que el delta-sync del app baje el cambio.
+   *
+   * 🔴 El sello va en UTC, NO con `now()` pelado: la sesión de Postgres corre
+   * en America/Lima y la columna es `timestamp SIN zona`, así que `now()`
+   * guarda cinco horas ANTES de lo que escribe Prisma. Con eso el
+   * `actualizadoEn` retrocedía y el delta **nunca bajaba el cambio** — o sea
+   * que este método no cumplía su propio propósito, en silencio.
    *  2. Invalidar la caché Redis del catálogo de la empresa.
    */
   private async propagarCambioAtributo(
@@ -55,7 +61,7 @@ export class ProductoAtributoService {
   ): Promise<void> {
     try {
       await this.prisma.$executeRaw`
-        UPDATE "Producto" SET "actualizadoEn" = now()
+        UPDATE "Producto" SET "actualizadoEn" = timezone('UTC', now())
         WHERE id IN (
           SELECT av."productoId" FROM "ProductoAtributoValor" av
             WHERE av."atributoId" = ${atributoId} AND av."productoId" IS NOT NULL
