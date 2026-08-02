@@ -3503,6 +3503,11 @@ export class VentaService {
         distrito: true,
         coordenadas: true,
         costoDelivery: true,
+        // Subasta: sin estos dos el detalle no puede mostrar "Ver ofertas"
+        // ni el precio sugerido — y `modoOferta` llegaría como undefined,
+        // que en la app se lee como false y esconde el botón EN SILENCIO.
+        modoOferta: true,
+        costoSugerido: true,
         repartidorId: true,
         entregadoEn: true,
         esInterno: true,
