@@ -35,7 +35,10 @@ describe('DeliveryLocalService', () => {
     prisma = {
       empresaUsuarioRol: { findMany: jest.fn().mockResolvedValue([]) },
       venta: { findFirst: jest.fn() },
-      sede: { findUnique: jest.fn().mockResolvedValue(null) },
+      sede: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       deliveryLocal: {
         create: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),

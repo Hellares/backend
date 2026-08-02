@@ -988,7 +988,7 @@ export class DeliveryLocalService {
   /** Pool de deliveries SOLICITADOS (visibles para tomar). */
   async disponibles(empresaId: string, userId: string, sedeId?: string) {
     await this.verificarRepartidor(empresaId, userId);
-    return this.prisma.deliveryLocal.findMany({
+    const deliveries = await this.prisma.deliveryLocal.findMany({
       where: {
         empresaId,
         estado: EstadoDeliveryLocal.SOLICITADO,
@@ -997,6 +997,46 @@ export class DeliveryLocalService {
       },
       include: { venta: { select: { codigo: true } } },
       orderBy: { creadoEn: 'asc' },
+    });
+    return this.conOrigen(deliveries);
+  }
+
+  /**
+   * Adjunta a cada delivery el punto de PARTIDA (la sede que despacha), que
+   * es lo que le falta al repartidor para saber si el pedido le queda de
+   * camino: con solo el destino no puede evaluar el recorrido.
+   *
+   * `origen` va en null si la sede no tiene coordenadas cargadas — el campo
+   * existe hace rato pero recién se está llenando, así que la UI tiene que
+   * bancarse que falte.
+   */
+  private async conOrigen<
+    T extends { sedeId: string },
+  >(deliveries: T[]): Promise<(T & { origen: unknown })[]> {
+    if (deliveries.length === 0) return [];
+    const sedes = await this.prisma.sede.findMany({
+      where: { id: { in: [...new Set(deliveries.map((d) => d.sedeId))] } },
+      select: { id: true, nombre: true, direccion: true, coordenadas: true },
+    });
+    const porId = new Map(sedes.map((s) => [s.id, s]));
+    return deliveries.map((d) => {
+      const sede = porId.get(d.sedeId);
+      const coords = sede?.coordenadas as
+        | { lat?: number; lon?: number }
+        | null
+        | undefined;
+      return {
+        ...d,
+        origen:
+          coords?.lat != null && coords?.lon != null
+            ? {
+                lat: coords.lat,
+                lon: coords.lon,
+                nombre: sede?.nombre ?? null,
+                direccion: sede?.direccion ?? null,
+              }
+            : null,
+      };
     });
   }
 
@@ -1271,7 +1311,7 @@ export class DeliveryLocalService {
     );
     const nombres = new Map(empresas.map((e) => [e.id, e.nombre]));
 
-    return deliveries
+    const visibles = deliveries
       .filter((d) =>
         DeliveryLocalService.zonaCoincide(zonas, d.distrito, d.direccion),
       )
@@ -1294,6 +1334,10 @@ export class DeliveryLocalService {
               }
             : null,
       }));
+
+    // El punto de partida se resuelve al final, ya filtrado: así se consultan
+    // solo las sedes de los pedidos que el repartidor realmente ve.
+    return this.conOrigen(visibles);
   }
 
   /**

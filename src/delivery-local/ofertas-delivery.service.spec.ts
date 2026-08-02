@@ -33,6 +33,7 @@ describe('DeliveryLocalService — subasta de ofertas', () => {
       },
       repartidorSyncronize: { findUnique: jest.fn() },
       empresa: { findUnique: jest.fn() },
+      sede: { findMany: jest.fn().mockResolvedValue([]) },
       ofertaDelivery: {
         upsert: jest.fn().mockResolvedValue({ id: 'of1' }),
         update: jest.fn(),
@@ -287,6 +288,68 @@ describe('DeliveryLocalService — subasta de ofertas', () => {
       // devuelve el nombre acentuado y en la base puede estar sin tildes.
       const params = prisma.$queryRaw.mock.calls[0].slice(1);
       expect(params).toContain('victor larco herrera');
+    });
+  });
+
+  describe('punto de partida en el pool', () => {
+    it('adjunta el origen cuando la sede tiene coordenadas', async () => {
+      freelanceOk({ zonas: ['Salaverry'] });
+      prisma.empresa.findMany = jest
+        .fn()
+        .mockResolvedValue([
+          { id: EMPRESA, nombre: 'TIENDA', montoMaxDeliveryExterno: null },
+        ]);
+      prisma.deliveryLocal.findMany = jest.fn().mockResolvedValue([
+        {
+          id: 'd1',
+          empresaId: EMPRESA,
+          sedeId: 'sede1',
+          distrito: 'SALAVERRY',
+          direccion: 'CALLE X, SALAVERRY',
+          venta: { codigo: 'VTA-1', total: '15' },
+        },
+      ]);
+      prisma.sede.findMany.mockResolvedValue([
+        {
+          id: 'sede1',
+          nombre: 'Sede Principal',
+          direccion: 'AV LARCO 100',
+          coordenadas: { lat: -8.138, lon: -79.056 },
+        },
+      ]);
+
+      const pool: any[] = await service.poolExterno(FREELANCE);
+      expect(pool[0].origen).toEqual({
+        lat: -8.138,
+        lon: -79.056,
+        nombre: 'Sede Principal',
+        direccion: 'AV LARCO 100',
+      });
+    });
+
+    it('origen null si la sede todavia no tiene coordenadas', async () => {
+      freelanceOk({ zonas: ['Salaverry'] });
+      prisma.empresa.findMany = jest
+        .fn()
+        .mockResolvedValue([
+          { id: EMPRESA, nombre: 'TIENDA', montoMaxDeliveryExterno: null },
+        ]);
+      prisma.deliveryLocal.findMany = jest.fn().mockResolvedValue([
+        {
+          id: 'd1',
+          empresaId: EMPRESA,
+          sedeId: 'sede1',
+          distrito: 'SALAVERRY',
+          direccion: 'CALLE X, SALAVERRY',
+          venta: { codigo: 'VTA-1', total: '15' },
+        },
+      ]);
+      prisma.sede.findMany.mockResolvedValue([
+        { id: 'sede1', nombre: 'Sede', direccion: null, coordenadas: null },
+      ]);
+
+      const pool: any[] = await service.poolExterno(FREELANCE);
+      expect(pool[0].origen).toBeNull();
     });
   });
 });
