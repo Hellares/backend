@@ -42,6 +42,7 @@ describe('DeliveryLocalService — subasta de ofertas', () => {
       },
       integracionWhatsapp: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn().mockResolvedValue([]),
+      $queryRaw: jest.fn().mockResolvedValue([]),
     };
     service = new DeliveryLocalService(
       prisma,
@@ -244,6 +245,48 @@ describe('DeliveryLocalService — subasta de ofertas', () => {
       expect(args.where.estado).toBe('PENDIENTE');
       expect(args.where.expiraEn.gt).toBeInstanceOf(Date);
       expect(args.orderBy).toEqual({ monto: 'asc' });
+    });
+  });
+
+  describe('tarifa sugerida por historial', () => {
+    const conMontos = (montos: number[]) =>
+      prisma.$queryRaw.mockResolvedValue(montos.map((monto) => ({ monto })));
+
+    it('usa la MEDIANA, no el promedio: un outlier no arrastra la referencia', async () => {
+      // Promedio = 16.2 por culpa del 50; mediana = 10, que es lo real.
+      conMontos([8, 9, 10, 12, 50]);
+      const r = await service.tarifaSugerida('SALAVERRY');
+      expect(r.sugerido).toBe(10);
+      expect(r.muestras).toBe(5);
+      expect(r.min).toBe(8);
+      expect(r.max).toBe(50);
+    });
+
+    it('con muestras pares promedia las dos del medio', async () => {
+      conMontos([8, 10, 12, 14]);
+      expect((await service.tarifaSugerida('SALAVERRY')).sugerido).toBe(11);
+    });
+
+    it('menos de 3 muestras NO sugiere nada (seria ruido leido como dato)', async () => {
+      conMontos([8, 20]);
+      const r = await service.tarifaSugerida('SALAVERRY');
+      expect(r.sugerido).toBeNull();
+      expect(r.muestras).toBe(2);
+    });
+
+    it('sin distrito devuelve vacio y no consulta la base', async () => {
+      const r = await service.tarifaSugerida(undefined);
+      expect(r.sugerido).toBeNull();
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('normaliza el distrito antes de comparar (tildes y mayusculas)', async () => {
+      conMontos([8, 10, 12]);
+      await service.tarifaSugerida('  VÍCTOR LARCO HERRERA  ');
+      // El parametro que viaja al SQL ya va normalizado: el geocoder
+      // devuelve el nombre acentuado y en la base puede estar sin tildes.
+      const params = prisma.$queryRaw.mock.calls[0].slice(1);
+      expect(params).toContain('victor larco herrera');
     });
   });
 });

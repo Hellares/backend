@@ -800,6 +800,63 @@ export class DeliveryLocalService {
     return delivery;
   }
 
+  /**
+   * Cuánto se viene pagando por llegar a una zona, según las ofertas que ya
+   * se ACEPTARON ahí. Es lo que convierte la subasta en algo que aprende:
+   * la empresa deja de publicar a ciegas y el repartidor sabe contra qué
+   * está compitiendo.
+   *
+   * Sale de las ofertas aceptadas — no hace falta ninguna tabla de tarifas
+   * que después haya que mantener sincronizada.
+   *
+   * Decisiones que importan:
+   *  - **Mediana, no promedio**: una sola oferta de S/ 50 por una zona
+   *    excepcional no puede arrastrar la referencia de todas las demás.
+   *  - **Cross-empresa**: cuánto cuesta llegar a un distrito es un hecho
+   *    del mercado, no de quién vende. Además así hay muestras antes.
+   *  - **90 días**: precios de hace un año anclan mal.
+   *  - **Mínimo 3 muestras**: con menos es ruido y es peor que no mostrar
+   *    nada, porque el número se lee como si fuera un dato.
+   */
+  async tarifaSugerida(distrito?: string) {
+    const zona = DeliveryLocalService.normalizarZona(distrito ?? '');
+    if (!zona) return { sugerido: null, muestras: 0, min: null, max: null };
+
+    // La normalización va en SQL para que empareje aunque el distrito se
+    // haya guardado con tildes ("VÍCTOR LARCO" vs "VICTOR LARCO"), que es
+    // algo que ya pasó: el geocoder devuelve el nombre acentuado.
+    const filas = await this.prisma.$queryRaw<{ monto: Prisma.Decimal }[]>`
+      SELECT o.monto
+      FROM oferta_delivery o
+      JOIN delivery_local d ON d.id = o."deliveryId"
+      WHERE o.estado = 'ACEPTADA'
+        AND o."resueltoEn" > now() - interval '90 days'
+        AND lower(translate(coalesce(d.distrito, ''),
+              'áéíóúÁÉÍÓÚñÑüÜ', 'aeiouAEIOUnNuU')) = ${zona}
+      ORDER BY o."resueltoEn" DESC
+      LIMIT 20
+    `;
+
+    const montos = filas.map((f) => Number(f.monto)).filter(Number.isFinite);
+    if (montos.length < 3) {
+      return { sugerido: null, muestras: montos.length, min: null, max: null };
+    }
+
+    const ordenados = [...montos].sort((a, b) => a - b);
+    const medio = Math.floor(ordenados.length / 2);
+    const mediana =
+      ordenados.length % 2 === 0
+        ? (ordenados[medio - 1] + ordenados[medio]) / 2
+        : ordenados[medio];
+
+    return {
+      sugerido: Math.round(mediana * 100) / 100,
+      muestras: montos.length,
+      min: ordenados[0],
+      max: ordenados[ordenados.length - 1],
+    };
+  }
+
   /** Staff con permiso de delivery, para avisos de la subasta. */
   private async avisarStaff(empresaId: string, titulo: string, cuerpo: string) {
     try {

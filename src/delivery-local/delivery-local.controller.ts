@@ -243,6 +243,20 @@ export class DeliveryLocalController {
   // sí. Publica en `modoOferta`, los repartidores proponen precio y la
   // empresa elige. Mientras esté en subasta el pedido NO se toma directo.
 
+  /**
+   * Cuánto se viene pagando por llegar a un distrito, según las ofertas ya
+   * aceptadas ahí. Lo consultan los DOS lados: la empresa al publicar (para
+   * no salir a ciegas) y el repartidor al ofertar (para saber contra qué
+   * compite). `sugerido: null` = todavía no hay muestras suficientes.
+   */
+  @Get('tarifa-sugerida')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Tarifa de referencia de una zona (histórico)' })
+  tarifaSugerida(@Query('distrito') distrito?: string) {
+    return this.service.tarifaSugerida(distrito);
+  }
+
   /** El repartidor propone su precio (re-ofertar pisa la anterior). */
   @Post('ofertas/:deliveryId')
   @UseGuards(JwtAuthGuard)
