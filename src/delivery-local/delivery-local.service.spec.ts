@@ -67,7 +67,13 @@ describe('DeliveryLocalService', () => {
       sendText: jest.fn().mockResolvedValue(undefined),
       sendLocation: jest.fn().mockResolvedValue(undefined),
     };
-    service = new DeliveryLocalService(prisma, notificaciones, evolution);
+    // El catálogo de ubigeo no interviene en estos casos.
+    service = new DeliveryLocalService(
+      prisma,
+      notificaciones,
+      evolution,
+      {} as any,
+    );
   });
 
   const conRol = (rol: Rol) =>

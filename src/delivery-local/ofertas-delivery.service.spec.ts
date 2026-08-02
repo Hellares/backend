@@ -50,6 +50,8 @@ describe('DeliveryLocalService — subasta de ofertas', () => {
         sendText: jest.fn().mockResolvedValue(undefined),
         sendLocation: jest.fn().mockResolvedValue(undefined),
       } as any,
+      // El catálogo de ubigeo no interviene en la subasta.
+      {} as any,
     );
   });
 

@@ -81,8 +81,11 @@ import { validate } from './config/validation';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SubscriptionTasksService } from './common/tasks/subscription-tasks.service';
 
+import { UbigeoModule } from './common/ubigeo/ubigeo.module';
+
 @Module({
   imports: [
+    UbigeoModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],

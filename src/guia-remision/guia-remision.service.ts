@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { NubefactProvider } from '../sunat/providers/nubefact.provider';
+import { UbigeoService } from '../common/ubigeo/ubigeo.service';
 import { GreNubefactMapper } from '../sunat/providers/gre-nubefact.mapper';
 import { FacturacionService } from '../sunat/facturacion.service';
 import { FacturacionProviderFactory } from '../sunat/providers/facturacion-provider.factory';
@@ -38,6 +39,7 @@ export class GuiaRemisionService {
     private readonly nubefactProvider: NubefactProvider,
     private readonly facturacionService: FacturacionService,
     private readonly providerFactory: FacturacionProviderFactory,
+    private readonly ubigeo: UbigeoService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -682,16 +684,14 @@ export class GuiaRemisionService {
 
   // ── Ubigeos ──
 
-  private _ubigeosCache: any[] | null = null;
-
+  /**
+   * Catálogo de ubigeo para el selector de la guía. Delega en el servicio
+   * compartido: el archivo local que había acá estaba incompleto (1496 de
+   * 1892 distritos; faltaban SALAVERRY, MOCHE y FLORENCIA DE MORA, entre
+   * otros 376) y con 29 provincias mal nombradas.
+   */
   getUbigeos() {
-    if (!this._ubigeosCache) {
-      const fs = require('fs');
-      const path = require('path');
-      const filePath = path.join(__dirname, 'ubigeos.json');
-      this._ubigeosCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    }
-    return this._ubigeosCache;
+    return this.ubigeo.todos();
   }
 
   // ── CRUD Vehículos de la empresa ──
