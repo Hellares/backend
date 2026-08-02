@@ -8,6 +8,10 @@
       {
         "include": "guia-remision/ubigeos.json",
         "outDir": "dist/src"
+      },
+      {
+        "include": "delivery-local/ubigeos-peru.json",
+        "outDir": "dist/src"
       }
     ]
   }
