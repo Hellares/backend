@@ -27,6 +27,19 @@ import {
   esEnlaceAcortado,
   resolverEnlaceAcortado,
 } from './enlace-maps.util';
+import * as fs from 'fs';
+import * as path from 'path';
+
+interface UbigeoFila {
+  ubigeo: string;
+  departamento: string;
+  provincia: string;
+  distrito: string;
+}
+
+/** Los nombres del catálogo traen tildes: `localeCompare` los ordena bien. */
+const porNombre = (a: { nombre: string }, b: { nombre: string }) =>
+  a.nombre.localeCompare(b.nombre, 'es');
 
 /**
  * Delivery local F1 — repartidores propios de la empresa.
@@ -548,6 +561,59 @@ export class DeliveryLocalService {
       this.logger.warn(`Resolver enlace Maps error: ${e?.message}`);
       throw new BadRequestException('No se pudo resolver el enlace');
     }
+  }
+
+  // ── Catálogo de ubigeo (selector de zonas del repartidor) ──
+
+  private _ubigeoCache: UbigeoFila[] | null = null;
+
+  /**
+   * Catálogo estático de 1892 distritos. Se lee del disco una sola vez.
+   *
+   * ⚠️ El archivo llega a `dist/` porque está listado en los `assets` de
+   * `nest-cli.json`. Si se mueve o renombra, actualizar ahí también o en
+   * produccion explota con ENOENT.
+   */
+  private get ubigeo(): UbigeoFila[] {
+    if (!this._ubigeoCache) {
+      const ruta = path.join(__dirname, 'ubigeos-peru.json');
+      this._ubigeoCache = JSON.parse(fs.readFileSync(ruta, 'utf-8'));
+    }
+    return this._ubigeoCache!;
+  }
+
+  /**
+   * Los tres niveles salen del MISMO archivo por prefijo del código: 2
+   * dígitos = departamento, 4 = provincia, 6 = distrito. Por eso no hace
+   * falta ninguna tabla de jerarquía.
+   */
+  ubigeoDepartamentos() {
+    const m = new Map<string, string>();
+    for (const f of this.ubigeo) m.set(f.ubigeo.slice(0, 2), f.departamento);
+    return [...m].map(([codigo, nombre]) => ({ codigo, nombre })).sort(porNombre);
+  }
+
+  ubigeoProvincias(departamento?: string) {
+    const pref = (departamento ?? '').trim();
+    if (!/^\d{2}$/.test(pref)) {
+      throw new BadRequestException('departamento debe ser el código de 2 dígitos');
+    }
+    const m = new Map<string, string>();
+    for (const f of this.ubigeo) {
+      if (f.ubigeo.startsWith(pref)) m.set(f.ubigeo.slice(0, 4), f.provincia);
+    }
+    return [...m].map(([codigo, nombre]) => ({ codigo, nombre })).sort(porNombre);
+  }
+
+  ubigeoDistritos(provincia?: string) {
+    const pref = (provincia ?? '').trim();
+    if (!/^\d{4}$/.test(pref)) {
+      throw new BadRequestException('provincia debe ser el código de 4 dígitos');
+    }
+    return this.ubigeo
+      .filter((f) => f.ubigeo.startsWith(pref))
+      .map((f) => ({ codigo: f.ubigeo, nombre: f.distrito }))
+      .sort(porNombre);
   }
 
   async geocodificarGoogle(q?: string) {

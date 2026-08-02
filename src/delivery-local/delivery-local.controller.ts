@@ -132,6 +132,34 @@ export class DeliveryLocalController {
     return this.service.geocodificarGoogle(q);
   }
 
+  // ── Catálogo de ubigeo: alimenta el selector de zonas del repartidor ──
+  //
+  // Tres endpoints en cascada en vez de mandar el catálogo entero (173 KB):
+  // cada nivel devuelve entre 10 y 25 items.
+  //
+  // 🔓 SIN JwtAuthGuard a propósito: el registro del repartidor freelance es
+  // PÚBLICO (`POST /repartidores/registro`, sin sesión) y ahí es justamente
+  // donde elige sus zonas. Con guard el selector no cargaría. Es data pública
+  // del INEI, estática y sin nada de la empresa.
+
+  @Get('catalogos/ubigeo/departamentos')
+  @ApiOperation({ summary: 'Departamentos del Perú (público)' })
+  ubigeoDepartamentos() {
+    return this.service.ubigeoDepartamentos();
+  }
+
+  @Get('catalogos/ubigeo/provincias')
+  @ApiOperation({ summary: 'Provincias de un departamento (público)' })
+  ubigeoProvincias(@Query('departamento') departamento?: string) {
+    return this.service.ubigeoProvincias(departamento);
+  }
+
+  @Get('catalogos/ubigeo/distritos')
+  @ApiOperation({ summary: 'Distritos de una provincia (público)' })
+  ubigeoDistritos(@Query('provincia') provincia?: string) {
+    return this.service.ubigeoDistritos(provincia);
+  }
+
   /**
    * Convierte un enlace ACORTADO de Maps (`maps.app.goo.gl/...`) en
    * coordenadas siguiendo la redirección. Lo llama la app cuando el cliente
