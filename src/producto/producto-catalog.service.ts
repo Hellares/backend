@@ -11,6 +11,11 @@ import {
   OrdenProducto,
 } from './dto/query-producto.dto';
 import { ProductoResponseDto } from './dto/producto-response.dto';
+import {
+  condicionTextoBusqueda,
+  pareceCodigo,
+  tokenizarBusqueda,
+} from './texto-busqueda.util';
 
 /**
  * Servicio especializado para el catálogo de productos
@@ -588,31 +593,30 @@ export class ProductoCatalogService {
       where.isActive = false;
     }
 
-    // Búsqueda por texto — optimizada:
-    // 1. Códigos exactos (barcode, sku, codigoEmpresa): búsqueda exacta case-insensitive (usa índice)
-    // 2. Nombre/descripción: ILIKE con texto (substring search)
+    // Búsqueda por texto. Cada palabra de la consulta tiene que aparecer en
+    // `textoBusqueda` (nombre + descripción + códigos + marca + categoría, ya
+    // normalizado). Antes se buscaba la FRASE ENTERA contra nombre/descripción
+    // y "lavadora samsung" devolvía cero, porque una palabra está en el
+    // nombre y la otra en la marca. Ver `texto-busqueda.util.ts`.
     if (filters.search) {
-      const search = filters.search.trim();
+      const consulta = filters.search.trim();
+      const terminos = tokenizarBusqueda(consulta);
+      const porPalabras = condicionTextoBusqueda(terminos);
 
-      // Si parece un código (sin espacios, menos de 50 chars), priorizar búsqueda exacta
-      const esCodigoExacto = !search.includes(' ') && search.length < 50;
-
-      if (esCodigoExacto) {
+      if (pareceCodigo(consulta)) {
+        // Un escaneo de código de barras se resuelve por igualdad exacta,
+        // que es instantánea. La búsqueda por palabras queda como
+        // alternativa para cuando lo tecleado era una palabra y no un código.
         where.OR = [
-          { codigoBarras: { equals: search, mode: 'insensitive' } },
-          { sku: { equals: search, mode: 'insensitive' } },
-          { codigoEmpresa: { equals: search, mode: 'insensitive' } },
-          { nombre: { contains: search, mode: 'insensitive' } },
-          // Buscar también en variantes por código de barras
-          { variantes: { some: { codigoBarras: { equals: search, mode: 'insensitive' } } } },
-          { variantes: { some: { sku: { equals: search, mode: 'insensitive' } } } },
+          { codigoBarras: { equals: consulta, mode: 'insensitive' } },
+          { sku: { equals: consulta, mode: 'insensitive' } },
+          { codigoEmpresa: { equals: consulta, mode: 'insensitive' } },
+          { variantes: { some: { codigoBarras: { equals: consulta, mode: 'insensitive' } } } },
+          { variantes: { some: { sku: { equals: consulta, mode: 'insensitive' } } } },
+          ...(porPalabras.length > 0 ? [{ AND: porPalabras }] : []),
         ];
-      } else {
-        where.OR = [
-          { nombre: { contains: search, mode: 'insensitive' } },
-          { descripcion: { contains: search, mode: 'insensitive' } },
-          { codigoEmpresa: { contains: search, mode: 'insensitive' } },
-        ];
+      } else if (porPalabras.length > 0) {
+        where.AND = porPalabras;
       }
     }
 

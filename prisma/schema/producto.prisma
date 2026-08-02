@@ -23,6 +23,13 @@ model Producto {
   nombre             String
   descripcion        String?
 
+  // Búsqueda unificada: nombre + descripción + códigos + nombre RESUELTO de
+  // marca y categoría, todo en minúsculas y sin tildes. Lo llena
+  // `TextoBusquedaService` en SQL — no escribir a mano.
+  // El índice es GIN trigram y vive SOLO en la migración
+  // (20260802140000_texto_busqueda_producto): Prisma no modela GIN.
+  textoBusqueda String?
+
   peso               Decimal?          @db.Decimal(10, 3)
   dimensiones        Json?
   videoUrl           String?

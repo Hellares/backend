@@ -27,6 +27,11 @@ import { RealtimeInvalidationService } from '../notificacion/realtime-invalidati
 import * as ExcelJS from 'exceljs';
 import { Response } from 'express';
 import { createPaginatedResponse } from '../common/utils/pagination.util';
+import {
+  condicionStockPorPalabras,
+  pareceCodigo,
+  tokenizarBusqueda,
+} from '../producto/texto-busqueda.util';
 
 // Usar Prisma.Decimal para los valores decimales
 const Decimal = Prisma.Decimal;
@@ -345,15 +350,25 @@ export class ProductoStockService {
     // Búsqueda por nombre/código/SKU/barras del producto o de la variante
     const term = search?.trim();
     if (term) {
-      where.OR = [
-        { producto: { nombre: { contains: term, mode: 'insensitive' } } },
-        { producto: { codigoEmpresa: { contains: term, mode: 'insensitive' } } },
-        { producto: { sku: { contains: term, mode: 'insensitive' } } },
-        { producto: { codigoBarras: { contains: term, mode: 'insensitive' } } },
-        { variante: { nombre: { contains: term, mode: 'insensitive' } } },
-        { variante: { sku: { contains: term, mode: 'insensitive' } } },
-        { variante: { codigoBarras: { contains: term, mode: 'insensitive' } } },
-      ];
+      // Por PALABRAS, no por frase entera: en el mostrador se teclea
+      // "lavadora samsung" y antes eso devolvía cero (una palabra está en el
+      // nombre y la otra en la marca). Ver `texto-busqueda.util.ts`.
+      const terminos = tokenizarBusqueda(term);
+      const porPalabras = condicionStockPorPalabras(terminos);
+
+      if (pareceCodigo(term)) {
+        // El escaneo de código de barras se resuelve por igualdad exacta.
+        where.OR = [
+          { producto: { codigoBarras: { equals: term, mode: 'insensitive' } } },
+          { producto: { sku: { equals: term, mode: 'insensitive' } } },
+          { producto: { codigoEmpresa: { equals: term, mode: 'insensitive' } } },
+          { variante: { codigoBarras: { equals: term, mode: 'insensitive' } } },
+          { variante: { sku: { equals: term, mode: 'insensitive' } } },
+          ...(porPalabras.length > 0 ? [{ AND: porPalabras }] : []),
+        ];
+      } else if (porPalabras.length > 0) {
+        where.AND = porPalabras;
+      }
     }
 
     const [stocks, total] = await Promise.all([
@@ -3319,15 +3334,25 @@ export class ProductoStockService {
     const where: Prisma.ProductoStockWhereInput = { sedeId, empresaId };
     const term = search?.trim();
     if (term) {
-      where.OR = [
-        { producto: { nombre: { contains: term, mode: 'insensitive' } } },
-        { producto: { codigoEmpresa: { contains: term, mode: 'insensitive' } } },
-        { producto: { sku: { contains: term, mode: 'insensitive' } } },
-        { producto: { codigoBarras: { contains: term, mode: 'insensitive' } } },
-        { variante: { nombre: { contains: term, mode: 'insensitive' } } },
-        { variante: { sku: { contains: term, mode: 'insensitive' } } },
-        { variante: { codigoBarras: { contains: term, mode: 'insensitive' } } },
-      ];
+      // Por PALABRAS, no por frase entera: en el mostrador se teclea
+      // "lavadora samsung" y antes eso devolvía cero (una palabra está en el
+      // nombre y la otra en la marca). Ver `texto-busqueda.util.ts`.
+      const terminos = tokenizarBusqueda(term);
+      const porPalabras = condicionStockPorPalabras(terminos);
+
+      if (pareceCodigo(term)) {
+        // El escaneo de código de barras se resuelve por igualdad exacta.
+        where.OR = [
+          { producto: { codigoBarras: { equals: term, mode: 'insensitive' } } },
+          { producto: { sku: { equals: term, mode: 'insensitive' } } },
+          { producto: { codigoEmpresa: { equals: term, mode: 'insensitive' } } },
+          { variante: { codigoBarras: { equals: term, mode: 'insensitive' } } },
+          { variante: { sku: { equals: term, mode: 'insensitive' } } },
+          ...(porPalabras.length > 0 ? [{ AND: porPalabras }] : []),
+        ];
+      } else if (porPalabras.length > 0) {
+        where.AND = porPalabras;
+      }
     }
 
     const stocks = await this.prisma.productoStock.findMany({

@@ -26,6 +26,7 @@ import { CompatibilidadService } from './compatibilidad.service';
 import { CompatibilidadController } from './compatibilidad.controller';
 import { ProductoBulkUploadService } from './producto-bulk-upload.service';
 import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
+import { TextoBusquedaService } from './texto-busqueda.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule],
@@ -64,6 +65,9 @@ import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
     // Trazabilidad / Ficha 360
     ProductoTrazabilidadService,
 
+    // Índice de búsqueda unificada
+    TextoBusquedaService,
+
     // Helpers
     SedeContextHelper,
   ],
@@ -86,6 +90,9 @@ import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
     PrecioNivelService,
     ConfiguracionPrecioService,
     CompatibilidadService,
+
+    // Lo usa CatalogosModule al renombrar una marca o categoría.
+    TextoBusquedaService,
   ],
 })
 export class ProductoModule {}

@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TextoBusquedaService } from '../producto/texto-busqueda.service';
 
 interface ActivarCategoriaDto {
   empresaId: string;
@@ -28,7 +29,10 @@ interface ActivarMarcaDto {
 export class CatalogosService {
   private readonly logger = new Logger(CatalogosService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private textoBusqueda: TextoBusquedaService,
+  ) {}
 
   // ============================================
   // CATEGORÍAS MAESTRAS
@@ -172,6 +176,12 @@ export class CatalogosService {
         },
       });
     });
+
+    // Reactivar puede cambiar el `nombreLocal`, y ese nombre está COPIADO
+    // dentro del `textoBusqueda` de cada producto de la categoría: sin
+    // rehacerlo seguirían encontrándose por el nombre viejo. Si la categoría
+    // es nueva no tiene productos y el UPDATE no toca ninguna fila.
+    await this.textoBusqueda.recalcularPorCategoria(empresaCategoria.id);
 
     this.logger.log(
       `Categoría ${categoriaMaestraId ? 'maestra' : 'personalizada'} activada para empresa ${empresaId}`,
@@ -348,6 +358,10 @@ export class CatalogosService {
         },
       });
     });
+
+    // Mismo motivo que en categorías: el nombre de la marca viaja copiado
+    // dentro del textoBusqueda de sus productos.
+    await this.textoBusqueda.recalcularPorMarca(empresaMarca.id);
 
     this.logger.log(
       `Marca ${marcaMaestraId ? 'maestra' : 'personalizada'} activada para empresa ${empresaId}`,

@@ -23,6 +23,7 @@ import { SedeContextHelper } from '../common/helpers/sede-context.helper';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 // Servicios especializados (Modular Monolith)
 import { ProductoCatalogService } from './producto-catalog.service';
+import { TextoBusquedaService } from './texto-busqueda.service';
 import { ProductoInventoryService } from './producto-inventory.service';
 import { ProductoPricingService } from './producto-pricing.service';
 import { ProductoVarianteService } from './producto-variante.service';
@@ -59,6 +60,7 @@ export class ProductoService {
     private configCodigosService: ConfiguracionCodigosService,
     private planLimitsService: PlanLimitsService,
     private realtime: RealtimeInvalidationService,
+    private textoBusqueda: TextoBusquedaService,
     loggerService: AppLoggerService,
   ) {
     this.logger = loggerService;
@@ -370,6 +372,13 @@ export class ProductoService {
       // 12.1 Notificar a otros devices conectados a esta empresa que
       // hay un producto nuevo, para que refresquen el catálogo sin
       // esperar a un pull-to-refresh manual. Uno por sede afectada.
+      // El texto de la búsqueda unificada se arma en SQL porque necesita el
+      // nombre RESUELTO de marca y categoría. Va antes de avisar por realtime
+      // para que quien refresque ya lo encuentre buscando.
+      for (const p of productosCreados) {
+        await this.textoBusqueda.recalcularProducto(p.id);
+      }
+
       for (const p of productosCreados) {
         this.realtime.notifyProductoCreado({ empresaId, productoId: p.id });
       }
@@ -1258,6 +1267,10 @@ export class ProductoService {
       // Notificar cambio estructural (nombre/desc/categoría/marca/isActive/
       // etc). Los clientes harán fetch full para que el backend re-aplique
       // filtros — si se desactivó debe desaparecer del listado.
+      // Rehacer el texto de búsqueda: pudo cambiar el nombre, la descripción,
+      // los códigos, la marca o la categoría.
+      await this.textoBusqueda.recalcularProducto(id);
+
       this.realtime.notifyProductoActualizado({ empresaId, productoId: id });
 
       // 9. Obtener archivos actualizados para respuesta
