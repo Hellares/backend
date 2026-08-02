@@ -14,6 +14,7 @@
 | Archivos de entorno | `/opt/syncronize/deploy/stack.beta.env` y `stack.prod.env` |
 | Contenedor Postgres | `postgres` — DB beta = `db_saas_beta`, DB prod = `db_saas` |
 | Contenedores backend | `syncronize-backend-beta` / `syncronize-backend-prod` |
+| **Imágenes (separadas desde 08-2026)** | beta = `syncronize-api:latest` · **prod = `syncronize-api:prod-actual`** — ver gotcha 8 |
 | Puerto interno del backend | **6000** (el health desde dentro del contenedor es a `localhost:6000`, NO 3001) |
 | Redis | beta = contenedor `redis-beta` · **PROD = contenedor `redis-dev`** ⚠️ (nombre engañoso, NO es dev) |
 | Backups | `/opt/backups/` |
@@ -36,6 +37,20 @@
 6. **Health interno `000` por IPv4 no significa caído** — el socket puede ser IPv6-only
    o el puerto es 6000. Verificar con los comandos de abajo antes de asustarse.
 7. **El health desde fuera puede tardar ~15-30s** tras recrear el contenedor (NestJS bootea).
+8. **Beta y prod usan IMÁGENES DISTINTAS** (separadas en 08-2026). Antes compartían
+   `syncronize-api:latest`, así que un `docker compose up -d` **sin nombrar el servicio**
+   recreaba prod con lo último compilado para beta — código no liberado y migraciones sin
+   aplicar, sin que nadie lo decidiera. El caso realista era aplicar un cambio de
+   `stack.prod.env`, que obliga a recrear el contenedor.
+   Hoy prod está fijado a `syncronize-api:prod-actual` y **`deploy.sh prod` mueve esa
+   etiqueta solo** (retag explícito antes de recrear). Consecuencias prácticas:
+   - Aplicar un env nuevo a prod ya **no** arrastra código: recrear es seguro.
+   - Si alguna vez desplegás prod **a mano** (`docker build` + `compose up`), sos vos quien
+     tiene que hacer `docker tag syncronize-api:latest syncronize-api:prod-actual`, o prod
+     se recreará con el código viejo y parecerá que desplegaste.
+   - Rollback rápido: apuntar `prod-actual` a la imagen anterior y recrear.
+   - Respaldos del cambio: `docker-compose.yml.bak.*` y `deploy.sh.bak.*` en
+     `/opt/syncronize/deploy/`.
 
 ---
 
@@ -125,6 +140,20 @@ ssh root@86.48.26.221 'cd /opt/syncronize/deploy && cp stack.prod.env stack.prod
 
 ```bash
 ssh root@86.48.26.221 "/opt/syncronize/deploy/deploy.sh prod"
+```
+
+El script compila `syncronize-api:latest`, **lo retiquetea como `syncronize-api:prod-actual`**
+y recién ahí recrea el contenedor. Ese retag es lo que hace que prod avance: sin él, recrear
+prod lo dejaría en el código anterior (ver gotcha 8). En la salida tiene que aparecer:
+
+```
+==> [tag] syncronize-api:latest -> syncronize-api:prod-actual
+```
+
+Verificar que prod quedó en la imagen nueva:
+
+```bash
+ssh root@86.48.26.221 'docker inspect syncronize-backend-prod --format "{{.Image}}"; docker images syncronize-api --format "{{.Repository}}:{{.Tag}} {{.ID}}"'
 ```
 
 ### Paso 5 — Registrar las migraciones manuales + verificar
