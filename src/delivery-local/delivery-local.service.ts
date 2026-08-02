@@ -28,6 +28,7 @@ import {
   esEnlaceAcortado,
   resolverEnlaceAcortado,
 } from './enlace-maps.util';
+import { generarMapaConPin } from './mapa-estatico.util';
 import { UbigeoService } from '../common/ubigeo/ubigeo.service';
 
 /**
@@ -404,16 +405,65 @@ export class DeliveryLocalService {
     const lon = coords?.lon != null ? Number(coords.lon) : null;
     const codigo = delivery.venta?.codigo ?? '';
 
-    // UN SOLO mensaje: el pin nativo carga título, dirección, ref y zona
-    // en address — dos mensajes seguidos a un número frío arriesgan baneo.
-    // El texto queda solo como fallback (sin coords o sendLocation caído).
+    // UN SOLO mensaje: dos seguidos a un número frío arriesgan baneo. Por eso
+    // el pie carga TODO — dirección, referencia, zona y el enlace del mapa.
     const direccionCompleta =
       `${delivery.direccion}` +
       (delivery.referencia ? ` — Ref: ${delivery.referencia}` : '') +
       (delivery.distrito ? ` — ${delivery.distrito}` : '');
 
-    let pinEnviado = false;
+    const pie =
+      `📍 *Entrega ${codigo}*\n` +
+      `${delivery.direccion}` +
+      (delivery.referencia ? `\nRef: ${delivery.referencia}` : '') +
+      (delivery.distrito ? `\nZona: ${delivery.distrito}` : '') +
+      (lat != null && lon != null
+        ? `\nhttps://maps.google.com/?q=${lat},${lon}`
+        : '');
+
+    /** Evolution responde `exists:false` cuando el número no tiene WhatsApp. */
+    const numeroSinWhatsapp = (e: any) =>
+      String(e?.message ?? '').includes('exists":false');
+
+    let enviado = false;
+
+    // 1) Preferido: IMAGEN del mapa con el marcador dibujado por nosotros.
+    //    Evolution v2.3.7 no puede mandar la miniatura de una ubicación
+    //    nativa (su payload solo admite lat/lon/name/address), así que el pin
+    //    nunca aparecía sobre el mapa. Ver mapa-estatico.util.ts.
     if (lat != null && lon != null) {
+      const mapa = await generarMapaConPin(lat, lon);
+      if (mapa) {
+        try {
+          await this.evolution.sendImage({
+            instanceName: iw.instanceName,
+            number: celular,
+            base64: mapa,
+            mimetype: 'image/jpeg',
+            fileName: `entrega-${codigo || 'ubicacion'}.jpg`,
+            caption: pie,
+          });
+          enviado = true;
+        } catch (e: any) {
+          if (numeroSinWhatsapp(e)) {
+            throw new BadRequestException(
+              `El número ${dto.celular} no tiene WhatsApp — verifícalo`,
+            );
+          }
+          this.logger.warn(
+            `sendImage del mapa falló (sigo con el pin nativo): ${String(e?.message ?? '')}`,
+          );
+        }
+      } else {
+        this.logger.warn(
+          'No se pudo armar el mapa estático (sigo con el pin nativo)',
+        );
+      }
+    }
+
+    // 2) Si el mapa no salió, la ubicación nativa igual lleva las coordenadas
+    //    buenas — se ve sin marcador, pero al tocarla abre el punto.
+    if (!enviado && lat != null && lon != null) {
       try {
         await this.evolution.sendLocation({
           instanceName: iw.instanceName,
@@ -423,43 +473,37 @@ export class DeliveryLocalService {
           name: `Entrega ${codigo}`.trim(),
           address: direccionCompleta,
         });
-        pinEnviado = true;
+        enviado = true;
       } catch (e: any) {
-        const msg = String(e?.message ?? '');
-        if (msg.includes('exists":false')) {
+        if (numeroSinWhatsapp(e)) {
           throw new BadRequestException(
             `El número ${dto.celular} no tiene WhatsApp — verifícalo`,
           );
         }
-        this.logger.warn(`sendLocation falló (fallback a texto): ${msg}`);
+        this.logger.warn(
+          `sendLocation falló (fallback a texto): ${String(e?.message ?? '')}`,
+        );
       }
     }
 
-    if (!pinEnviado) {
-      const texto =
-        `📍 *Entrega ${codigo}*\n` +
-        `${delivery.direccion}` +
-        (delivery.referencia ? `\nRef: ${delivery.referencia}` : '') +
-        (delivery.distrito ? `\nZona: ${delivery.distrito}` : '') +
-        (lat != null && lon != null
-          ? `\nMapa: https://maps.google.com/?q=${lat},${lon}`
-          : '');
-
+    // 3) Último recurso: el texto con el enlace, que siempre es navegable.
+    if (!enviado) {
       try {
         await this.evolution.sendText({
           instanceName: iw.instanceName,
           number: celular,
-          text: texto,
+          text: pie,
           linkPreview: false,
         });
       } catch (e: any) {
-        const msg = String(e?.message ?? '');
-        if (msg.includes('exists":false')) {
+        if (numeroSinWhatsapp(e)) {
           throw new BadRequestException(
             `El número ${dto.celular} no tiene WhatsApp — verifícalo`,
           );
         }
-        this.logger.warn(`compartirUbicacion sendText: ${msg}`);
+        this.logger.warn(
+          `compartirUbicacion sendText: ${String(e?.message ?? '')}`,
+        );
         throw new BadRequestException('No se pudo enviar el WhatsApp');
       }
     }

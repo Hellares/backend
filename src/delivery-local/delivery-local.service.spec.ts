@@ -11,6 +11,13 @@ import {
   Rol,
 } from '@prisma/client';
 import { DeliveryLocalService } from './delivery-local.service';
+import { generarMapaConPin } from './mapa-estatico.util';
+
+// Sin esto las pruebas saldrían a bajar mosaicos reales de OpenStreetMap.
+jest.mock('./mapa-estatico.util', () => ({
+  generarMapaConPin: jest.fn(),
+}));
+const mapaMock = generarMapaConPin as jest.Mock;
 
 /**
  * Delivery local F1 — las reglas que no pueden romperse:
@@ -69,7 +76,10 @@ describe('DeliveryLocalService', () => {
     evolution = {
       sendText: jest.fn().mockResolvedValue(undefined),
       sendLocation: jest.fn().mockResolvedValue(undefined),
+      sendImage: jest.fn().mockResolvedValue(undefined),
     };
+    mapaMock.mockReset();
+    mapaMock.mockResolvedValue('BASE64DELMAPA');
     // El catálogo de ubigeo no interviene en estos casos.
     service = new DeliveryLocalService(
       prisma,
@@ -684,7 +694,7 @@ describe('DeliveryLocalService', () => {
         ...over,
       });
 
-    it('con pin: UN SOLO mensaje — sendLocation con dirección/ref/zona en address, SIN sendText', async () => {
+    it('con pin: UN SOLO mensaje — IMAGEN del mapa con el pie completo', async () => {
       conRol(Rol.EMPRESA_ADMIN);
       conWhatsapp();
       deliveryConPin();
@@ -694,18 +704,22 @@ describe('DeliveryLocalService', () => {
         celular: '904773029',
       });
 
-      expect(evolution.sendLocation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          number: '51904773029',
-          name: 'Entrega VTA-1',
-          address: 'Av. Balta 123 — Ref: portón verde — Chiclayo',
-        }),
-      );
+      expect(mapaMock).toHaveBeenCalledWith(-6.7714, -79.8409);
+      const args = evolution.sendImage.mock.calls[0][0];
+      expect(args.number).toBe('51904773029');
+      expect(args.base64).toBe('BASE64DELMAPA');
+      expect(args.mimetype).toBe('image/jpeg');
+      // El pie carga todo: sin él la foto sola no sirve para llegar.
+      expect(args.caption).toContain('Av. Balta 123');
+      expect(args.caption).toContain('Ref: portón verde');
+      expect(args.caption).toContain('Zona: Chiclayo');
+      expect(args.caption).toContain('maps.google.com/?q=-6.7714,-79.8409');
       // Dos mensajes seguidos arriesgan baneo del número de la empresa.
+      expect(evolution.sendLocation).not.toHaveBeenCalled();
       expect(evolution.sendText).not.toHaveBeenCalled();
     });
 
-    it('sin coordenadas: solo texto con los datos, sin link de Maps', async () => {
+    it('sin coordenadas: solo texto, sin mapa ni link', async () => {
       conRol(Rol.EMPRESA_ADMIN);
       conWhatsapp();
       deliveryConPin({ coordenadas: null });
@@ -715,6 +729,8 @@ describe('DeliveryLocalService', () => {
         celular: '904773029',
       });
 
+      expect(mapaMock).not.toHaveBeenCalled();
+      expect(evolution.sendImage).not.toHaveBeenCalled();
       expect(evolution.sendLocation).not.toHaveBeenCalled();
       const args = evolution.sendText.mock.calls[0][0];
       expect(args.text).toContain('Av. Balta 123');
@@ -723,10 +739,48 @@ describe('DeliveryLocalService', () => {
       expect(args.linkPreview).toBe(false);
     });
 
-    it('sendLocation caído: fallback a texto CON link de Maps (preview off)', async () => {
+    it('mapa que no se pudo armar: cae al pin nativo, no a texto', async () => {
       conRol(Rol.EMPRESA_ADMIN);
       conWhatsapp();
       deliveryConPin();
+      mapaMock.mockResolvedValue(null);
+
+      await service.compartirUbicacion(VENDEDOR, 'd1', {
+        empresaId: EMPRESA,
+        celular: '904773029',
+      });
+
+      expect(evolution.sendImage).not.toHaveBeenCalled();
+      expect(evolution.sendLocation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          number: '51904773029',
+          name: 'Entrega VTA-1',
+          address: 'Av. Balta 123 — Ref: portón verde — Chiclayo',
+        }),
+      );
+      expect(evolution.sendText).not.toHaveBeenCalled();
+    });
+
+    it('sendImage caído: cae al pin nativo', async () => {
+      conRol(Rol.EMPRESA_ADMIN);
+      conWhatsapp();
+      deliveryConPin();
+      evolution.sendImage.mockRejectedValue(new Error('media rechazada'));
+
+      await service.compartirUbicacion(VENDEDOR, 'd1', {
+        empresaId: EMPRESA,
+        celular: '904773029',
+      });
+
+      expect(evolution.sendLocation).toHaveBeenCalled();
+      expect(evolution.sendText).not.toHaveBeenCalled();
+    });
+
+    it('imagen y pin caídos: último recurso texto CON link (preview off)', async () => {
+      conRol(Rol.EMPRESA_ADMIN);
+      conWhatsapp();
+      deliveryConPin();
+      evolution.sendImage.mockRejectedValue(new Error('media rechazada'));
       evolution.sendLocation.mockRejectedValue(new Error('boom'));
 
       await service.compartirUbicacion(VENDEDOR, 'd1', {
@@ -739,11 +793,11 @@ describe('DeliveryLocalService', () => {
       expect(args.linkPreview).toBe(false);
     });
 
-    it('número sin WhatsApp (exists:false en sendLocation) → BadRequest, sin reintentar por texto', async () => {
+    it('número sin WhatsApp (exists:false en sendImage) → BadRequest, sin reintentar', async () => {
       conRol(Rol.EMPRESA_ADMIN);
       conWhatsapp();
       deliveryConPin();
-      evolution.sendLocation.mockRejectedValue(
+      evolution.sendImage.mockRejectedValue(
         new Error('Evolution 400: {"exists":false}'),
       );
 
@@ -753,6 +807,8 @@ describe('DeliveryLocalService', () => {
           celular: '904773029',
         }),
       ).rejects.toThrow(BadRequestException);
+      // Reintentar por otra vía a un número que no existe es gastar cuota.
+      expect(evolution.sendLocation).not.toHaveBeenCalled();
       expect(evolution.sendText).not.toHaveBeenCalled();
     });
   });
