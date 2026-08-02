@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -18,6 +19,7 @@ import {
   CancelarDeliveryDto,
   CompartirUbicacionDto,
   EntregarDeliveryDto,
+  OfertarDeliveryDto,
   ReportarPosicionDto,
   ResolverEnlaceUbicacionDto,
   SolicitarDeliveryDto,
@@ -233,6 +235,68 @@ export class DeliveryLocalController {
     @CurrentUser() user: any,
   ) {
     return this.service.marcarEntregado(dto.empresaId, id, user.sub, dto.pin);
+  }
+
+  // ── Subasta de ofertas (estilo inDrive) ──
+  //
+  // La empresa no puede saber cuánto sale llegar a cada zona; el repartidor
+  // sí. Publica en `modoOferta`, los repartidores proponen precio y la
+  // empresa elige. Mientras esté en subasta el pedido NO se toma directo.
+
+  /** El repartidor propone su precio (re-ofertar pisa la anterior). */
+  @Post('ofertas/:deliveryId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Ofertar por un pedido en subasta (repartidor)' })
+  ofertar(
+    @Param('deliveryId') deliveryId: string,
+    @Body() dto: OfertarDeliveryDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.ofertar(
+      user.sub,
+      deliveryId,
+      dto.monto,
+      dto.comentario,
+    );
+  }
+
+  /** El repartidor se baja de la subasta. */
+  @Delete('ofertas/:deliveryId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Retirar mi oferta (repartidor)' })
+  retirarOferta(
+    @Param('deliveryId') deliveryId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.retirarOferta(user.sub, deliveryId);
+  }
+
+  /** Ofertas vigentes de un pedido, de la más barata a la más cara (staff). */
+  @Get(':id/ofertas')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Ver ofertas de un pedido (staff)' })
+  ofertasDe(
+    @Param('id') id: string,
+    @Query('empresaId') empresaId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.ofertasDe(empresaId, user.sub, id);
+  }
+
+  /** La empresa elige una oferta: asigna el pedido y fija el costo. */
+  @Post('ofertas/:ofertaId/aceptar')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Aceptar una oferta (staff)' })
+  aceptarOferta(
+    @Param('ofertaId') ofertaId: string,
+    @Body() dto: AccionDeliveryDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.aceptarOferta(dto.empresaId, user.sub, ofertaId);
   }
 
   // ── Pool EXTERNO (repartidores freelance de Syncronize) ──

@@ -53,6 +53,14 @@ describe('DeliveryLocalService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         findUnique: jest.fn().mockResolvedValue(null),
       },
+      ofertaDelivery: {
+        upsert: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      $transaction: jest.fn().mockResolvedValue([]),
     };
     notificaciones = { enviarAUsuarios: jest.fn().mockResolvedValue(undefined) };
     evolution = {

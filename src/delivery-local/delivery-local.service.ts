@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import {
   EstadoDeliveryLocal,
+  EstadoOfertaDelivery,
   EstadoRepartidorSyncronize,
   EstadoVenta,
   Prisma,
@@ -170,7 +171,11 @@ export class DeliveryLocalService {
           dto.destinoLat != null && dto.destinoLon != null
             ? { lat: dto.destinoLat, lon: dto.destinoLon }
             : undefined,
-        costoDelivery: costo,
+        // En subasta el costo definitivo lo fija la oferta aceptada; hasta
+        // entonces queda en 0 y el ancla vive en `costoSugerido`.
+        costoDelivery: dto.modoOferta ? 0 : costo,
+        modoOferta: dto.modoOferta ?? false,
+        costoSugerido: dto.modoOferta ? (dto.costoSugerido ?? null) : null,
         // Interno: lo lleva un empleado — NO se publica al pool.
         esInterno: dto.esInterno ?? false,
         encargadoInterno: dto.esInterno ? (dto.encargadoInterno ?? null) : null,
@@ -182,8 +187,14 @@ export class DeliveryLocalService {
     if (!dto.esInterno) {
       void this.avisarRepartidores(
         dto.empresaId,
-        `${venta.codigo} para entregar en ${dto.distrito ?? dto.direccion}` +
-          (costo > 0 ? ` — tarifa S/ ${costo.toFixed(2)}` : ''),
+        dto.modoOferta
+          ? `${venta.codigo} para ${dto.distrito ?? dto.direccion} — ` +
+              'PROPÓN TU PRECIO' +
+              (dto.costoSugerido != null
+                ? ` (sugerido S/ ${dto.costoSugerido.toFixed(2)})`
+                : '')
+          : `${venta.codigo} para entregar en ${dto.distrito ?? dto.direccion}` +
+              (costo > 0 ? ` — tarifa S/ ${costo.toFixed(2)}` : ''),
       );
     }
 
@@ -560,6 +571,267 @@ export class DeliveryLocalService {
       }
       this.logger.warn(`Resolver enlace Maps error: ${e?.message}`);
       throw new BadRequestException('No se pudo resolver el enlace');
+    }
+  }
+
+  // ── Subasta de ofertas (estilo inDrive) ──
+
+  /** Ventana de vida de una oferta. Vieja = el repartidor ya puede estar ocupado. */
+  private static readonly OFERTA_MINUTOS = 10;
+
+  /** Filtro reusable: PENDIENTE **y** todavía no vencida. */
+  private static ofertaVigente() {
+    return {
+      estado: EstadoOfertaDelivery.PENDIENTE,
+      expiraEn: { gt: new Date() },
+    };
+  }
+
+  /**
+   * El repartidor propone su precio. Re-ofertar PISA la anterior (upsert por
+   * el único `deliveryId+repartidorId`) y renueva el vencimiento.
+   */
+  async ofertar(
+    usuarioId: string,
+    deliveryId: string,
+    monto: number,
+    comentario?: string,
+  ) {
+    if (!(monto > 0)) {
+      throw new BadRequestException('El monto debe ser mayor a 0');
+    }
+    const delivery = await this.prisma.deliveryLocal.findUnique({
+      where: { id: deliveryId },
+      select: {
+        id: true,
+        empresaId: true,
+        estado: true,
+        modoOferta: true,
+        esInterno: true,
+        distrito: true,
+        direccion: true,
+      },
+    });
+    if (!delivery) throw new NotFoundException('Delivery no encontrado');
+    if (delivery.esInterno) {
+      throw new ForbiddenException('Este pedido lo lleva la empresa');
+    }
+    if (!delivery.modoOferta) {
+      throw new BadRequestException(
+        'Este pedido no admite ofertas: tiene tarifa fija, tómalo directo',
+      );
+    }
+    if (delivery.estado !== EstadoDeliveryLocal.SOLICITADO) {
+      throw new ConflictException('El pedido ya no está disponible');
+    }
+
+    // Mismas puertas que para tomar: aprobado, con celular verificado, la
+    // empresa con opt-in y el destino dentro de sus zonas.
+    const rep = await this.verificarFreelance(usuarioId);
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: delivery.empresaId },
+      select: { aceptaRepartidoresExternos: true },
+    });
+    if (!empresa?.aceptaRepartidoresExternos) {
+      throw new ForbiddenException(
+        'Esta empresa no trabaja con repartidores externos',
+      );
+    }
+    if (
+      !DeliveryLocalService.zonaCoincide(
+        rep.zonas,
+        delivery.distrito,
+        delivery.direccion,
+      )
+    ) {
+      throw new ForbiddenException('Este pedido está fuera de tus zonas');
+    }
+
+    const expiraEn = new Date(
+      Date.now() + DeliveryLocalService.OFERTA_MINUTOS * 60_000,
+    );
+    const oferta = await this.prisma.ofertaDelivery.upsert({
+      where: {
+        deliveryId_repartidorId: { deliveryId, repartidorId: usuarioId },
+      },
+      create: {
+        deliveryId,
+        repartidorId: usuarioId,
+        monto,
+        comentario: comentario ?? null,
+        expiraEn,
+      },
+      update: {
+        monto,
+        comentario: comentario ?? null,
+        // Re-ofertar revive una RECHAZADA/RETIRADA anterior.
+        estado: EstadoOfertaDelivery.PENDIENTE,
+        expiraEn,
+        resueltoEn: null,
+      },
+    });
+
+    void this.avisarStaff(
+      delivery.empresaId,
+      '💸 Nueva oferta de reparto',
+      `${rep.nombreCompleto} ofertó S/ ${monto.toFixed(2)} para ${
+        delivery.distrito ?? delivery.direccion
+      }. Vence en ${DeliveryLocalService.OFERTA_MINUTOS} min.`,
+    );
+
+    return oferta;
+  }
+
+  /** El repartidor se baja de la subasta. */
+  async retirarOferta(usuarioId: string, deliveryId: string) {
+    const r = await this.prisma.ofertaDelivery.updateMany({
+      where: {
+        deliveryId,
+        repartidorId: usuarioId,
+        estado: EstadoOfertaDelivery.PENDIENTE,
+      },
+      data: {
+        estado: EstadoOfertaDelivery.RETIRADA,
+        resueltoEn: new Date(),
+      },
+    });
+    if (r.count === 0) {
+      throw new NotFoundException('No tienes una oferta activa en ese pedido');
+    }
+    return { retirada: true };
+  }
+
+  /** Ofertas VIGENTES de un pedido (staff), de la más barata a la más cara. */
+  async ofertasDe(empresaId: string, usuarioId: string, deliveryId: string) {
+    await this.verificarStaff(empresaId, usuarioId);
+    const ofertas = await this.prisma.ofertaDelivery.findMany({
+      where: { deliveryId, ...DeliveryLocalService.ofertaVigente() },
+      orderBy: { monto: 'asc' },
+    });
+    if (ofertas.length === 0) return [];
+
+    // El nombre y las entregas completadas viven en el perfil freelance —
+    // el staff necesita ambos para decidir, no solo el precio.
+    const perfiles = await this.prisma.repartidorSyncronize.findMany({
+      where: { usuarioId: { in: ofertas.map((o) => o.repartidorId) } },
+      select: {
+        usuarioId: true,
+        nombreCompleto: true,
+        entregasCompletadas: true,
+      },
+    });
+    const porUsuario = new Map(perfiles.map((p) => [p.usuarioId, p]));
+    return ofertas.map((o) => ({
+      ...o,
+      repartidorNombre: porUsuario.get(o.repartidorId)?.nombreCompleto ?? null,
+      entregasCompletadas:
+        porUsuario.get(o.repartidorId)?.entregasCompletadas ?? 0,
+    }));
+  }
+
+  /**
+   * La empresa elige una oferta: asigna el pedido, fija el costo acordado y
+   * cierra la subasta. El resto de las ofertas quedan RECHAZADAS.
+   *
+   * La asignación va condicionada a SOLICITADO + sin repartidor, igual que
+   * `tomar`: si alguien lo tomó en el medio, esto no pisa nada.
+   */
+  async aceptarOferta(empresaId: string, usuarioId: string, ofertaId: string) {
+    await this.verificarStaff(empresaId, usuarioId);
+
+    const oferta = await this.prisma.ofertaDelivery.findUnique({
+      where: { id: ofertaId },
+      include: { delivery: { select: { id: true, empresaId: true } } },
+    });
+    if (!oferta || oferta.delivery.empresaId !== empresaId) {
+      throw new NotFoundException('Oferta no encontrada');
+    }
+    if (oferta.estado !== EstadoOfertaDelivery.PENDIENTE) {
+      throw new ConflictException('Esa oferta ya no está vigente');
+    }
+    // El vencimiento no lo marca ningún job: se revalida acá.
+    if (oferta.expiraEn.getTime() <= Date.now()) {
+      throw new ConflictException(
+        'Esa oferta venció — pídele al repartidor que la renueve',
+      );
+    }
+
+    const asignado = await this.prisma.deliveryLocal.updateMany({
+      where: {
+        id: oferta.deliveryId,
+        estado: EstadoDeliveryLocal.SOLICITADO,
+        repartidorId: null,
+      },
+      data: {
+        estado: EstadoDeliveryLocal.TOMADO,
+        repartidorId: oferta.repartidorId,
+        costoDelivery: oferta.monto,
+        modoOferta: false,
+        tomadoEn: new Date(),
+      },
+    });
+    if (asignado.count === 0) {
+      throw new ConflictException('El pedido ya no está disponible');
+    }
+
+    const ahora = new Date();
+    await this.prisma.$transaction([
+      this.prisma.ofertaDelivery.update({
+        where: { id: ofertaId },
+        data: { estado: EstadoOfertaDelivery.ACEPTADA, resueltoEn: ahora },
+      }),
+      this.prisma.ofertaDelivery.updateMany({
+        where: {
+          deliveryId: oferta.deliveryId,
+          id: { not: ofertaId },
+          estado: EstadoOfertaDelivery.PENDIENTE,
+        },
+        data: { estado: EstadoOfertaDelivery.RECHAZADA, resueltoEn: ahora },
+      }),
+    ]);
+
+    const delivery = await this.cargar(oferta.deliveryId);
+    void this.notificaciones
+      .enviarAUsuarios(
+        [oferta.repartidorId],
+        '✅ Te asignaron el pedido',
+        `Aceptaron tu oferta de S/ ${Number(oferta.monto).toFixed(2)} — ` +
+          `${delivery.direccion}. Pasa a recogerlo.`,
+        { tipo: 'SISTEMA', empresaId },
+      )
+      .catch((e) =>
+        this.logger.warn(`Aviso de oferta aceptada: ${(e as Error).message}`),
+      );
+    void this.avisarCliente(
+      delivery,
+      `🛵 ¡Tu pedido ${delivery.venta?.codigo ?? ''} ya tiene repartidor asignado! ` +
+        'Te aviso cuando esté en camino.\n' +
+        `Sigue tu pedido aquí: ${this.urlTracking(delivery.trackingToken)}`,
+    );
+    return delivery;
+  }
+
+  /** Staff con permiso de delivery, para avisos de la subasta. */
+  private async avisarStaff(empresaId: string, titulo: string, cuerpo: string) {
+    try {
+      const staff = await this.prisma.empresaUsuarioRol.findMany({
+        where: {
+          empresaId,
+          rol: { in: [Rol.EMPRESA_ADMIN, Rol.SEDE_ADMIN, Rol.VENDEDOR] },
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { usuarioId: true },
+      });
+      if (staff.length === 0) return;
+      await this.notificaciones.enviarAUsuarios(
+        [...new Set(staff.map((x) => x.usuarioId))],
+        titulo,
+        cuerpo,
+        { tipo: 'SISTEMA', empresaId, data: { tipo: 'OFERTA_DELIVERY' } },
+      );
+    } catch (e) {
+      this.logger.warn(`avisarStaff: ${(e as Error).message}`);
     }
   }
 
@@ -970,6 +1242,17 @@ export class DeliveryLocalService {
       orderBy: { creadoEn: 'asc' },
     });
 
+    // Ofertas vigentes propias, para marcar en el pool cuáles ya oferté.
+    const propias = await this.prisma.ofertaDelivery.findMany({
+      where: {
+        repartidorId: usuarioId,
+        deliveryId: { in: deliveries.map((d) => d.id) },
+        ...DeliveryLocalService.ofertaVigente(),
+      },
+      select: { deliveryId: true, monto: true, expiraEn: true },
+    });
+    const mias = new Map(propias.map((o) => [o.deliveryId, o]));
+
     const topes = new Map(
       empresas.map((e) => [
         e.id,
@@ -990,7 +1273,19 @@ export class DeliveryLocalService {
         const total = d.venta?.total != null ? Number(d.venta.total) : null;
         return total == null || total <= tope;
       })
-      .map((d) => ({ ...d, empresaNombre: nombres.get(d.empresaId) ?? null }));
+      .map((d) => ({
+        ...d,
+        empresaNombre: nombres.get(d.empresaId) ?? null,
+        // El repartidor tiene que saber si le toca ofertar o puede tomarlo
+        // directo, y si ya ofertó (para no ofertar dos veces sin darse cuenta).
+        miOferta:
+          mias.get(d.id) != null
+            ? {
+                monto: mias.get(d.id)!.monto,
+                expiraEn: mias.get(d.id)!.expiraEn,
+              }
+            : null,
+      }));
   }
 
   /**
@@ -1009,6 +1304,13 @@ export class DeliveryLocalService {
     if (!delivery) throw new NotFoundException('Delivery no encontrado');
     if (delivery.esInterno) {
       throw new ForbiddenException('Este delivery lo lleva la propia empresa');
+    }
+    // En subasta no se toma directo: el primero que aceptara el precio base
+    // ganaría siempre y la subasta no ocurriría nunca.
+    if (delivery.modoOferta) {
+      throw new BadRequestException(
+        'Este pedido se asigna por oferta: propón tu precio',
+      );
     }
 
     const empresa = await this.prisma.empresa.findUnique({

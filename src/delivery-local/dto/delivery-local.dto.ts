@@ -39,6 +39,20 @@ export class SolicitarDeliveryDto {
   @IsString()
   distrito?: string;
 
+  /**
+   * Publicar en SUBASTA: los repartidores proponen precio y la empresa
+   * elige. Mientras esté así, el pedido NO se puede tomar directo.
+   */
+  @IsOptional()
+  @IsBoolean()
+  modoOferta?: boolean;
+
+  /** Ancla opcional para la subasta; puede ir vacío. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  costoSugerido?: number;
+
   /** Tarifa que cobra el repartidor al entregar. Default: Sede.tarifaDeliveryLocal. */
   @IsOptional()
   @IsNumber()
@@ -151,6 +165,38 @@ export class CancelarDeliveryDto {
   @IsOptional()
   @IsString()
   motivo?: string;
+}
+
+/**
+ * Publicar en SUBASTA en vez de con tarifa fija. La empresa no siempre sabe
+ * cuánto sale llegar a una zona; el repartidor sí.
+ */
+export class ModoOfertaDeliveryDto {
+  @IsOptional()
+  @IsBoolean()
+  modoOferta?: boolean;
+
+  /** Ancla opcional. Puede ir vacío: la empresa puede no tener idea. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  costoSugerido?: number;
+}
+
+/** El repartidor propone su precio para un pedido en subasta. */
+export class OfertarDeliveryDto {
+  @IsString()
+  @IsNotEmpty()
+  empresaId: string;
+
+  @IsNumber()
+  @Min(0.01)
+  monto: number;
+
+  /** "esa zona son 20 min de ida" — le da contexto al staff que decide. */
+  @IsOptional()
+  @IsString()
+  comentario?: string;
 }
 
 /**

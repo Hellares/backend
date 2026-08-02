@@ -16,6 +16,48 @@ enum EstadoDeliveryLocal {
   CANCELADO
 }
 
+enum EstadoOfertaDelivery {
+  PENDIENTE
+  ACEPTADA
+  RECHAZADA // la empresa eligió otra oferta
+  RETIRADA // el propio repartidor la dio de baja
+}
+
+// Subasta estilo inDrive: la empresa NO puede saber cuánto sale llegar a
+// cada zona — el que lo sabe es el repartidor. En vez de decretar la
+// tarifa, la empresa publica (con precio sugerido o sin nada) y los
+// repartidores ofertan; la empresa elige y ahí recién se asigna.
+//
+// ⚠️ VENCIMIENTO: una oferta vieja no sirve — el repartidor ya puede estar
+// ocupado. Vencen a los 10 min y NO hay job que las marque: se derivan
+// comparando `expiraEn` contra ahora. Todo lo que lea ofertas PENDIENTES
+// tiene que filtrar por `expiraEn > now()`, y aceptar tiene que revalidarlo.
+model OfertaDelivery {
+  id           String @id @default(cuid())
+  deliveryId   String
+  // Usuario del repartidor (freelance o empleado): mismo criterio que
+  // DeliveryLocal.repartidorId.
+  repartidorId String
+
+  monto      Decimal @db.Decimal(10, 2)
+  comentario String? // "esa zona son 20 min de ida"
+
+  estado EstadoOfertaDelivery @default(PENDIENTE)
+
+  creadoEn   DateTime  @default(now())
+  expiraEn   DateTime
+  resueltoEn DateTime?
+
+  delivery   DeliveryLocal @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  repartidor Usuario       @relation("OfertaRepartidor", fields: [repartidorId], references: [id])
+
+  // Una oferta viva por repartidor y delivery: re-ofertar pisa la anterior.
+  @@unique([deliveryId, repartidorId])
+  @@index([deliveryId, estado])
+  @@index([repartidorId, estado])
+  @@map("oferta_delivery")
+}
+
 // Geocoder PROPIO (Fase 1): cada dirección CONFIRMADA con pin (delivery
 // creado) alimenta la búsqueda local del picker — los lugares reales de la
 // zona ("Mz B Lt 5", mercados, referencias) que los geocoders externos no
@@ -49,7 +91,7 @@ model DeliveryLocal {
   sedeId    String
 
   // Origen: venta (bot IA / POS / online). Única por venta.
-  ventaId String? @unique
+  ventaId             String? @unique
   // Reservado para F2 (pedido web directo, aún sin FK).
   pedidoMarketplaceId String? @unique
 
@@ -95,8 +137,17 @@ model DeliveryLocal {
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 
-  venta      Venta?   @relation(fields: [ventaId], references: [id])
-  repartidor Usuario? @relation("DeliveryRepartidor", fields: [repartidorId], references: [id])
+  // Subasta: mientras `modoOferta` esté activo el delivery NO se puede
+  // tomar directo — solo por oferta aceptada. Si conviven las dos vías, el
+  // primero que acepta el precio base gana siempre y la subasta nunca pasa.
+  modoOferta    Boolean  @default(false)
+  // Ancla opcional para el repartidor. Puede ir vacío: la empresa
+  // justamente puede no saber cuánto vale llegar a esa zona.
+  costoSugerido Decimal? @db.Decimal(10, 2)
+
+  venta      Venta?           @relation(fields: [ventaId], references: [id])
+  repartidor Usuario?         @relation("DeliveryRepartidor", fields: [repartidorId], references: [id])
+  ofertas    OfertaDelivery[]
 
   @@index([empresaId, estado])
   @@index([sedeId, estado])

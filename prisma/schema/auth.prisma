@@ -93,7 +93,8 @@ model Usuario {
   usuariosRegistrados EmpresaUsuarioRol[] @relation("RegistradoPor")
 
   // Deliveries locales asignados como repartidor
-  deliveriesRepartidor DeliveryLocal[] @relation("DeliveryRepartidor")
+  deliveriesRepartidor DeliveryLocal[]  @relation("DeliveryRepartidor")
+  ofertasDelivery      OfertaDelivery[] @relation("OfertaRepartidor")
 
   // Perfil de repartidor freelance de Syncronize (si se registró como tal)
   repartidorSyncronize RepartidorSyncronize?
