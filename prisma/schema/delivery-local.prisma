@@ -55,6 +55,10 @@ model OfertaDelivery {
   @@unique([deliveryId, repartidorId])
   @@index([deliveryId, estado])
   @@index([repartidorId, estado])
+  // Histórico de tarifas: filtra ACEPTADA + ventana de 90 días y ordena por
+  // `resueltoEn`. Sin esto, cada consulta de tarifa sugerida escanea toda
+  // la tabla de ofertas.
+  @@index([estado, resueltoEn])
   @@map("oferta_delivery")
 }
 
