@@ -1526,6 +1526,26 @@ export class EmpresaService {
         etiquetaCondicionEquipo: 'Estado del artículo',
         mostrarSeccionEquipo: true,
       },
+      // En mascotas la "sección equipo" de la orden de servicio es el ANIMAL
+      // (baño, grooming, consulta). numeroSerie en OrdenServicio es texto libre
+      // sin @unique, así que puede llevar el nombre sin romper nada.
+      MASCOTAS: {
+        etiquetaSeccionEquipo: 'MASCOTA',
+        etiquetaTipoEquipo: 'Tipo de mascota',
+        etiquetaMarcaEquipo: 'Raza',
+        etiquetaNumeroSerie: 'Nombre de la mascota',
+        etiquetaCondicionEquipo: 'Estado de la mascota',
+        mostrarSeccionEquipo: true,
+      },
+      BELLEZA: {
+        mostrarSeccionEquipo: false,
+      },
+      OFICINA: {
+        mostrarSeccionEquipo: false,
+      },
+      ENTRETENIMIENTO: {
+        mostrarSeccionEquipo: false,
+      },
     };
 
     return defaults[rubro] ?? defaults.TECNOLOGIA;

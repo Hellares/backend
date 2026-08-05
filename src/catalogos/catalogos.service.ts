@@ -518,6 +518,17 @@ export class CatalogosService {
   };
 
   /**
+   * Rubros sin catálogo propio: arrancan con las categorías y marcas populares.
+   * ⚠️ Junto con las claves de CATALOGOS_POR_RUBRO tiene que cubrir el enum
+   * RubroEmpresa COMPLETO. Un rubro que no esté en ninguno de los dos crea la
+   * empresa con CERO categorías y CERO marcas, sin error visible.
+   */
+  private static readonly RUBROS_GENERICOS = [
+    'AUTOMOTRIZ', 'DEPORTES', 'CONSTRUCCION', 'EDUCACION',
+    'BELLEZA', 'MASCOTAS', 'OFICINA', 'ENTRETENIMIENTO', 'OTRO',
+  ];
+
+  /**
    * Método bulk optimizado para activar catálogos por slugs
    * Reduce ~100+ queries individuales a ~4 queries con createMany + skipDuplicates
    */
@@ -604,8 +615,7 @@ export class CatalogosService {
     }
 
     // Rubros sin configuración específica: usar populares generales
-    const rubrosGenericos = ['AUTOMOTRIZ', 'DEPORTES', 'CONSTRUCCION', 'EDUCACION', 'OTRO'];
-    if (rubrosGenericos.includes(rubroKey)) {
+    if (CatalogosService.RUBROS_GENERICOS.includes(rubroKey)) {
       this.logger.log(
         `Rubro ${rubro} no tiene catálogos específicos, usando populares generales`,
       );
@@ -635,8 +645,7 @@ export class CatalogosService {
     const config = CatalogosService.CATALOGOS_POR_RUBRO[rubroKey];
 
     // Rubros sin config específica: usar populares
-    const rubrosGenericos = ['AUTOMOTRIZ', 'DEPORTES', 'CONSTRUCCION', 'EDUCACION', 'OTRO'];
-    if (!config && rubrosGenericos.includes(rubroKey)) {
+    if (!config && CatalogosService.RUBROS_GENERICOS.includes(rubroKey)) {
       const [categoriasPopulares, marcasPopulares] = await Promise.all([
         this.prisma.categoriaMaestra.findMany({
           where: { esPopular: true, isActive: true },
