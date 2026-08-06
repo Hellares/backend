@@ -16,6 +16,19 @@ model Producto {
   unidadCompraId String?
   factorCompra   Decimal? @db.Decimal(12, 4) // Unidades de venta que trae 1 unidad de compra (ej: 100 BOLSAS/PAQUETE).
 
+  // ─── Unidad de PRESENTACIÓN ───────────────────────────────────
+  // Opcional. Cómo se le HABLA al usuario y al cliente, cuando la unidad
+  // atómica es demasiado chica para mostrarla: un alimento a granel se
+  // guarda en gramos (para que la balanza y el stock entero funcionen)
+  // pero se cotiza, se cobra y se imprime en KILOS.
+  // `factorPresentacion` = unidades atómicas que trae 1 de presentación
+  // (kg = 1000 g). NO cambia nada de lo almacenado: stock, precioCosto y
+  // movimientos siguen SIEMPRE en unidad atómica. Es capa de vista y de
+  // captura. Sin ella, el producto se muestra en su unidad atómica, que es
+  // el comportamiento de siempre.
+  unidadPresentacionId String?
+  factorPresentacion   Decimal? @db.Decimal(12, 4)
+
   codigoEmpresa      String
   codigoSistema      String
   sku                String?
@@ -73,6 +86,7 @@ model Producto {
   empresaMarca        EmpresaMarca?            @relation(fields: [empresaMarcaId], references: [id])
   unidadMedida        EmpresaUnidadMedida?     @relation(fields: [unidadMedidaId], references: [id])
   unidadCompra        EmpresaUnidadMedida?     @relation("ProductoUnidadCompra", fields: [unidadCompraId], references: [id])
+  unidadPresentacion  EmpresaUnidadMedida?     @relation("ProductoUnidadPresentacion", fields: [unidadPresentacionId], references: [id])
   empresa             Empresa                  @relation(fields: [empresaId], references: [id])
   sede                Sede?                    @relation(fields: [sedeId], references: [id])
   comprobantes        ComprobanteElectronico[] @relation("ProductoComprobante")
@@ -152,6 +166,7 @@ model Producto {
   @@index([empresaMarcaId])
   @@index([unidadMedidaId])
   @@index([unidadCompraId])
+  @@index([unidadPresentacionId])
   @@index([sedeId])
   @@index([isActive])
   @@index([deletedAt])

@@ -329,7 +329,7 @@ export class ProductoCatalogService {
     }
 
     // Desestructurar para excluir campos relacionados
-    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, unidadCompra, stocksPorSede: _, ...productoData } = producto;
+    const { empresaCategoria, empresaMarca, empresa, sede, variantes, atributosValores, unidadMedida, unidadCompra, unidadPresentacion, stocksPorSede: _, ...productoData } = producto;
 
     // Obtener precio del primer stock con precio configurado
     let precioFinal = 0;
@@ -443,6 +443,20 @@ export class ProductoCatalogService {
         } : null,
       } : null,
       factorCompra: producto.factorCompra != null ? Number(producto.factorCompra) : null,
+      // Unidad de PRESENTACIÓN: se manda plana (símbolo + factor) porque lo
+      // único que hace el cliente es formatear y convertir. Si se necesitara
+      // el objeto completo, replicar el shape de `unidadCompra` de arriba.
+      unidadPresentacionId: producto.unidadPresentacionId ?? null,
+      unidadPresentacionSimbolo: unidadPresentacion
+        ? (unidadPresentacion.simboloLocal ??
+           unidadPresentacion.simboloPersonalizado ??
+           unidadPresentacion.unidadMaestra?.simbolo ??
+           null)
+        : null,
+      factorPresentacion:
+        producto.factorPresentacion != null
+          ? Number(producto.factorPresentacion)
+          : null,
       imagenes: archivos?.map((a) => a.url) || [],
       archivos: archivos?.map((a) => ({
         id: a.id,
@@ -807,6 +821,16 @@ export class ProductoCatalogService {
               actualizadoEn: true,
             },
           },
+        },
+      },
+      // Solo lo necesario para formatear: el símbolo sale de local →
+      // personalizado → maestra, igual que en el resto del catálogo.
+      unidadPresentacion: {
+        select: {
+          id: true,
+          simboloLocal: true,
+          simboloPersonalizado: true,
+          unidadMaestra: { select: { simbolo: true } },
         },
       },
     };

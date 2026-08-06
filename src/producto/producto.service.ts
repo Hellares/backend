@@ -137,6 +137,64 @@ export class ProductoService {
   }
 
   /**
+   * Valida la pareja `unidadPresentacionId` + `factorPresentacion`.
+   *
+   * Mismas reglas que la unidad de compra (ambos o ninguno, factor > 0, la
+   * unidad tiene que ser de la empresa y distinta a la de venta), con un
+   * agregado propio: el factor tiene que ser **mayor a 1**. La presentación
+   * existe para AGRUPAR la unidad atómica cuando es muy chica —mostrar kilos
+   * cuando se guardan gramos—, así que un factor de 1 o menor no agruparía
+   * nada y solo confundiría.
+   */
+  private async _validarUnidadPresentacion(
+    empresaId: string,
+    data: {
+      unidadPresentacionId?: string | null;
+      factorPresentacion?: number | null;
+      unidadMedidaId?: string | null;
+    },
+  ): Promise<void> {
+    const tieneUP =
+      data.unidadPresentacionId != null && data.unidadPresentacionId !== '';
+    const tieneFactor =
+      data.factorPresentacion != null && Number(data.factorPresentacion) > 0;
+
+    if (tieneUP && !tieneFactor) {
+      throw new BadRequestException(
+        'factorPresentacion es requerido cuando se define unidadPresentacionId (cuántas unidades de venta trae 1 de presentación).',
+      );
+    }
+    if (!tieneUP && tieneFactor) {
+      throw new BadRequestException(
+        'unidadPresentacionId es requerido cuando se define factorPresentacion.',
+      );
+    }
+    if (!tieneUP) return;
+
+    if (Number(data.factorPresentacion) <= 1) {
+      throw new BadRequestException(
+        'factorPresentacion debe ser mayor a 1: la unidad de presentación agrupa varias unidades de venta (ej. 1 kg = 1000 g).',
+      );
+    }
+
+    if (data.unidadPresentacionId === data.unidadMedidaId) {
+      throw new BadRequestException(
+        'La unidad de presentación debe ser distinta a la unidad de venta. Si ya vendés en esa unidad, dejá unidadPresentacion vacía.',
+      );
+    }
+
+    const um = await this.prisma.empresaUnidadMedida.findFirst({
+      where: { id: data.unidadPresentacionId!, empresaId, isActive: true },
+      select: { id: true },
+    });
+    if (!um) {
+      throw new BadRequestException(
+        'La unidad de presentación no existe o no pertenece a la empresa.',
+      );
+    }
+  }
+
+  /**
    * Crear un nuevo producto
    * Método delegador (Facade) - orquesta llamadas a servicios especializados
    */
@@ -221,8 +279,9 @@ export class ProductoService {
     // 4. Validar/normalizar IGV (tipoAfectacionIgv ↔ impuestoPorcentaje)
     this.normalizarIgvProducto(productoData);
 
-    // 4.1 Validar Unidad de Compra (opcional)
+    // 4.1 Validar Unidad de Compra y de Presentación (ambas opcionales)
     await this._validarUnidadCompra(empresaId, productoData);
+    await this._validarUnidadPresentacion(empresaId, productoData);
 
     // 4. Validar relación XOR entre esCombo y tieneVariantes (lógica de negocio - mantener en Facade)
     if (productoData.esCombo === true && productoData.tieneVariantes === true) {
@@ -964,8 +1023,19 @@ export class ProductoService {
           productoData.unidadMedidaId !== undefined
             ? productoData.unidadMedidaId
             : productoExistente.unidadMedidaId,
+        unidadPresentacionId:
+          productoData.unidadPresentacionId !== undefined
+            ? productoData.unidadPresentacionId
+            : productoExistente.unidadPresentacionId,
+        factorPresentacion:
+          productoData.factorPresentacion !== undefined
+            ? productoData.factorPresentacion
+            : productoExistente.factorPresentacion != null
+              ? Number(productoExistente.factorPresentacion)
+              : null,
       };
       await this._validarUnidadCompra(empresaId, merged);
+      await this._validarUnidadPresentacion(empresaId, merged);
     }
 
     // Validar relación XOR entre esCombo y tieneVariantes

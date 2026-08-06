@@ -81,6 +81,30 @@ export class CreateProductoDto {
   factorCompra?: number;
 
   @ApiPropertyOptional({
+    description:
+      'Unidad de PRESENTACIÓN (EmpresaUnidadMedida). Cómo se muestra y se cobra el producto cuando la unidad de venta es demasiado chica: se guarda en gramos y se cotiza en KILOS. No cambia el stock ni el costo, que siguen en unidad de venta. Requiere factorPresentacion.',
+    example: 'unidad-medida-kg-id',
+  })
+  @IsOptional()
+  @IsString()
+  unidadPresentacionId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Cuántas unidades de venta trae 1 de presentación. Ej: 1000 (g por KG), 100 (cm por M). Debe ser mayor a 1: la presentación agrupa. Required si se define unidadPresentacionId.',
+    example: 1000,
+    minimum: 1.0001,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(1.0001, {
+    message:
+      'El factor de presentación debe ser mayor a 1 (agrupa varias unidades de venta)',
+  })
+  factorPresentacion?: number;
+
+  @ApiPropertyOptional({
     description: 'SKU del producto',
     example: 'SKU-12345',
   })

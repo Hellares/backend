@@ -216,6 +216,7 @@ model EmpresaUnidadMedida {
   unidadMaestra       UnidadMedidaMaestra? @relation(fields: [unidadMaestraId], references: [id], onDelete: Restrict)
   productos           Producto[]
   productosComoUnidadCompra Producto[]     @relation("ProductoUnidadCompra")
+  productosComoUnidadPresentacion Producto[] @relation("ProductoUnidadPresentacion")
   variantes           ProductoVariante[]
   servicios           Servicio[]
   detallesComprobante DetalleComprobante[]
