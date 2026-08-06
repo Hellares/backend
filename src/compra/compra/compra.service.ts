@@ -9,6 +9,7 @@ import { CacheService } from '../../redis/cache.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../../configuracion-codigos/configuracion-codigos.service';
 import { createCursorPaginatedResponse } from '../../common/utils/pagination.util';
+import { round2, round6 } from '../../common/utils/money.util';
 import { OrdenCompraService } from '../orden-compra/orden-compra.service';
 import {
   CreateCompraDto,
@@ -780,7 +781,8 @@ export class CompraService {
           nuevoCosto =
             (stockAnterior * costoAnterior - cantidadAReversar * precioCompra) /
             nuevoStock;
-          nuevoCosto = Math.max(0, Math.round(nuevoCosto * 100) / 100);
+          // 6 decimales: es un costo UNITARIO, no un monto (ver round6).
+          nuevoCosto = Math.max(0, round6(nuevoCosto));
         } else if (nuevoStock === 0) {
           nuevoCosto = 0;
         }
@@ -1481,10 +1483,15 @@ export class CompraService {
   }
 
   /**
-   * Costo promedio ponderado tras una entrada de compra, redondeado a 2
+   * Costo promedio ponderado tras una entrada de compra, redondeado a 6
    * decimales. Si no había stock previo, el nuevo costo es el de la compra.
    * `cantidadEntra` y `precioCompra` van en UNIDAD ATÓMICA (ya convertidos
    * por factorCompra si la compra fue en unidad de compra).
+   *
+   * Son 6 y no 2 decimales porque esto es un precio UNITARIO, no un monto:
+   * se multiplica por miles de unidades cuando la unidad atómica es chica
+   * (gramo, centímetro). A 2 decimales, un saco de 22 kg a S/147.99 daba
+   * un costo de S/0.01/g = S/10/kg, 48% arriba del real. Ver `round6`.
    */
   static calcularNuevoCostoPromedio(
     stockAnterior: number,
@@ -1497,7 +1504,7 @@ export class CompraService {
         ? precioCompra
         : (stockAnterior * costoAnterior + cantidadEntra * precioCompra) /
           (stockAnterior + cantidadEntra);
-    return Math.round(nuevo * 100) / 100;
+    return round6(nuevo);
   }
 
   /**
@@ -1582,7 +1589,7 @@ export class CompraService {
       pe.cant += d.cantidad;
       if (!e.ultFecha || d.compra.fechaRecepcion > e.ultFecha) {
         e.ultFecha = d.compra.fechaRecepcion;
-        e.ultimoCosto = +cu.toFixed(4);
+        e.ultimoCosto = round6(cu);
       }
     }
 
@@ -1597,7 +1604,7 @@ export class CompraService {
             .map((p: any) => ({
               proveedorId: p.id,
               proveedor: p.nombre,
-              costoPromedio: p.cant > 0 ? +(p.sumCxC / p.cant).toFixed(4) : 0,
+              costoPromedio: p.cant > 0 ? round6(p.sumCxC / p.cant) : 0,
             }))
             .sort((a, b) => a.costoPromedio - b.costoPromedio);
           mejorProveedor = arr[0] ?? null;
@@ -1902,8 +1909,11 @@ export class CompraService {
       unidadOriginalSimbolo = info.simboloUnidadCompra;
       // Cantidad en unidad atómica (Int). Round defensivo por float.
       cantidad = Math.round(dto.cantidad * factor);
-      // Precio por unidad atómica (Decimal 14,4 → 4 decimales).
-      precioUnitario = +(dto.precioUnitario / factor).toFixed(4);
+      // Precio por unidad atómica (Decimal 14,6 → 6 decimales). Con 4 se
+      // perdía plata al dividir por factores grandes: un saco de 22 000 g a
+      // S/147.99 daba 0.0067/g, que ×22 000 vuelve como S/147.40 y la compra
+      // dejaba de cuadrar con la factura del proveedor.
+      precioUnitario = round6(dto.precioUnitario / factor);
     }
 
     // Cálculo de IGV según convención de la compra.
@@ -1912,19 +1922,24 @@ export class CompraService {
     //   total = bruto (lo que el user esperaba pagar).
     // - precioIncluyeIgv=false: precio es la base; igv encima; total
     //   = subtotal + igv.
+    //
+    // Los tres montos se redondean de forma DEPENDIENTE: el tercero sale de
+    // los dos ya redondeados. Redondeando cada uno por su cuenta, la suma no
+    // cerraba: un saco a S/147.99 daba subtotal 125.42 + igv 22.58 = 148.00
+    // contra un total de 147.99.
     const subtotalBruto = cantidad * precioUnitario - descuento;
     let subtotal: number;
     let igv: number;
     let total: number;
     if (precioIncluyeIgv) {
       const factor = 1 + porcentajeIGV / 100;
-      subtotal = subtotalBruto / factor;
-      igv = subtotalBruto - subtotal;
-      total = subtotalBruto;
+      total = round2(subtotalBruto);
+      subtotal = round2(subtotalBruto / factor);
+      igv = round2(total - subtotal);
     } else {
-      subtotal = subtotalBruto;
-      igv = subtotal * (porcentajeIGV / 100);
-      total = subtotal + igv;
+      subtotal = round2(subtotalBruto);
+      igv = round2(subtotal * (porcentajeIGV / 100));
+      total = round2(subtotal + igv);
     }
 
     return {
@@ -1936,8 +1951,8 @@ export class CompraService {
       precioUnitario,
       descuento,
       porcentajeIGV,
-      igv: Math.round(igv * 100) / 100,
-      subtotal: Math.round(subtotal * 100) / 100,
+      igv,
+      subtotal,
       total: Math.round(total * 100) / 100,
       orden: index,
       usaUnidadCompra,

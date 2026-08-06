@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
+import { round6 } from '../common/utils/money.util';
 import { Prisma } from '@prisma/client';
 import {
   CrearComponenteDto,
@@ -796,7 +797,7 @@ export class ProductoComponenteService {
           // NO el ponderado. Así el historial puede leer el costo del lote
           // desde el kardex y derivar la mano de obra (= total − insumos).
           precioCostoUnitario: costoActualizado
-            ? +(costoLoteTotal / dto.cantidad).toFixed(4)
+            ? round6(costoLoteTotal / dto.cantidad)
             : undefined,
           // Mano de obra explícita del lote (marca que es costeo nuevo). Solo
           // si el costo del lote es confiable (todos los insumos con costo);
@@ -831,7 +832,7 @@ export class ProductoComponenteService {
         costoManoObra: +costoManoObra.toFixed(2),
         costoLoteTotal: +costoLoteTotal.toFixed(2),
         costoUnitarioLote: !dto.soloConsumirInsumos && dto.cantidad > 0
-            ? +(costoLoteTotal / dto.cantidad).toFixed(4)
+            ? round6(costoLoteTotal / dto.cantidad)
             : null,
         componentesConsumidos: movimientosSalida,
       };

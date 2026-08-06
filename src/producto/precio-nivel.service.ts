@@ -15,8 +15,8 @@ import { RealtimeInvalidationService } from '../notificacion/realtime-invalidati
 // Usar Prisma.Decimal para los valores decimales
 const Decimal = Prisma.Decimal;
 
-/** Redondea a 4 decimales (igual que el storage Decimal(14,4)). */
-const round4 = (v: number): number => Math.round(v * 10000) / 10000;
+/** Redondea a 6 decimales (igual que el storage Decimal(14,6)). */
+const round6 = (v: number): number => Math.round(v * 1_000_000) / 1_000_000;
 
 /**
  * Contexto de precio especial de un cliente VIP, resuelto por VentaService a
@@ -629,7 +629,7 @@ export class PrecioNivelService {
         // Costo no configurado (null) o <= 0 → no aplica VIP (evita vender a 0).
         // Debe coincidir con Flutter (_calcularCandidatoVip) o saltaría el 409.
         if (precioCosto == null || precioCosto <= 0) return null;
-        return round4(precioCosto * (1 + (vip.markupSobreCosto ?? 0) / 100));
+        return round6(precioCosto * (1 + (vip.markupSobreCosto ?? 0) / 100));
       }
       case 'PRECIO_MAYOR_DESDE_UNIDAD': {
         // Todos los niveles activos, sin filtrar por cantidad (desde la unidad 1).
@@ -656,21 +656,21 @@ export class PrecioNivelService {
                 precioDeNivel(n) < precioDeNivel(best) ? n : best,
               )
             : pool[0]; // PRIMER_NIVEL: menor cantidadMinima (pool ya ordenado asc)
-        return round4(precioDeNivel(elegido));
+        return round6(precioDeNivel(elegido));
       }
       case 'PORCENTAJE': {
         let desc = precioBase * ((vip.valor ?? 0) / 100);
         if (vip.descuentoMaximo != null && desc > vip.descuentoMaximo) {
           desc = vip.descuentoMaximo;
         }
-        return round4(Math.max(precioBase - desc, 0));
+        return round6(Math.max(precioBase - desc, 0));
       }
       case 'MONTO_FIJO': {
         let desc = vip.valor ?? 0;
         if (vip.descuentoMaximo != null && desc > vip.descuentoMaximo) {
           desc = vip.descuentoMaximo;
         }
-        return round4(Math.max(precioBase - desc, 0));
+        return round6(Math.max(precioBase - desc, 0));
       }
       default:
         return null;

@@ -40,9 +40,9 @@ model ProductoStock {
   // 4 decimales en precios para soportar productos con unidad atómica
   // chica (ej: arroz por gramo a S/0.003/gr). Totales y subtotales
   // siguen redondeando a 2 decimales en cálculos.
-  precio       Decimal? @db.Decimal(14, 4) // Precio de venta en esta sede
-  precioCosto  Decimal? @db.Decimal(14, 4) // Precio de costo en esta sede (para cálculo de márgenes)
-  precioOferta Decimal? @db.Decimal(14, 4) // Precio de oferta específico de la sede
+  precio       Decimal? @db.Decimal(14, 6) // Precio de venta en esta sede
+  precioCosto  Decimal? @db.Decimal(14, 6) // Precio de costo en esta sede (para cálculo de márgenes)
+  precioOferta Decimal? @db.Decimal(14, 6) // Precio de oferta específico de la sede
 
   // Control de ofertas por sede
   enOferta          Boolean   @default(false) // Si está en oferta en esta sede
@@ -52,7 +52,7 @@ model ProductoStock {
   // Liquidación (remate por debajo de costo, autorizado por gerencia)
   // Diferente a oferta: tiene motivo justificado y acepta margen negativo.
   enLiquidacion              Boolean            @default(false)
-  precioLiquidacion          Decimal?           @db.Decimal(14, 4)
+  precioLiquidacion          Decimal?           @db.Decimal(14, 6)
   motivoLiquidacion          MotivoLiquidacion?
   observacionesLiquidacion   String?            @db.Text
   fechaInicioLiquidacion     DateTime?
@@ -141,7 +141,7 @@ model MovimientoStock {
   // movimiento y valor total (|cantidad| × costo). Nullable porque los
   // movimientos previos a esta migración no tienen snapshot — la UI
   // muestra "—" en ese caso. Para movs nuevos siempre se popula.
-  precioCostoUnitario Decimal? @db.Decimal(14, 4)
+  precioCostoUnitario Decimal? @db.Decimal(14, 6)
   valorMovimiento     Decimal? @db.Decimal(14, 2)
 
   // Mano de obra del lote (solo en PRODUCCION_ENTRADA de fabricaciones nuevas).

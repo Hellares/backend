@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { round6 } from '../common/utils/money.util';
 
 /**
  * Ficha 360 / Trazabilidad de un producto: consolida en una sola respuesta
@@ -262,7 +263,7 @@ export class ProductoTrazabilidadService {
       cantidad: r.cantidad,
       precioUnitario: Number(r.precioUnitario),
       total: Number(r.total),
-      costoUnitario: +costoUnit(r).toFixed(4),
+      costoUnitario: round6(costoUnit(r)),
       usaUnidadCompra: r.usaUnidadCompra,
       cantidadOriginal: r.cantidadOriginal != null ? Number(r.cantidadOriginal) : null,
       unidadOriginalSimbolo: r.unidadOriginalSimbolo,
@@ -287,7 +288,7 @@ export class ProductoTrazabilidadService {
       e.sumaCostoXCant += cu * r.cantidad;
       if (!e.ultimaFecha || r.compra.fechaRecepcion > e.ultimaFecha) {
         e.ultimaFecha = r.compra.fechaRecepcion;
-        e.ultimoCosto = +cu.toFixed(4);
+        e.ultimoCosto = round6(cu);
       }
       map.set(key, e);
     }
@@ -297,7 +298,7 @@ export class ProductoTrazabilidadService {
         proveedor: e.proveedor,
         veces: e.veces,
         cantidadAcum: e.cantidadAcum,
-        costoPromedio: e.cantidadAcum > 0 ? +(e.sumaCostoXCant / e.cantidadAcum).toFixed(4) : 0,
+        costoPromedio: e.cantidadAcum > 0 ? round6(e.sumaCostoXCant / e.cantidadAcum) : 0,
         ultimoCosto: e.ultimoCosto,
         ultimaFecha: e.ultimaFecha,
       }))
@@ -679,7 +680,7 @@ export class ProductoTrazabilidadService {
         cantidadAcum: v.cantidadAcum,
         precioPromedio:
           v.cantidadAcum > 0
-            ? +(v.sumaPrecioXCant / v.cantidadAcum).toFixed(4)
+            ? round6(v.sumaPrecioXCant / v.cantidadAcum)
             : 0,
         ultimaCompra: v.ultimaCompra,
       }))

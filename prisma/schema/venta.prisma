@@ -206,16 +206,16 @@ model VentaDetalle {
   // Datos del item (snapshot)
   descripcion    String
   cantidad       Decimal @db.Decimal(10, 2)
-  precioUnitario Decimal @db.Decimal(14, 4)
+  precioUnitario Decimal @db.Decimal(14, 6)
   descuento      Decimal @default(0) @db.Decimal(10, 2)
 
   // Snapshot del costo unitario al momento de la venta (deuda técnica
   // necesaria para reportería histórica de margen). Si cambia el
   // precioCosto después, el margen ya vendido queda preservado.
-  precioCostoSnapshot       Decimal            @default(0) @db.Decimal(14, 4)
+  precioCostoSnapshot       Decimal            @default(0) @db.Decimal(14, 6)
   // Margen unitario = (precioUnitario - descuentoUnitario) - precioCostoSnapshot.
   // Negativo cuando se vende bajo costo (liquidación o autorización).
-  margenSnapshot            Decimal            @default(0) @db.Decimal(14, 4)
+  margenSnapshot            Decimal            @default(0) @db.Decimal(14, 6)
   // Si el item se vendió en estado liquidación, copia del motivo
   // (snapshot) para reportería. Null cuando margen no fue negativo o
   // cuando la venta bajo costo se autorizó manualmente sin liquidación.

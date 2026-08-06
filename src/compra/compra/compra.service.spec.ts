@@ -6,7 +6,8 @@ import { CompraService } from './compra.service';
  *    (×factor / ÷factor) + cálculo de IGV/subtotal/total. Es el corazón del
  *    feature unidad-de-compra. Se invoca vía prototype (no usa `this`).
  *  - `calcularNuevoCostoPromedio()` (estático): costo promedio ponderado al
- *    recibir una compra, en unidad atómica, redondeado a 2 decimales.
+ *    recibir una compra, en unidad atómica, redondeado a 6 decimales (es un
+ *    precio unitario, no un monto).
  *
  * No tocan infra (sin prisma/DB): son funciones puras.
  */
@@ -112,6 +113,31 @@ describe('CompraService.calcularDetalle — unidad de compra (conversión ×fact
     expect(r.total).toBe(50); // 1000 × 0.05
   });
 
+  it('granel: 1 saco × S/147.99, factor 22 000 → la compra cuadra con la factura', () => {
+    // El caso que motivó los 6 decimales. Con 4, el precio por gramo quedaba
+    // en 0.0067 y el total volvía como S/147.40: S/0.59 menos que la factura.
+    const r = calcularDetalle(
+      {
+        descripcion: 'RICOCAN 22KG',
+        productoId: 'ricocan',
+        usaUnidadCompra: true,
+        cantidad: 1,
+        precioUnitario: 147.99,
+      },
+      0,
+      mapDe({ ricocan: { factor: 22000, simbolo: 'SC' } }),
+      true,
+    );
+    expect(r.cantidad).toBe(22000);
+    expect(r.precioUnitario).toBe(0.006727);
+    expect(r.total).toBe(147.99);
+    // Con IGV incluido: base 125.42 + IGV 22.57 = 147.99. Los tres cierran
+    // entre si porque el igv se deriva de los ya redondeados.
+    expect(r.subtotal).toBe(125.42);
+    expect(r.igv).toBe(22.57);
+    expect(r.subtotal + r.igv).toBe(r.total);
+  });
+
   it('plantas: 1 caja × S/350, factor 50 → 50 par × S/7/par', () => {
     const r = calcularDetalle(
       {
@@ -148,7 +174,7 @@ describe('CompraService.calcularDetalle — unidad de compra (conversión ×fact
     expect(r.total).toBe(40);
   });
 
-  it('precio no exacto: factor 3, precio 10 → 3.3333 (4 decimales)', () => {
+  it('precio no exacto: factor 3, precio 10 → 3.333333 (6 decimales)', () => {
     const r = calcularDetalle(
       {
         descripcion: 'Y',
@@ -162,7 +188,7 @@ describe('CompraService.calcularDetalle — unidad de compra (conversión ×fact
       true,
     );
     expect(r.cantidad).toBe(3);
-    expect(r.precioUnitario).toBe(3.3333);
+    expect(r.precioUnitario).toBe(3.333333);
   });
 
   it('cantidad de compra fraccionaria: 1.5 m × factor 100 → 150 cm (round)', () => {
@@ -394,18 +420,34 @@ describe('CompraService.calcularNuevoCostoPromedio — costo promedio ponderado'
     expect(CompraService.calcularNuevoCostoPromedio(100, 2.5, 50, 7)).toBe(4);
   });
 
-  it('cuero: 140 cm @ 0.04 + 1000 cm @ 0.05 → 0.05 (2 dec)', () => {
-    // (140×0.04 + 1000×0.05) / 1140 = 0.04877 → 0.05
+  it('cuero: 140 cm @ 0.04 + 1000 cm @ 0.05 → 0.048772 (6 dec)', () => {
+    // (140×0.04 + 1000×0.05) / 1140 = 0.0487719…
+    // A 2 decimales daba 0.05: un 2.5% arriba en cada compra, y el error se
+    // acumulaba compra tras compra dentro del promedio ponderado.
     expect(CompraService.calcularNuevoCostoPromedio(140, 0.04, 1000, 0.05)).toBe(
-      0.05,
+      0.048772,
     );
   });
 
-  it('cuero: 140 cm @ 0.04 + 1 cm @ 0.05 → 0.04 (apenas mueve)', () => {
-    // (140×0.04 + 1×0.05) / 141 = 0.0400 → 0.04
+  it('cuero: 140 cm @ 0.04 + 1 cm @ 0.05 → 0.040071 (apenas mueve)', () => {
+    // (140×0.04 + 1×0.05) / 141 = 0.0400709…
     expect(CompraService.calcularNuevoCostoPromedio(140, 0.04, 1, 0.05)).toBe(
-      0.04,
+      0.040071,
     );
+  });
+
+  it('granel: un saco de 22 kg en gramos NO se redondea a S/0.01/g', () => {
+    // 147.99 / 22 000 = 0.0067268… A 2 decimales quedaba 0.01/g = S/10/kg,
+    // un 48% arriba del costo real (S/6.73/kg).
+    const costo = CompraService.calcularNuevoCostoPromedio(
+      0,
+      0,
+      22000,
+      147.99 / 22000,
+    );
+    expect(costo).toBe(0.006727);
+    // El equivalente por kilo vuelve a ser el real.
+    expect(+(costo * 1000).toFixed(2)).toBe(6.73);
   });
 });
 

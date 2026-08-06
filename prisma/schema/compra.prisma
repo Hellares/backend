@@ -110,7 +110,7 @@ model OrdenCompraDetalle {
   // (PAQUETE/KG/...), el service convierte antes de persistir.
   descripcion    String
   cantidad       Int
-  precioUnitario Decimal @db.Decimal(14, 4)
+  precioUnitario Decimal @db.Decimal(14, 6)
   descuento      Decimal @default(0) @db.Decimal(12, 2)
 
   // ─── Snapshot Unidad de Compra ────────────────────────────────
@@ -258,7 +258,7 @@ model CompraDetalle {
   // UI muestre la doble vista.
   descripcion    String
   cantidad       Int
-  precioUnitario Decimal @db.Decimal(14, 4)
+  precioUnitario Decimal @db.Decimal(14, 6)
   descuento      Decimal @default(0) @db.Decimal(12, 2)
 
   // ─── Snapshot Unidad de Compra ────────────────────────────────
@@ -275,7 +275,7 @@ model CompraDetalle {
   // la compra se actualiza también el `precio` del ProductoStock y se
   // registra en `ProductoPrecioHistorialSede` con origenModulo=COMPRA.
   // Si la compra queda en BORRADOR o se anula, no se aplica.
-  nuevoPrecioVenta Decimal? @db.Decimal(14, 4)
+  nuevoPrecioVenta Decimal? @db.Decimal(14, 6)
 
   // IGV
   porcentajeIGV Decimal @default(18) @db.Decimal(5, 2)
@@ -323,7 +323,7 @@ model Lote {
   numeroLote String? // Número de lote del fabricante
 
   // Costo unitario de ESTE lote
-  precioCosto Decimal @db.Decimal(14, 4)
+  precioCosto Decimal @db.Decimal(14, 6)
   moneda      String  @default("PEN")
 
   // Cantidades

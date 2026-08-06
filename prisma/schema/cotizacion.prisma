@@ -105,18 +105,18 @@ model CotizacionDetalle {
   // Datos del item (snapshot)
   descripcion    String
   cantidad       Decimal @db.Decimal(10, 2)
-  precioUnitario Decimal @db.Decimal(14, 4)
+  precioUnitario Decimal @db.Decimal(14, 6)
   descuento      Decimal @default(0) @db.Decimal(10, 2)
 
   // Precio unitario REGULAR (antes del nivel por mayor / precio VIP).
   // Solo se persiste cuando difiere de precioUnitario; permite mostrarle
   // al cliente el ahorro completo (nivel + descuento manual).
-  precioRegular Decimal? @db.Decimal(14, 4)
+  precioRegular Decimal? @db.Decimal(14, 6)
 
   // Precio NORMAL de sede antes de la OFERTA/liquidación pública vigente
   // al cotizar. Solo informativo (chip "En oferta — antes S/X"): la oferta
   // es precio público y NO cuenta como descuento de la cotización.
-  precioAntesOferta Decimal? @db.Decimal(14, 4)
+  precioAntesOferta Decimal? @db.Decimal(14, 6)
 
   // Impuesto
   tipoAfectacion String  @default("10") // SUNAT Cat.07: 10=Gravado, 20=Exonerado, 30=Inafecto
