@@ -226,6 +226,22 @@ model VentaDetalle {
   // depender de la config actual (que puede cambiar o eliminarse).
   nivelAplicadoSnapshot     String?
 
+  // Unidad en la que se le HABLA al cliente en esta línea (snapshot). Un
+  // producto a granel se guarda en gramos pero se cobra en kilos: `cantidad`
+  // y `precioUnitario` siguen en unidad de venta (1500 g @ S/0.008), y estos
+  // tres campos son lo que necesitan el ticket y el comprobante para
+  // mostrarlo como 1.5 kg @ S/8.00/kg.
+  //
+  // Snapshot y no lookup al Producto: si mañana el producto cambia de
+  // presentación, el ticket reimpreso de una venta vieja tiene que seguir
+  // diciendo lo que se cobró ese día.
+  //
+  // `codigoUnidadSunat` aplica también sin presentación: es la unidad con la
+  // que la línea se declara ante SUNAT (catálogo 03). Null = NIU.
+  unidadPresentacionSimbolo String?  @db.VarChar(20)
+  factorPresentacion        Decimal? @db.Decimal(12, 4)
+  codigoUnidadSunat         String?  @db.VarChar(5)
+
   // Impuesto
   tipoAfectacion String  @default("10") // SUNAT Cat.07: 10=Gravado, 20=Exonerado, 30=Inafecto
   porcentajeIGV  Decimal @default(18.00) @db.Decimal(5, 2)

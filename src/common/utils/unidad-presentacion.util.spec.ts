@@ -1,0 +1,108 @@
+import {
+  cantidadDeclarada,
+  codigoSunatUnidad,
+  montosDeclarados,
+  sinPresentacion,
+  UNIDAD_SUNAT_DEFAULT,
+  type PresentacionLinea,
+} from './unidad-presentacion.util';
+
+/** RICOCAN: se guarda en gramos, se cobra en kilos. */
+const KILO: PresentacionLinea = { factor: 1000, simbolo: 'kg', codigoSunat: 'KGM' };
+
+describe('codigoSunatUnidad', () => {
+  it('usa el código de la unidad maestra', () => {
+    expect(codigoSunatUnidad({ unidadMaestra: { codigo: 'KGM' } })).toBe('KGM');
+  });
+
+  it('normaliza a mayúsculas y sin espacios', () => {
+    expect(codigoSunatUnidad({ unidadMaestra: { codigo: ' kgm ' } })).toBe('KGM');
+  });
+
+  it('cae a NIU sin unidad', () => {
+    expect(codigoSunatUnidad(null)).toBe(UNIDAD_SUNAT_DEFAULT);
+    expect(codigoSunatUnidad(undefined)).toBe(UNIDAD_SUNAT_DEFAULT);
+  });
+
+  it('cae a NIU cuando la unidad es PERSONALIZADA', () => {
+    // Sin unidadMaestra el código lo escribió el usuario ("100 g", "CJ12") y
+    // no existe en el catálogo 03: mandarlo hace que SUNAT rechace.
+    expect(codigoSunatUnidad({ unidadMaestra: null })).toBe('NIU');
+    expect(codigoSunatUnidad({} as any)).toBe('NIU');
+  });
+});
+
+describe('cantidadDeclarada', () => {
+  it('divide por el factor: 1500 g son 1.5 kg', () => {
+    expect(cantidadDeclarada(1500, KILO)).toBe(1.5);
+  });
+
+  it('un saco entero: 22 000 g son 22 kg', () => {
+    expect(cantidadDeclarada(22000, KILO)).toBe(22);
+  });
+
+  it('conserva el gramo: 1237 g son 1.237 kg', () => {
+    expect(cantidadDeclarada(1237, KILO)).toBe(1.237);
+  });
+
+  it('sin presentación no toca la cantidad', () => {
+    expect(cantidadDeclarada(3, sinPresentacion())).toBe(3);
+  });
+
+  it('un factor de 1 no divide (presentación inerte)', () => {
+    expect(cantidadDeclarada(3, { factor: 1, simbolo: 'und', codigoSunat: 'NIU' })).toBe(3);
+  });
+});
+
+describe('montosDeclarados', () => {
+  it('1.5 kg a S/8.00 el kilo, no 1500 g a S/0.01', () => {
+    // Lo guardado: 1500 g, precio por gramo 0.008 → total 12.00.
+    const r = montosDeclarados({ cantidad: 1500, subtotal: 10.17, total: 12 }, KILO);
+
+    expect(r.cantidad).toBe(1.5);
+    expect(r.precioUnitario).toBeCloseTo(8, 6);
+    expect(r.valorUnitario).toBeCloseTo(6.78, 6);
+  });
+
+  it('cantidad × precioUnitario reconstruye el total que pagó el cliente', () => {
+    // El caso que motivó los 3 decimales: 1237 g a S/8/kg = S/9.90 cobrados.
+    // Derivando el unitario de la cantidad ya redondeada, la línea cuadra.
+    const linea = { cantidad: 1237, subtotal: 8.39, total: 9.9 };
+    const r = montosDeclarados(linea, KILO);
+
+    expect(r.cantidad * r.precioUnitario).toBeCloseTo(linea.total, 6);
+    expect(r.cantidad * r.valorUnitario).toBeCloseTo(linea.subtotal, 6);
+  });
+
+  it('NO es multiplicar el precio por el factor', () => {
+    // precioPorGramo × 1000 daría 9.896/1.237 = 8.0000 pero al revés:
+    // con cantidad redondeada a 1.24 (2 decimales) el total saldría 9.92.
+    // Este test fija que la cantidad conserva el gramo.
+    const r = montosDeclarados({ cantidad: 1237, subtotal: 8.39, total: 9.9 }, KILO);
+    expect(r.cantidad).not.toBe(1.24);
+    expect(r.cantidad).toBe(1.237);
+  });
+
+  it('sin presentación deja la línea exactamente como estaba', () => {
+    const r = montosDeclarados({ cantidad: 2, subtotal: 20, total: 23.6 }, sinPresentacion());
+
+    expect(r.cantidad).toBe(2);
+    expect(r.valorUnitario).toBe(10);
+    expect(r.precioUnitario).toBe(11.8);
+  });
+
+  it('cantidad 0 no divide por cero', () => {
+    const r = montosDeclarados({ cantidad: 0, subtotal: 5, total: 5.9 }, KILO);
+
+    expect(r.cantidad).toBe(0);
+    expect(Number.isFinite(r.valorUnitario)).toBe(true);
+    expect(r.precioUnitario).toBe(5.9);
+  });
+
+  it('media unidad de presentación: 500 g son 0.5 kg', () => {
+    const r = montosDeclarados({ cantidad: 500, subtotal: 3.39, total: 4 }, KILO);
+
+    expect(r.cantidad).toBe(0.5);
+    expect(r.precioUnitario).toBeCloseTo(8, 6);
+  });
+});

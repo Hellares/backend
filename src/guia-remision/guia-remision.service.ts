@@ -12,6 +12,11 @@ import { QueryGuiasRemisionDto } from './dto/query-guias-remision.dto';
 import { Prisma } from '@prisma/client';
 import { NubefactGreResponse } from '../sunat/providers/gre-nubefact.types';
 import { NUBEFACT_TIMEOUT_MS } from '../sunat/providers/nubefact.types';
+import {
+  cantidadDeclarada,
+  codigoSunatUnidad,
+  type PresentacionLinea,
+} from '../common/utils/unidad-presentacion.util';
 
 const MAX_INTENTOS_GRE = 10;
 const ENVIO_BATCH_SIZE = 50;
@@ -543,7 +548,18 @@ export class GuiaRemisionService {
             varianteId: true,
             descripcion: true,
             cantidad: true,
-            producto: { select: { nombre: true, codigoEmpresa: true, sku: true, peso: true, unidadMedida: { select: { codigoPersonalizado: true, simboloPersonalizado: true } } } },
+            producto: {
+              select: {
+                nombre: true,
+                codigoEmpresa: true,
+                sku: true,
+                peso: true,
+                // `unidadMaestra.codigo` es lo ÚNICO que sirve para el
+                // catálogo 03 de SUNAT: los campos personalizados los
+                // escribe el usuario y no existen en ningún catálogo.
+                unidadMedida: { select: { unidadMaestra: { select: { codigo: true } } } },
+              },
+            },
             variante: { select: { nombre: true, sku: true } },
           },
         },
@@ -592,12 +608,24 @@ export class GuiaRemisionService {
       };
     }
 
-    // Items desde detalles de venta — solo campos necesarios para la GRE
+    // Items desde detalles de venta — solo campos necesarios para la GRE.
+    //
+    // La guía se declara en la MISMA unidad que el comprobante: si la boleta
+    // dice 1.5 KGM, la guía que ampara ese traslado no puede decir 1500 NIU.
+    // Cada línea trae su snapshot de presentación; sin él va tal cual, pero
+    // ahora con la unidad real del producto en vez de NIU fijo.
     let pesoEstimado = 0;
     const items = venta.detalles.map((d: any) => {
       const pesoUnitario = d.producto?.peso ? Number(d.producto.peso) : 0;
       const cant = Number(d.cantidad);
       pesoEstimado += pesoUnitario * cant;
+      const factor = Number(d.factorPresentacion ?? 1);
+      const presentacion: PresentacionLinea = {
+        factor: factor > 1 ? factor : 1,
+        simbolo: d.unidadPresentacionSimbolo ?? null,
+        codigoSunat:
+          d.codigoUnidadSunat || codigoSunatUnidad(d.producto?.unidadMedida),
+      };
       return {
         productoId: d.productoId || null,
         varianteId: d.varianteId || null,
@@ -605,8 +633,8 @@ export class GuiaRemisionService {
           ? (d.variante?.nombre ? `${d.producto.nombre} - ${d.variante.nombre}` : d.producto.nombre)
           : d.descripcion || 'Producto',
         codigo: d.producto?.codigoEmpresa || d.producto?.sku || '',
-        cantidad: cant,
-        unidadMedida: d.producto?.unidadMedida?.codigoPersonalizado || d.producto?.unidadMedida?.simboloPersonalizado || 'NIU',
+        cantidad: cantidadDeclarada(cant, presentacion),
+        unidadMedida: presentacion.codigoSunat,
       };
     });
 

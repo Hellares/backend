@@ -25,6 +25,7 @@ import {
   MotivoNota,
   TipoNota,
 } from './catalogos-sunat';
+import { UNIDAD_SUNAT_DEFAULT } from '../common/utils/unidad-presentacion.util';
 
 /**
  * Mapeo entre tipo de documento SUNAT y los campos de Sede donde se guarda
@@ -996,8 +997,8 @@ export class FacturacionService {
           })
         : null;
 
-      const precioLista = Number(stock?.precio ?? 0);
-      if (!precioLista || precioLista <= 0) {
+      const precioListaUnitario = Number(stock?.precio ?? 0);
+      if (!precioListaUnitario || precioListaUnitario <= 0) {
         throw new BadRequestException(
           `La línea "${d.descripcion}" está a S/ 0.00 y el producto no tiene ` +
           `precio de lista en la sede: no se puede calcular el valor ` +
@@ -1006,13 +1007,30 @@ export class FacturacionService {
         );
       }
 
+      // El precio de lista está en unidad de VENTA (por gramo), pero la línea
+      // del comprobante ya se declaró en la unidad de PRESENTACIÓN (por kilo).
+      // Sin convertirlo, el valor referencial de un regalo de 1.5 kg saldría
+      // como S/0.01 el kilo en vez de S/8.00.
+      const producto = await this.prisma.producto.findUnique({
+        where: { id: d.productoId },
+        select: { factorPresentacion: true, unidadPresentacionId: true },
+      });
+      const factor = Number(producto?.factorPresentacion ?? 0);
+      const precioLista =
+        producto?.unidadPresentacionId && factor > 1
+          ? precioListaUnitario * factor
+          : precioListaUnitario;
+
       const tipoOriginal = d.tipoAfectacion ?? '10';
       const tipoGratuita = MAPA_GRATUITA[tipoOriginal];
       // El valor referencial va SIN IGV: para gravados se desagrega del
       // precio de lista; exonerados/inafectos no llevan IGV.
       const valorReferencial =
         tipoOriginal === '10' ? precioLista / (1 + igvPct / 100) : precioLista;
-      const valorRef2 = Math.round(valorReferencial * 100) / 100;
+      // 4 decimales, que es la escala de la columna: esto es un precio por
+      // unidad, no un monto, y redondearlo a centavos es justo lo que rompe
+      // los productos de unidad atómica chica.
+      const valorRef2 = Math.round(valorReferencial * 10000) / 10000;
 
       await this.prisma.detalleComprobante.update({
         where: { id: d.id },
@@ -1749,10 +1767,22 @@ export class FacturacionService {
       // etc.) y recalculamos totales del header desde ellos. Si no vienen, copiamos
       // del comprobante origen (caso "anular completo").
       const usaItemsCustom = !!(dto.items && dto.items.length > 0);
+
+      // La nota tiene que declararse en la MISMA unidad que el comprobante
+      // que afecta: si la boleta salió en KGM, una nota en NIU es un
+      // documento que no corresponde al original. Los items custom pueden
+      // mandarla; si no, se toma de la línea homónima del comprobante.
+      const unidadPorDescripcion = new Map(
+        origen.detalles.map((d) => [d.descripcion, d.unidadMedida]),
+      );
       const itemsParaCrear = usaItemsCustom
         ? dto.items!.map((item) => ({
             descripcion: item.descripcion,
             cantidad: new Prisma.Decimal(item.cantidad),
+            unidadMedida:
+              item.unidadMedida ||
+              unidadPorDescripcion.get(item.descripcion) ||
+              UNIDAD_SUNAT_DEFAULT,
             valorUnitario: new Prisma.Decimal(item.valorUnitario.toFixed(2)),
             precioUnitario: new Prisma.Decimal(item.precioUnitario.toFixed(2)),
             tipoAfectacion: item.tipoAfectacion || '10',
@@ -1765,6 +1795,7 @@ export class FacturacionService {
         : origen.detalles.map((d) => ({
             descripcion: d.descripcion,
             cantidad: d.cantidad,
+            unidadMedida: d.unidadMedida,
             valorUnitario: d.valorUnitario,
             precioUnitario: d.precioUnitario,
             tipoAfectacion: d.tipoAfectacion,

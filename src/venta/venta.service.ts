@@ -42,6 +42,14 @@ import { FacturacionService } from '../sunat/facturacion.service';
 import { OrdenServicioService } from '../servicio/orden-servicio.service';
 import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
 import { round2 } from '../common/utils/money.util';
+import {
+  codigoSunatUnidad,
+  montosDeclarados,
+  simboloUnidad,
+  sinPresentacion,
+  UNIDAD_SUNAT_DEFAULT,
+  type PresentacionLinea,
+} from '../common/utils/unidad-presentacion.util';
 
 /**
  * DTO interno enriquecido por `aplicarPreciosBackendNivel` con el snapshot
@@ -56,6 +64,13 @@ type DetalleConSnapshot = CreateVentaDetalleDto & {
   vipPoliticaId?: string | null;
   /** Precio base antes del precio especial VIP (para el historial de uso). */
   precioBaseVip?: number | null;
+  /**
+   * Unidad en la que se le habla al cliente en esta línea. La resuelve
+   * `resolverPresentaciones` una sola vez por venta y la consumen tanto el
+   * snapshot de VentaDetalle (para el ticket) como el DetalleComprobante
+   * (para SUNAT), así los dos documentos no pueden decir cosas distintas.
+   */
+  presentacion?: PresentacionLinea;
 };
 
 /**
@@ -315,6 +330,183 @@ export class VentaService {
     }
 
     return result;
+  }
+
+  /**
+   * En qué unidad se le habla al cliente en cada línea.
+   *
+   * Un producto a granel se guarda en gramos —para que el stock entero
+   * aguante los 22 000 de un saco y la balanza escriba enteros— pero se cobra
+   * en kilos. El sistema sigue guardando gramos; esto es lo que necesitan el
+   * ticket y el comprobante para decir "1.5 kg @ S/8.00/kg" en vez de
+   * "1500 @ S/0.01", que es un precio que no existe.
+   *
+   * Se resuelve UNA vez por venta y alimenta tanto el snapshot de la línea
+   * como el detalle del comprobante: si cada documento lo resolviera por su
+   * cuenta, podrían terminar diciendo cosas distintas del mismo cobro.
+   *
+   * Devuelve un mapa por productoId. Las líneas sin producto (servicios,
+   * ítems libres) no entran y caen a `sinPresentacion()` en el consumidor.
+   */
+  private async resolverPresentaciones(
+    tx: Prisma.TransactionClient,
+    productoIds: Array<string | null | undefined>,
+  ): Promise<Map<string, PresentacionLinea>> {
+    const mapa = new Map<string, PresentacionLinea>();
+    const ids = [...new Set(productoIds.filter((id): id is string => !!id))];
+    if (ids.length === 0) return mapa;
+
+    const productos = await tx.producto.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        factorPresentacion: true,
+        unidadPresentacion: {
+          select: {
+            simboloLocal: true,
+            simboloPersonalizado: true,
+            unidadMaestra: { select: { codigo: true, simbolo: true } },
+          },
+        },
+        unidadMedida: {
+          select: { unidadMaestra: { select: { codigo: true } } },
+        },
+      },
+    });
+
+    for (const p of productos) {
+      const factor = Number(p.factorPresentacion ?? 0);
+      // La presentación existe para AGRUPAR: con factor <= 1 no agrupa nada
+      // y solo metería divisiones inútiles. El create del producto ya lo
+      // valida, pero un dato viejo o cargado por SQL no se valida solo.
+      if (p.unidadPresentacion && factor > 1) {
+        mapa.set(p.id, {
+          factor,
+          simbolo: simboloUnidad(p.unidadPresentacion),
+          codigoSunat: codigoSunatUnidad(p.unidadPresentacion),
+        });
+      } else {
+        // Sin presentación la línea va tal cual, pero igual se declara con
+        // SU unidad: hasta ahora todo salía como NIU aunque el producto se
+        // vendiera en kilos o en metros.
+        mapa.set(p.id, sinPresentacion(codigoSunatUnidad(p.unidadMedida)));
+      }
+    }
+    return mapa;
+  }
+
+  /**
+   * Presentación de una línea, sea que venga del carrito o de la base.
+   *
+   * Prioridad: el SNAPSHOT de la línea ya guardada gana sobre el producto de
+   * hoy. Al facturar un ticket viejo, el comprobante tiene que declarar la
+   * unidad con la que se cobró ese día, no la que el producto tenga ahora.
+   * El mapa es el fallback para líneas del carrito (todavía sin snapshot) y
+   * para ventas anteriores a esta capa, donde las columnas están vacías.
+   */
+  private presentacionDeLinea(
+    d: {
+      productoId?: string | null;
+      presentacion?: PresentacionLinea;
+      unidadPresentacionSimbolo?: string | null;
+      factorPresentacion?: Prisma.Decimal | number | null;
+      codigoUnidadSunat?: string | null;
+    },
+    mapa?: Map<string, PresentacionLinea>,
+  ): PresentacionLinea {
+    if (d.presentacion) return d.presentacion;
+
+    if (d.codigoUnidadSunat != null || d.factorPresentacion != null) {
+      const factor = Number(d.factorPresentacion ?? 1);
+      return {
+        factor: factor > 1 ? factor : 1,
+        simbolo: d.unidadPresentacionSimbolo ?? null,
+        codigoSunat: d.codigoUnidadSunat || UNIDAD_SUNAT_DEFAULT,
+      };
+    }
+
+    const delMapa = d.productoId ? mapa?.get(d.productoId) : undefined;
+    return delMapa ?? sinPresentacion();
+  }
+
+  /**
+   * Columnas de presentación que se guardan en VentaDetalle.
+   *
+   * Son un SNAPSHOT: si mañana el producto cambia de presentación, el ticket
+   * reimpreso de una venta vieja tiene que seguir diciendo lo que se cobró
+   * ese día. `null` cuando no hay presentación, para que una línea normal
+   * quede exactamente como quedaba antes.
+   */
+  private snapshotPresentacion(p: PresentacionLinea) {
+    return {
+      unidadPresentacionSimbolo: p.factor > 1 ? p.simbolo : null,
+      factorPresentacion: p.factor > 1 ? new Prisma.Decimal(p.factor) : null,
+      codigoUnidadSunat: p.codigoSunat,
+    };
+  }
+
+  /**
+   * Arma las líneas de un DetalleComprobante a partir de las líneas de la
+   * venta, declaradas en la unidad de presentación.
+   *
+   * Los montos de la línea (subtotal, igv, total) NO se tocan: son los que
+   * pagó el cliente y son los que mandan. Lo que cambia es cómo se EXPRESAN:
+   * la cantidad se divide por el factor y los unitarios se derivan de esa
+   * cantidad ya redondeada, para que `cantidad × precioUnitario` siga
+   * reconstruyendo el total exacto.
+   *
+   * Sin presentación el resultado es idéntico al de antes, salvo por la
+   * unidad declarada, que ahora es la del producto en vez de NIU fijo.
+   */
+  private construirDetallesComprobante(
+    lineas: Array<{
+      descripcion: string;
+      cantidad: any;
+      subtotal: any;
+      total?: any;
+      igv?: any;
+      icbper?: any;
+      porcentajeIGV?: any;
+      tipoAfectacion?: string | null;
+      productoId?: string | null;
+      presentacion?: PresentacionLinea;
+    }>,
+    presentaciones?: Map<string, PresentacionLinea>,
+  ) {
+    return lineas.map((d) => {
+      const subtotalItem = Number(d.subtotal || 0);
+      const igvItem = Number(d.igv || 0);
+      const totalItem = Number(d.total ?? subtotalItem + igvItem);
+      const presentacion = this.presentacionDeLinea(d, presentaciones);
+
+      const declarado = montosDeclarados(
+        {
+          cantidad: Number(d.cantidad || 0),
+          subtotal: subtotalItem,
+          total: totalItem,
+        },
+        presentacion,
+      );
+
+      return {
+        descripcion: d.descripcion,
+        // 3 decimales = la escala de la columna. Mandar más los truncaría
+        // Postgres y los unitarios, que se derivan de ESTA cantidad,
+        // dejarían de cuadrar contra el total.
+        cantidad: new Prisma.Decimal(declarado.cantidad.toFixed(3)),
+        unidadMedida: presentacion.codigoSunat,
+        tipoAfectacion: d.tipoAfectacion || '10',
+        porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
+        valorUnitario: new Prisma.Decimal(declarado.valorUnitario.toFixed(4)),
+        precioUnitario: new Prisma.Decimal(declarado.precioUnitario.toFixed(4)),
+        valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
+        igv: new Prisma.Decimal(igvItem.toFixed(2)),
+        icbper: new Prisma.Decimal(Number(d.icbper || 0).toFixed(2)),
+        subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
+        total: new Prisma.Decimal(totalItem.toFixed(2)),
+        ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
+      };
+    });
   }
 
   /**
@@ -1002,6 +1194,15 @@ export class VentaService {
         this.calcularDetalle(d, index),
       );
 
+      // Unidad en la que se le habla al cliente (kilos para un granel que se
+      // guarda en gramos). Una consulta por venta que alimenta el snapshot de
+      // la línea y el detalle del comprobante, para que ticket y boleta no
+      // puedan discrepar.
+      const presentaciones = await this.resolverPresentaciones(
+        tx,
+        detallesCalculados.map((d) => d.productoId),
+      );
+
       // Guard: validar venta bajo costo. Lanza 422 si hay líneas sin
       // liquidación + sin autorización GERENTE/ADMIN.
       const perdidaTotal = await this.validarVentaBajoCosto(
@@ -1104,6 +1305,9 @@ export class VentaService {
               margenSnapshot: d.margenSnapshot,
               motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
               nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
+              ...this.snapshotPresentacion(
+                this.presentacionDeLinea(d, presentaciones),
+              ),
             })),
           },
         },
@@ -1175,6 +1379,13 @@ export class VentaService {
         );
         const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
+        );
+
+        // Unidad en la que se le habla al cliente (kilos para un granel que
+        // se guarda en gramos). Ver `resolverPresentaciones`.
+        const presentaciones = await this.resolverPresentaciones(
+          tx,
+          detallesCalculados.map((d) => d.productoId),
         );
 
         // 2a-bis. Órdenes de servicio en el carrito: validar y bloquear
@@ -1387,6 +1598,9 @@ export class VentaService {
                 margenSnapshot: d.margenSnapshot,
                 motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
                 nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
+                ...this.snapshotPresentacion(
+                  this.presentacionDeLinea(d, presentaciones),
+                ),
               })),
             },
           },
@@ -1804,28 +2018,10 @@ export class VentaService {
               total: new Prisma.Decimal(totalVenta.toFixed(2)),
               estado: 'REGISTRADO' as any,
               detalles: {
-                create: detallesCalculados.map((d) => {
-                  const subtotalItem = d.subtotal;
-                  const igvItem = d.igv;
-                  const totalItem = d.total;
-                  const cant = d.cantidad || 1;
-                  const valorUnit = cant > 0 ? subtotalItem / cant : 0;
-                  const precioUnit = cant > 0 ? totalItem / cant : 0;
-                  return {
-                    descripcion: d.descripcion,
-                    cantidad: d.cantidad,
-                    tipoAfectacion: d.tipoAfectacion,
-                    porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
-                    valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
-                    precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
-                    valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
-                    igv: new Prisma.Decimal(igvItem.toFixed(2)),
-                    icbper: new Prisma.Decimal((d.icbper || 0).toFixed(2)),
-                    subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
-                    total: new Prisma.Decimal(totalItem.toFixed(2)),
-                    ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
-                  };
-                }),
+                create: this.construirDetallesComprobante(
+                  detallesCalculados,
+                  presentaciones,
+                ),
               },
             },
           });
@@ -2182,6 +2378,14 @@ export class VentaService {
     // Calcular totales tributarios por tipo de afectación
     const tributario = this.calcularTotalesTributarios(p.detallesCalculados);
 
+    // Unidad en la que se declara cada línea. Este camino (Yape diferido)
+    // emite sobre `detallesCalculados` en memoria, no sobre la venta ya
+    // guardada, así que resuelve la presentación por su cuenta.
+    const presentaciones = await this.resolverPresentaciones(
+      tx,
+      p.detallesCalculados.map((d) => d.productoId),
+    );
+
     const comprobante = await tx.comprobanteElectronico.create({
       data: {
         ventaId: p.ventaId,
@@ -2215,30 +2419,10 @@ export class VentaService {
         total: new Prisma.Decimal(p.totalVenta.toFixed(2)),
         estado: 'REGISTRADO' as any,
         detalles: {
-          create: p.detallesCalculados.map((d) => {
-            const subtotalItem = d.subtotal;
-            const igvItem = d.igv;
-            const totalItem = d.total;
-            const cant = d.cantidad || 1;
-            const valorUnit = cant > 0 ? subtotalItem / cant : 0;
-            const precioUnit = cant > 0 ? totalItem / cant : 0;
-            return {
-              descripcion: d.descripcion,
-              cantidad: d.cantidad,
-              tipoAfectacion: d.tipoAfectacion,
-              porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
-              valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
-              precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
-              valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
-              igv: new Prisma.Decimal(igvItem.toFixed(2)),
-              icbper: new Prisma.Decimal((d.icbper || 0).toFixed(2)),
-              subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
-              total: new Prisma.Decimal(totalItem.toFixed(2)),
-              ...(d.productoId
-                ? { producto: { connect: { id: d.productoId } } }
-                : {}),
-            };
-          }),
+          create: this.construirDetallesComprobante(
+            p.detallesCalculados,
+            presentaciones,
+          ),
         },
       },
     });
@@ -2572,6 +2756,13 @@ export class VentaService {
         };
       });
 
+      // Unidad en la que se le habla al cliente, para las líneas de la
+      // cotización y las agregadas al vuelo. Ver `resolverPresentaciones`.
+      const presentaciones = await this.resolverPresentaciones(tx, [
+        ...detallesVenta.map((d) => d.productoId),
+        ...itemsAdicionales.map((d) => d.productoId),
+      ]);
+
       // 3d. Guard venta bajo costo combinado (cotizacion + adicionales).
       const lineasParaGuard = [
         ...detallesVenta.map((d, i) => ({
@@ -2770,6 +2961,9 @@ export class VentaService {
                   snapshotsCotizacion[i].motivoLiquidacionSnapshot,
                 nivelAplicadoSnapshot:
                   snapshotsCotizacion[i].nivelAplicadoSnapshot,
+                ...this.snapshotPresentacion(
+                  this.presentacionDeLinea(d, presentaciones),
+                ),
               })),
               ...itemsAdicionales.map((d, i) => ({
                 productoId: d.productoId,
@@ -2790,6 +2984,9 @@ export class VentaService {
                 margenSnapshot: d.margenSnapshot,
                 motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
                 nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
+                ...this.snapshotPresentacion(
+                  this.presentacionDeLinea(d, presentaciones),
+                ),
               })),
             ],
           },
@@ -3087,28 +3284,14 @@ export class VentaService {
             total: new Prisma.Decimal(totalVenta.toFixed(2)),
             estado: 'REGISTRADO' as any,
             detalles: {
-              create: detallesVenta.map((d: any) => {
-                const subtotalItem = Number(d.subtotal || 0);
-                const igvItem = Number(d.igv || 0);
-                const totalItem = Number(d.total || subtotalItem + igvItem);
-                const cant = Number(d.cantidad || 1);
-                const valorUnit = cant > 0 ? subtotalItem / cant : 0;
-                const precioUnit = cant > 0 ? totalItem / cant : 0;
-                return {
-                  descripcion: d.descripcion,
-                  cantidad: d.cantidad,
-                  tipoAfectacion: d.tipoAfectacion || '10',
-                  porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
-                  valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
-                  precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
-                  valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
-                  igv: new Prisma.Decimal(igvItem.toFixed(2)),
-                  icbper: new Prisma.Decimal(Number(d.icbper || 0).toFixed(2)),
-                  subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
-                  total: new Prisma.Decimal(totalItem.toFixed(2)),
-                  ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
-                };
-              }),
+              // `todosDetallesComprobante`, no `detallesVenta`: los ítems
+              // agregados al vuelo YA estaban sumando en los totales de
+              // arriba, pero no bajaban como líneas — el comprobante salía
+              // con un total mayor que la suma de su propio detalle.
+              create: this.construirDetallesComprobante(
+                todosDetallesComprobante,
+                presentaciones,
+              ),
             },
           },
         });
@@ -3716,6 +3899,12 @@ export class VentaService {
           dto.ventaBajoCostoAutorizadaPorId ?? null,
         );
 
+        // Unidad en la que se le habla al cliente. Ver `resolverPresentaciones`.
+        const presentaciones = await this.resolverPresentaciones(
+          tx,
+          detallesCalculados.map((d) => d.productoId),
+        );
+
         await tx.ventaDetalle.createMany({
           data: detallesCalculados.map((d) => ({
             ventaId: id,
@@ -3740,6 +3929,9 @@ export class VentaService {
             margenSnapshot: d.margenSnapshot,
             motivoLiquidacionSnapshot: d.motivoLiquidacionSnapshot,
             nivelAplicadoSnapshot: d.nivelAplicadoSnapshot,
+            ...this.snapshotPresentacion(
+              this.presentacionDeLinea(d, presentaciones),
+            ),
           })),
         });
 
@@ -5312,6 +5504,14 @@ export class VentaService {
       }));
       const tributario = this.calcularTotalesTributarios(detallesParaTributario);
 
+      // Las líneas ya guardadas traen su propio snapshot de presentación; el
+      // mapa solo cubre las ventas anteriores a esta capa, que lo tienen
+      // vacío y caen al producto de hoy.
+      const presentaciones = await this.resolverPresentaciones(
+        tx,
+        venta.detalles.map((d: any) => d.productoId),
+      );
+
       const comprobante = await tx.comprobanteElectronico.create({
         data: {
           ventaId: venta.id,
@@ -5347,28 +5547,10 @@ export class VentaService {
           total: new Prisma.Decimal(totalVenta.toFixed(2)),
           estado: 'REGISTRADO' as any,
           detalles: {
-            create: venta.detalles.map((d: any) => {
-              const subtotalItem = Number(d.subtotal || 0);
-              const igvItem = Number(d.igv || 0);
-              const totalItem = Number(d.total || subtotalItem + igvItem);
-              const cant = Number(d.cantidad || 1);
-              const valorUnit = cant > 0 ? subtotalItem / cant : 0;
-              const precioUnit = cant > 0 ? totalItem / cant : 0;
-              return {
-                descripcion: d.descripcion,
-                cantidad: d.cantidad,
-                tipoAfectacion: d.tipoAfectacion || '10',
-                porcentajeIGV: new Prisma.Decimal(Number(d.porcentajeIGV ?? 18)),
-                valorUnitario: new Prisma.Decimal(valorUnit.toFixed(2)),
-                precioUnitario: new Prisma.Decimal(precioUnit.toFixed(2)),
-                valorVenta: new Prisma.Decimal(subtotalItem.toFixed(2)),
-                igv: new Prisma.Decimal(igvItem.toFixed(2)),
-                icbper: new Prisma.Decimal(Number(d.icbper || 0).toFixed(2)),
-                subtotal: new Prisma.Decimal(subtotalItem.toFixed(2)),
-                total: new Prisma.Decimal(totalItem.toFixed(2)),
-                ...(d.productoId ? { producto: { connect: { id: d.productoId } } } : {}),
-              };
-            }),
+            create: this.construirDetallesComprobante(
+              venta.detalles,
+              presentaciones,
+            ),
           },
         },
       });

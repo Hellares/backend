@@ -72,6 +72,18 @@ describe('VentaService._emitirComprobante', () => {
         },
       ]),
       sede: { update: jest.fn().mockResolvedValue({ ultimoNumeroBoleta: 26 }) },
+      // La unidad en la que se declara cada línea sale del producto: sin
+      // presentación configurada, la línea se emite tal cual está guardada.
+      producto: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'prod-1',
+            factorPresentacion: null,
+            unidadPresentacion: null,
+            unidadMedida: { unidadMaestra: { codigo: 'NIU' } },
+          },
+        ]),
+      },
       comprobanteElectronico: {
         create: jest.fn().mockResolvedValue({ id: 'comp-1' }),
       },
@@ -127,6 +139,93 @@ describe('VentaService._emitirComprobante', () => {
     expect(arg.data).toEqual([
       expect.objectContaining({ metodoPago: 'YAPE', estado: 'COMPLETADO' }),
     ]);
+  });
+
+  it('declara la línea en la unidad de PRESENTACIÓN, no en la de venta', async () => {
+    // RICOCAN: se guarda en gramos, se cobra en kilos. La venta lleva 1500 g
+    // a S/0.008 el gramo; el comprobante tiene que decir 1.5 KGM a S/8.00.
+    tx.producto.findMany.mockResolvedValue([
+      {
+        id: 'prod-1',
+        factorPresentacion: 1000,
+        unidadPresentacion: {
+          simboloLocal: null,
+          simboloPersonalizado: null,
+          unidadMaestra: { codigo: 'KGM', simbolo: 'kg' },
+        },
+        unidadMedida: { unidadMaestra: { codigo: 'GRM' } },
+      },
+    ]);
+
+    await (service as any)._emitirComprobante(
+      tx,
+      params({
+        detallesCalculados: [
+          detalle({ cantidad: 1500, subtotal: 10.17, igv: 1.83, total: 12 }),
+        ],
+        totalVenta: 12,
+      }),
+    );
+
+    const linea =
+      tx.comprobanteElectronico.create.mock.calls[0][0].data.detalles.create[0];
+
+    expect(Number(linea.cantidad)).toBe(1.5);
+    expect(linea.unidadMedida).toBe('KGM');
+    expect(Number(linea.precioUnitario)).toBeCloseTo(8, 4);
+    // El monto de la línea NO se toca: es lo que pagó el cliente.
+    expect(Number(linea.total)).toBe(12);
+    expect(Number(linea.cantidad) * Number(linea.precioUnitario)).toBeCloseTo(12, 2);
+  });
+
+  it('sin presentación declara la unidad del producto, ya no NIU fijo', async () => {
+    tx.producto.findMany.mockResolvedValue([
+      {
+        id: 'prod-1',
+        factorPresentacion: null,
+        unidadPresentacion: null,
+        unidadMedida: { unidadMaestra: { codigo: 'KGM' } },
+      },
+    ]);
+
+    await (service as any)._emitirComprobante(tx, params());
+
+    const linea =
+      tx.comprobanteElectronico.create.mock.calls[0][0].data.detalles.create[0];
+    expect(linea.unidadMedida).toBe('KGM');
+    expect(Number(linea.cantidad)).toBe(1);
+  });
+
+  it('unidad PERSONALIZADA cae a NIU (su código no existe en el catálogo 03)', async () => {
+    tx.producto.findMany.mockResolvedValue([
+      {
+        id: 'prod-1',
+        factorPresentacion: 100,
+        unidadPresentacion: {
+          simboloLocal: '100 g',
+          simboloPersonalizado: '100g',
+          unidadMaestra: null,
+        },
+        unidadMedida: { unidadMaestra: null },
+      },
+    ]);
+
+    await (service as any)._emitirComprobante(
+      tx,
+      params({
+        detallesCalculados: [
+          detalle({ cantidad: 200, subtotal: 10.17, igv: 1.83, total: 12 }),
+        ],
+        totalVenta: 12,
+      }),
+    );
+
+    const linea =
+      tx.comprobanteElectronico.create.mock.calls[0][0].data.detalles.create[0];
+    // La cantidad SÍ se convierte (2 presentaciones de 100 g); lo que no se
+    // manda es el código inventado.
+    expect(Number(linea.cantidad)).toBe(2);
+    expect(linea.unidadMedida).toBe('NIU');
   });
 
   it('sede sin serie configurada → devuelve null y NO crea comprobante', async () => {

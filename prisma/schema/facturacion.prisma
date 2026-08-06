@@ -261,7 +261,10 @@ model DetalleComprobante {
   unidadMedidaId  String? // Relación a EmpresaUnidadMedida
   descripcion     String
   unidadMedida    String                 @default("NIU") // Código SUNAT directo (para compatibilidad)
-  cantidad        Decimal                @db.Decimal(12, 2)
+  // 3 decimales: con presentación la cantidad se DIVIDE por el factor
+  // (1237 g → 1.237 kg). Con 2 decimales quedaba 1.24 y la línea dejaba de
+  // cuadrar contra lo que el cliente pagó. 3 decimales = 1 gramo exacto.
+  cantidad        Decimal                @db.Decimal(12, 3)
   valorUnitario   Decimal                @db.Decimal(14, 4)
   precioUnitario  Decimal                @db.Decimal(14, 4)
   tipoAfectacion  String                 @default("10")
