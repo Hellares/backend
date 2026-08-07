@@ -5,6 +5,7 @@ import { ConfiguracionCodigosService } from '../configuracion-codigos/configurac
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
+import { simboloUnidad } from '../common/utils/unidad-presentacion.util';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
@@ -30,6 +31,17 @@ export class ProductoVarianteService {
    */
   private get varianteInclude() {
     return {
+      // La unidad de presentación se baja como objeto para poder devolver su
+      // SÍMBOLO: el diálogo de precios cobra en esa unidad ("por kg") y sin el
+      // símbolo pediría el precio por unidad de venta — para un granel en
+      // gramos, un número sub-céntimo que no entra en un campo de moneda.
+      unidadPresentacion: {
+        select: {
+          simboloLocal: true,
+          simboloPersonalizado: true,
+          unidadMaestra: { select: { simbolo: true } },
+        },
+      },
       archivos: {
         where: { deletedAt: null },
         orderBy: { orden: 'asc' as const },
@@ -649,6 +661,7 @@ export class ProductoVarianteService {
       codigoEmpresa: variante.codigoEmpresa,
       unidadMedidaId: variante.unidadMedidaId ?? null,
       unidadPresentacionId: variante.unidadPresentacionId ?? null,
+      unidadPresentacionSimbolo: simboloUnidad(variante.unidadPresentacion),
       // Prisma serializa Decimal como String: si esto viaja sin Number(), en
       // Flutter llega un String donde el modelo espera num y revienta.
       factorPresentacion:

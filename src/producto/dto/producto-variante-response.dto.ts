@@ -29,6 +29,8 @@ export class ProductoVarianteResponseDto {
   // Unidad de PRESENTACIÓN propia. Si está, gana sobre la del producto: es el
   // granel que se guarda en gramos y se cobra en kilos.
   unidadPresentacionId?: string | null;
+  /// Símbolo legible ("kg"): el diálogo de precios cobra en esta unidad.
+  unidadPresentacionSimbolo?: string | null;
   factorPresentacion?: number | null;
 
   // Apertura de bulto: en qué variante se convierte al abrirla y cuánto rinde
