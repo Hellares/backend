@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { simboloUnidad } from '../common/utils/unidad-presentacion.util';
 import {
   QueryProductoDto,
   OrdenProducto,
@@ -529,6 +530,21 @@ export class ProductoCatalogService {
           id: v.id,
           nombre: v.nombre,
           sku: v.sku,
+          // Unidad y presentación PROPIAS de la variante. Sin esto el POS las
+          // recibe en null y muestra el granel crudo ("S/ 0.01", "15000") en
+          // vez de en la unidad en la que se cobra ("S/ 15.00/kg", "15 kg").
+          // El `include` ya las traía; era el mapper el que las descartaba.
+          unidadMedidaId: v.unidadMedidaId ?? null,
+          unidadMedida: v.unidadMedida ?? null,
+          unidadPresentacionId: v.unidadPresentacionId ?? null,
+          unidadPresentacionSimbolo: simboloUnidad(v.unidadPresentacion),
+          factorPresentacion:
+            v.factorPresentacion != null ? Number(v.factorPresentacion) : null,
+          // Apertura de bulto: el sheet las usa para ofrecer abrir un saco
+          // cuando no alcanza el granel.
+          varianteAperturaId: v.varianteAperturaId ?? null,
+          rendimientoApertura:
+            v.rendimientoApertura != null ? Number(v.rendimientoApertura) : null,
           atributosValores: v.atributosValores?.map((av: any) => ({
             id: av.id,
             atributoId: av.atributoId,
@@ -837,6 +853,16 @@ export class ProductoCatalogService {
 
     if (includeVariantes) {
       const varianteInclude: any = {
+        // Solo el símbolo: el POS lo necesita para mostrar "S/ 15.00/kg" y
+        // "15 kg". Se baja compacto a propósito — el catálogo es la respuesta
+        // más pesada del sistema y no hace falta la unidad entera.
+        unidadPresentacion: {
+          select: {
+            simboloLocal: true,
+            simboloPersonalizado: true,
+            unidadMaestra: { select: { simbolo: true } },
+          },
+        },
         unidadMedida: {
           include: {
             unidadMaestra: {
