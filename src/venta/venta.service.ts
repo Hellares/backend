@@ -43,9 +43,10 @@ import { OrdenServicioService } from '../servicio/orden-servicio.service';
 import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
 import { round2 } from '../common/utils/money.util';
 import {
-  codigoSunatUnidad,
+  clavePresentacion,
   montosDeclarados,
-  simboloUnidad,
+  presentacionDeProducto,
+  presentacionDeVariante,
   sinPresentacion,
   UNIDAD_SUNAT_DEFAULT,
   type PresentacionLinea,
@@ -345,52 +346,116 @@ export class VentaService {
    * como el detalle del comprobante: si cada documento lo resolviera por su
    * cuenta, podrían terminar diciendo cosas distintas del mismo cobro.
    *
-   * Devuelve un mapa por productoId. Las líneas sin producto (servicios,
-   * ítems libres) no entran y caen a `sinPresentacion()` en el consumidor.
+   * Devuelve un mapa por par **producto+variante** (`clavePresentacion`), no
+   * por productoId: dos variantes del mismo producto pueden venderse en
+   * unidades distintas y con una sola clave colisionan. Las líneas sin
+   * producto ni variante (servicios, ítems libres) no entran y caen a
+   * `sinPresentacion()` en el consumidor.
    */
   private async resolverPresentaciones(
     tx: Prisma.TransactionClient,
-    productoIds: Array<string | null | undefined>,
+    lineas: Array<{ productoId?: string | null; varianteId?: string | null }>,
   ): Promise<Map<string, PresentacionLinea>> {
     const mapa = new Map<string, PresentacionLinea>();
-    const ids = [...new Set(productoIds.filter((id): id is string => !!id))];
-    if (ids.length === 0) return mapa;
 
-    const productos = await tx.producto.findMany({
-      where: { id: { in: ids } },
-      select: {
-        id: true,
-        factorPresentacion: true,
-        unidadPresentacion: {
+    // Se deduplica con la MISMA clave que después usa `presentacionDeLinea`,
+    // así no hay forma de que el consumidor busque con una clave que no se
+    // llenó (ej. una línea de variante con `productoId` en null).
+    const pares = new Map<
+      string,
+      { productoId: string | null; varianteId: string | null }
+    >();
+    for (const l of lineas) {
+      const productoId = l.productoId ?? null;
+      const varianteId = l.varianteId ?? null;
+      if (!productoId && !varianteId) continue;
+      pares.set(clavePresentacion(productoId, varianteId), {
+        productoId,
+        varianteId,
+      });
+    }
+    if (pares.size === 0) return mapa;
+
+    const varianteIds = [
+      ...new Set(
+        [...pares.values()]
+          .map((p) => p.varianteId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    // Solo las líneas SIN variante se resuelven contra el producto: las de
+    // variante se resuelven contra la variante, que trae su producto adentro.
+    const productoIds = [
+      ...new Set(
+        [...pares.values()]
+          .filter((p) => !p.varianteId)
+          .map((p) => p.productoId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+
+    const productos = productoIds.length
+      ? await tx.producto.findMany({
+          where: { id: { in: productoIds } },
           select: {
-            simboloLocal: true,
-            simboloPersonalizado: true,
-            unidadMaestra: { select: { codigo: true, simbolo: true } },
+            id: true,
+            unidadMedidaId: true,
+            factorPresentacion: true,
+            unidadPresentacion: {
+              select: {
+                simboloLocal: true,
+                simboloPersonalizado: true,
+                unidadMaestra: { select: { codigo: true, simbolo: true } },
+              },
+            },
+            unidadMedida: {
+              select: { unidadMaestra: { select: { codigo: true } } },
+            },
           },
-        },
-        unidadMedida: {
-          select: { unidadMaestra: { select: { codigo: true } } },
-        },
-      },
-    });
+        })
+      : [];
 
-    for (const p of productos) {
-      const factor = Number(p.factorPresentacion ?? 0);
-      // La presentación existe para AGRUPAR: con factor <= 1 no agrupa nada
-      // y solo metería divisiones inútiles. El create del producto ya lo
-      // valida, pero un dato viejo o cargado por SQL no se valida solo.
-      if (p.unidadPresentacion && factor > 1) {
-        mapa.set(p.id, {
-          factor,
-          simbolo: simboloUnidad(p.unidadPresentacion),
-          codigoSunat: codigoSunatUnidad(p.unidadPresentacion),
-        });
-      } else {
-        // Sin presentación la línea va tal cual, pero igual se declara con
-        // SU unidad: hasta ahora todo salía como NIU aunque el producto se
-        // vendiera en kilos o en metros.
-        mapa.set(p.id, sinPresentacion(codigoSunatUnidad(p.unidadMedida)));
+    const variantes = varianteIds.length
+      ? await tx.productoVariante.findMany({
+          where: { id: { in: varianteIds } },
+          select: {
+            id: true,
+            unidadMedidaId: true,
+            unidadMedida: {
+              select: { unidadMaestra: { select: { codigo: true } } },
+            },
+            producto: {
+              select: {
+                id: true,
+                unidadMedidaId: true,
+                factorPresentacion: true,
+                unidadPresentacion: {
+                  select: {
+                    simboloLocal: true,
+                    simboloPersonalizado: true,
+                    unidadMaestra: { select: { codigo: true, simbolo: true } },
+                  },
+                },
+                unidadMedida: {
+                  select: { unidadMaestra: { select: { codigo: true } } },
+                },
+              },
+            },
+          },
+        })
+      : [];
+
+    const porProducto = new Map(productos.map((p) => [p.id, p]));
+    const porVariante = new Map(variantes.map((v) => [v.id, v]));
+
+    for (const [clave, par] of pares) {
+      if (par.varianteId) {
+        const v = porVariante.get(par.varianteId);
+        if (v) mapa.set(clave, presentacionDeVariante(v));
+        continue;
       }
+      const p = porProducto.get(par.productoId!);
+      if (p) mapa.set(clave, presentacionDeProducto(p));
     }
     return mapa;
   }
@@ -407,6 +472,7 @@ export class VentaService {
   private presentacionDeLinea(
     d: {
       productoId?: string | null;
+      varianteId?: string | null;
       presentacion?: PresentacionLinea;
       unidadPresentacionSimbolo?: string | null;
       factorPresentacion?: Prisma.Decimal | number | null;
@@ -425,7 +491,10 @@ export class VentaService {
       };
     }
 
-    const delMapa = d.productoId ? mapa?.get(d.productoId) : undefined;
+    const delMapa =
+      d.productoId || d.varianteId
+        ? mapa?.get(clavePresentacion(d.productoId, d.varianteId))
+        : undefined;
     return delMapa ?? sinPresentacion();
   }
 
@@ -469,6 +538,10 @@ export class VentaService {
       porcentajeIGV?: any;
       tipoAfectacion?: string | null;
       productoId?: string | null;
+      // Necesario para buscar en el mapa de presentaciones: se indexa por
+      // producto + variante. Sin esto, una línea de variante caería en la
+      // entrada del producto base y se declararía en la unidad equivocada.
+      varianteId?: string | null;
       presentacion?: PresentacionLinea;
     }>,
     presentaciones?: Map<string, PresentacionLinea>,
@@ -1200,7 +1273,7 @@ export class VentaService {
       // puedan discrepar.
       const presentaciones = await this.resolverPresentaciones(
         tx,
-        detallesCalculados.map((d) => d.productoId),
+        detallesCalculados,
       );
 
       // Guard: validar venta bajo costo. Lanza 422 si hay líneas sin
@@ -1385,7 +1458,7 @@ export class VentaService {
         // se guarda en gramos). Ver `resolverPresentaciones`.
         const presentaciones = await this.resolverPresentaciones(
           tx,
-          detallesCalculados.map((d) => d.productoId),
+          detallesCalculados,
         );
 
         // 2a-bis. Órdenes de servicio en el carrito: validar y bloquear
@@ -2383,7 +2456,7 @@ export class VentaService {
     // guardada, así que resuelve la presentación por su cuenta.
     const presentaciones = await this.resolverPresentaciones(
       tx,
-      p.detallesCalculados.map((d) => d.productoId),
+      p.detallesCalculados,
     );
 
     const comprobante = await tx.comprobanteElectronico.create({
@@ -2759,8 +2832,8 @@ export class VentaService {
       // Unidad en la que se le habla al cliente, para las líneas de la
       // cotización y las agregadas al vuelo. Ver `resolverPresentaciones`.
       const presentaciones = await this.resolverPresentaciones(tx, [
-        ...detallesVenta.map((d) => d.productoId),
-        ...itemsAdicionales.map((d) => d.productoId),
+        ...detallesVenta,
+        ...itemsAdicionales,
       ]);
 
       // 3d. Guard venta bajo costo combinado (cotizacion + adicionales).
@@ -3902,7 +3975,7 @@ export class VentaService {
         // Unidad en la que se le habla al cliente. Ver `resolverPresentaciones`.
         const presentaciones = await this.resolverPresentaciones(
           tx,
-          detallesCalculados.map((d) => d.productoId),
+          detallesCalculados,
         );
 
         await tx.ventaDetalle.createMany({
@@ -5509,7 +5582,10 @@ export class VentaService {
       // vacío y caen al producto de hoy.
       const presentaciones = await this.resolverPresentaciones(
         tx,
-        venta.detalles.map((d: any) => d.productoId),
+        venta.detalles as Array<{
+          productoId: string | null;
+          varianteId: string | null;
+        }>,
       );
 
       const comprobante = await tx.comprobanteElectronico.create({

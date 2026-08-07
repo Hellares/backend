@@ -1,7 +1,10 @@
 import {
   cantidadDeclarada,
+  clavePresentacion,
   codigoSunatUnidad,
   montosDeclarados,
+  presentacionDeProducto,
+  presentacionDeVariante,
   sinPresentacion,
   UNIDAD_SUNAT_DEFAULT,
   type PresentacionLinea,
@@ -9,6 +12,21 @@ import {
 
 /** RICOCAN: se guarda en gramos, se cobra en kilos. */
 const KILO: PresentacionLinea = { factor: 1000, simbolo: 'kg', codigoSunat: 'KGM' };
+
+/** Unidad de empresa con su maestra, tal como sale del select de Prisma. */
+const unidad = (codigo: string, simbolo?: string) => ({
+  simboloLocal: simbolo ?? null,
+  simboloPersonalizado: null,
+  unidadMaestra: { codigo, simbolo: simbolo ?? codigo },
+});
+
+/** RICOCAN tal como está configurado en prod: base gramo, presentación kilo. */
+const GRANEL_EN_KILOS = {
+  unidadMedidaId: 'um-gramo',
+  factorPresentacion: 1000,
+  unidadPresentacion: unidad('KGM', 'kg'),
+  unidadMedida: unidad('GRM', 'g'),
+};
 
 describe('codigoSunatUnidad', () => {
   it('usa el código de la unidad maestra', () => {
@@ -104,5 +122,109 @@ describe('montosDeclarados', () => {
 
     expect(r.cantidad).toBe(0.5);
     expect(r.precioUnitario).toBeCloseTo(8, 6);
+  });
+});
+
+describe('clavePresentacion', () => {
+  it('dos variantes del MISMO producto no colisionan', () => {
+    // El bug que motivó la clave compuesta: indexando por productoId, el saco
+    // y el granel del mismo alimento caían en la misma entrada.
+    expect(clavePresentacion('p1', 'v-saco')).not.toBe(
+      clavePresentacion('p1', 'v-granel'),
+    );
+  });
+
+  it('el producto base y una variante suya son claves distintas', () => {
+    expect(clavePresentacion('p1', null)).not.toBe(clavePresentacion('p1', 'v1'));
+  });
+
+  it('es estable con null y con undefined', () => {
+    expect(clavePresentacion('p1', null)).toBe(clavePresentacion('p1', undefined));
+    expect(clavePresentacion(null, 'v1')).toBe(clavePresentacion(undefined, 'v1'));
+  });
+});
+
+describe('presentacionDeProducto', () => {
+  it('con presentación configurada declara en la unidad de presentación', () => {
+    const p = presentacionDeProducto(GRANEL_EN_KILOS);
+
+    expect(p.factor).toBe(1000);
+    expect(p.simbolo).toBe('kg');
+    expect(p.codigoSunat).toBe('KGM');
+  });
+
+  it('sin presentación declara con la unidad de VENTA, no NIU', () => {
+    const p = presentacionDeProducto({
+      unidadMedidaId: 'um-gramo',
+      unidadMedida: unidad('GRM', 'g'),
+    });
+
+    expect(p.factor).toBe(1);
+    expect(p.codigoSunat).toBe('GRM');
+  });
+
+  it('un factor <= 1 deja la presentación inerte', () => {
+    // Dato viejo o cargado por SQL: agrupar de a 1 no agrupa nada.
+    const p = presentacionDeProducto({ ...GRANEL_EN_KILOS, factorPresentacion: 1 });
+
+    expect(p.factor).toBe(1);
+    expect(p.codigoSunat).toBe('GRM');
+  });
+
+  it('sin producto cae a NIU', () => {
+    expect(presentacionDeProducto(null).codigoSunat).toBe(UNIDAD_SUNAT_DEFAULT);
+  });
+});
+
+describe('presentacionDeVariante', () => {
+  it('una variante sin unidad propia hereda la presentación del producto', () => {
+    // Colores y tallas: misma unidad de venta que el producto.
+    const p = presentacionDeVariante({
+      unidadMedidaId: null,
+      producto: GRANEL_EN_KILOS,
+    });
+
+    expect(p.factor).toBe(1000);
+    expect(p.codigoSunat).toBe('KGM');
+  });
+
+  it('una variante con la MISMA unidad que el producto también la hereda', () => {
+    const p = presentacionDeVariante({
+      unidadMedidaId: 'um-gramo',
+      unidadMedida: unidad('GRM', 'g'),
+      producto: GRANEL_EN_KILOS,
+    });
+
+    expect(p.factor).toBe(1000);
+    expect(p.codigoSunat).toBe('KGM');
+  });
+
+  it('🔴 una variante en OTRA unidad NO hereda la presentación del producto', () => {
+    // El caso saco cerrado vs granel: el saco se vende por unidad, dentro de
+    // un producto cuya base es el gramo y su presentación el kilo. Heredando,
+    // la boleta declaraba "1 KGM" por un saco de 15 kg — SUNAT la acepta y
+    // dice una mentira.
+    const p = presentacionDeVariante({
+      unidadMedidaId: 'um-unidad',
+      unidadMedida: unidad('NIU', 'und'),
+      producto: GRANEL_EN_KILOS,
+    });
+
+    expect(p.factor).toBe(1);
+    expect(p.codigoSunat).toBe('NIU');
+  });
+
+  it('la variante en otra unidad se declara con la SUYA, no con NIU por defecto', () => {
+    const p = presentacionDeVariante({
+      unidadMedidaId: 'um-metro',
+      unidadMedida: unidad('MTR', 'm'),
+      producto: GRANEL_EN_KILOS,
+    });
+
+    expect(p.codigoSunat).toBe('MTR');
+  });
+
+  it('sin producto ni unidad cae a NIU', () => {
+    expect(presentacionDeVariante({}).codigoSunat).toBe(UNIDAD_SUNAT_DEFAULT);
   });
 });

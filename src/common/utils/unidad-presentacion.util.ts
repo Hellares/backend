@@ -87,6 +87,91 @@ export function sinPresentacion(codigoSunat = UNIDAD_SUNAT_DEFAULT): Presentacio
 }
 
 /**
+ * Clave con la que se indexa la presentación de una línea.
+ *
+ * ⚠️ Producto **y** variante. Dos variantes del mismo producto pueden venderse
+ * en unidades distintas —el caso que viene es un saco cerrado (UND) y el granel
+ * que sale de abrirlo (g)—, así que indexar solo por `productoId` las hace
+ * colisionar: la segunda hereda la unidad de la primera y el comprobante
+ * declara un saco de 15 kg como "1 KGM". SUNAT lo acepta, y miente.
+ */
+export function clavePresentacion(
+  productoId?: string | null,
+  varianteId?: string | null,
+): string {
+  return `${productoId ?? ''}|${varianteId ?? ''}`;
+}
+
+/**
+ * Un factor tal como sale de la base: `Decimal` de Prisma, number o null.
+ * Todos responden a `Number()`.
+ */
+type FactorCrudo = number | string | { valueOf(): unknown } | null | undefined;
+
+/** Forma mínima de un producto para resolver en qué unidad se declara. */
+export interface ProductoParaPresentacion {
+  unidadMedidaId?: string | null;
+  factorPresentacion?: FactorCrudo;
+  unidadPresentacion?: (UnidadParaSimbolo & UnidadParaSunat) | null;
+  unidadMedida?: UnidadParaSunat | null;
+}
+
+/** Forma mínima de una variante para resolver en qué unidad se declara. */
+export interface VarianteParaPresentacion {
+  unidadMedidaId?: string | null;
+  unidadMedida?: UnidadParaSunat | null;
+  producto?: ProductoParaPresentacion | null;
+}
+
+/**
+ * En qué unidad se declara una línea de este producto.
+ *
+ * Con presentación configurada y factor > 1, esa. Sin ella, la unidad de venta
+ * del producto — que ya es mejor que el `NIU` fijo que se mandaba para todo.
+ */
+export function presentacionDeProducto(
+  producto: ProductoParaPresentacion | null | undefined,
+): PresentacionLinea {
+  const factor = Number(producto?.factorPresentacion ?? 0);
+  // La presentación existe para AGRUPAR: con factor <= 1 no agrupa nada y solo
+  // metería divisiones inútiles. El create del producto ya lo valida, pero un
+  // dato viejo o cargado por SQL no se valida solo.
+  if (producto?.unidadPresentacion && factor > 1) {
+    return {
+      factor,
+      simbolo: simboloUnidad(producto.unidadPresentacion),
+      codigoSunat: codigoSunatUnidad(producto.unidadPresentacion),
+    };
+  }
+  return sinPresentacion(codigoSunatUnidad(producto?.unidadMedida));
+}
+
+/**
+ * En qué unidad se declara una línea de esta variante.
+ *
+ * La presentación vive en el Producto, así que por defecto la variante la
+ * hereda: es lo correcto mientras las variantes sean colores o tallas del
+ * mismo artículo, que se venden todas en la misma unidad.
+ *
+ * ⚠️ Pero si la variante declara su PROPIA unidad de venta y es distinta a la
+ * del producto, la presentación del producto NO es de ella: un saco cerrado
+ * (UND) dentro de un producto cuya base es el gramo y su presentación el kilo
+ * saldría declarado como "1 KGM". En ese caso la variante se declara con su
+ * unidad y sin agrupar.
+ */
+export function presentacionDeVariante(
+  variante: VarianteParaPresentacion | null | undefined,
+): PresentacionLinea {
+  const unidadPropia = variante?.unidadMedidaId ?? null;
+  const unidadDelProducto = variante?.producto?.unidadMedidaId ?? null;
+
+  if (unidadPropia && unidadPropia !== unidadDelProducto) {
+    return sinPresentacion(codigoSunatUnidad(variante?.unidadMedida));
+  }
+  return presentacionDeProducto(variante?.producto);
+}
+
+/**
  * Una presentación solo "está activa" con factor > 1. Un factor de 1 no
  * agruparía nada (es la misma unidad de venta con otro nombre) y solo
  * introduciría divisiones inútiles; el backend ya lo rechaza al crear el
