@@ -19,6 +19,7 @@ import { PoliticaDescuentoModule } from './politica-descuento/politica-descuento
 import { SedeModule } from './sede/sede.module';
 import { ProductoStockModule } from './producto-stock/producto-stock.module';
 import { ProductoComponenteModule } from './producto-componente/producto-componente.module';
+import { AperturaBultoModule } from './apertura-bulto/apertura-bulto.module';
 import { TransferenciaStockModule } from './transferencia-stock/transferencia-stock.module';
 import { ProveedorModule } from './proveedor/proveedor.module';
 import { ReporteIncidenciaModule } from './reporte-incidencia/reporte-incidencia.module';
@@ -118,6 +119,7 @@ import { UbigeoModule } from './common/ubigeo/ubigeo.module';
     SedeModule,
     ProductoStockModule,
     ProductoComponenteModule,
+    AperturaBultoModule,
     TransferenciaStockModule,
     ProveedorModule,
     ReporteIncidenciaModule,
