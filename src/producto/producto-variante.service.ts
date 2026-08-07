@@ -122,6 +122,8 @@ export class ProductoVarianteService {
       throw new ConflictException(`Ya existe una variante con el SKU: ${dto.sku}`);
     }
 
+    await this.validarPresentacionYApertura(productoId, null, dto);
+
     // Transacción atómica: crear variante + atributos + imágenes + niveles + stock
     const varianteId = await this.prisma.$transaction(async (tx) => {
       // Generar código de empresa único
@@ -139,6 +141,10 @@ export class ProductoVarianteService {
           // variante con unidad propia. El saco cerrado la necesita: se vende
           // por unidad dentro de un producto cuya base es el gramo.
           unidadMedidaId: dto.unidadMedidaId ?? null,
+          unidadPresentacionId: dto.unidadPresentacionId ?? null,
+          factorPresentacion: dto.factorPresentacion ?? null,
+          varianteAperturaId: dto.varianteAperturaId ?? null,
+          rendimientoApertura: dto.rendimientoApertura ?? null,
           codigoBarras: dto.codigoBarras,
           codigoEmpresa,
           peso: dto.peso,
@@ -191,6 +197,64 @@ export class ProductoVarianteService {
     this.logger.success('Product variant created', { varianteId });
 
     return this.mapToResponseDto(varianteFinal);
+  }
+
+  /**
+   * Coherencia de la presentación y del vínculo de apertura de una variante.
+   *
+   * Se valida acá y no en el DTO porque las reglas son entre campos y contra
+   * la base: el destino de la apertura tiene que ser otra variante del MISMO
+   * producto, y las dos parejas (unidad+factor, destino+rendimiento) van
+   * completas o vacías. Media configuración es peor que ninguna: deja un
+   * "abrir" que no sabe cuánto rinde.
+   */
+  private async validarPresentacionYApertura(
+    productoId: string,
+    varianteId: string | null,
+    dto: {
+      unidadPresentacionId?: string | null;
+      factorPresentacion?: number | null;
+      varianteAperturaId?: string | null;
+      rendimientoApertura?: number | null;
+    },
+  ) {
+    if (dto.unidadPresentacionId && !(Number(dto.factorPresentacion) > 1)) {
+      throw new BadRequestException(
+        'Si la variante tiene unidad de presentación, el factor es obligatorio y debe ser mayor a 1 (kg = 1000 g).',
+      );
+    }
+    if (dto.factorPresentacion != null && !dto.unidadPresentacionId) {
+      throw new BadRequestException(
+        'Hay un factor de presentación sin unidad de presentación: mandá las dos o ninguna.',
+      );
+    }
+
+    if (dto.varianteAperturaId) {
+      if (varianteId && dto.varianteAperturaId === varianteId) {
+        throw new BadRequestException(
+          'Una variante no puede abrirse en sí misma.',
+        );
+      }
+      if (!(Number(dto.rendimientoApertura) > 0)) {
+        throw new BadRequestException(
+          'Si configurás en qué variante se abre, el rendimiento es obligatorio y debe ser mayor a 0 ' +
+          '(cuántas unidades de venta del destino salen de 1 bulto).',
+        );
+      }
+      const destino = await this.prisma.productoVariante.findFirst({
+        where: { id: dto.varianteAperturaId, productoId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!destino) {
+        throw new BadRequestException(
+          'La variante de apertura tiene que ser otra variante del MISMO producto.',
+        );
+      }
+    } else if (dto.rendimientoApertura != null) {
+      throw new BadRequestException(
+        'Hay un rendimiento de apertura sin variante destino: mandá los dos o ninguno.',
+      );
+    }
   }
 
   /**
@@ -297,6 +361,32 @@ export class ProductoVarianteService {
       }
     }
 
+    // La coherencia se valida sobre el estado RESULTANTE, no sobre el dto: un
+    // PATCH que manda solo el rendimiento tiene que verse contra el destino ya
+    // guardado, o rechazaríamos ediciones válidas.
+    await this.validarPresentacionYApertura(existing.productoId, varianteId, {
+      unidadPresentacionId:
+        dto.unidadPresentacionId !== undefined
+          ? dto.unidadPresentacionId
+          : existing.unidadPresentacionId,
+      factorPresentacion:
+        dto.factorPresentacion !== undefined
+          ? dto.factorPresentacion
+          : existing.factorPresentacion != null
+            ? Number(existing.factorPresentacion)
+            : null,
+      varianteAperturaId:
+        dto.varianteAperturaId !== undefined
+          ? dto.varianteAperturaId
+          : existing.varianteAperturaId,
+      rendimientoApertura:
+        dto.rendimientoApertura !== undefined
+          ? dto.rendimientoApertura
+          : existing.rendimientoApertura != null
+            ? Number(existing.rendimientoApertura)
+            : null,
+    });
+
     // Transacción atómica: update variante + atributos + imágenes
     await this.prisma.$transaction(async (tx) => {
       // Actualizar la variante
@@ -310,6 +400,18 @@ export class ProductoVarianteService {
           // lo lee como "no tocar", que es el bug por el que hoy no se puede
           // apagar la unidad de compra de un producto.
           ...(dto.unidadMedidaId !== undefined && { unidadMedidaId: dto.unidadMedidaId }),
+          ...(dto.unidadPresentacionId !== undefined && {
+            unidadPresentacionId: dto.unidadPresentacionId,
+          }),
+          ...(dto.factorPresentacion !== undefined && {
+            factorPresentacion: dto.factorPresentacion,
+          }),
+          ...(dto.varianteAperturaId !== undefined && {
+            varianteAperturaId: dto.varianteAperturaId,
+          }),
+          ...(dto.rendimientoApertura !== undefined && {
+            rendimientoApertura: dto.rendimientoApertura,
+          }),
           ...(dto.codigoBarras !== undefined && { codigoBarras: dto.codigoBarras }),
           ...(dto.peso !== undefined && { peso: dto.peso }),
           ...(dto.dimensiones && { dimensiones: dto.dimensiones }),
@@ -546,6 +648,14 @@ export class ProductoVarianteService {
       codigoBarras: variante.codigoBarras,
       codigoEmpresa: variante.codigoEmpresa,
       unidadMedidaId: variante.unidadMedidaId ?? null,
+      unidadPresentacionId: variante.unidadPresentacionId ?? null,
+      // Prisma serializa Decimal como String: si esto viaja sin Number(), en
+      // Flutter llega un String donde el modelo espera num y revienta.
+      factorPresentacion:
+        variante.factorPresentacion != null ? Number(variante.factorPresentacion) : null,
+      varianteAperturaId: variante.varianteAperturaId ?? null,
+      rendimientoApertura:
+        variante.rendimientoApertura != null ? Number(variante.rendimientoApertura) : null,
       atributosValores: variante.atributosValores?.map((av: any) => ({
         id: av.id,
         atributoId: av.atributoId,

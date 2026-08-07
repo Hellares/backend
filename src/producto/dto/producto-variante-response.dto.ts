@@ -26,6 +26,16 @@ export class ProductoVarianteResponseDto {
   // Unidad de VENTA propia de la variante. null = usa la del producto.
   unidadMedidaId?: string | null;
 
+  // Unidad de PRESENTACIÓN propia. Si está, gana sobre la del producto: es el
+  // granel que se guarda en gramos y se cobra en kilos.
+  unidadPresentacionId?: string | null;
+  factorPresentacion?: number | null;
+
+  // Apertura de bulto: en qué variante se convierte al abrirla y cuánto rinde
+  // (en unidad de venta del destino).
+  varianteAperturaId?: string | null;
+  rendimientoApertura?: number | null;
+
   // ✅ Atributos estructurados (nuevo formato)
   atributosValores: AtributoValorDto[];
 
