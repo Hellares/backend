@@ -134,6 +134,11 @@ export class ProductoVarianteService {
           empresaId,
           nombre: dto.nombre,
           sku: dto.sku,
+          // OJO: `unidadMedidaId` estaba en el DTO desde siempre pero NUNCA se
+          // persistía — ni en create ni en update. Por eso no existía una sola
+          // variante con unidad propia. El saco cerrado la necesita: se vende
+          // por unidad dentro de un producto cuya base es el gramo.
+          unidadMedidaId: dto.unidadMedidaId ?? null,
           codigoBarras: dto.codigoBarras,
           codigoEmpresa,
           peso: dto.peso,
@@ -300,6 +305,11 @@ export class ProductoVarianteService {
         data: {
           ...(dto.nombre && { nombre: dto.nombre }),
           ...(dto.sku && { sku: dto.sku }),
+          // `!== undefined`, NO `!= null`: mandar null tiene que poder BORRAR
+          // el vínculo. Con `!= null` el campo en null se omite y el backend
+          // lo lee como "no tocar", que es el bug por el que hoy no se puede
+          // apagar la unidad de compra de un producto.
+          ...(dto.unidadMedidaId !== undefined && { unidadMedidaId: dto.unidadMedidaId }),
           ...(dto.codigoBarras !== undefined && { codigoBarras: dto.codigoBarras }),
           ...(dto.peso !== undefined && { peso: dto.peso }),
           ...(dto.dimensiones && { dimensiones: dto.dimensiones }),
@@ -535,6 +545,7 @@ export class ProductoVarianteService {
       sku: variante.sku,
       codigoBarras: variante.codigoBarras,
       codigoEmpresa: variante.codigoEmpresa,
+      unidadMedidaId: variante.unidadMedidaId ?? null,
       atributosValores: variante.atributosValores?.map((av: any) => ({
         id: av.id,
         atributoId: av.atributoId,

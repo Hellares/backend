@@ -23,6 +23,9 @@ export class ProductoVarianteResponseDto {
   codigoBarras?: string;
   codigoEmpresa: string;
 
+  // Unidad de VENTA propia de la variante. null = usa la del producto.
+  unidadMedidaId?: string | null;
+
   // ✅ Atributos estructurados (nuevo formato)
   atributosValores: AtributoValorDto[];
 
