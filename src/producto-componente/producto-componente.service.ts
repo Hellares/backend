@@ -729,7 +729,12 @@ export class ProductoComponenteService {
         } else {
           const valorPrevio = stockFinalAnterior * (precioCostoAnterior ?? 0);
           const valorTotal = valorPrevio + costoLoteTotal;
-          precioCostoNuevo = +(valorTotal / stockFinalNuevo).toFixed(2);
+          // `round6`, NO centavos: esto es un costo POR UNIDAD, no un monto.
+          // Con unidad atómica chica redondear a 2 decimales lo destroza — un
+          // saco de S/150 en 22 000 g da 0.006818/g y en centavos queda 0.01,
+          // un 47% arriba. Además el kardex ya guarda el unitario del lote con
+          // `round6` (más abajo): con `toFixed(2)` acá los dos discrepaban.
+          precioCostoNuevo = round6(valorTotal / stockFinalNuevo);
           costoActualizado = true;
         }
 

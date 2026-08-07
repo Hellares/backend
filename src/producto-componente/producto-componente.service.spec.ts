@@ -205,11 +205,12 @@ describe('ProductoComponenteService.fabricar', () => {
     expect(r.numeroDocumento).toMatch(/^PROD-/);
   });
 
-  it('promedio ponderado con stock previo + redondeo a 2 decimales', async () => {
+  it('promedio ponderado con stock previo, redondeado con round6', async () => {
     // Final ya tiene 10 unidades a costo 5. Receta: 1 X por unidad (costo 4).
     // Fabricar 3 → consumo 3, costoLote = 3*4 = 12.
     // valorPrevio = 10*5 = 50; valorTotal = 62; stockNuevo = 13.
-    // nuevoCosto = 62/13 = 4.769... → 4.77
+    // nuevoCosto = 62/13 = 4.769230... → 4.769231 (NO 4.77: es un costo por
+    // unidad, no un monto).
     const { service, tx } = mkService({
       receta: [recetaItem('x', 1, 'Insumo X')],
       stockRows: [stockRow('x', 100, '4')],
@@ -220,13 +221,41 @@ describe('ProductoComponenteService.fabricar', () => {
 
     expect(updateCallFor(tx, 'sf')![0].data).toEqual({
       stockActual: 13,
-      precioCosto: 4.77,
+      precioCosto: 4.769231,
     });
     expect(r.precioCostoAnterior).toBe(5);
-    expect(r.precioCostoNuevo).toBe(4.77);
+    expect(r.precioCostoNuevo).toBe(4.769231);
     expect(r.costoActualizado).toBe(true);
-    // Historial registra el cambio de costo (5 → 4.77)
+    // Historial registra el cambio de costo (5 → 4.769231)
     expect(tx.productoPrecioHistorialSede.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('🔴 unidad atómica chica: el costo NO se redondea a centavos', async () => {
+    // El caso que rompía: un producto final que se guarda en gramos. Insumo a
+    // S/0.006818 el gramo, se fabrican 1000 g → lote S/6.818 y costo unitario
+    // 0.006818/g. Con el `.toFixed(2)` que había, quedaba en 0.01: S/10 el
+    // kilo contra S/6.82 reales, 47% inflado. Ver
+    // feedback_precio_unitario_no_es_monto.
+    const { service, tx } = mkService({
+      receta: [recetaItem('granel', 1, 'Granel')],
+      stockRows: [stockRow('granel', 500000, '0.006818')],
+      finalStock: null,
+    });
+
+    const r = await service.fabricar('e1', 'pf', DTO(1000), 'u1');
+
+    expect(r.precioCostoNuevo).toBe(0.006818);
+    expect(r.precioCostoNuevo).not.toBe(0.01);
+    expect(tx.productoStock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ precioCosto: 0.006818 }),
+      }),
+    );
+    // El kardex ya usaba round6: los dos tienen que decir lo mismo.
+    const entrada = movMock.mock.calls.find(
+      (c) => c[1].tipo === 'PRODUCCION_ENTRADA',
+    );
+    expect(entrada![1].precioCostoUnitario).toBe(0.006818);
   });
 
   it('mano de obra: se suma al costo del lote y al ponderado; la entrada vale el lote', async () => {
