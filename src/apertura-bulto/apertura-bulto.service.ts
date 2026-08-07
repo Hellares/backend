@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { round6 } from '../common/utils/money.util';
+import { simboloUnidad } from '../common/utils/unidad-presentacion.util';
 import { AbrirBultoDto, CerrarBultoDto } from './dto';
 
 /**
@@ -42,6 +43,100 @@ export class AperturaBultoService {
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
   ) {}
+
+  /**
+   * Bultos abribles en una sede, con el stock de los dos lados.
+   *
+   * Alimenta la pantalla "Abrir bultos" y —esto es lo importante— le da a la
+   * alerta de stock mínimo la información que hoy no tiene: si el granel está
+   * bajo mínimo PERO hay bultos cerrados en depósito, la acción no es
+   * comprarle al proveedor sino abrir uno. Sin esa distinción el gerente pide
+   * compras que no hacen falta.
+   */
+  async listarDisponibles(empresaId: string, sedeId: string) {
+    const bultos = await this.prisma.productoVariante.findMany({
+      where: {
+        empresaId,
+        deletedAt: null,
+        isActive: true,
+        varianteAperturaId: { not: null },
+      },
+      select: {
+        id: true,
+        nombre: true,
+        rendimientoApertura: true,
+        varianteAperturaId: true,
+        producto: { select: { id: true, nombre: true } },
+        varianteApertura: {
+          select: {
+            id: true,
+            nombre: true,
+            factorPresentacion: true,
+            unidadPresentacion: {
+              select: {
+                simboloLocal: true,
+                simboloPersonalizado: true,
+                unidadMaestra: { select: { simbolo: true } },
+              },
+            },
+            unidadMedida: {
+              select: {
+                simboloLocal: true,
+                simboloPersonalizado: true,
+                unidadMaestra: { select: { simbolo: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { nombre: 'asc' },
+    });
+    if (bultos.length === 0) return [];
+
+    // Una sola consulta para los dos lados de todas las parejas.
+    const varianteIds = [
+      ...new Set(
+        bultos.flatMap((b) => [b.id, b.varianteAperturaId!]).filter(Boolean),
+      ),
+    ];
+    const stocks = await this.prisma.productoStock.findMany({
+      where: { sedeId, varianteId: { in: varianteIds } },
+      select: { varianteId: true, stockActual: true, stockMinimo: true },
+    });
+    const porVariante = new Map(stocks.map((s) => [s.varianteId!, s]));
+
+    return bultos
+      .filter((b) => b.varianteApertura)
+      .map((b) => {
+        const stockBulto = porVariante.get(b.id);
+        const stockDestino = porVariante.get(b.varianteAperturaId!);
+        const disponibles = stockBulto?.stockActual ?? 0;
+        const sueltas = stockDestino?.stockActual ?? 0;
+        const minimo = stockDestino?.stockMinimo ?? null;
+
+        return {
+          producto: b.producto,
+          bulto: { varianteId: b.id, nombre: b.nombre, stock: disponibles },
+          destino: {
+            varianteId: b.varianteApertura!.id,
+            nombre: b.varianteApertura!.nombre,
+            stock: sueltas,
+            stockMinimo: minimo,
+            factorPresentacion:
+              b.varianteApertura!.factorPresentacion != null
+                ? Number(b.varianteApertura!.factorPresentacion)
+                : null,
+            simbolo:
+              simboloUnidad(b.varianteApertura!.unidadPresentacion) ??
+              simboloUnidad(b.varianteApertura!.unidadMedida),
+          },
+          rendimiento: Number(b.rendimientoApertura ?? 0),
+          // 🔑 Lo que la alerta necesita para decidir qué acción ofrecer.
+          destinoBajoMinimo: minimo != null && sueltas <= minimo,
+          sePuedeAbrir: disponibles > 0,
+        };
+      });
+  }
 
   /**
    * Abre N bultos cerrados: descuenta N de la variante origen y suma

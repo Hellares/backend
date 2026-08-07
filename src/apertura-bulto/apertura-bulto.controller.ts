@@ -1,4 +1,12 @@
-import { Body, Controller, Headers, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiHeader,
@@ -19,6 +27,24 @@ import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 @Controller('apertura-bulto')
 export class AperturaBultoController {
   constructor(private readonly service: AperturaBultoService) {}
+
+  @Get('disponibles')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Bultos abribles en una sede',
+    description:
+      'Lista las variantes configuradas para abrirse, con el stock de bultos ' +
+      'cerrados y el de la variante suelta. Incluye `destinoBajoMinimo` para ' +
+      'que la alerta de stock pueda distinguir "abrí un saco" de "comprale al ' +
+      'proveedor".',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async disponibles(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string,
+  ) {
+    return this.service.listarDisponibles(empresaId, sedeId);
+  }
 
   @Post('abrir')
   @RequiresPermission(Permission.MANAGE_PRODUCTS)
