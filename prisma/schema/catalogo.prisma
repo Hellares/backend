@@ -218,6 +218,7 @@ model EmpresaUnidadMedida {
   productosComoUnidadCompra Producto[]     @relation("ProductoUnidadCompra")
   productosComoUnidadPresentacion Producto[] @relation("ProductoUnidadPresentacion")
   variantes           ProductoVariante[]
+  variantesComoUnidadPresentacion ProductoVariante[] @relation("VarianteUnidadPresentacion")
   servicios           Servicio[]
   detallesComprobante DetalleComprobante[]
 

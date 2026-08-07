@@ -279,6 +279,28 @@ model ProductoVariante {
   empresaId      String
   unidadMedidaId String? // Unidad de medida específica de la variante
 
+  // ─── Unidad de PRESENTACIÓN de la variante ────────────────────
+  // Misma idea que en Producto pero por variante, y existe porque dos
+  // variantes del mismo artículo pueden venderse en unidades distintas: un
+  // SACO cerrado (UND) y el GRANEL que sale de abrirlo (gramo, presentado en
+  // kilos). La presentación vive en Producto, así que sin estas columnas las
+  // dos variantes heredan la misma y el saco se declara en kilos.
+  // Nullable: sin ella la variante HEREDA la del producto, que es el
+  // comportamiento de siempre.
+  unidadPresentacionId String?
+  factorPresentacion   Decimal? @db.Decimal(12, 4)
+
+  // ─── Apertura de bulto ────────────────────────────────────────
+  // La variante cerrada (SACO 15KG) apunta a la suelta (GRANEL) en la que se
+  // convierte al abrirla, y `rendimientoApertura` dice cuánto rinde en unidad
+  // de VENTA del destino (15 000 si el granel se guarda en gramos).
+  //
+  // Ojo: esto NO es la presentación. La presentación traduce cómo se MUESTRA
+  // un mismo stock; la apertura mueve stock real de una variante a otra y es
+  // una operación física que alguien ejecuta y queda en el kardex.
+  varianteAperturaId  String?
+  rendimientoApertura Decimal? @db.Decimal(12, 4)
+
   // Identificación de la variante
   nombre        String // "Negro - USB", "Blanco - Bluetooth"
   sku           String // SKU único de la variante
@@ -302,8 +324,15 @@ model ProductoVariante {
   producto      Producto             @relation(fields: [productoId], references: [id], onDelete: Cascade)
   empresa       Empresa              @relation(fields: [empresaId], references: [id])
   unidadMedida  EmpresaUnidadMedida? @relation(fields: [unidadMedidaId], references: [id])
+  unidadPresentacion EmpresaUnidadMedida? @relation("VarianteUnidadPresentacion", fields: [unidadPresentacionId], references: [id])
   archivos      Archivo[]
   usadoEnCombos ProductoCombo[]      @relation("ComponenteVariante")
+
+  // Apertura: SACO --varianteApertura--> GRANEL.
+  // `variantesOrigenApertura` es el lado inverso: las variantes cuya apertura
+  // produce ESTA (normalmente una sola, pero el modelo no lo limita).
+  varianteApertura        ProductoVariante?  @relation("VarianteApertura", fields: [varianteAperturaId], references: [id])
+  variantesOrigenApertura ProductoVariante[] @relation("VarianteApertura")
 
   // Relaciones para atributos estructurados
   atributosValores ProductoAtributoValor[]
@@ -359,6 +388,8 @@ model ProductoVariante {
   @@index([productoId])
   @@index([empresaId])
   @@index([unidadMedidaId])
+  @@index([unidadPresentacionId])
+  @@index([varianteAperturaId])
   @@index([sku])
   @@index([isActive])
   // Índices compuestos para queries comunes

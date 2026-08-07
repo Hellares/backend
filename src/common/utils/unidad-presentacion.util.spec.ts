@@ -227,4 +227,56 @@ describe('presentacionDeVariante', () => {
   it('sin producto ni unidad cae a NIU', () => {
     expect(presentacionDeVariante({}).codigoSunat).toBe(UNIDAD_SUNAT_DEFAULT);
   });
+
+  // ─── Presentación PROPIA de la variante (saco cerrado vs granel) ───
+
+  it('la presentación PROPIA de la variante gana sobre la del producto', () => {
+    // GRANEL de un saco abierto: el producto padre podría no tener
+    // presentación, o tener otra; manda la de la variante.
+    const p = presentacionDeVariante({
+      unidadMedidaId: 'um-gramo',
+      unidadMedida: unidad('GRM', 'g'),
+      factorPresentacion: 1000,
+      unidadPresentacion: unidad('KGM', 'kg'),
+      producto: { unidadMedidaId: 'um-unidad', unidadMedida: unidad('NIU', 'und') },
+    });
+
+    expect(p.factor).toBe(1000);
+    expect(p.simbolo).toBe('kg');
+    expect(p.codigoSunat).toBe('KGM');
+  });
+
+  it('🔴 el SACO cerrado no se contagia de la presentación del GRANEL', () => {
+    // Las dos variantes del mismo producto, resueltas por separado. Este es
+    // el caso que la clave compuesta hizo posible expresar.
+    const saco = presentacionDeVariante({
+      unidadMedidaId: 'um-unidad',
+      unidadMedida: unidad('NIU', 'und'),
+      producto: GRANEL_EN_KILOS,
+    });
+    const granel = presentacionDeVariante({
+      unidadMedidaId: 'um-gramo',
+      unidadMedida: unidad('GRM', 'g'),
+      factorPresentacion: 1000,
+      unidadPresentacion: unidad('KGM', 'kg'),
+      producto: GRANEL_EN_KILOS,
+    });
+
+    expect(saco.codigoSunat).toBe('NIU');
+    expect(saco.factor).toBe(1);
+    expect(granel.codigoSunat).toBe('KGM');
+    expect(granel.factor).toBe(1000);
+  });
+
+  it('una presentación propia con factor <= 1 no se aplica y se hereda', () => {
+    const p = presentacionDeVariante({
+      factorPresentacion: 1,
+      unidadPresentacion: unidad('KGM', 'kg'),
+      producto: GRANEL_EN_KILOS,
+    });
+
+    // Cae a la herencia, o sea la presentación del producto.
+    expect(p.factor).toBe(1000);
+    expect(p.codigoSunat).toBe('KGM');
+  });
 });

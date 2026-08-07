@@ -424,6 +424,17 @@ export class VentaService {
             unidadMedida: {
               select: { unidadMaestra: { select: { codigo: true } } },
             },
+            // Presentación PROPIA de la variante: gana sobre la del producto.
+            // Es el granel que sale de abrir un saco — se guarda en gramos y
+            // se cobra en kilos aunque el producto padre no tenga presentación.
+            factorPresentacion: true,
+            unidadPresentacion: {
+              select: {
+                simboloLocal: true,
+                simboloPersonalizado: true,
+                unidadMaestra: { select: { codigo: true, simbolo: true } },
+              },
+            },
             producto: {
               select: {
                 id: true,

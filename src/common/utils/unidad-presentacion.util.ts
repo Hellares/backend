@@ -120,6 +120,9 @@ export interface ProductoParaPresentacion {
 export interface VarianteParaPresentacion {
   unidadMedidaId?: string | null;
   unidadMedida?: UnidadParaSunat | null;
+  /** Presentación PROPIA de la variante. Si existe, gana sobre la del producto. */
+  factorPresentacion?: FactorCrudo;
+  unidadPresentacion?: (UnidadParaSimbolo & UnidadParaSunat) | null;
   producto?: ProductoParaPresentacion | null;
 }
 
@@ -149,19 +152,31 @@ export function presentacionDeProducto(
 /**
  * En qué unidad se declara una línea de esta variante.
  *
- * La presentación vive en el Producto, así que por defecto la variante la
- * hereda: es lo correcto mientras las variantes sean colores o tallas del
- * mismo artículo, que se venden todas en la misma unidad.
+ * Tres casos, en este orden:
  *
- * ⚠️ Pero si la variante declara su PROPIA unidad de venta y es distinta a la
- * del producto, la presentación del producto NO es de ella: un saco cerrado
- * (UND) dentro de un producto cuya base es el gramo y su presentación el kilo
- * saldría declarado como "1 KGM". En ese caso la variante se declara con su
- * unidad y sin agrupar.
+ * 1. La variante tiene presentación PROPIA → gana. Es el granel de un saco
+ *    abierto: se guarda en gramos y se cobra en kilos, aunque el producto
+ *    padre no tenga presentación o tenga otra.
+ * 2. La variante declara su propia unidad de VENTA y es distinta a la del
+ *    producto → la presentación del producto no es de ella. Un saco cerrado
+ *    (UND) dentro de un producto cuya base es el gramo y su presentación el
+ *    kilo saldría declarado como "1 KGM" por 15 kg de alimento.
+ * 3. Si no, HEREDA la del producto. Es lo correcto mientras las variantes
+ *    sean colores o tallas, que se venden todas en la misma unidad — y es el
+ *    comportamiento de todas las variantes que existen hoy.
  */
 export function presentacionDeVariante(
   variante: VarianteParaPresentacion | null | undefined,
 ): PresentacionLinea {
+  const factorPropio = Number(variante?.factorPresentacion ?? 0);
+  if (variante?.unidadPresentacion && factorPropio > 1) {
+    return {
+      factor: factorPropio,
+      simbolo: simboloUnidad(variante.unidadPresentacion),
+      codigoSunat: codigoSunatUnidad(variante.unidadPresentacion),
+    };
+  }
+
   const unidadPropia = variante?.unidadMedidaId ?? null;
   const unidadDelProducto = variante?.producto?.unidadMedidaId ?? null;
 
