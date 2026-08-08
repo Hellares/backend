@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { EstadoVenta, Prisma } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
@@ -1123,6 +1123,70 @@ export class ProductoVarianteService {
       where: { id: varianteId },
       include: this.varianteInclude,
     });
+  }
+
+  /**
+   * Rotación de las variantes de un producto en una sede: cuánto salió de cada
+   * una en los últimos `dias`.
+   *
+   * Es el dato que separa "tengo 175 kg de pollo" de "tengo pollo para 8
+   * meses". Sin esto, una variante con buen margen y cero salida se ve igual de
+   * sana que una que vuela, y el análisis de variantes solo sabe mirar el
+   * saldo.
+   *
+   * `cantidad` vuelve en UNIDAD DE VENTA (gramos para un granel): la conversión
+   * a kilos la hace el cliente, que ya conoce la presentación de cada variante.
+   *
+   * Mismo criterio que la analítica de ventas: se excluyen BORRADOR y ANULADA,
+   * y se filtra por `fechaVenta`, no por `creadoEn` de la venta.
+   */
+  async rotacionVariantes(
+    productoId: string,
+    empresaId: string,
+    sedeId: string,
+    dias: number,
+  ) {
+    const desde = new Date();
+    desde.setDate(desde.getDate() - dias);
+
+    const variantes = await this.prisma.productoVariante.findMany({
+      where: { productoId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+    if (variantes.length === 0) {
+      return { dias, desde: desde.toISOString(), items: [] };
+    }
+
+    const agrupado = await this.prisma.ventaDetalle.groupBy({
+      by: ['varianteId'],
+      where: {
+        varianteId: { in: variantes.map((v) => v.id) },
+        venta: {
+          empresaId,
+          sedeId,
+          estado: { notIn: [EstadoVenta.BORRADOR, EstadoVenta.ANULADA] },
+          fechaVenta: { gte: desde },
+        },
+      },
+      _sum: { cantidad: true, total: true },
+      _count: { _all: true },
+      // La última venta sale del detalle y no de `venta.fechaVenta`: groupBy no
+      // agrega campos de una relación. Se crean juntos, así que la diferencia
+      // es de milisegundos.
+      _max: { creadoEn: true },
+    });
+
+    return {
+      dias,
+      desde: desde.toISOString(),
+      items: agrupado.map((g) => ({
+        varianteId: g.varianteId,
+        cantidad: g._sum.cantidad != null ? Number(g._sum.cantidad) : 0,
+        total: g._sum.total != null ? Number(g._sum.total) : 0,
+        ventas: g._count._all,
+        ultimaVenta: g._max.creadoEn?.toISOString() ?? null,
+      })),
+    };
   }
 
   /**

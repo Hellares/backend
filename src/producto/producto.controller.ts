@@ -922,6 +922,43 @@ export class ProductoController {
     return await this.varianteService.generarCombinaciones(productoId, empresaId, dto);
   }
 
+  @Get(':productoId/variantes/rotacion')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Rotación de las variantes de un producto en una sede',
+    description:
+      'Cuánto salió de cada variante en los últimos N días (default 90, máximo 365). ' +
+      'La cantidad vuelve en UNIDAD DE VENTA: para un granel guardado en gramos, en gramos. ' +
+      'Excluye ventas en BORRADOR y ANULADA.',
+  })
+  @ApiQuery({ name: 'sedeId', required: true, type: String })
+  @ApiQuery({ name: 'dias', required: false, type: Number, example: 90 })
+  @ApiResponse({ status: 200, description: 'Rotación calculada' })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async rotacionVariantes(
+    @Param('productoId') productoId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('sedeId') sedeId: string,
+    @Query('dias') dias?: string,
+  ) {
+    if (!sedeId) {
+      throw new BadRequestException('El parámetro sedeId es requerido');
+    }
+    // Sin tope, un `dias` absurdo barre la tabla de ventas entera.
+    const parsed = parseInt(dias ?? '', 10);
+    const rango = Number.isNaN(parsed) ? 90 : Math.min(Math.max(parsed, 1), 365);
+    return await this.varianteService.rotacionVariantes(
+      productoId,
+      empresaId,
+      sedeId,
+      rango,
+    );
+  }
+
   @Get(':productoId/variantes')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener todas las variantes de un producto' })
