@@ -35,7 +35,16 @@ const VAR_EXISTENTE = {
   rendimientoApertura: null,
 };
 
-const mkService = (opts: { destinoExiste?: boolean; existente?: any } = {}) => {
+const mkService = (
+  opts: {
+    destinoExiste?: boolean;
+    existente?: any;
+    /** El destino elegido es a su vez un bulto (saco → saco). */
+    destinoEsBulto?: boolean;
+    /** Otra variante ya se abre en la que estamos editando. */
+    laAbreOtra?: any;
+  } = {},
+) => {
   const tx = {
     productoVariante: {
       create: jest.fn().mockResolvedValue({ id: 'v-nueva' }),
@@ -57,12 +66,30 @@ const mkService = (opts: { destinoExiste?: boolean; existente?: any } = {}) => {
         .mockResolvedValue({ id: 'p1', isActive: true, tieneVariantes: true }),
     },
     productoVariante: {
-      // 1ª llamada: chequeo de SKU duplicado / variante existente.
-      // 2ª llamada: destino de la apertura.
-      findFirst: jest
-        .fn()
-        .mockResolvedValueOnce(opts.existente ?? null)
-        .mockResolvedValue(opts.destinoExiste === false ? null : { id: 'v-granel' }),
+      // Despacha por la FORMA del `where`, no por el orden de llamada: contar
+      // llamadas hacía que cualquier validación nueva —como el guard de
+      // cadena— rompiera specs que ni la miran.
+      findFirst: jest.fn().mockImplementation((args: any) => {
+        const where = args?.where ?? {};
+        // "¿alguna otra variante se abre en ésta?"
+        if (where.varianteAperturaId) {
+          return Promise.resolve(opts.laAbreOtra ?? null);
+        }
+        // Destino de la apertura: se busca por id DENTRO del producto.
+        if (where.id && where.productoId) {
+          return Promise.resolve(
+            opts.destinoExiste === false
+              ? null
+              : {
+                  id: 'v-granel',
+                  nombre: 'GRANEL',
+                  varianteAperturaId: opts.destinoEsBulto ? 'v-otro-granel' : null,
+                },
+          );
+        }
+        // Chequeo de SKU duplicado / variante existente.
+        return Promise.resolve(opts.existente ?? null);
+      }),
       findMany: jest.fn().mockResolvedValue([]),
     },
     $transaction: jest.fn(async (cb: any) => cb(tx)),
@@ -182,6 +209,20 @@ describe('crear variante con configuración de apertura', () => {
       } as any),
     ).rejects.toThrow(/mismo producto/i);
   });
+
+  it('🔴 rechaza un destino que a su vez es un bulto (saco → saco)', async () => {
+    // Cargando ALIMENTO PARA RATON en beta, un saco quedó apuntando al saco de
+    // la otra etapa: en la lista de hermanas los nombres solo se diferencian al
+    // final. Abrirlo habría sumado 15 000 SACOS al inventario y dejado el costo
+    // del destino en centavos por el promedio ponderado.
+    const { service } = mkService({ destinoEsBulto: true });
+
+    await expect(
+      service.create('p1', 'e1', {
+        ...BASE, varianteAperturaId: 'v-otro-saco', rendimientoApertura: 15000,
+      } as any),
+    ).rejects.toThrow(/variante suelta/i);
+  });
 });
 
 describe('actualizar variante', () => {
@@ -235,5 +276,21 @@ describe('actualizar variante', () => {
         varianteAperturaId: 'v-saco', rendimientoApertura: 100,
       } as any),
     ).rejects.toThrow(/en sí misma/i);
+  });
+
+  it('🔴 la que ya es destino de otra no puede volverse bulto', async () => {
+    // La misma regla que el guard de arriba, del otro lado. Sin esto el orden
+    // de carga decide: si al elegir el destino ése todavía no era bulto, la
+    // cadena se arma igual cuando se lo configure después.
+    const { service } = mkService({
+      existente: VAR_EXISTENTE,
+      laAbreOtra: { nombre: 'SACO 15KG' },
+    });
+
+    await expect(
+      service.update('v-saco', 'e1', {
+        varianteAperturaId: 'v-granel', rendimientoApertura: 15000,
+      } as any),
+    ).rejects.toThrow(/se abre en esta variante/i);
   });
 });

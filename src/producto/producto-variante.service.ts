@@ -255,12 +255,40 @@ export class ProductoVarianteService {
       }
       const destino = await this.prisma.productoVariante.findFirst({
         where: { id: dto.varianteAperturaId, productoId, deletedAt: null },
-        select: { id: true },
+        select: { id: true, nombre: true, varianteAperturaId: true },
       });
       if (!destino) {
         throw new BadRequestException(
           'La variante de apertura tiene que ser otra variante del MISMO producto.',
         );
+      }
+      // El destino tiene que ser la variante SUELTA, no otro bulto: un saco que
+      // se abre en otro saco no existe. El error sale caro y en silencio —
+      // abrir sumaría el rendimiento (15 000) como UNIDADES del destino y el
+      // promedio ponderado repartiría el costo del bulto entre esas 15 000,
+      // dejando el saco destino costando centavos. Pasó en beta: un saco quedó
+      // apuntando al saco de la otra etapa, porque en la lista de hermanas los
+      // nombres solo se diferencian al final.
+      if (destino.varianteAperturaId) {
+        throw new BadRequestException(
+          `"${destino.nombre}" también es un bulto que se abre en otra variante: ` +
+          'el destino tiene que ser la variante suelta (el granel), no otro bulto.',
+        );
+      }
+      // La misma regla vista al revés. Sin esto el guard dependería del orden
+      // de carga: si al elegir el destino ése todavía no era un bulto, la
+      // cadena queda armada igual cuando se lo configure después.
+      if (varianteId) {
+        const laAbreOtra = await this.prisma.productoVariante.findFirst({
+          where: { varianteAperturaId: varianteId, deletedAt: null },
+          select: { nombre: true },
+        });
+        if (laAbreOtra) {
+          throw new BadRequestException(
+            `"${laAbreOtra.nombre}" se abre en esta variante, así que ésta es la ` +
+            'suelta: no puede a su vez abrirse en otra.',
+          );
+        }
       }
     } else if (dto.rendimientoApertura != null) {
       throw new BadRequestException(
