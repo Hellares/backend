@@ -1026,11 +1026,11 @@ export class ProductoVarianteService {
     if (stocksExistentes.length > 0) {
       sedeIds = [...new Set(stocksExistentes.map(s => s.sedeId))];
     } else {
-      const sedesActivas = await this.prisma.sede.findMany({
-        where: { empresaId, isActive: true },
-        select: { id: true },
-      });
-      sedeIds = sedesActivas.map(s => s.id);
+      sedeIds = await this.sedesPorDefectoDelProducto(
+        productoId,
+        empresaId,
+        this.prisma,
+      );
     }
 
     if (sedeIds.length > 0) {
@@ -1118,9 +1118,44 @@ export class ProductoVarianteService {
   }
 
   /**
+   * Sedes donde crear el stock de una variante cuando el producto no tiene
+   * NINGUNA fila viva de la que deducirlas.
+   *
+   * Antes esto caía derecho a "todas las sedes activas" y esparcía el producto
+   * por toda la empresa. Y pasa de verdad: la conversión a variantes migra el
+   * stock del producto a una variante por defecto, así que si esa variante se
+   * borra, la única fila que sabía en qué sedes vivía el producto deja de
+   * aparecer en la consulta —filtra `deletedAt: null`— y no queda nada.
+   * Ocurrió en beta con ALIMENTO PARA RATON: se creó para Sede Principal y
+   * terminó con 24 filas de stock en una sede donde el producto no existe.
+   *
+   * `Producto.sedeId` es la sede en la que se creó (hay una fila de Producto
+   * por sede), o sea que la respuesta ya estaba en la base: solo no se miraba.
+   * El fallback a "todas" queda para productos viejos, sin esa columna.
+   */
+  private async sedesPorDefectoDelProducto(
+    productoId: string,
+    empresaId: string,
+    prisma: Prisma.TransactionClient,
+  ): Promise<string[]> {
+    const producto = await prisma.producto.findFirst({
+      where: { id: productoId, empresaId },
+      select: { sedeId: true },
+    });
+    if (producto?.sedeId) return [producto.sedeId];
+
+    const sedesActivas = await prisma.sede.findMany({
+      where: { empresaId, isActive: true },
+      select: { id: true },
+    });
+    return sedesActivas.map(s => s.id);
+  }
+
+  /**
    * Crea registros de ProductoStock para una variante en todas las sedes
    * donde el producto base ya tiene stock.
-   * Si el producto base no tiene stock en ninguna sede, crea en todas las sedes activas de la empresa.
+   * Si no hay ninguna, cae a la sede del producto (ver
+   * `sedesPorDefectoDelProducto`).
    * Los registros se crean con stock=0 y sin precio (precioConfigurado=false).
    */
   private async crearProductoStockEnSedes(
@@ -1153,11 +1188,11 @@ export class ProductoVarianteService {
       if (stocksExistentes.length > 0) {
         sedeIds = [...new Set(stocksExistentes.map(s => s.sedeId))];
       } else {
-        const sedesActivas = await prisma.sede.findMany({
-          where: { empresaId, isActive: true },
-          select: { id: true },
-        });
-        sedeIds = sedesActivas.map(s => s.id);
+        sedeIds = await this.sedesPorDefectoDelProducto(
+          productoId,
+          empresaId,
+          prisma,
+        );
       }
 
       if (sedeIds.length === 0) return;
