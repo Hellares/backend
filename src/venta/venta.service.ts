@@ -41,7 +41,7 @@ import {
 import { FacturacionService } from '../sunat/facturacion.service';
 import { OrdenServicioService } from '../servicio/orden-servicio.service';
 import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
-import { round2 } from '../common/utils/money.util';
+import { round2, round6 } from '../common/utils/money.util';
 import {
   clavePresentacion,
   montosDeclarados,
@@ -2823,8 +2823,10 @@ export class VentaService {
           subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
           total: new Prisma.Decimal(total.toFixed(2)),
           orden: 0,
-          precioCostoSnapshot: new Prisma.Decimal(snap.precioCostoSnapshot.toFixed(2)),
-          margenSnapshot: new Prisma.Decimal((round2(margenUnit)).toFixed(2)),
+          // Por unidad de venta, no montos: van con 6 decimales (ver
+          // `calcularDetalle`). Con 2 el margen de un granel es siempre 0.
+          precioCostoSnapshot: new Prisma.Decimal(round6(snap.precioCostoSnapshot)),
+          margenSnapshot: new Prisma.Decimal(round6(margenUnit)),
           motivoLiquidacionSnapshot: snap.motivoLiquidacionSnapshot,
           nivelAplicadoSnapshot: snap.nivelAplicadoSnapshot,
           // Guardar valores numéricos para stock + guard
@@ -3035,11 +3037,13 @@ export class VentaService {
                 subtotal: d.subtotal,
                 total: d.total,
                 orden: d.orden,
+                // Por unidad de venta, no montos: 6 decimales (ver
+                // `calcularDetalle`). Con 2, el margen de un granel es 0.
                 precioCostoSnapshot: new Prisma.Decimal(
-                  snapshotsCotizacion[i].precioCostoSnapshot.toFixed(2),
+                  round6(snapshotsCotizacion[i].precioCostoSnapshot),
                 ),
                 margenSnapshot: new Prisma.Decimal(
-                  snapshotsCotizacion[i].margenSnapshot.toFixed(2),
+                  round6(snapshotsCotizacion[i].margenSnapshot),
                 ),
                 motivoLiquidacionSnapshot:
                   snapshotsCotizacion[i].motivoLiquidacionSnapshot,
@@ -5281,7 +5285,8 @@ export class VentaService {
         const margenUnit = (precioUnit - descuentoUnit) - costo;
         result.push({
           precioCostoSnapshot: costo,
-          margenSnapshot: round2(margenUnit),
+          // Por unidad de venta, no monto (ver `calcularDetalle`).
+          margenSnapshot: round6(margenUnit),
           motivoLiquidacionSnapshot:
             (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
           nivelAplicadoSnapshot:
@@ -5513,8 +5518,14 @@ export class VentaService {
       origenComboId: dto.origenComboId || null,
       origenComboNombre: dto.origenComboNombre || null,
       // Snapshot de margen para reportería de liquidaciones / pérdidas.
-      precioCostoSnapshot: round2(precioCostoSnapshot),
-      margenSnapshot: round2(margenSnapshot),
+      // round6, NO round2: los dos son valores POR UNIDAD DE VENTA, no montos.
+      // Un granel guardado en gramos cuesta 0.009933/g y con round2 quedaba en
+      // 0.01 (+0.67% de COGS), pero lo grave era el margen: 0.001067 colapsaba
+      // a 0.00, así que TODA venta a granel se reportaba con margen cero y el
+      // guard de venta bajo costo —que busca `margenSnapshot < 0`— dejaba de
+      // ver las pérdidas sub-céntimo. Las dos columnas ya son Decimal(14,6).
+      precioCostoSnapshot: round6(precioCostoSnapshot),
+      margenSnapshot: round6(margenSnapshot),
       motivoLiquidacionSnapshot,
       nivelAplicadoSnapshot,
       // Passthrough VIP para el historial de uso (no se persiste en VentaDetalle).
