@@ -927,10 +927,18 @@ export class ProductoVarianteService {
 
       for (let i = 0; i < combinacionesNuevas.length; i++) {
         const combo = combinacionesNuevas[i];
-        const nombre = combo.map((valor, idx) => {
-          const atributo = atributosMap.get(dto.atributos[idx].atributoId)!;
-          return `${atributo.nombre} ${valor}`;
-        }).join(' / ');
+        // Solo los VALORES, sin el nombre del atributo adelante. Este nombre
+        // no vive en la pantalla de variantes: viaja al detalle de la venta,
+        // al ticket, al comprobante y a la guía como
+        // "PRODUCTO - <nombre variante>". Con el atributo adelante quedaba
+        // "ALIMENTO PARA RATON - Etapa ADULTO / Sabor CARNE / Presentación
+        // SACO 15KG" —79 caracteres, tres líneas en un ticket de 58 mm— y las
+        // palabras Etapa/Sabor/Presentación no agregan nada: el valor ya se
+        // explica solo. El grupo se sigue viendo etiquetado en los chips del
+        // selector, que es donde sí hace falta.
+        // Ojo: el mensaje de duplicado de más arriba SÍ los conserva, porque
+        // ahí se está señalando cuál combinación choca.
+        const nombre = combo.join(' / ');
 
         // Generar código de empresa único
         const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId, tx);
