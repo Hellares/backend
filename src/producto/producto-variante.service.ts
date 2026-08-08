@@ -61,7 +61,17 @@ export class ProductoVarianteService {
       },
       stocksPorSede: {
         select: {
+          // El id de la fila: sin él el cliente no puede pedir nada por sede
+          // —el bulk de mínimos va por `productoStockId`— y tenía que hacer
+          // una consulta por variante para conseguirlo.
+          id: true,
           stockActual: true,
+          // Sin estos dos, `esBajoMinimo` del lado del cliente comparaba
+          // contra null y era SIEMPRE falso: la alerta de reposición de una
+          // variante no podía saltar nunca. Es el gotcha de siempre — un
+          // `select` explícito omite en silencio.
+          stockMinimo: true,
+          stockMaximo: true,
           precio: true,
           precioCosto: true,
           precioOferta: true,
@@ -660,10 +670,13 @@ export class ProductoVarianteService {
 
       // Preparar desglose por sede (incluyendo precios)
       stocksPorSede = variante.stocksPorSede.map((stock: any) => ({
+        id: stock.id,
         sedeId: stock.sede.id,
         sedeNombre: stock.sede.nombre,
         sedeCodigo: stock.sede.codigo,
         cantidad: stock.stockActual,
+        stockMinimo: stock.stockMinimo,
+        stockMaximo: stock.stockMaximo,
         precio: stock.precio ? Number(stock.precio) : undefined,
         precioCosto: stock.precioCosto ? Number(stock.precioCosto) : undefined,
         precioOferta: stock.precioOferta ? Number(stock.precioOferta) : undefined,
