@@ -58,8 +58,13 @@ const mkService = (opts: {
     $transaction: jest.fn(async (cb: any) => cb(tx)),
   };
   const cache = { invalidateProductosLists: jest.fn().mockResolvedValue(undefined) };
-  const service = new AperturaBultoService(prisma as any, cache as any);
-  return { service, prisma, tx };
+  const realtime = { notifyStockCambiado: jest.fn() };
+  const service = new AperturaBultoService(
+    prisma as any,
+    cache as any,
+    realtime as any,
+  );
+  return { service, prisma, tx, realtime };
 };
 
 const DTO = (cantidad = 1) => ({ varianteId: SACO, sedeId: 's1', cantidad });
@@ -82,6 +87,28 @@ describe('AperturaBultoService.abrir', () => {
     expect(r.bultos).toBe(1);
     expect(r.unidadesPorBulto).toBe(15000);
     expect(r.numeroDocumento).toMatch(/^APER-/);
+  });
+
+  it('🔴 avisa por realtime del stock de LAS DOS variantes', async () => {
+    // Sin esto los devices con el catálogo ya cargado siguen viendo el granel
+    // en cero, y como el sheet de venta esconde los valores sin stock, el
+    // granel recién abierto no aparece para vender. Invalidar Redis no
+    // alcanza: arregla la próxima consulta, no la copia que el POS ya tiene.
+    const { service, realtime } = mkService({
+      filas: [fila(SACO, 5, '150'), fila(GRANEL, 0, null)],
+    });
+
+    await service.abrir('e1', DTO(1), 'u1');
+
+    const variantesAvisadas = realtime.notifyStockCambiado.mock.calls.map(
+      (c: any[]) => c[0].varianteId,
+    );
+    expect(variantesAvisadas).toEqual([SACO, GRANEL]);
+    expect(realtime.notifyStockCambiado.mock.calls[0][0]).toMatchObject({
+      empresaId: 'e1',
+      productoId: 'p1',
+      sedeId: 's1',
+    });
   });
 
   it('🔴 el costo por gramo NO se redondea a centavos', async () => {

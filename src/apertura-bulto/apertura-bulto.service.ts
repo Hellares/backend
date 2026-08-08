@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
+import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { round6 } from '../common/utils/money.util';
 import { simboloUnidad } from '../common/utils/unidad-presentacion.util';
@@ -42,6 +43,7 @@ export class AperturaBultoService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
+    private readonly realtimeInvalidation: RealtimeInvalidationService,
   ) {}
 
   /**
@@ -422,6 +424,33 @@ export class AperturaBultoService {
       `${operacion} ${result.numeroDocumento}: ${etiqueta} × ${dto.cantidad} en sede ${dto.sedeId} (usuario ${usuarioId})`,
     );
     await this.cache.invalidateProductosLists(empresaId);
+
+    // Abrir mueve stock entre DOS variantes del mismo producto, y sin avisar
+    // los devices que ya tienen el catálogo cargado siguen viendo el granel en
+    // cero. El sheet de venta esconde los valores de atributo sin stock, así
+    // que el granel recién abierto NO aparece para vender hasta que alguien
+    // recargue a mano. Invalidar Redis no alcanza: eso arregla la próxima
+    // consulta al servidor, no la copia que el POS ya tiene en memoria.
+    // Fire-and-forget, igual que en compra y devolución: un fallo del push no
+    // puede tumbar una operación de stock ya commiteada.
+    try {
+      for (const varianteId of [
+        result.origen.varianteId,
+        result.destino.varianteId,
+      ]) {
+        this.realtimeInvalidation.notifyStockCambiado({
+          empresaId,
+          productoId: saco.productoId,
+          varianteId,
+          sedeId: dto.sedeId,
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `Error notificando realtime ${operacion} ${result.numeroDocumento}: ${err?.message ?? err}`,
+      );
+    }
+
     return result;
   }
 
