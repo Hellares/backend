@@ -1023,9 +1023,12 @@ export class ProductoVarianteService {
           empresaId,
           varianteId,
           stockActual: stockPorVariante[idx] ?? 0,
-          precio: dto.precioBase,
+          precio: dto.precioBase ?? null,
           precioCosto: dto.precioCosto ?? null,
-          precioConfigurado: true,
+          // Sin precio la fila NO queda "configurada": si no, la variante
+          // aparece como vendible a S/0 en vez de mostrar SIN PRECIO, que es
+          // el aviso de que todavía falta ponérselo.
+          precioConfigurado: dto.precioBase != null,
         })),
       );
       await this.prisma.productoStock.createMany({

@@ -19,10 +19,22 @@ export class GenerateVarianteCombinationsDto {
   @ArrayMinSize(1)
   atributos: AtributoCombinacionDto[];
 
+  /**
+   * Precio de venta con el que nacen TODAS las variantes de esta generación.
+   * Opcional: cuando las combinaciones no comparten precio (un granel se cobra
+   * por gramo y su saco por unidad) mandarlo sería inventar un número. Sin él
+   * las variantes nacen con `precioConfigurado: false` y se les pone precio una
+   * por una.
+   *
+   * El piso es sub-céntimo a propósito: es un precio POR UNIDAD DE VENTA, no un
+   * monto. Un granel guardado en gramos vale 0.008/g (S/8 el kilo) y con un
+   * mínimo de 0.01 quedaba imposible de cargar.
+   */
   @IsNumber()
   @Type(() => Number)
-  @Min(0.01)
-  precioBase: number;
+  @Min(0.000001)
+  @IsOptional()
+  precioBase?: number;
 
   @IsNumber()
   @Type(() => Number)
