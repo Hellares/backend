@@ -1,7 +1,8 @@
 # 🚀 Runbook de Deploy — Syncronize SaaS (beta y prod)
 
-> Guía para hacer el deploy MANUAL del backend. Última actualización: 2026-07-25
-> (pase a prod del sprint delivery + multi-RUC, donde se validó todo este flujo).
+> Guía para hacer el deploy MANUAL del backend. Última actualización: 2026-08-09
+> (pase a prod de unidad de presentación + variantes con apertura de bulto, donde se
+> corrigió el paso 8: en prod el cache se invalida por patrón, nunca con `FLUSHDB`).
 
 ---
 
@@ -30,8 +31,10 @@
    migrate después (o psql manual antes, ver flujo prod).
 3. **Migraciones con `CREATE EXTENSION`** (ej: `pg_trgm`): el usuario del contenedor no
    puede crear extensiones → aplicarlas por `psql -U postgres` (superuser).
-4. **Cambiaste un transformer/shape de respuesta cacheada** → flush Redis manual después
-   del deploy, o servirá datos stale.
+4. **Cambiaste un transformer/shape de respuesta cacheada** → invalidar Redis a mano
+   después del deploy, o servirá datos stale. En **beta** alcanza `FLUSHDB`; en **prod
+   va por patrón, NUNCA `FLUSHDB`** — ese Redis tiene sesiones vivas y los webhooks de
+   Yape sin TTL. Ver paso 8.
 5. **Los env nuevos van ANTES del deploy** — el contenedor toma `stack.<env>.env` al
    recrearse. Si agregas la variable después, toca recrear de nuevo.
 6. **Health interno `000` por IPv4 no significa caído** — el socket puede ser IPv6-only
@@ -174,36 +177,79 @@ ssh root@86.48.26.221 "docker logs --since 10m syncronize-backend-prod 2>&1 | gr
 ### Paso 7 — Backfills / data-fixes del pase (si los hay)
 
 Correr los UPDATE que la sesión haya dejado pendientes (siempre probados en beta antes).
-Recordar el gotcha: tras un data-fix de catálogo, bump de `actualizadoEn` + flush Redis.
+Recordar el gotcha: tras un data-fix de catálogo, bump de `actualizadoEn` + invalidar el
+cache de catálogo (paso 8, por patrón).
 
-### Paso 8 — Flush Redis PROD
+### Paso 8 — Invalidar cache en PROD (🔴 NUNCA con FLUSHDB)
+
+> ⚠️ El Redis de PROD es el contenedor **`redis-dev`** (sí, en serio).
+>
+> 🔴 **En prod NO se hace `FLUSHDB`.** Ese Redis no es solo cache: guarda las
+> **sesiones activas** de los usuarios y los hashes **`yape-prod:webhooks:*`,
+> que no tienen TTL** — o sea estado durable de pagos, no cache. Un FLUSHDB
+> desloguea a todo el mundo y borra esos webhooks para siempre.
+> (Medido el 09-08-2026: 135 claves en prod, **ninguna de catálogo**.)
+
+**8.1 — Inspeccionar primero.** Siempre, antes de borrar nada:
 
 ```bash
-# ⚠️ El Redis de PROD es el contenedor "redis-dev" (sí, en serio)
-ssh root@86.48.26.221 'PASS=$(grep "^REDIS_URL=" /opt/syncronize/deploy/stack.prod.env | sed -E "s|.*default:([^@]+)@.*|\1|"); docker exec redis-dev redis-cli -a "$PASS" --no-auth-warning DBSIZE; docker exec redis-dev redis-cli -a "$PASS" --no-auth-warning FLUSHDB'
+ssh root@86.48.26.221 'PASS=$(grep "^REDIS_URL=" /opt/syncronize/deploy/stack.prod.env | sed -E "s|.*default:([^@]+)@.*|\1|"); docker exec redis-dev redis-cli -a "$PASS" --no-auth-warning DBSIZE; docker exec redis-dev redis-cli -a "$PASS" --no-auth-warning --scan | awk -F: "{print \$1}" | sort | uniq -c | sort -rn'
 ```
+
+**8.2 — Borrar SOLO el patrón afectado**, si el pase cambió un transformer o el
+`select` de un endpoint cacheado. Si el listado de arriba no muestra claves de
+catálogo, **no hay nada que hacer y este paso se salta**:
+
+```bash
+ssh root@86.48.26.221 'PASS=$(grep "^REDIS_URL=" /opt/syncronize/deploy/stack.prod.env | sed -E "s|.*default:([^@]+)@.*|\1|"); docker exec redis-dev redis-cli -a "$PASS" --no-auth-warning --scan --pattern "productos:empresa:*" | xargs -r -n 100 docker exec -i redis-dev redis-cli -a "$PASS" --no-auth-warning DEL'
+```
+
+> En **BETA** el `FLUSHDB` sigue estando bien (ver la sección de beta): ahí no
+> hay sesiones que cuidar y el cache de catálogo sí está poblado.
 
 ### Paso 9 — Verificar paridad de schemas beta vs prod
 
-Los tres diffs deben salir VACÍOS. Entrar por SSH al VPS y correr (el quoting es
-mucho más simple dentro de la sesión):
+Un solo comando, desde la carpeta del repo local:
 
 ```bash
-ssh root@86.48.26.221
-# ya dentro del VPS:
-comparar() {
-  docker exec postgres psql -U postgres -d db_saas_beta -t -A -c "$1" > /tmp/b.txt
-  docker exec postgres psql -U postgres -d db_saas      -t -A -c "$1" > /tmp/p.txt
-  diff /tmp/b.txt /tmp/p.txt && echo "== IDENTICO =="
-}
-
-# Columnas
-comparar "SELECT table_name||'.'||column_name||':'||data_type||':'||is_nullable FROM information_schema.columns WHERE table_schema='public' ORDER BY 1"
-# Índices
-comparar "SELECT indexname FROM pg_indexes WHERE schemaname='public' ORDER BY 1"
-# Enums
-comparar "SELECT t.typname||':'||e.enumlabel FROM pg_type t JOIN pg_enum e ON t.oid=e.enumtypid ORDER BY t.typname, e.enumsortorder"
+ssh root@86.48.26.221 'bash -s' < backend/scripts/parity-schemas.sh
 ```
+
+Tiene que terminar en **`LAS 12 DIMENSIONES DAN IDENTICO`** y salir con código 0.
+Si algo difiere, imprime el diff de esa dimensión (`<` beta, `>` prod) y sale 1.
+
+Compara **12 dimensiones**, no las 3 de antes:
+
+| | | |
+|---|---|---|
+| 1. Tablas | 5. Constraints — **definición** | 9. Triggers de usuario |
+| 2. Columnas: tipo, escala, nullable | 6. Enums (label + orden) | 10. Vistas |
+| 3. **Defaults de columna** | 7. Extensiones + versión | 11. Secuencias |
+| 4. Índices — **definición** | 8. Funciones | 12. Migraciones aplicadas |
+
+Por qué se amplió (09-08-2026): la versión vieja comparaba **nombres**, y un
+índice puede llamarse igual con otras columnas, otro `WHERE` parcial u otro
+método; una FK puede llamarse igual y haber pasado de `ON DELETE SET NULL` a
+`CASCADE`. Los chequeos 4 y 5 comparan la definición entera. Y los **defaults**
+no se miraban nunca, que es drift silencioso clásico.
+
+🔴 **La trampa que el script cubre**: si el SQL de un chequeo está mal escrito,
+las dos bases devuelven vacío y el `diff` dice "idéntico" — un falso positivo que
+parece verificación. Por eso las dimensiones que legítimamente dan cero
+(triggers, vistas, secuencias: Prisma no crea nada de eso, los IDs son `cuid()`)
+llevan una **query de control** que tiene que devolver > 0 para probar que la
+consulta corre de verdad. Se ve así, y está bien:
+
+```
+9. TRIGGERS de usuario    beta:0  prod:0  VACIO EN AMBAS (control ok: 1928/1928)
+```
+
+> Compara SOLO estructura. **Que los datos difieran es lo correcto** — son
+> entornos distintos. Si los datos fueran iguales, algo pisó producción.
+
+Variables opcionales: `BETA_DB`, `PROD_DB`, `PGC` (contenedor de Postgres). Sirven
+para probar que el script *sabe fallar*: `PROD_DB=db_yape bash -s` tiene que
+reportar diferencias y salir 1.
 
 ### Paso 10 — Smoke e2e + APK
 
@@ -259,4 +305,5 @@ ssh root@86.48.26.221 "docker exec -i postgres pg_restore -U postgres -d db_saas
 
 **Prod**: beta validado e2e → diff de migraciones → **backup** → psql migraciones →
 env nuevos → `deploy.sh prod` → `resolve --applied` + `migrate deploy` ("No pending") →
-health + logs → backfills → flush `redis-dev` → paridad schemas → smoke → APK al final.
+health + logs → backfills → invalidar cache **por patrón** (🔴 nunca `FLUSHDB` en prod) →
+paridad schemas (`scripts/parity-schemas.sh`, 12 dimensiones) → smoke → APK al final.
