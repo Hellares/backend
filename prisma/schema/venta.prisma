@@ -203,6 +203,19 @@ model VentaDetalle {
   // de la orden.
   ordenServicioId String? @unique
 
+  // Identificadores por unidad capturados AL VENDER (IMEI, N° de serie,
+  // placa). Uno por unidad: cantidad 3 ⇒ tres valores.
+  //
+  // Se guardan estructurados y NO solo dentro de `descripcion` porque la
+  // pregunta que aparece meses después es "¿a quién le vendí el IMEI 35…?",
+  // cuando llega un reclamo de garantía. Con array + GIN eso es una consulta;
+  // dentro del texto sería un LIKE sobre toda la tabla de ventas.
+  //
+  // `descripcion` igual los lleva embebidos: es lo que se imprime y lo que
+  // viaja a SUNAT, y como snapshot tiene que decir lo mismo el día que se
+  // reimprima el ticket.
+  identificadores String[] @default([])
+
   // Datos del item (snapshot)
   descripcion    String
   cantidad       Decimal @db.Decimal(10, 2)
@@ -281,6 +294,9 @@ model VentaDetalle {
   @@index([servicioId])
   @@index([origenComboId])
   @@index([motivoLiquidacionSnapshot]) // Reportería de liquidaciones por motivo
+  // Buscar por IMEI/serie cuando llega un reclamo de garantía. Sin esto sería
+  // un Seq Scan sobre todas las líneas de venta de la historia.
+  @@index([identificadores], type: Gin)
 }
 
 /// Registro de pagos de una venta (soporta pagos parciales/múltiples)

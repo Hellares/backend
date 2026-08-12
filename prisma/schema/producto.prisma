@@ -65,6 +65,23 @@ model Producto {
   // Sistema de Variantes
   tieneVariantes Boolean @default(false)
 
+  // ─── Identificador por unidad, capturado AL VENDER ────────────────
+  //
+  // Un celular se registra genérico ("CELULAR REDMI 15 PRO") pero cada unidad
+  // física tiene un IMEI que TIENE que salir en la boleta. Modelarlo como
+  // variante no sirve: habría que crear una variante por aparato.
+  //
+  // Con esto activo, la venta EXIGE tantos identificadores como unidades y el
+  // servidor los sella en la descripción de la línea, que es lo que se imprime
+  // y lo que viaja a SUNAT.
+  //
+  // El stock sigue siendo genérico: no se serializa el inventario, el dato se
+  // tipea recién al vender. La etiqueta es configurable porque el caso no es
+  // solo IMEI — es "Placa" para un vehículo o "N° de serie" para una máquina,
+  // igual que `ConfiguracionEmpresa.etiquetaNumeroSerie` en órdenes de servicio.
+  requiereIdentificador Boolean @default(false)
+  etiquetaIdentificador String? @db.VarChar(30)
+
   // Sistema de Combos
   esCombo         Boolean          @default(false)
   tipoPrecioCombo TipoPrecioCombo?

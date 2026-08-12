@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsString,
   IsOptional,
   IsNumber,
@@ -44,6 +46,20 @@ export class CreateVentaDetalleDto {
   @IsString()
   @IsNotEmpty()
   descripcion: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Identificadores por unidad (IMEI, N° de serie, placa). Obligatorio y ' +
+      'con EXACTAMENTE `cantidad` valores cuando el producto tiene ' +
+      'requiereIdentificador. El servidor los sella en la descripción de la ' +
+      'línea, que es lo que se imprime y lo que viaja a SUNAT.',
+    example: ['351234567890123', '351234567890124'],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  identificadores?: string[];
 
   @ApiProperty({ description: 'Cantidad', example: 1 })
   @IsNumber()

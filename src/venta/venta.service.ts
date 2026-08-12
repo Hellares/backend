@@ -330,7 +330,118 @@ export class VentaService {
       });
     }
 
-    return result;
+    return this.sellarIdentificadores(result);
+  }
+
+  /**
+   * Valida los identificadores por unidad (IMEI, N° de serie, placa) y los
+   * SELLA en la descripción de la línea.
+   *
+   * Va acá dentro y no en cada endpoint a propósito: `aplicarPreciosBackendNivel`
+   * es el embudo por el que ya pasan los tres flujos de venta, así que ninguno
+   * puede olvidarse de validar.
+   *
+   * 🔴 El sellado lo hace el SERVIDOR aunque `descripcion` la mande el cliente.
+   * Esa descripción es el snapshot que se imprime y el que viaja a
+   * `DetalleComprobante` → SUNAT; si el append quedara del lado del app, nada
+   * garantiza que el texto declarado coincida con lo que se guardó.
+   */
+  private async sellarIdentificadores(
+    detalles: DetalleConSnapshot[],
+  ): Promise<DetalleConSnapshot[]> {
+    // Los combos son Producto, pero el identificador se pide sobre el producto
+    // que efectivamente sale del stock, no sobre el combo contenedor.
+    const productoIds = new Set<string>();
+    const varianteIds = new Set<string>();
+    for (const d of detalles) {
+      if (d.productoId) productoIds.add(d.productoId);
+      if (d.varianteId) varianteIds.add(d.varianteId);
+    }
+    if (productoIds.size === 0 && varianteIds.size === 0) return detalles;
+
+    const [productos, variantes] = await Promise.all([
+      productoIds.size
+        ? this.prisma.producto.findMany({
+            where: { id: { in: [...productoIds] }, requiereIdentificador: true },
+            select: { id: true, nombre: true, etiquetaIdentificador: true },
+          })
+        : Promise.resolve([]),
+      varianteIds.size
+        ? this.prisma.productoVariante.findMany({
+            where: {
+              id: { in: [...varianteIds] },
+              producto: { requiereIdentificador: true },
+            },
+            select: {
+              id: true,
+              producto: {
+                select: { nombre: true, etiquetaIdentificador: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    if (productos.length === 0 && variantes.length === 0) return detalles;
+
+    const etiquetaPorProducto = new Map(
+      productos.map((p) => [p.id, p.etiquetaIdentificador || 'N° de serie']),
+    );
+    const etiquetaPorVariante = new Map(
+      variantes.map((v) => [
+        v.id,
+        v.producto.etiquetaIdentificador || 'N° de serie',
+      ]),
+    );
+
+    // Un mismo identificador no puede repetirse en la venta: dos unidades no
+    // comparten IMEI, así que es un error de tipeo.
+    const vistos = new Set<string>();
+
+    return detalles.map((d) => {
+      const etiqueta = d.varianteId
+        ? etiquetaPorVariante.get(d.varianteId)
+        : d.productoId
+          ? etiquetaPorProducto.get(d.productoId)
+          : undefined;
+      if (!etiqueta) return d;
+
+      const valores = (d.identificadores ?? [])
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
+
+      // Un producto serializado se vende por unidades enteras: media unidad no
+      // tiene identificador.
+      if (!Number.isInteger(d.cantidad)) {
+        throw new BadRequestException(
+          `"${d.descripcion}" se vende por unidades enteras porque cada una ` +
+            `lleva su ${etiqueta}.`,
+        );
+      }
+      if (valores.length !== d.cantidad) {
+        throw new BadRequestException(
+          `"${d.descripcion}": faltan datos. Se venden ${d.cantidad} ` +
+            `unidad(es) y hay que indicar ${d.cantidad} ${etiqueta}, ` +
+            `llegaron ${valores.length}.`,
+        );
+      }
+      for (const v of valores) {
+        if (vistos.has(v)) {
+          throw new BadRequestException(
+            `El ${etiqueta} "${v}" está repetido en la venta: dos unidades no ` +
+              `pueden tener el mismo.`,
+          );
+        }
+        vistos.add(v);
+      }
+
+      return {
+        ...d,
+        identificadores: valores,
+        // Queda embebido en el snapshot para el ticket y para SUNAT.
+        descripcion: `${d.descripcion} — ${etiqueta}: ${valores.join(', ')}`,
+      };
+    });
   }
 
   /**
@@ -1373,6 +1484,10 @@ export class VentaService {
               servicioId: d.servicioId,
               comboId: d.comboId,
               descripcion: d.descripcion,
+              // Ya validados y sellados en la descripción por
+              // sellarIdentificadores(); acá van estructurados para poder
+              // buscar por IMEI cuando llega un reclamo de garantía.
+              identificadores: d.identificadores ?? [],
               cantidad: d.cantidad,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
@@ -1666,6 +1781,7 @@ export class VentaService {
                 comboId: d.comboId,
                 ordenServicioId: d.ordenServicioId,
                 descripcion: d.descripcion,
+                identificadores: d.identificadores ?? [],
                 cantidad: d.cantidad,
                 precioUnitario: d.precioUnitario,
                 descuento: d.descuento,
@@ -4001,6 +4117,7 @@ export class VentaService {
             servicioId: d.servicioId,
             comboId: d.comboId,
             descripcion: d.descripcion,
+            identificadores: d.identificadores ?? [],
             cantidad: d.cantidad,
             precioUnitario: d.precioUnitario,
             descuento: d.descuento,
@@ -5505,6 +5622,9 @@ export class VentaService {
       comboId: dto.comboId || null,
       ordenServicioId: dto.ordenServicioId || null,
       descripcion: dto.descripcion,
+      // Ya vienen validados y normalizados de sellarIdentificadores(); acá
+      // solo se arrastran para que lleguen a la fila.
+      identificadores: dto.identificadores ?? [],
       cantidad,
       precioUnitario,
       descuento,
