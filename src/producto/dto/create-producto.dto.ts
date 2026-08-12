@@ -271,6 +271,30 @@ export class CreateProductoDto {
   esInsumo?: boolean;
 
   @ApiPropertyOptional({
+    description:
+      'El producto pide un identificador por unidad AL VENDER (IMEI, N° de ' +
+      'serie, placa). El stock sigue siendo genérico: el dato se tipea en el ' +
+      'carrito y el servidor lo sella en la descripción de la línea, que es ' +
+      'lo que se imprime y lo que se declara a SUNAT.',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  requiereIdentificador?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Cómo se llama ese dato para este producto. Vacío ⇒ "N° de serie".',
+    example: 'IMEI',
+    maxLength: 30,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  etiquetaIdentificador?: string;
+
+  @ApiPropertyOptional({
     description: 'Tipo de precio del combo (solo aplica si esCombo es true)',
     enum: TipoPrecioCombo,
     example: TipoPrecioCombo.FIJO,
