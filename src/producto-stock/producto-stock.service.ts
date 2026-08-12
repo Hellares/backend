@@ -20,7 +20,7 @@ import {
   ModoVerificacion,
   VerificarPreciosDto,
 } from './dto/verificar-precios.dto';
-import { Prisma, TipoCambioPrecio } from '@prisma/client';
+import { Prisma, TipoCambioPrecio, TipoPrecioNivel } from '@prisma/client';
 import { crearMovimientoStockConValoracion } from './movimiento-stock.helper';
 import { PromocionService } from '../promocion/promocion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
@@ -2090,9 +2090,34 @@ export class ProductoStockService {
       if (
         item.agregarStock === undefined &&
         item.precio === undefined &&
-        item.precioCosto === undefined
+        item.precioCosto === undefined &&
+        item.mayorPrecio === undefined &&
+        !item.mayorEliminar
       ) {
         throw new BadRequestException(`Fila ${i + 1}: no tiene cambios que aplicar`);
+      }
+
+      // El nivel por mayor necesita las dos mitades: un precio sin cantidad
+      // no se sabe desde cuándo aplica, y una cantidad sin precio no crea nada.
+      if (item.mayorPrecio !== undefined && item.mayorCantidadMinima === undefined) {
+        throw new BadRequestException(
+          `Fila ${i + 1}: falta la cantidad mínima del precio por mayor`,
+        );
+      }
+      if (item.mayorCantidadMinima !== undefined && item.mayorPrecio === undefined && !item.mayorEliminar) {
+        throw new BadRequestException(
+          `Fila ${i + 1}: falta el precio por mayor para la cantidad mínima indicada`,
+        );
+      }
+      if (item.mayorEliminar && item.mayorPrecio !== undefined) {
+        throw new BadRequestException(
+          `Fila ${i + 1}: no se puede fijar y eliminar el precio por mayor a la vez`,
+        );
+      }
+      if (item.mayorEliminar && item.mayorCantidadMinima === undefined) {
+        throw new BadRequestException(
+          `Fila ${i + 1}: para eliminar el precio por mayor hay que indicar su cantidad mínima`,
+        );
       }
     });
 
@@ -2112,8 +2137,11 @@ export class ProductoStockService {
           stockAjustado: 0,
           preciosActualizados: 0,
           registrosCreados: 0,
+          nivelesActualizados: 0,
+          nivelesEliminados: 0,
         };
         const productosAfectados = new Set<string>();
+        const nivelesAfectados: Array<{ productoId: string | null; varianteId: string | null }> = [];
 
         for (const item of dto.items) {
           let stock = await tx.productoStock.findFirst({
@@ -2236,7 +2264,83 @@ export class ProductoStockService {
             resumen.preciosActualizados++;
           }
 
-          // 2) Ajuste de stock con bloqueo de fila y movimiento de kardex
+          // 2) Precio por mayor (PrecioNivel)
+          //
+          // 🔴 El nivel es GLOBAL a la variante: PrecioNivel no tiene sedeId,
+          // así que esto se aplica a TODAS las sedes aunque la pantalla esté
+          // parada en una. El costo con el que se valida, en cambio, sí es el
+          // de ESTA sede — es el único contra el que se puede comparar acá.
+          if (item.mayorPrecio !== undefined || item.mayorEliminar) {
+            const filtroNivel = {
+              productoId: item.productoId ?? null,
+              varianteId: item.varianteId ?? null,
+              cantidadMinima: item.mayorCantidadMinima!,
+            };
+
+            if (item.mayorEliminar) {
+              const borrados = await tx.precioNivel.deleteMany({ where: filtroNivel });
+              if (borrados.count > 0) {
+                resumen.nivelesEliminados += borrados.count;
+                nivelesAfectados.push({
+                  productoId: item.productoId ?? null,
+                  varianteId: item.varianteId ?? null,
+                });
+              }
+            } else {
+              // Costo efectivo: si en esta misma fila se está cambiando el
+              // costo, manda el nuevo. Comparar contra el viejo dejaría pasar
+              // un mayorista bajo costo cuando ambos se cargan juntos.
+              const costoEfectivo =
+                item.precioCosto !== undefined
+                  ? item.precioCosto
+                  : stock.precioCosto != null
+                    ? Number(stock.precioCosto.toString())
+                    : null;
+
+              // Es el error que ya ocurrió dos veces con los edredones: un
+              // precio por mayor plano aplicado a variantes de costos
+              // distintos deja vendiendo bajo costo justo a las caras, y no
+              // se nota porque en las baratas el nivel ni siquiera aplica.
+              if (costoEfectivo != null && item.mayorPrecio! < costoEfectivo) {
+                throw new BadRequestException(
+                  `${nombre}: el precio por mayor S/${item.mayorPrecio!.toFixed(2)} está por debajo del costo S/${costoEfectivo.toFixed(2)}`,
+                );
+              }
+
+              const existente = await tx.precioNivel.findFirst({ where: filtroNivel });
+
+              if (existente) {
+                await tx.precioNivel.update({
+                  where: { id: existente.id },
+                  data: {
+                    precio: new Decimal(item.mayorPrecio!),
+                    tipoPrecio: TipoPrecioNivel.PRECIO_FIJO,
+                    porcentajeDesc: null,
+                    isActive: true,
+                  },
+                });
+              } else {
+                await tx.precioNivel.create({
+                  data: {
+                    ...filtroNivel,
+                    nombre: 'Por Mayor',
+                    cantidadMaxima: null,
+                    tipoPrecio: TipoPrecioNivel.PRECIO_FIJO,
+                    precio: new Decimal(item.mayorPrecio!),
+                    porcentajeDesc: null,
+                  },
+                });
+              }
+
+              resumen.nivelesActualizados++;
+              nivelesAfectados.push({
+                productoId: item.productoId ?? null,
+                varianteId: item.varianteId ?? null,
+              });
+            }
+          }
+
+          // 3) Ajuste de stock con bloqueo de fila y movimiento de kardex
           if (item.agregarStock !== undefined && item.agregarStock !== 0) {
             const [locked] = await tx.$queryRaw<Array<{ stockActual: number }>>`
               SELECT "stockActual" FROM "ProductoStock"
@@ -2273,7 +2377,7 @@ export class ProductoStockService {
           }
         }
 
-        return { resumen, productosAfectados: [...productosAfectados] };
+        return { resumen, productosAfectados: [...productosAfectados], nivelesAfectados };
       },
       { timeout: 60_000 },
     );
@@ -2290,9 +2394,16 @@ export class ProductoStockService {
       }
     }
 
+    // Los niveles van por variante, no por producto: el cliente invalida el
+    // precio de esa variante puntual.
+    for (const nivel of resultado.nivelesAfectados) {
+      this.realtimeInvalidation.notifyNivelesCambiados({ empresaId, ...nivel });
+    }
+
     this.logger.log(
       `Edición masiva en sede ${sedeId}: ${resultado.resumen.stockAjustado} ajustes de stock, ` +
-        `${resultado.resumen.preciosActualizados} precios, ${resultado.resumen.registrosCreados} registros creados`,
+        `${resultado.resumen.preciosActualizados} precios, ${resultado.resumen.registrosCreados} registros creados, ` +
+        `${resultado.resumen.nivelesActualizados} niveles por mayor, ${resultado.resumen.nivelesEliminados} eliminados`,
     );
 
     return resultado.resumen;

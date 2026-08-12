@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsInt,
   IsNumber,
   IsOptional,
@@ -49,6 +50,42 @@ export class BulkEditarItemDto {
   @Min(0)
   @Type(() => Number)
   precioCosto?: number;
+
+  // ─── Precio por mayor (PrecioNivel) ──────────────────────────────
+  // Ojo: a diferencia de precio y precioCosto, que son POR SEDE, el nivel
+  // es GLOBAL a la variante — PrecioNivel no tiene sedeId. Editarlo desde
+  // una sede lo cambia para todas.
+
+  @ApiPropertyOptional({
+    description:
+      'Cantidad mínima desde la que aplica el precio por mayor. Va junto con mayorPrecio.',
+    example: 3,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(2, { message: 'La cantidad mínima del precio por mayor debe ser al menos 2' })
+  @Type(() => Number)
+  mayorCantidadMinima?: number;
+
+  @ApiPropertyOptional({
+    description: 'Precio por mayor (PRECIO_FIJO). Va junto con mayorCantidadMinima.',
+    example: 72.0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  mayorPrecio?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Elimina el nivel por mayor de esta variante/producto. Excluyente con mayorPrecio.',
+    example: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  mayorEliminar?: boolean;
 }
 
 /**

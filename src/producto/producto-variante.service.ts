@@ -93,6 +93,26 @@ export class ProductoVarianteService {
           },
         },
       },
+      // Niveles de precio por volumen. Van acá porque la grilla de edición
+      // masiva necesita mostrar el nivel VIGENTE de cada variante: sin esto
+      // el usuario teclea a ciegas y no distingue "no tiene mayorista" de
+      // "ya tiene uno y lo estoy pisando".
+      //
+      // Ojo: el nivel NO es por sede (PrecioNivel no tiene sedeId), a
+      // diferencia de precio y costo, que sí viven en ProductoStock.
+      preciosNivel: {
+        where: { isActive: true },
+        select: {
+          id: true,
+          nombre: true,
+          cantidadMinima: true,
+          cantidadMaxima: true,
+          tipoPrecio: true,
+          precio: true,
+          porcentajeDesc: true,
+        },
+        orderBy: { cantidadMinima: 'asc' as const },
+      },
     };
   }
 
@@ -326,7 +346,10 @@ export class ProductoVarianteService {
       },
       include: this.varianteInclude,
       orderBy: { orden: 'asc' },
-      take: 100, // Límite de seguridad
+      // El tope era 100 y EDREDONES ya tiene 91: al pasarlo, la grilla de
+      // edición masiva y el sheet dejarían de ver variantes que existen,
+      // sin error ni aviso. 500 es el mismo tope que acepta el bulk.
+      take: 500,
     });
 
     return variantes.map((v) => this.mapToResponseDto(v));
@@ -725,6 +748,19 @@ export class ProductoVarianteService {
       precio: precioFinal,
       precioCosto: precioCostoFinal,
       precioOferta: precioOfertaFinal,
+      // Decimal viaja como String si no se lo fuerza a Number (mismo caso que
+      // factorPresentacion): en Flutter llegaría un String donde el modelo
+      // espera num.
+      preciosNivel:
+        variante.preciosNivel?.map((n: any) => ({
+          id: n.id,
+          nombre: n.nombre,
+          cantidadMinima: n.cantidadMinima,
+          cantidadMaxima: n.cantidadMaxima ?? null,
+          tipoPrecio: n.tipoPrecio,
+          precio: n.precio != null ? Number(n.precio) : null,
+          porcentajeDesc: n.porcentajeDesc != null ? Number(n.porcentajeDesc) : null,
+        })) || [],
       stock: stockTotal,
       stocksPorSede: stocksPorSede,
       peso: variante.peso ? Number(variante.peso) : undefined,

@@ -45,6 +45,19 @@ export class ProductoVarianteResponseDto {
   precioCosto?: number;
   precioOferta?: number;
 
+  // Niveles de precio por volumen ("Por Mayor 3+").
+  // A diferencia de precio y precioCosto, que son POR SEDE, el nivel es
+  // global a la variante: PrecioNivel no tiene sedeId.
+  preciosNivel?: {
+    id: string;
+    nombre: string;
+    cantidadMinima: number;
+    cantidadMaxima: number | null;
+    tipoPrecio: string;
+    precio: number | null;
+    porcentajeDesc: number | null;
+  }[];
+
   // Stock total calculado desde ProductoStock (suma de todas las sedes)
   stock: number;
 
