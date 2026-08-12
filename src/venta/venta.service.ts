@@ -450,7 +450,11 @@ export class VentaService {
         ...d,
         identificadores: valores,
         // Queda embebido en el snapshot para el ticket y para SUNAT.
-        descripcion: `${d.descripcion} — ${etiqueta}: ${etiquetados.join(', ')}`,
+        // 🔴 Guión ASCII, NO raya larga (—). Las impresoras térmicas y las
+        // fuentes del PDF no traen U+2014 y lo imprimen como un rectángulo
+        // con una X. Esta descripción termina en el ticket, en el PDF y en el
+        // XML de SUNAT: acá solo entran caracteres seguros.
+        descripcion: `${d.descripcion} - ${etiqueta}: ${etiquetados.join(', ')}`,
       };
     });
   }
