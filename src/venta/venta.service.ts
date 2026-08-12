@@ -435,11 +435,22 @@ export class VentaService {
         vistos.add(v);
       }
 
+      // Nota opcional por unidad ("NEGRO 128GB"). Va entre paréntesis en el
+      // texto y NO dentro de `identificadores`: el identificador se guarda
+      // limpio para poder buscarlo exacto con el índice GIN ante un reclamo
+      // de garantía. Mezclarlos rompería esa búsqueda y la detección de
+      // duplicados, que compara el valor completo.
+      const notas = d.notasIdentificador ?? [];
+      const etiquetados = valores.map((v, i) => {
+        const nota = (notas[i] ?? '').trim();
+        return nota ? `${v} (${nota})` : v;
+      });
+
       return {
         ...d,
         identificadores: valores,
         // Queda embebido en el snapshot para el ticket y para SUNAT.
-        descripcion: `${d.descripcion} — ${etiqueta}: ${valores.join(', ')}`,
+        descripcion: `${d.descripcion} — ${etiqueta}: ${etiquetados.join(', ')}`,
       };
     });
   }

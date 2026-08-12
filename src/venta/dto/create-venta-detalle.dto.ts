@@ -61,6 +61,21 @@ export class CreateVentaDetalleDto {
   @IsString({ each: true })
   identificadores?: string[];
 
+  @ApiPropertyOptional({
+    description:
+      'Nota opcional por unidad, en el MISMO orden que identificadores ' +
+      '("NEGRO 128GB"). Va entre paréntesis en la descripción de la línea. ' +
+      'No se guarda como columna aparte: es descriptiva y su lugar es el ' +
+      'texto del comprobante — el identificador se guarda limpio para poder ' +
+      'buscarlo exacto ante un reclamo de garantía.',
+    example: ['NEGRO 128GB', 'AZUL 256GB'],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  notasIdentificador?: string[];
+
   @ApiProperty({ description: 'Cantidad', example: 1 })
   @IsNumber()
   @Min(0.01)
