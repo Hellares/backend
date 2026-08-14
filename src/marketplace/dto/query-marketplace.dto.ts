@@ -1,5 +1,5 @@
-import { IsOptional, IsString, IsNumber, Min, Max, IsIn } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsNumber, Min, Max, IsIn, IsArray } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class QueryMarketplaceProductosDto {
@@ -36,6 +36,24 @@ export class QueryMarketplaceProductosDto {
   @IsOptional()
   @IsString()
   departamento?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Filtrar por valor de atributo, en formato `clave:valor`. Repetible. ' +
+      'Claves distintas se combinan con Y y varios valores de la misma clave con O.',
+    example: ['fabricante:QUALCOMM', 'procesador:8 Gen 3'],
+    isArray: true,
+    type: String,
+  })
+  @IsOptional()
+  // Con un solo `?atributos=x:y` Nest entrega un string suelto, no un array.
+  @Transform(({ value }) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    return Array.isArray(value) ? value : [value];
+  })
+  @IsArray()
+  @IsString({ each: true })
+  atributos?: string[];
 
   @ApiPropertyOptional({ description: 'Ordenar por', enum: ['relevancia', 'precio_asc', 'precio_desc', 'recientes'] })
   @IsOptional()

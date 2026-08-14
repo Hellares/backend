@@ -41,6 +41,20 @@ export class ProductoAtributoPlantillaService {
               unidad: true,
               valores: true,
               isActive: true,
+              // Sin esto, un atributo dependiente dentro de una plantilla no
+              // sabe de qué cuelga cada opción y el formulario termina
+              // ofreciendo la lista plana: los procesadores de todas las
+              // marcas mezclados.
+              dependeDeAtributoId: true,
+              opciones: {
+                orderBy: { orden: 'asc' as const },
+                select: {
+                  id: true,
+                  valor: true,
+                  orden: true,
+                  padre: { select: { valor: true } },
+                },
+              },
             },
           },
         },
@@ -451,6 +465,13 @@ export class ProductoAtributoPlantillaService {
           descripcion: pa.atributo.descripcion,
           unidad: pa.atributo.unidad,
           valores: pa.atributo.valores, // Siempre retornar valores base, el frontend aplica override
+          dependeDeAtributoId: pa.atributo.dependeDeAtributoId ?? null,
+          opciones: (pa.atributo.opciones ?? []).map((o: any) => ({
+            id: o.id,
+            valor: o.valor,
+            padreValor: o.padre?.valor ?? null,
+            orden: o.orden,
+          })),
         },
       })),
       categoria: plantilla.categoria,

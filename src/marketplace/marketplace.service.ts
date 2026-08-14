@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  condicionesPorAtributo,
+  sumarAlAnd,
+} from '../producto/utils/filtro-atributos.util';
 
 @Injectable()
 export class MarketplaceService {
@@ -29,6 +33,8 @@ export class MarketplaceService {
     precioMin?: number;
     precioMax?: number;
     departamento?: string;
+    /** Valores de atributo en formato `clave:valor`. */
+    atributos?: string[];
     orden?: string;
     lat?: number;
     lng?: number;
@@ -76,6 +82,14 @@ export class MarketplaceService {
         },
       };
     }
+
+    // Filtro por valor de atributo. Misma semántica y mismo util que el
+    // catálogo de la empresa: Y entre claves distintas, O entre los valores de
+    // una misma, mirando el producto base Y sus variantes.
+    //
+    // 🔴 Va al AND y no pisa nada: `where.OR` de más arriba es la búsqueda por
+    // texto, y son cosas distintas que tienen que convivir.
+    sumarAlAnd(where, condicionesPorAtributo(query.atributos));
 
     // Orden base (DB): destacados primero, luego recientes. El orden por PRECIO
     // no se resuelve a nivel Prisma (el precio vive en la relación
@@ -990,6 +1004,69 @@ export class MarketplaceService {
   /**
    * Categorías disponibles en el marketplace
    */
+  /**
+   * Atributos que el marketplace puede ofrecer como filtro.
+   *
+   * 🔑 Acá es CROSS-EMPRESA, y ahí está la diferencia con el catálogo interno:
+   * `clave` es única por empresa, así que veinte empresas pueden tener su
+   * propio "color". Se unen por clave y se hace la unión de sus valores; si no,
+   * el comprador vería veinte filtros "Color" idénticos.
+   *
+   * Solo entran los marcados `usarParaFiltros` **y** `mostrarEnMarketplace`, y
+   * de empresas visibles: un atributo interno no tiene por qué asomar al
+   * público.
+   */
+  async getFiltrosAtributos(categoriaId?: string) {
+    const atributos = await this.prisma.productoAtributo.findMany({
+      where: {
+        isActive: true,
+        usarParaFiltros: true,
+        mostrarEnMarketplace: true,
+        tipo: { in: ['SELECT', 'MULTI_SELECT', 'SELECT_DEPENDIENTE'] },
+        empresa: { isActive: true, deletedAt: null, visibleEnMarketplace: true },
+      },
+      select: { nombre: true, clave: true, valores: true, orden: true },
+      orderBy: { orden: 'asc' },
+      take: 300,
+    });
+
+    const porClave = new Map<
+      string,
+      { nombre: string; clave: string; valores: Set<string>; orden: number }
+    >();
+
+    for (const a of atributos) {
+      const actual = porClave.get(a.clave);
+      if (actual) {
+        for (const v of a.valores) actual.valores.add(v);
+      } else {
+        porClave.set(a.clave, {
+          // Gana el nombre del primero, que por el orderBy es el de menor
+          // `orden`. Dos empresas pueden escribirlo distinto ("Color" vs
+          // "COLOR") y hay que elegir uno.
+          nombre: a.nombre,
+          clave: a.clave,
+          valores: new Set(a.valores),
+          orden: a.orden,
+        });
+      }
+    }
+
+    // `categoriaId` no filtra todavía: las categorías del marketplace son
+    // MAESTRAS y los atributos se asocian a las categorías de cada empresa, así
+    // que el cruce no es directo. Se recibe para no cambiar la firma después.
+    void categoriaId;
+
+    return Array.from(porClave.values())
+      .filter((a) => a.valores.size > 0)
+      .sort((a, b) => a.orden - b.orden || a.nombre.localeCompare(b.nombre))
+      .map((a) => ({
+        nombre: a.nombre,
+        clave: a.clave,
+        valores: Array.from(a.valores).sort((x, y) => x.localeCompare(y)),
+      }));
+  }
+
   async getCategorias() {
     return this.prisma.categoriaMaestra.findMany({
       where: { isActive: true },

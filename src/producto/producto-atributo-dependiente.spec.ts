@@ -1,6 +1,7 @@
 import { AtributoTipo } from '@prisma/client';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoCatalogService } from './producto-catalog.service';
+import { condicionesPorAtributo, sumarAlAnd } from './utils/filtro-atributos.util';
 
 /**
  * Atributos dependientes (FABRICANTE → FAMILIA → PROCESADOR) y el filtro por
@@ -251,6 +252,22 @@ describe('ProductoAtributoService — cadena de atributos dependientes', () => {
 describe('ProductoCatalogService — filtro por valor de atributo', () => {
   const service = () =>
     new ProductoCatalogService({} as any, {} as any, mkLogger() as any);
+
+  it('sumarAlAnd no pisa lo que ya estaba en AND', () => {
+    // La búsqueda por texto ya usa `AND` para exigir que cada palabra aparezca;
+    // asignarlo en vez de sumarle la borraba sin que nadie lo notara.
+    const where: any = { AND: [{ textoBusqueda: { contains: 'lavadora' } }] };
+    sumarAlAnd(where, condicionesPorAtributo(['color:Negro']));
+
+    expect(where.AND).toHaveLength(2);
+    expect(where.AND[0]).toEqual({ textoBusqueda: { contains: 'lavadora' } });
+  });
+
+  it('sin atributos no toca el where', () => {
+    const where: any = { AND: [{ x: 1 }] };
+    sumarAlAnd(where, condicionesPorAtributo(undefined));
+    expect(where.AND).toEqual([{ x: 1 }]);
+  });
 
   it('combina claves distintas con Y y valores de la misma clave con O', () => {
     const cond = service()['condicionesPorAtributo']([

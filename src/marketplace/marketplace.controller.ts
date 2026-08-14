@@ -17,6 +17,18 @@ export class MarketplaceController {
   constructor(private readonly marketplaceService: MarketplaceService) {}
 
   /**
+   * Atributos disponibles como filtro, unidos por clave entre empresas.
+   *
+   * Va antes de cualquier ruta con parámetro para que Nest no lo confunda.
+   */
+  @Get('filtros-atributos')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Atributos disponibles como filtro en el marketplace' })
+  async getFiltrosAtributos(@Query('categoriaId') categoriaId?: string) {
+    return this.marketplaceService.getFiltrosAtributos(categoriaId);
+  }
+
+  /**
    * Buscar productos en todo el marketplace
    */
   @Get('productos')
@@ -34,6 +46,9 @@ export class MarketplaceController {
     @Query('lng') lng?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    // Repetible: ?atributos=fabricante:QUALCOMM&atributos=ram:8GB. Con uno
+    // solo Nest entrega un string suelto en vez de un array.
+    @Query('atributos') atributos?: string | string[],
   ) {
     return this.marketplaceService.searchProductos({
       search,
@@ -42,6 +57,11 @@ export class MarketplaceController {
       precioMin: precioMin ? parseFloat(precioMin) : undefined,
       precioMax: precioMax ? parseFloat(precioMax) : undefined,
       departamento,
+      atributos: atributos === undefined
+        ? undefined
+        : Array.isArray(atributos)
+          ? atributos
+          : [atributos],
       orden,
       lat: lat ? parseFloat(lat) : undefined,
       lng: lng ? parseFloat(lng) : undefined,
