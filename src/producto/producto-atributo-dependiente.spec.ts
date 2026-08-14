@@ -184,6 +184,44 @@ describe('ProductoAtributoService — cadena de atributos dependientes', () => {
     expect(valores).toEqual(['Snapdragon 8 Gen']);
   });
 
+  /**
+   * Renombrar DOS valores de una vez no se puede aparear, así que las viejas
+   * caen como borradas y el cascade se llevaría sus ramas. Preferimos cortar.
+   */
+  it('no borra una opción que tiene hijas colgando', async () => {
+    const tx = {
+      productoAtributoOpcion: {
+        findMany: jest
+          .fn()
+          // Las propias: QUALCOMM existe y no viene en la lista nueva.
+          .mockResolvedValueOnce([
+            { id: 'o-qc', valor: 'QUALCOMM', padreId: null, orden: 0 },
+          ])
+          // La consulta del freno: QUALCOMM tiene familias colgando.
+          .mockResolvedValueOnce([
+            { padre: { valor: 'QUALCOMM' } },
+            { padre: { valor: 'QUALCOMM' } },
+          ]),
+        update: jest.fn(),
+        create: jest.fn().mockResolvedValue({ id: 'o-nueva' }),
+        deleteMany: jest.fn(),
+      },
+    };
+    const service = new ProductoAtributoService(
+      {} as any,
+      mkLogger() as any,
+      mkCache() as any,
+    );
+
+    await expect(
+      service['sincronizarOpciones'](tx as any, 'a1', null, [
+        { valor: 'Qualcomm' }, // renombrado sin id: la vieja se daría por borrada
+      ]),
+    ).rejects.toThrow(/QUALCOMM.*colgando/s);
+
+    expect(tx.productoAtributoOpcion.deleteMany).not.toHaveBeenCalled();
+  });
+
   it('falla si la opción dice colgar de un valor que el padre no tiene', async () => {
     const tx = {
       productoAtributoOpcion: {

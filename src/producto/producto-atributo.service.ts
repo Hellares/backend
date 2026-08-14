@@ -661,7 +661,35 @@ export class ProductoAtributoService {
     const aBorrar = existentes
       .filter((o) => !conservados.has(o.id))
       .map((o) => o.id);
+
     if (aBorrar.length > 0) {
+      // 🔴 Freno contra la pérdida silenciosa de ramas enteras.
+      //
+      // La cascada de renombrado solo sabe resolver UN cambio (uno sale, uno
+      // entra). Al renombrar dos valores de una sola vez no hay forma de
+      // aparearlos, así que las opciones viejas caen acá como "borradas" — y
+      // el `onDelete: Cascade` del FK se lleva a todas sus hijas.
+      //
+      // Con la lista plana eso dejaba valores desactualizados; con la
+      // jerarquía borra los procesadores de una marca sin que nadie lo pida.
+      // Antes que adivinar, se corta y se explica.
+      const conHijas = await tx.productoAtributoOpcion.findMany({
+        where: { padreId: { in: aBorrar } },
+        select: { padre: { select: { valor: true } } },
+      });
+
+      if (conHijas.length > 0) {
+        const afectadas = [
+          ...new Set(conHijas.map((h) => h.padre?.valor).filter(Boolean)),
+        ];
+        throw new BadRequestException(
+          `No se pueden quitar las opciones ${afectadas.join(', ')}: hay ` +
+            `${conHijas.length} opción(es) de otro atributo colgando de ellas y ` +
+            `se borrarían. Si querés renombrarlas, hacelo de a una por vez; si ` +
+            `querés eliminarlas, primero sacá las opciones que dependen de ellas.`,
+        );
+      }
+
       await tx.productoAtributoOpcion.deleteMany({ where: { id: { in: aBorrar } } });
     }
 
