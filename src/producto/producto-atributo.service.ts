@@ -405,28 +405,25 @@ export class ProductoAtributoService {
         }
         break;
 
-      case AtributoTipo.TEXTO:
-      case AtributoTipo.NUMERO:
-      case AtributoTipo.BOOLEAN:
-        // No deben tener valores predefinidos
+      case AtributoTipo.COLOR:
+      case AtributoTipo.TALLA:
+      case AtributoTipo.MATERIAL:
+      case AtributoTipo.CAPACIDAD:
+        // Legacy: no son tipos de dato sino NOMBRES de atributo, se comportan
+        // como SELECT y ya no se ofrecen en el selector. Quedan laxos para no
+        // romper filas viejas; no hay ninguna en beta ni en prod.
+        break;
+
+      default:
+        // Todo el resto es de DATO LIBRE: se tipea al editar el producto, no
+        // se elige de una lista. Un tipo nuevo del enum cae acá solo y se
+        // comporta bien; el valor inválido ya lo rechazó el @IsEnum del DTO,
+        // así que este default no necesita hacer de guardia de enum.
         if (valoresArray.length > 0) {
           throw new BadRequestException(
             `El tipo ${tipo} no admite valores predefinidos`,
           );
         }
-        break;
-
-      case AtributoTipo.COLOR:
-      case AtributoTipo.TALLA:
-      case AtributoTipo.MATERIAL:
-      case AtributoTipo.CAPACIDAD:
-        // Pueden tener valores predefinidos (opcional) o no
-        // No hay restricciones adicionales
-        break;
-
-      default:
-        // Esto no debería ocurrir si el enum está actualizado
-        throw new BadRequestException(`Tipo de atributo no reconocido: ${tipo}`);
     }
   }
   /**

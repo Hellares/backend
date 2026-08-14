@@ -633,17 +633,57 @@ enum TipoAfectacionIgv {
   INAFECTO // 30 - Operación Onerosa inafecta
 }
 
-/// Tipos de atributos para productos
+/// Tipos de atributos para productos.
+///
+/// Comparte vocabulario con `TipoCampoServicio` (ver servicio.prisma): las
+/// etiquetas y los íconos de ambos salen de un único catálogo en la app
+/// (`core/constants/tipos_dato.dart`). Los nombres del enum NO se unificaron
+/// a propósito — renombrar SELECT a OPCION_SIMPLES obligaría a migrar filas
+/// vivas de `ProductoAtributo` y de `ConfiguracionCampo` por un cambio que
+/// nadie ve. Lo que el usuario lee sí es idéntico en las dos pantallas.
+///
+/// Quedan FUERA `TABLA` y `OBJETO`: guardan estructura, y el valor de un
+/// atributo es un `String` con índice GIN para los filtros del marketplace
+/// (ver ProductoAtributoValor.valor). Un JSON ahí ensucia el buscador.
+/// 🔴 El ORDEN espeja al de Postgres: `ALTER TYPE ADD VALUE` agrega al final,
+/// así que los nuevos van al final acá también. Reordenarlos para que se lean
+/// lindo genera drift contra la base. El orden del selector NO sale de acá,
+/// sale de `kTiposAtributoProducto` en la app.
 enum AtributoTipo {
-  COLOR // Color con picker
-  TALLA // Tallas predefinidas (XS, S, M, L, XL, etc.)
-  MATERIAL // Material del producto (ej: Algodón, Poliéster)
-  CAPACIDAD // Capacidad (ej: 1TB, 500GB, 64GB)
+  // ── Legacy: no son tipos de dato, son NOMBRES de atributo ─────────────
+  // Se comportaban idéntico a SELECT (mismo input, distinto ícono) y ya no se
+  // ofrecen en el selector. Cero filas los usan en beta y en prod, pero el
+  // valor queda porque borrarlo obliga a recrear el tipo entero.
+  COLOR
+  TALLA
+  MATERIAL
+  CAPACIDAD
+
   TEXTO // Texto libre
   NUMERO // Valor numérico
-  SELECT // Lista desplegable (un solo valor)
-  MULTI_SELECT // Lista desplegable (múltiples valores)
-  BOOLEAN // Sí/No
+  SELECT // Lista desplegable (un solo valor) — "OPCION_SIMPLES" en servicios
+  MULTI_SELECT // Lista desplegable (múltiples valores) — "OPCION_MULTIPLE"
+  BOOLEAN // Sí/No — "CHECKBOX" en servicios
+
+  // ── Traídos de TipoCampoServicio (2026-08-14) ─────────────────────────
+  TEXTO_AREA // Texto largo (descripción, composición, cuidados)
+  MONEDA // Monto en soles
+  EMAIL
+  TELEFONO
+  URL
+  FECHA
+  HORA
+  CODIGO_BARRAS // IMEI, número de serie, SKU del fabricante
+  PIN_CLAVE // Se muestra obscurecido
+  PATRON_DESBLOQUEO // Nodos separados por guion: "1-2-3-6-9"
+  DOCUMENTO_IDENTIDAD // DNI / RUC, con consulta a RENIEC / SUNAT
+  PLACA_VEHICULO // Con consulta de marca, modelo y color
+  LICENCIA_CONDUCIR // Se consulta por DNI del conductor, no por la licencia
+  FOTO // El valor es la URL del storage
+  FIRMA // Idem
+  ARCHIVO // Idem
+  INSPECCION_VISUAL // JSON serializado {silueta, puntos[]}
+  PRODUCTO_CATALOGO // Nombre y precio CONGELADOS de un producto del catálogo
 }
 
 enum EntidadTipo {

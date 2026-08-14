@@ -237,6 +237,7 @@ export class ProductoAtributoValorService {
       // Validar según tipo
       switch (plantilla.tipo) {
         case AtributoTipo.NUMERO:
+        case AtributoTipo.MONEDA:
           if (isNaN(Number(atributo.valor))) {
             throw new BadRequestException(
               `El atributo "${plantilla.nombre}" requiere un valor numérico, recibido: ${atributo.valor}`,
@@ -253,7 +254,6 @@ export class ProductoAtributoValorService {
           break;
 
         case AtributoTipo.SELECT:
-        case AtributoTipo.MULTI_SELECT:
           // Verificar que el valor esté en los valores predefinidos
           if (plantilla.valores.length > 0 && !plantilla.valores.includes(atributo.valor)) {
             throw new BadRequestException(
@@ -261,6 +261,26 @@ export class ProductoAtributoValorService {
             );
           }
           break;
+
+        case AtributoTipo.MULTI_SELECT: {
+          // 🔴 El app manda los elegidos separados por coma ("Rojo,Azul"), así
+          // que compararlos como un solo string rechazaba cualquier selección
+          // de 2+ valores con "solo acepta los valores: ...". Se valida uno
+          // por uno.
+          const elegidos = atributo.valor
+            .split(',')
+            .map(v => v.trim())
+            .filter(v => v.length > 0);
+          const invalidos = plantilla.valores.length > 0
+            ? elegidos.filter(v => !plantilla.valores.includes(v))
+            : [];
+          if (invalidos.length > 0) {
+            throw new BadRequestException(
+              `El atributo "${plantilla.nombre}" solo acepta los valores: ${plantilla.valores.join(', ')}. Recibido: ${invalidos.join(', ')}`,
+            );
+          }
+          break;
+        }
 
         case AtributoTipo.COLOR:
         case AtributoTipo.TALLA:
