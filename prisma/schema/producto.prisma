@@ -91,6 +91,22 @@ model Producto {
   // de productos compuestos (peluches, PCs armadas) en el módulo BOM.
   esInsumo Boolean @default(false)
 
+  /// Plantillas de atributos aplicadas, en el orden en que se muestran.
+  ///
+  /// Son SECCIONES de la ficha técnica: un celular puede traer PROCESADOR,
+  /// MEMORIA, PANTALLA y DISEÑO, y ese mismo DISEÑO lo reusa un peluche sin
+  /// arrastrar nada de procesador. Con una sola plantilla por producto habría
+  /// que crear una por cada tipo repitiendo las partes comunes.
+  ///
+  /// 🔑 Es solo memoria de la UI: los valores viven en `ProductoAtributoValor`
+  /// por atributo, no por plantilla, así que quitar una plantilla no borra lo
+  /// cargado. Sin esto, al reabrir el producto los atributos aparecen sueltos
+  /// y no se sabe en qué secciones agruparlos.
+  ///
+  /// Va como array de ids y no como tabla puente por lo mismo que
+  /// `ProductoAtributo.categoriaIds`: no hay nada que colgar de la relación.
+  plantillasAtributosIds String[] @default([])
+
   // Configuración de precios por volumen
   configuracionPrecioId String?
 

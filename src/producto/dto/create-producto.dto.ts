@@ -272,6 +272,20 @@ export class CreateProductoDto {
 
   @ApiPropertyOptional({
     description:
+      'Plantillas de atributos aplicadas, en el orden en que se muestran. Son ' +
+      'SECCIONES de la ficha técnica (PROCESADOR, MEMORIA, PANTALLA…). Los ' +
+      'valores viven por atributo, así que quitar una plantilla no borra nada.',
+    example: ['plantilla-procesador-id', 'plantilla-memoria-id'],
+    isArray: true,
+    type: String,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  plantillasAtributosIds?: string[];
+
+  @ApiPropertyOptional({
+    description:
       'El producto pide un identificador por unidad AL VENDER (IMEI, N° de ' +
       'serie, placa). El stock sigue siendo genérico: el dato se tipea en el ' +
       'carrito y el servidor lo sella en la descripción de la línea, que es ' +
