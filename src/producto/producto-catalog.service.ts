@@ -605,6 +605,59 @@ export class ProductoCatalogService {
   /**
    * Construye la cláusula WHERE para filtrado de productos
    */
+  /**
+   * Traduce `["fabricante:QUALCOMM", "fabricante:SAMSUNG", "ram:8GB"]` a
+   * condiciones Prisma.
+   *
+   * Claves distintas se combinan con **Y** (quiero Qualcomm Y 8GB); varios
+   * valores de la misma clave, con **O** (Qualcomm O Samsung). Es el
+   * comportamiento que espera cualquiera que haya usado un filtro de tienda.
+   *
+   * 🔑 El valor puede estar en el producto base **o** en alguna de sus
+   * variantes: un producto con variantes no guarda los atributos en sí mismo,
+   * los guarda cada variante. Buscar solo en el producto no encontraría nada
+   * justamente en los catálogos con variantes, que son los que más filtran.
+   */
+  private condicionesPorAtributo(
+    atributos: string[] | undefined,
+  ): Prisma.ProductoWhereInput[] {
+    if (!atributos || atributos.length === 0) return [];
+
+    const porClave = new Map<string, string[]>();
+    for (const entrada of atributos) {
+      // Split en el PRIMER ':' — un valor bien puede traer otro adentro.
+      const corte = entrada.indexOf(':');
+      if (corte <= 0) continue;
+      const clave = entrada.slice(0, corte).trim();
+      const valor = entrada.slice(corte + 1).trim();
+      if (!clave || !valor) continue;
+      const actuales = porClave.get(clave) ?? [];
+      actuales.push(valor);
+      porClave.set(clave, actuales);
+    }
+
+    return Array.from(porClave.entries()).map(([clave, valores]) => ({
+      OR: [
+        {
+          atributosValores: {
+            some: { atributo: { clave }, valor: { in: valores } },
+          },
+        },
+        {
+          variantes: {
+            some: {
+              isActive: true,
+              deletedAt: null,
+              atributosValores: {
+                some: { atributo: { clave }, valor: { in: valores } },
+              },
+            },
+          },
+        },
+      ],
+    }));
+  }
+
   async buildWhereClause(empresaId: string, filters: QueryProductoDto): Promise<Prisma.ProductoWhereInput> {
     const where: Prisma.ProductoWhereInput = {
       empresaId,
@@ -648,6 +701,21 @@ export class ProductoCatalogService {
       } else if (porPalabras.length > 0) {
         where.AND = porPalabras;
       }
+    }
+
+    // Filtro por valor de atributo (fabricante:QUALCOMM, procesador:8 Gen 3).
+    //
+    // 🔴 Se SUMA a `where.AND`, nunca lo pisa: la búsqueda por texto de más
+    // arriba ya lo usa para exigir que cada palabra aparezca, y asignarlo
+    // acá la borraría sin que nadie lo note.
+    const condicionesAtributos = this.condicionesPorAtributo(filters.atributos);
+    if (condicionesAtributos.length > 0) {
+      const previas = where.AND
+        ? Array.isArray(where.AND)
+          ? where.AND
+          : [where.AND]
+        : [];
+      where.AND = [...previas, ...condicionesAtributos];
     }
 
     // Filtros específicos

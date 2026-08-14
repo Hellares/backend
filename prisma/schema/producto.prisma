@@ -430,9 +430,24 @@ model ProductoAtributo {
   descripcion String?
   unidad      String? // "MHz", "GB", "mm", "W" - para valores numéricos
 
-  // Valores posibles (solo para tipos SELECT y MULTI_SELECT)
-  // Ejemplo: ["Negro", "Blanco", "Rojo"] para Color
-  // Ejemplo: ["AM4", "AM5", "LGA1700"] para Socket
+  /// Atributo del que DEPENDE este (null = es raíz de la cadena).
+  ///
+  /// Con `tipo = SELECT_DEPENDIENTE`, las opciones de este atributo cuelgan de
+  /// las del padre: elegido QUALCOMM en FABRICANTE, FAMILIA solo ofrece las
+  /// familias de Qualcomm. La cadena puede tener los eslabones que quiera
+  /// (FABRICANTE → FAMILIA → PROCESADOR) porque cada uno apunta al suyo.
+  dependeDeAtributoId String?
+
+  /// 🔴 ESPEJO DENORMALIZADO de `opciones`, NO la fuente de verdad.
+  ///
+  /// La fuente es `ProductoAtributoOpcion`, que es la única que sabe de qué
+  /// valor del padre cuelga cada opción. Esta lista plana se regenera en la
+  /// MISMA transacción cada vez que se escriben las opciones, y existe solo
+  /// para que todo lo que ya la leía siga funcionando sin cambios: el
+  /// generador de combinaciones, la edición masiva, el sheet de variantes,
+  /// el marketplace y la web.
+  ///
+  /// Nadie debe escribirla por fuera de `ProductoAtributoService`.
   valores String[] @default([])
 
   // Configuración de visualización
@@ -450,14 +465,60 @@ model ProductoAtributo {
   empresa             Empresa                 @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   valoresProductos    ProductoAtributoValor[]
   plantillasAtributos PlantillaAtributo[] // Atributos que pertenecen a plantillas
+  opciones            ProductoAtributoOpcion[]
+
+  /// Borrar el padre de una cadena NO borra al hijo: lo deja suelto (SetNull) y
+  /// el hijo pasa a comportarse como una selección común con todas sus
+  /// opciones. Cascade habría borrado el atributo entero —y con él los valores
+  /// ya cargados en los productos— por desarmar la dependencia.
+  dependeDe    ProductoAtributo?  @relation("AtributoDependencia", fields: [dependeDeAtributoId], references: [id], onDelete: SetNull)
+  dependientes ProductoAtributo[] @relation("AtributoDependencia")
 
   @@unique([empresaId, clave])
   @@index([empresaId])
   @@index([tipo])
   @@index([isActive])
   @@index([clave])
+  @@index([dependeDeAtributoId])
   // GIN trigram para ILIKE '%texto%' — ver feedback_prisma_drop_gin_trgm_drift.md
   @@index([nombre(ops: raw("gin_trgm_ops"))], type: Gin, map: "ProductoAtributo_nombre_trgm_idx")
+}
+
+/// Una opción elegible de un atributo, y de qué opción del atributo padre
+/// cuelga.
+///
+/// Es la FUENTE DE VERDAD de los valores posibles; `ProductoAtributo.valores`
+/// es un espejo plano que se regenera desde acá.
+///
+/// El padre se referencia por **id**, no por texto, justamente para que
+/// renombrar una opción no huerfanice a sus hijos — que es lo que pasa hoy
+/// cuando se renombra un valor de atributo a mano.
+model ProductoAtributoOpcion {
+  id         String  @id @default(cuid())
+  atributoId String
+  valor      String // "QUALCOMM", "Snapdragon 8 Gen", "8 Gen 3"
+
+  /// Opción del atributo PADRE de la que cuelga. Null en los atributos raíz.
+  padreId String?
+
+  orden    Int     @default(0)
+  isActive Boolean @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  atributo ProductoAtributo @relation(fields: [atributoId], references: [id], onDelete: Cascade)
+
+  /// Borrar una opción se lleva a sus hijas: sin QUALCOMM no tiene sentido que
+  /// quede "Snapdragon 8 Gen" colgando de la nada. Los valores YA cargados en
+  /// los productos no se tocan — son snapshots de texto en
+  /// `ProductoAtributoValor`, igual que el historial de ventas.
+  padre ProductoAtributoOpcion?  @relation("OpcionJerarquia", fields: [padreId], references: [id], onDelete: Cascade)
+  hijos ProductoAtributoOpcion[] @relation("OpcionJerarquia")
+
+  @@unique([atributoId, valor])
+  @@index([atributoId])
+  @@index([padreId])
 }
 
 /// Valores de atributos para productos y variantes
@@ -684,6 +745,13 @@ enum AtributoTipo {
   ARCHIVO // Idem
   INSPECCION_VISUAL // JSON serializado {silueta, puntos[]}
   PRODUCTO_CATALOGO // Nombre y precio CONGELADOS de un producto del catálogo
+
+  /// Selección cuyas opciones dependen del valor elegido en el atributo padre
+  /// (`dependeDeAtributoId`). Se gana ser un tipo y no una casilla porque
+  /// cambia las tres cosas: la captura (bloqueada hasta que el padre tenga
+  /// valor), la validación (el valor tiene que pertenecer a la rama del padre)
+  /// y la generación de variantes (poda el producto cartesiano).
+  SELECT_DEPENDIENTE
 }
 
 enum EntidadTipo {

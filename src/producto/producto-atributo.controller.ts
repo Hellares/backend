@@ -59,6 +59,24 @@ export class ProductoAtributoController {
   }
 
   /**
+   * Atributos que el buscador puede ofrecer como filtro, con sus opciones.
+   * GET /producto-atributos/filtros?categoriaId=...
+   *
+   * Va ANTES de `@Get(':id')`: Nest resuelve por orden de declaración y si
+   * quedara después, "filtros" entraría como si fuera un id.
+   */
+  @Get('filtros')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({ summary: 'Atributos disponibles como filtro, con sus opciones' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async filtrosDisponibles(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('categoriaId') categoriaId?: string,
+  ): Promise<ProductoAtributoResponse[]> {
+    return this.atributoService.filtrosDisponibles(empresaId, categoriaId);
+  }
+
+  /**
    * Obtener atributos por categoría
    * GET /producto-atributos/categoria/:categoriaId
    */

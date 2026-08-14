@@ -2,9 +2,17 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
-import { CreateProductoAtributoDto } from './dto/create-producto-atributo.dto';
+import { CreateProductoAtributoDto, OpcionAtributoDto } from './dto/create-producto-atributo.dto';
 import { UpdateProductoAtributoDto } from './dto/update-producto-atributo.dto';
-import { AtributoTipo } from '@prisma/client';
+import { AtributoTipo, Prisma } from '@prisma/client';
+
+export interface OpcionAtributoResponse {
+  id: string;
+  valor: string;
+  /** Valor del atributo PADRE del que cuelga. Null en los atributos raíz. */
+  padreValor: string | null;
+  orden: number;
+}
 
 export interface ProductoAtributoResponse {
   id: string;
@@ -17,6 +25,9 @@ export interface ProductoAtributoResponse {
   descripcion?: string;
   unidad?: string;
   valores: string[];
+  /** Las opciones con su jerarquía. Vacío en los tipos que no llevan lista. */
+  opciones: OpcionAtributoResponse[];
+  dependeDeAtributoId: string | null;
   orden: number;
   mostrarEnListado: boolean;
   usarParaFiltros: boolean;
@@ -25,6 +36,17 @@ export interface ProductoAtributoResponse {
   creadoEn: Date;
   actualizadoEn: Date;
 }
+
+/** Cuántos eslabones se admiten en una cadena, como red contra un ciclo que se escape. */
+const MAX_PROFUNDIDAD_DEPENDENCIA = 10;
+
+/** Las opciones siempre se leen con el valor de su padre resuelto. */
+const INCLUIR_OPCIONES = {
+  opciones: {
+    orderBy: { orden: 'asc' as const },
+    include: { padre: { select: { valor: true } } },
+  },
+};
 
 @Injectable()
 export class ProductoAtributoService {
@@ -103,47 +125,93 @@ export class ProductoAtributoService {
       if (existing.isActive) {
         throw new ConflictException(`Ya existe un atributo con la clave: ${dto.clave}`);
       }
-      // Reactivar atributo soft-deleted actualizando sus datos
-      const reactivado = await this.prisma.productoAtributo.update({
-        where: { id: existing.id },
+      // Reactivar atributo soft-deleted actualizando sus datos. Pasa por la
+      // misma sincronización que el alta: si no, quedaba con las opciones
+      // viejas de cuando se lo desactivó y un `valores` que no las refleja.
+      const entradasReactivado = this.opcionesDeDto(dto.opciones, dto.valores);
+      await this.validarDependencia(empresaId, existing.id, dto.tipo, dto.dependeDeAtributoId);
+
+      const reactivado = await this.prisma.$transaction(async (tx) => {
+        await tx.productoAtributo.update({
+          where: { id: existing.id },
+          data: {
+            isActive: true,
+            nombre: dto.nombre,
+            tipo: dto.tipo,
+            requerido: dto.requerido ?? false,
+            descripcion: dto.descripcion,
+            unidad: dto.unidad,
+            dependeDeAtributoId: dto.dependeDeAtributoId ?? null,
+            categoriaIds: dto.categoriaIds ?? [],
+            orden: dto.orden ?? 0,
+            mostrarEnListado: dto.mostrarEnListado ?? true,
+            usarParaFiltros: dto.usarParaFiltros ?? true,
+            mostrarEnMarketplace: dto.mostrarEnMarketplace ?? true,
+          },
+        });
+
+        const valores = await this.sincronizarOpciones(
+          tx,
+          existing.id,
+          dto.dependeDeAtributoId ?? null,
+          entradasReactivado,
+        );
+
+        return tx.productoAtributo.update({
+          where: { id: existing.id },
+          data: { valores },
+          include: INCLUIR_OPCIONES,
+        });
+      });
+
+      this.logger.success('Product attribute reactivated', { atributoId: reactivado.id });
+      return this.mapToResponse(reactivado);
+    }
+
+    // Validar coherencia entre tipo y valores
+    const entradas = this.opcionesDeDto(dto.opciones, dto.valores);
+    this.validateAtributoValues(
+      dto.tipo,
+      entradas.map((o) => o.valor),
+    );
+    await this.validarDependencia(empresaId, null, dto.tipo, dto.dependeDeAtributoId);
+
+    // El alta va en transacción porque son dos pasos: nace el atributo y
+    // recién con su id se pueden colgar las opciones. `valores` se escribe al
+    // final, calculado desde las opciones, para que el espejo no pueda quedar
+    // diciendo algo distinto a la fuente.
+    const atributo = await this.prisma.$transaction(async (tx) => {
+      const creado = await tx.productoAtributo.create({
         data: {
-          isActive: true,
+          empresaId,
+          categoriaIds: dto.categoriaIds ?? [],
           nombre: dto.nombre,
+          clave: dto.clave,
           tipo: dto.tipo,
           requerido: dto.requerido ?? false,
           descripcion: dto.descripcion,
           unidad: dto.unidad,
-          valores: dto.valores ?? [],
-          categoriaIds: dto.categoriaIds ?? [],
+          dependeDeAtributoId: dto.dependeDeAtributoId ?? null,
+          valores: [],
           orden: dto.orden ?? 0,
           mostrarEnListado: dto.mostrarEnListado ?? true,
           usarParaFiltros: dto.usarParaFiltros ?? true,
           mostrarEnMarketplace: dto.mostrarEnMarketplace ?? true,
         },
       });
-      this.logger.success('Product attribute reactivated', { atributoId: reactivado.id });
-      return this.mapToResponse(reactivado);
-    }
 
-    // Validar coherencia entre tipo y valores
-    this.validateAtributoValues(dto.tipo, dto.valores);
+      const valores = await this.sincronizarOpciones(
+        tx,
+        creado.id,
+        creado.dependeDeAtributoId,
+        entradas,
+      );
 
-    const atributo = await this.prisma.productoAtributo.create({
-      data: {
-        empresaId,
-        categoriaIds: dto.categoriaIds ?? [],
-        nombre: dto.nombre,
-        clave: dto.clave,
-        tipo: dto.tipo,
-        requerido: dto.requerido ?? false,
-        descripcion: dto.descripcion,
-        unidad: dto.unidad,
-        valores: dto.valores ?? [],
-        orden: dto.orden ?? 0,
-        mostrarEnListado: dto.mostrarEnListado ?? true,
-        usarParaFiltros: dto.usarParaFiltros ?? true,
-        mostrarEnMarketplace: dto.mostrarEnMarketplace ?? true,
-      },
+      return tx.productoAtributo.update({
+        where: { id: creado.id },
+        data: { valores },
+        include: INCLUIR_OPCIONES,
+      });
     });
 
     this.logger.success('Product attribute created', { atributoId: atributo.id });
@@ -162,6 +230,7 @@ export class ProductoAtributoService {
         empresaId,
         ...(includeInactive ? {} : { isActive: true }),
       },
+      include: INCLUIR_OPCIONES,
       orderBy: { orden: 'asc' },
       take: 200, // Límite de seguridad
     });
@@ -181,7 +250,46 @@ export class ProductoAtributoService {
         categoriaIds: { has: categoriaId },
         isActive: true,
       },
+      include: INCLUIR_OPCIONES,
       orderBy: { orden: 'asc' },
+    });
+
+    return atributos.map((a) => this.mapToResponse(a));
+  }
+
+  /**
+   * Los atributos que el buscador puede ofrecer como filtro.
+   *
+   * Solo los que se eligen de una lista: filtrar por un texto libre o una
+   * fecha no es una faceta, es otra clase de filtro. Vienen con sus opciones y
+   * con `dependeDeAtributoId`, que es lo que le permite a la pantalla mostrar
+   * FABRICANTE → FAMILIA → PROCESADOR en cascada y no como tres listas sueltas.
+   *
+   * No trae conteos a propósito: contar productos por cada valor obliga a un
+   * groupBy por atributo y el catálogo se pagina igual. Si más adelante hacen
+   * falta, van en su propio endpoint.
+   */
+  async filtrosDisponibles(
+    empresaId: string,
+    categoriaId?: string,
+  ): Promise<ProductoAtributoResponse[]> {
+    const atributos = await this.prisma.productoAtributo.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        usarParaFiltros: true,
+        tipo: {
+          in: [
+            AtributoTipo.SELECT,
+            AtributoTipo.MULTI_SELECT,
+            AtributoTipo.SELECT_DEPENDIENTE,
+          ],
+        },
+        ...(categoriaId ? { categoriaIds: { has: categoriaId } } : {}),
+      },
+      include: INCLUIR_OPCIONES,
+      orderBy: { orden: 'asc' },
+      take: 200,
     });
 
     return atributos.map((a) => this.mapToResponse(a));
@@ -199,6 +307,7 @@ export class ProductoAtributoService {
         empresaId,
         isActive: true,
       },
+      include: INCLUIR_OPCIONES,
     });
 
     if (!atributo) {
@@ -248,8 +357,27 @@ export class ProductoAtributoService {
 
     // Determinar tipo y valores para validación
     const tipoParaValidar = dto.tipo ?? existing.tipo;
-    const valoresParaValidar = dto.valores ?? existing.valores;
+    const tocaOpciones = dto.opciones !== undefined || dto.valores !== undefined;
+    const entradas = tocaOpciones
+      ? this.opcionesDeDto(dto.opciones, dto.valores)
+      : null;
+    const valoresParaValidar = entradas
+      ? entradas.map((o) => o.valor)
+      : existing.valores;
     this.validateAtributoValues(tipoParaValidar, valoresParaValidar);
+
+    // `dependeDeAtributoId` admite null explícito para desarmar la cadena, así
+    // que hay que distinguir "no vino" de "vino en null".
+    const dependeDeParaValidar =
+      dto.dependeDeAtributoId !== undefined
+        ? dto.dependeDeAtributoId
+        : existing.dependeDeAtributoId;
+    await this.validarDependencia(
+      empresaId,
+      atributoId,
+      tipoParaValidar,
+      dependeDeParaValidar,
+    );
 
     // Update + cascada de rename en UNA transacción: si la cascada falla,
     // el cambio de la lista de opciones también se revierte (antes el
@@ -266,7 +394,9 @@ export class ProductoAtributoService {
           ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
           ...(dto.unidad !== undefined && { unidad: dto.unidad }),
           ...(dto.categoriaIds !== undefined && { categoriaIds: dto.categoriaIds }),
-          ...(dto.valores && { valores: dto.valores }),
+          ...(dto.dependeDeAtributoId !== undefined && {
+            dependeDeAtributoId: dto.dependeDeAtributoId,
+          }),
           ...(dto.orden !== undefined && { orden: dto.orden }),
           ...(dto.mostrarEnListado !== undefined && { mostrarEnListado: dto.mostrarEnListado }),
           ...(dto.usarParaFiltros !== undefined && { usarParaFiltros: dto.usarParaFiltros }),
@@ -283,9 +413,9 @@ export class ProductoAtributoService {
       // detecta un rename simple (un valor sale, uno entra) y se propaga a todas
       // las asignaciones. Cambios múltiples no se cascadean (ambigüedad).
       let rename: { de: string; a: string; count: number } | null = null;
-      if (dto.valores) {
+      if (entradas) {
         const viejos = existing.valores ?? [];
-        const nuevos = dto.valores;
+        const nuevos = entradas.map((o) => o.valor);
         const removidos = viejos.filter((v) => !nuevos.includes(v));
         const agregados = nuevos.filter((v) => !viejos.includes(v));
         if (removidos.length === 1 && agregados.length === 1) {
@@ -294,6 +424,18 @@ export class ProductoAtributoService {
             data: { valor: agregados[0] },
           });
           rename = { de: removidos[0], a: agregados[0], count: res.count };
+
+          // 🔴 La OPCIÓN también se renombra en su lugar, y ANTES de
+          // sincronizar. Si no, el sincronizador la ve como "una que sale y
+          // otra que entra": borra la vieja y el cascade del FK se lleva
+          // TODAS sus hijas. Renombrar QUALCOMM borraría sus procesadores.
+          //
+          // Esto solo hace falta cuando el cliente manda la lista plana. Si
+          // manda `opciones` con id, el apareo por id ya resuelve el rename.
+          await tx.productoAtributoOpcion.updateMany({
+            where: { atributoId, valor: removidos[0] },
+            data: { valor: agregados[0] },
+          });
         } else if (removidos.length > 0 && agregados.length > 0) {
           this.logger.warn(
             `Cambio múltiple de valores en atributo ${atributoId} ` +
@@ -301,9 +443,25 @@ export class ProductoAtributoService {
               `No se aplica cascada automática para evitar ambigüedad.`,
           );
         }
+
+        const valores = await this.sincronizarOpciones(
+          tx,
+          atributoId,
+          atributo.dependeDeAtributoId,
+          entradas,
+        );
+        await tx.productoAtributo.update({
+          where: { id: atributoId },
+          data: { valores },
+        });
       }
 
-      return { atributo, rename };
+      const conOpciones = await tx.productoAtributo.findUniqueOrThrow({
+        where: { id: atributoId },
+        include: INCLUIR_OPCIONES,
+      });
+
+      return { atributo: conOpciones, rename };
     });
 
     this.logger.success('Attribute updated', { atributoId });
@@ -391,6 +549,7 @@ export class ProductoAtributoService {
     switch (tipo) {
       case AtributoTipo.SELECT:
       case AtributoTipo.MULTI_SELECT:
+      case AtributoTipo.SELECT_DEPENDIENTE:
         // Debe tener al menos un valor predefinido
         if (valoresArray.length === 0) {
           throw new BadRequestException(
@@ -429,6 +588,166 @@ export class ProductoAtributoService {
   /**
    * Mapear a response
    */
+  /**
+   * Deja las opciones del atributo igual a lo que llegó, y devuelve la lista
+   * plana con la que se regenera el espejo `valores`.
+   *
+   * 🔑 El apareo va primero por `id` y recién después por `valor`. Con el id,
+   * renombrar una opción la actualiza EN SU LUGAR y sus hijas la siguen
+   * apuntando; sin él, un rename se ve como "una que sale y otra que entra" y
+   * el borrado se lleva la rama entera por el cascade del FK.
+   */
+  private async sincronizarOpciones(
+    tx: Prisma.TransactionClient,
+    atributoId: string,
+    dependeDeAtributoId: string | null,
+    entradas: OpcionAtributoDto[],
+  ): Promise<string[]> {
+    const existentes = await tx.productoAtributoOpcion.findMany({
+      where: { atributoId },
+    });
+    const porId = new Map(existentes.map((o) => [o.id, o]));
+    const porValor = new Map(existentes.map((o) => [o.valor, o]));
+
+    // Las opciones del padre, para resolver `padreValor` → id.
+    const opcionesPadre = dependeDeAtributoId
+      ? await tx.productoAtributoOpcion.findMany({
+          where: { atributoId: dependeDeAtributoId },
+        })
+      : [];
+    const padrePorValor = new Map(opcionesPadre.map((o) => [o.valor, o.id]));
+
+    const conservados = new Set<string>();
+    const valores: string[] = [];
+    let orden = 0;
+
+    for (const entrada of entradas) {
+      const valor = entrada.valor?.trim();
+      if (!valor) continue;
+
+      let padreId: string | null = null;
+      if (dependeDeAtributoId) {
+        if (!entrada.padreValor) {
+          throw new BadRequestException(
+            `La opción "${valor}" no dice de qué valor del atributo padre cuelga`,
+          );
+        }
+        padreId = padrePorValor.get(entrada.padreValor) ?? null;
+        if (!padreId) {
+          throw new BadRequestException(
+            `El atributo padre no tiene la opción "${entrada.padreValor}"`,
+          );
+        }
+      }
+
+      const actual = (entrada.id && porId.get(entrada.id)) || porValor.get(valor);
+      if (actual) {
+        conservados.add(actual.id);
+        await tx.productoAtributoOpcion.update({
+          where: { id: actual.id },
+          data: { valor, padreId, orden: entrada.orden ?? orden },
+        });
+      } else {
+        const creada = await tx.productoAtributoOpcion.create({
+          data: { atributoId, valor, padreId, orden: entrada.orden ?? orden },
+        });
+        conservados.add(creada.id);
+      }
+
+      valores.push(valor);
+      orden++;
+    }
+
+    const aBorrar = existentes
+      .filter((o) => !conservados.has(o.id))
+      .map((o) => o.id);
+    if (aBorrar.length > 0) {
+      await tx.productoAtributoOpcion.deleteMany({ where: { id: { in: aBorrar } } });
+    }
+
+    return valores;
+  }
+
+  /**
+   * Valida que la dependencia declarada sea sana antes de guardarla.
+   *
+   * `atributoId` es null al crear (todavía no existe), y en ese caso no hace
+   * falta buscar ciclos: un atributo recién nacido no puede ser el padre de
+   * nadie.
+   */
+  private async validarDependencia(
+    empresaId: string,
+    atributoId: string | null,
+    tipo: AtributoTipo,
+    dependeDeAtributoId: string | null | undefined,
+  ): Promise<void> {
+    if (tipo === AtributoTipo.SELECT_DEPENDIENTE && !dependeDeAtributoId) {
+      throw new BadRequestException(
+        'Una selección dependiente necesita el atributo del que depende',
+      );
+    }
+    if (!dependeDeAtributoId) return;
+
+    if (tipo !== AtributoTipo.SELECT_DEPENDIENTE) {
+      throw new BadRequestException(
+        'Solo una selección dependiente puede declarar un atributo padre',
+      );
+    }
+    if (atributoId && dependeDeAtributoId === atributoId) {
+      throw new BadRequestException('Un atributo no puede depender de sí mismo');
+    }
+
+    const padre = await this.prisma.productoAtributo.findFirst({
+      where: { id: dependeDeAtributoId, empresaId },
+    });
+    if (!padre) {
+      throw new BadRequestException('El atributo padre no existe en esta empresa');
+    }
+    // Con un padre de selección múltiple el producto puede tener DOS valores a
+    // la vez y no habría forma de saber qué rama ofrecer abajo.
+    if (padre.tipo === AtributoTipo.MULTI_SELECT) {
+      throw new BadRequestException(
+        `"${padre.nombre}" es de selección múltiple y no puede ser padre: si un producto tiene dos valores a la vez, no se sabe qué opciones mostrar`,
+      );
+    }
+    if (
+      padre.tipo !== AtributoTipo.SELECT &&
+      padre.tipo !== AtributoTipo.SELECT_DEPENDIENTE
+    ) {
+      throw new BadRequestException(
+        `"${padre.nombre}" no tiene lista de valores, así que no puede ser padre de una selección dependiente`,
+      );
+    }
+
+    // Subir por la cadena hasta la raíz buscando volver al punto de partida.
+    let cursorId: string | null = padre.dependeDeAtributoId;
+    let saltos = 0;
+    while (cursorId) {
+      if (atributoId && cursorId === atributoId) {
+        throw new BadRequestException(
+          'Esa dependencia arma un ciclo: el atributo terminaría dependiendo de sí mismo',
+        );
+      }
+      if (++saltos > MAX_PROFUNDIDAD_DEPENDENCIA) {
+        throw new BadRequestException('La cadena de dependencias es demasiado larga');
+      }
+      const siguiente = await this.prisma.productoAtributo.findUnique({
+        where: { id: cursorId },
+        select: { dependeDeAtributoId: true },
+      });
+      cursorId = siguiente?.dependeDeAtributoId ?? null;
+    }
+  }
+
+  /** Las opciones que manda el cliente, o la lista plana si mandó `valores` a la vieja usanza. */
+  private opcionesDeDto(
+    opciones: OpcionAtributoDto[] | undefined,
+    valores: string[] | undefined,
+  ): OpcionAtributoDto[] {
+    if (opciones) return opciones;
+    return (valores ?? []).map((valor) => ({ valor }));
+  }
+
   private mapToResponse(atributo: any): ProductoAtributoResponse {
     return {
       id: atributo.id,
@@ -441,6 +760,16 @@ export class ProductoAtributoService {
       descripcion: atributo.descripcion,
       unidad: atributo.unidad,
       valores: atributo.valores,
+      opciones: (atributo.opciones ?? [])
+        .slice()
+        .sort((a: any, b: any) => a.orden - b.orden)
+        .map((o: any) => ({
+          id: o.id,
+          valor: o.valor,
+          padreValor: o.padre?.valor ?? null,
+          orden: o.orden,
+        })),
+      dependeDeAtributoId: atributo.dependeDeAtributoId ?? null,
       orden: atributo.orden,
       mostrarEnListado: atributo.mostrarEnListado,
       usarParaFiltros: atributo.usarParaFiltros,

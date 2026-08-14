@@ -229,6 +229,29 @@ export class ProductoAtributoValorService {
       );
     }
 
+    // Un valor de atributo DEPENDIENTE tiene que pertenecer a la rama del
+    // valor elegido en su padre. Se resuelve con una sola consulta: las
+    // opciones de todos los dependientes que vengan en el payload, con el
+    // valor de su opción padre resuelto.
+    const dependientes = atributosExistentes.filter(
+      (a) => a.tipo === AtributoTipo.SELECT_DEPENDIENTE && a.dependeDeAtributoId,
+    );
+    const opcionesPorAtributo = new Map<string, Map<string, string | null>>();
+    if (dependientes.length > 0) {
+      const opciones = await this.prisma.productoAtributoOpcion.findMany({
+        where: { atributoId: { in: dependientes.map((a) => a.id) } },
+        select: { atributoId: true, valor: true, padre: { select: { valor: true } } },
+      });
+      for (const o of opciones) {
+        if (!opcionesPorAtributo.has(o.atributoId)) {
+          opcionesPorAtributo.set(o.atributoId, new Map());
+        }
+        opcionesPorAtributo.get(o.atributoId)!.set(o.valor, o.padre?.valor ?? null);
+      }
+    }
+    // Lo que el payload asigna a cada atributo, para saber qué eligió el padre.
+    const valorPorAtributo = new Map(atributos.map((a) => [a.atributoId, a.valor]));
+
     // Validar que los valores sean coherentes con el tipo de atributo
     for (const atributo of atributos) {
       const plantilla = existentesMap.get(atributo.atributoId);
@@ -277,6 +300,32 @@ export class ProductoAtributoValorService {
           if (invalidos.length > 0) {
             throw new BadRequestException(
               `El atributo "${plantilla.nombre}" solo acepta los valores: ${plantilla.valores.join(', ')}. Recibido: ${invalidos.join(', ')}`,
+            );
+          }
+          break;
+        }
+
+        case AtributoTipo.SELECT_DEPENDIENTE: {
+          const opciones = opcionesPorAtributo.get(plantilla.id);
+          if (!opciones || opciones.size === 0) break;
+
+          const padreDeLaOpcion = opciones.get(atributo.valor);
+          if (padreDeLaOpcion === undefined) {
+            throw new BadRequestException(
+              `El atributo "${plantilla.nombre}" no tiene la opción "${atributo.valor}"`,
+            );
+          }
+
+          // El padre puede no venir en este payload (edición parcial de un
+          // producto que ya lo tenía). Sin ese dato no hay contra qué comparar
+          // y se acepta: el valor ya se validó contra la lista de opciones.
+          const valorDelPadre = valorPorAtributo.get(plantilla.dependeDeAtributoId!);
+          if (valorDelPadre === undefined) break;
+
+          if (padreDeLaOpcion !== valorDelPadre) {
+            throw new BadRequestException(
+              `"${atributo.valor}" no corresponde a "${valorDelPadre}" en "${plantilla.nombre}"` +
+                (padreDeLaOpcion ? `, sino a "${padreDeLaOpcion}"` : ''),
             );
           }
           break;

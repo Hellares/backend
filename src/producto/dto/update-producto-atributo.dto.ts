@@ -7,9 +7,11 @@ import {
   IsArray,
   IsNumber,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AtributoTipo } from '@prisma/client';
+import { OpcionAtributoDto } from './create-producto-atributo.dto';
 
 export class UpdateProductoAtributoDto {
   @IsString()
@@ -49,6 +51,18 @@ export class UpdateProductoAtributoDto {
   @IsNotEmpty({ each: true })
   @IsOptional()
   valores?: string[];
+
+  /** Ver `CreateProductoAtributoDto.opciones`: si viene, manda sobre `valores`. */
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OpcionAtributoDto)
+  @IsOptional()
+  opciones?: OpcionAtributoDto[];
+
+  /** `null` explícito desarma la dependencia y deja el atributo como raíz. */
+  @IsString()
+  @IsOptional()
+  dependeDeAtributoId?: string | null;
 
   @IsNumber()
   @Type(() => Number)
