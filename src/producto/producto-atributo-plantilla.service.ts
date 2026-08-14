@@ -455,7 +455,19 @@ export class ProductoAtributoPlantillaService {
         atributoId: pa.atributoId,
         orden: pa.orden,
         requeridoOverride: pa.requeridoOverride,
-        valoresOverride: pa.valoresOverride,
+        // 🔴 Un override VACÍO significa "sin restricción, valen todos". Se
+        // devuelve como null y no como `[]` porque son cosas distintas: `[]`
+        // se lee como "cero valores elegidos".
+        //
+        // La columna es un `String[]` de Postgres y no admite null, así que la
+        // normalización va acá. Sin esto, la pantalla de editar plantilla
+        // mostraba "0/3 val." y abría el selector con todo desmarcado en
+        // plantillas donde nunca se restringió nada — que son todas, porque el
+        // create guarda `valoresOverride ?? []`.
+        valoresOverride:
+          pa.valoresOverride && pa.valoresOverride.length > 0
+            ? pa.valoresOverride
+            : null,
         atributo: {
           id: pa.atributo.id,
           nombre: pa.atributo.nombre,
