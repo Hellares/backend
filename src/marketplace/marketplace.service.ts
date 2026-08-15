@@ -977,6 +977,11 @@ export class MarketplaceService {
       atributos: producto.atributosValores
         .filter((a) => a.atributo.mostrarEnMarketplace)
         .map((a) => ({ nombre: a.atributo.nombre, valor: a.valor })),
+      // Los mismos atributos, agrupados en las secciones con las que se
+      // cargaron. Se arman ACÁ y no en el navegador: el marketplace es público
+      // y no puede andar pidiendo plantillas y cruzándolas del lado del
+      // cliente. `atributos` se mantiene por compatibilidad y como respaldo.
+      seccionesAtributos: await this._seccionesDeAtributos(producto),
       empresa: {
         id: producto.empresa.id,
         nombre: producto.empresa.configuracionDocumentos?.nombreComercial || producto.empresa.nombre,
@@ -1016,6 +1021,73 @@ export class MarketplaceService {
    * de empresas visibles: un atributo interno no tiene por qué asomar al
    * público.
    */
+  /**
+   * Los atributos del producto repartidos en las secciones con las que se
+   * cargaron: PROCESADOR, MEMORIA, PANTALLA, DISEÑO.
+   *
+   * Devuelve `[]` si el producto no tiene secciones guardadas —los de antes de
+   * que existieran— y ahí el cliente cae a la lista plana de `atributos`.
+   *
+   * 🔑 Los SUELTOS van igual, bajo "Otras": un atributo cargado a mano, o de
+   * una plantilla que después se quitó, sigue siendo un dato del producto.
+   * Esconderlo sería peor que no agruparlo.
+   */
+  private async _seccionesDeAtributos(producto: any) {
+    const ids: string[] = producto.plantillasAtributosIds ?? [];
+    const visibles = (producto.atributosValores ?? []).filter(
+      (a: any) => a.atributo.mostrarEnMarketplace,
+    );
+    if (visibles.length === 0) return [];
+
+    const plantillas = ids.length
+      ? await this.prisma.productoAtributoPlantilla.findMany({
+          where: { id: { in: ids }, isActive: true },
+          select: {
+            id: true,
+            nombre: true,
+            atributos: {
+              select: { atributoId: true, orden: true },
+              orderBy: { orden: 'asc' },
+            },
+          },
+        })
+      : [];
+
+    // Respetar el orden en que el producto las guardó.
+    plantillas.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+
+    const usados = new Set<string>();
+    const secciones: { nombre: string; atributos: any[] }[] = [];
+
+    for (const pl of plantillas) {
+      const propios: any[] = [];
+      for (const pa of pl.atributos) {
+        const av = visibles.find((v: any) => v.atributoId === pa.atributoId);
+        // `usados` evita repetir un atributo que está en dos plantillas.
+        if (av && !usados.has(pa.atributoId)) {
+          usados.add(pa.atributoId);
+          propios.push({ nombre: av.atributo.nombre, valor: av.valor });
+        }
+      }
+      if (propios.length > 0) {
+        secciones.push({ nombre: pl.nombre, atributos: propios });
+      }
+    }
+
+    const sueltos = visibles
+      .filter((a: any) => !usados.has(a.atributoId))
+      .map((a: any) => ({ nombre: a.atributo.nombre, valor: a.valor }));
+    if (sueltos.length > 0) {
+      secciones.push({ nombre: 'Otras', atributos: sueltos });
+    }
+
+    // Una sola sección "Otras" no es agrupar nada: que el cliente muestre la
+    // lista plana de siempre.
+    if (secciones.length === 1 && secciones[0].nombre === 'Otras') return [];
+
+    return secciones;
+  }
+
   async getFiltrosAtributos(categoriaId?: string) {
     const atributos = await this.prisma.productoAtributo.findMany({
       where: {
