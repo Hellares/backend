@@ -39,17 +39,22 @@ const mkPrisma = (producto: any) => {
   const prisma = {
     producto: { findFirst: jest.fn().mockResolvedValue(producto) },
     productoAtributo: {
-      findMany: jest.fn().mockResolvedValue([
-        {
-          id: 'a1',
-          empresaId: 'e1',
-          isActive: true,
-          tipo: 'TEXTO',
-          nombre: 'Fabricante',
-          valores: [],
-          dependeDeAtributoId: null,
-        },
-      ]),
+      // Respeta el `in` del where: con la ficha vacía tiene que devolver
+      // vacío, o la validación creería que faltan atributos.
+      findMany: jest.fn(async ({ where }: any) => {
+        const pedidos: string[] = where?.id?.in ?? [];
+        return [
+          {
+            id: 'a1',
+            empresaId: 'e1',
+            isActive: true,
+            tipo: 'TEXTO',
+            nombre: 'Fabricante',
+            valores: [],
+            dependeDeAtributoId: null,
+          },
+        ].filter((a) => pedidos.includes(a.id));
+      }),
     },
     $transaction: jest.fn(async (cb: any) => await cb(tx)),
   };
@@ -114,6 +119,32 @@ describe('setProductoAtributos — secciones de la ficha técnica', () => {
     expect(tx.producto.update.mock.calls[0][0].data.plantillasAtributosIds).toEqual([
       'pl-procesador',
     ]);
+  });
+
+  /**
+   * Quitar la última sección desde el formulario manda la ficha VACÍA: es la
+   * única forma de borrar lo que quedó afuera. Tiene que pasar la validación
+   * —que con lista vacía no consulta nada— y llegar al deleteMany.
+   */
+  it('con la ficha vacía borra todo sin romper la validación', async () => {
+    const { prisma, tx } = mkPrisma({
+      id: 'p1',
+      empresaId: 'e1',
+      plantillasAtributosIds: ['pl-procesador'],
+    });
+    tx.productoAtributoValor.findMany.mockResolvedValue([]);
+
+    const res = await svc(prisma).setProductoAtributos('e1', 'p1', {
+      atributos: [],
+    } as any);
+
+    expect(tx.productoAtributoValor.deleteMany).toHaveBeenCalledWith({
+      where: { productoId: 'p1' },
+    });
+    expect(tx.productoAtributoValor.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: [] }),
+    );
+    expect(res).toEqual([]);
   });
 
   /**
