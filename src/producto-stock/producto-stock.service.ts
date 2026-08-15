@@ -371,6 +371,32 @@ export class ProductoStockService {
       }
     }
 
+    // 🔴 Fuera lo BORRADO. El where solo miraba sede y empresa, así que las
+    // filas de stock de variantes soft-deleted seguían saliendo: REDMI 15 PRO
+    // tiene 2 variantes vivas y listaba 14, con stock de sobra (una borrada
+    // con 47 unidades). Cualquiera que sume esas filas obtiene un total que no
+    // existe.
+    //
+    // Una fila de producto se filtra por su producto; una de variante, por la
+    // variante Y por su producto —una variante viva de un producto borrado
+    // tampoco va—.
+    //
+    // 🔴 Se SUMA a `where.AND`, nunca se asigna: la búsqueda por palabras de
+    // arriba ya lo usa, y asignarlo acá la borraría sin que nadie lo note.
+    const soloVivos: Prisma.ProductoStockWhereInput = {
+      OR: [
+        { producto: { deletedAt: null } },
+        { variante: { deletedAt: null, producto: { deletedAt: null } } },
+      ],
+    };
+    if (Array.isArray(where.AND)) {
+      where.AND = [...where.AND, soloVivos];
+    } else if (where.AND) {
+      where.AND = [where.AND, soloVivos];
+    } else {
+      where.AND = [soloVivos];
+    }
+
     const [stocks, total] = await Promise.all([
       this.prisma.productoStock.findMany({
         where,
