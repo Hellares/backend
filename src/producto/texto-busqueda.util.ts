@@ -97,6 +97,16 @@ export function condicionStockPorPalabras(terminos: string[]) {
   return terminos.map((termino) => ({
     OR: [
       { producto: { textoBusqueda: { contains: termino } } },
+      // 🔴 El nombre del PRODUCTO DUEÑO de la variante.
+      //
+      // En una fila de stock de variante el `productoId` es NULL —es el XOR
+      // del modelo: la fila cuelga de la variante, no del producto—, así que
+      // la primera condición nunca matchea ahí. Sin esta, buscar "ALIMENTO
+      // PARA RATON" no devolvía NINGUNA de sus variantes: había que adivinar
+      // el nombre de la variante ("GRANEL"), que además trae las de todos los
+      // productos mezcladas. Las filas eran inalcanzables por nombre de
+      // producto.
+      { variante: { producto: { textoBusqueda: { contains: termino } } } },
       { variante: { nombre: { contains: termino, mode: 'insensitive' as const } } },
       { variante: { sku: { contains: termino, mode: 'insensitive' as const } } },
       {

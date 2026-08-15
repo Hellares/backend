@@ -102,10 +102,24 @@ describe('condicionStockPorPalabras', () => {
     const [cond] = condicionStockPorPalabras(['blanca']);
     expect(cond.OR).toEqual([
       { producto: { textoBusqueda: { contains: 'blanca' } } },
+      { variante: { producto: { textoBusqueda: { contains: 'blanca' } } } },
       { variante: { nombre: { contains: 'blanca', mode: 'insensitive' } } },
       { variante: { sku: { contains: 'blanca', mode: 'insensitive' } } },
       { variante: { codigoBarras: { contains: 'blanca', mode: 'insensitive' } } },
     ]);
+  });
+
+  /**
+   * 🔴 En una fila de stock de VARIANTE el `productoId` es NULL (XOR del
+   * modelo), así que `producto.textoBusqueda` nunca matchea ahí. Sin bajar por
+   * `variante.producto`, buscar el nombre del producto no devolvía ninguna de
+   * sus variantes: había que adivinar el nombre de la variante.
+   */
+  it('llega a las variantes por el nombre de SU producto', () => {
+    const [cond] = condicionStockPorPalabras(['raton']);
+    expect(cond.OR).toContainEqual({
+      variante: { producto: { textoBusqueda: { contains: 'raton' } } },
+    });
   });
 
   it('varias palabras se combinan con AND (una condición por palabra)', () => {
