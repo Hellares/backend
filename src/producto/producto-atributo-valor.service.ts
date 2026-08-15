@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { CacheService } from '../redis/cache.service';
 import { SetProductoAtributosDto, AtributoValorDto } from './dto/create-producto-atributo-valor.dto';
 import { AtributoTipo } from '@prisma/client';
 import {
@@ -30,9 +31,30 @@ export class ProductoAtributoValorService {
   constructor(
     private readonly prisma: PrismaService,
     loggerService: AppLoggerService,
+    private readonly cacheService: CacheService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ProductoAtributoValorService.name);
+  }
+
+  /// El listado de productos vive en Redis 30 minutos (`findAll` es un
+  /// `getOrSet`), así que guardar atributos sin invalidarlo dejaba la ficha
+  /// vieja servida durante media hora.
+  ///
+  /// 🔴 No alcanza con bumpear `Producto.actualizadoEn`: ese sello lo mira el
+  /// delta-sync, que va directo a la base, pero un cliente que hace sync
+  /// COMPLETO —primera carga, snapshot invalidado, `fullSyncRequired`— pasa
+  /// por el cache y se lleva los atributos anteriores. Todos los demás
+  /// servicios del módulo invalidan; este era el único que no.
+  private async invalidarListas(empresaId: string): Promise<void> {
+    try {
+      await this.cacheService.invalidateProductosLists(empresaId);
+    } catch (e) {
+      // Que falle el cache no puede tumbar un guardado que ya se hizo.
+      this.logger.warn(
+        `No se pudo invalidar el cache de productos de ${empresaId}: ${e}`,
+      );
+    }
   }
 
   /**
@@ -60,7 +82,7 @@ export class ProductoAtributoValorService {
     // 🔴 REEMPLAZA: lo que no venga en `dto.atributos` se borra. Es a
     // propósito —así se quita un atributo— pero obliga a que quien llama mande
     // la ficha COMPLETA, no solo los campos que acaba de tocar.
-    return await this.prisma.$transaction(async (tx) => {
+    const resultado = await this.prisma.$transaction(async (tx) => {
       // Eliminar todos los valores existentes del producto
       await tx.productoAtributoValor.deleteMany({
         where: { productoId },
@@ -104,6 +126,11 @@ export class ProductoAtributoValorService {
 
       return valoresCreados.map((v) => this.mapToResponse(v));
     });
+
+    // Fuera de la transacción: si el guardado se confirmó, el cache tiene que
+    // caer aunque la invalidación falle.
+    await this.invalidarListas(empresaId);
+    return resultado;
   }
 
   /**
@@ -129,7 +156,7 @@ export class ProductoAtributoValorService {
     await this.validateAtributos(empresaId, dto.atributos);
 
     // Usar transacción para asegurar atomicidad
-    return await this.prisma.$transaction(async (tx) => {
+    const resultado = await this.prisma.$transaction(async (tx) => {
       // Los valores de ANTES, para saber si el nombre actual lo generamos
       // nosotros o lo escribió alguien a mano.
       const valoresPrevios = await tx.productoAtributoValor.findMany({
@@ -213,6 +240,9 @@ export class ProductoAtributoValorService {
 
       return valoresCreados.map((v) => this.mapToResponse(v));
     });
+
+    await this.invalidarListas(empresaId);
+    return resultado;
   }
 
   /**

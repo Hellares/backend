@@ -62,8 +62,16 @@ const mkPrisma = (producto: any) => {
   return { prisma, tx };
 };
 
-const svc = (prisma: any) =>
-  new ProductoAtributoValorService(prisma as any, mkLogger() as any);
+const mkCache = () => ({
+  invalidateProductosLists: jest.fn().mockResolvedValue(undefined),
+});
+
+const svc = (prisma: any, cache: any = mkCache()) =>
+  new ProductoAtributoValorService(
+    prisma as any,
+    mkLogger() as any,
+    cache as any,
+  );
 
 describe('setProductoAtributos — secciones de la ficha técnica', () => {
   const dto = { atributos: [{ atributoId: 'a1', valor: 'QUALQON' }] };
@@ -153,6 +161,24 @@ describe('setProductoAtributos — secciones de la ficha técnica', () => {
    * quedan bien en la base y el celular sigue mostrando los viejos, sin ningún
    * error que lo delate.
    */
+  /**
+   * El listado vive en Redis 30 min. Bumpear `actualizadoEn` alcanza para el
+   * delta-sync —que va directo a la base— pero un cliente que hace sync
+   * COMPLETO pasa por el cache y se llevaría los atributos anteriores.
+   */
+  it('invalida el cache del listado de productos', async () => {
+    const { prisma } = mkPrisma({
+      id: 'p1',
+      empresaId: 'e1',
+      plantillasAtributosIds: [],
+    });
+    const cache = mkCache();
+
+    await svc(prisma, cache).setProductoAtributos('e1', 'p1', dto as any);
+
+    expect(cache.invalidateProductosLists).toHaveBeenCalledWith('e1');
+  });
+
   it('marca el producto como actualizado en la MISMA transacción', async () => {
     const { prisma, tx } = mkPrisma({
       id: 'p1',
