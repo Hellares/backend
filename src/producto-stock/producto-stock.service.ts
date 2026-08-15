@@ -37,6 +37,35 @@ import {
 const Decimal = Prisma.Decimal;
 type DecimalType = Prisma.Decimal;
 
+/// Lo mínimo para resolver el símbolo de una unidad: local > personalizado >
+/// maestra, la misma jerarquía que usa el resto del catálogo.
+const _selectSimbolo = {
+  simboloLocal: true,
+  simboloPersonalizado: true,
+  unidadMaestra: { select: { simbolo: true } },
+} as const;
+
+/// Aplana la unidad de presentación a `{ factor, simbolo }`, que es lo único
+/// que el cliente necesita para hablar en kilos en vez de gramos.
+function _presentacionPlana(entidad: {
+  factorPresentacion?: Prisma.Decimal | null;
+  unidadPresentacion?: {
+    simboloLocal?: string | null;
+    simboloPersonalizado?: string | null;
+    unidadMaestra?: { simbolo?: string | null } | null;
+  } | null;
+} | null): { factorPresentacion: number | null; unidadPresentacionSimbolo: string | null } {
+  const u = entidad?.unidadPresentacion;
+  return {
+    factorPresentacion:
+      entidad?.factorPresentacion != null
+        ? Number(entidad.factorPresentacion)
+        : null,
+    unidadPresentacionSimbolo:
+      u?.simboloLocal ?? u?.simboloPersonalizado ?? u?.unidadMaestra?.simbolo ?? null,
+  };
+}
+
 @Injectable()
 export class ProductoStockService {
   private readonly logger = new Logger(ProductoStockService.name);
@@ -407,6 +436,9 @@ export class ProductoStockService {
               nombre: true,
               codigoEmpresa: true,
               sku: true,
+              // Ver el comentario de la variante: el granel se lee en kilos.
+              factorPresentacion: true,
+              unidadPresentacion: { select: _selectSimbolo },
               // Marca y categoría para la tabla de inventario por sede.
               // El nombre efectivo = nombreLocal ?? nombrePersonalizado ?? maestra.nombre.
               empresaMarca: {
@@ -432,13 +464,27 @@ export class ProductoStockService {
               nombre: true,
               sku: true,
               // precio: true, // ❌ DEPRECATED - Precio ahora solo en ProductoStock
+              // Presentación PROPIA de la variante: el granel se guarda en
+              // gramos pero se lee en kilos. Sin esto la pantalla de mín/máx
+              // pedía "9000" donde el usuario piensa "9 kg".
+              factorPresentacion: true,
+              unidadPresentacion: { select: _selectSimbolo },
               // 🔴 El producto DUEÑO de la variante. En estas filas el
               // `productoId` propio es NULL —XOR del modelo—, así que sin esto
               // el cliente no tiene forma de saber a qué producto pertenece la
               // variante: la pantalla de mín/máx las mostraba sueltas, sin
               // poder agruparlas ni decir de qué producto son.
+              //
+              // Su presentación viaja también porque la variante la HEREDA
+              // cuando no tiene una propia.
               producto: {
-                select: { id: true, nombre: true, codigoEmpresa: true },
+                select: {
+                  id: true,
+                  nombre: true,
+                  codigoEmpresa: true,
+                  factorPresentacion: true,
+                  unidadPresentacion: { select: _selectSimbolo },
+                },
               },
             },
           },
@@ -465,9 +511,23 @@ export class ProductoStockService {
     // / empresaCategoria.nombre). Nombre efectivo: local > personalizado > maestra.
     const stocksMapped = stocks.map((s) => ({
       ...s,
+      // La presentación aplanada, para producto y variante. La variante que no
+      // tiene una propia HEREDA la de su producto: así se resuelve del mismo
+      // modo que en el catálogo y el granel se lee en kilos en las dos formas.
+      variante: s.variante
+        ? {
+            ...s.variante,
+            ..._presentacionPlana(
+              s.variante.factorPresentacion != null
+                ? s.variante
+                : s.variante.producto,
+            ),
+          }
+        : null,
       producto: s.producto
         ? {
             ...s.producto,
+            ..._presentacionPlana(s.producto),
             empresaMarca: s.producto.empresaMarca
               ? {
                   nombre:
