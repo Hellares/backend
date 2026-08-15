@@ -406,6 +406,14 @@ export class ProductoStockService {
               nombre: true,
               sku: true,
               // precio: true, // ❌ DEPRECATED - Precio ahora solo en ProductoStock
+              // 🔴 El producto DUEÑO de la variante. En estas filas el
+              // `productoId` propio es NULL —XOR del modelo—, así que sin esto
+              // el cliente no tiene forma de saber a qué producto pertenece la
+              // variante: la pantalla de mín/máx las mostraba sueltas, sin
+              // poder agruparlas ni decir de qué producto son.
+              producto: {
+                select: { id: true, nombre: true, codigoEmpresa: true },
+              },
             },
           },
           sede: {
@@ -417,6 +425,9 @@ export class ProductoStockService {
             },
           },
         },
+        // Se ordena por `creadoEn` y NO por nombre de producto: ordenar por
+        // relación obliga a un join ordenado y es caro. El cliente agrupa por
+        // producto igual, así que el orden de llegada no cambia lo que se ve.
         orderBy: { creadoEn: 'desc' },
         skip,
         take: limit,
