@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
 import { SetProductoAtributosDto, AtributoValorDto } from './dto/create-producto-atributo-valor.dto';
-import { AtributoTipo } from '@prisma/client';
+import { AtributoTipo, Prisma } from '@prisma/client';
 import {
   construirNombreVariante,
   nombreEsAutogenerado,
@@ -46,6 +46,42 @@ export class ProductoAtributoValorService {
   /// COMPLETO —primera carga, snapshot invalidado, `fullSyncRequired`— pasa
   /// por el cache y se lleva los atributos anteriores. Todos los demás
   /// servicios del módulo invalidan; este era el único que no.
+  /// Saca de la ficha las secciones que ya no sostiene ningún valor.
+  ///
+  /// 🔴 Sin esto `plantillasAtributosIds` era de SOLO AGREGAR: el diálogo del
+  /// detalle suma secciones, y el formulario —el único que reemplaza la lista
+  /// entera— no muestra atributos cuando el producto tiene variantes. Una
+  /// plantilla aplicada por error ahí no se podía sacar desde ninguna
+  /// pantalla, aunque se le borraran todos los valores.
+  ///
+  /// Una sección sobrevive si:
+  ///  - viene en ESTA llamada (recién aplicada, todavía sin llenar), o
+  ///  - al menos uno de sus atributos quedó con valor.
+  ///
+  /// Las plantillas borradas del catálogo también se van: su id ya no
+  /// describe nada.
+  private async podarSecciones(
+    tx: Prisma.TransactionClient,
+    ids: string[],
+    recienAplicadas: Set<string>,
+    atributosConValor: Set<string>,
+  ): Promise<string[]> {
+    if (ids.length === 0) return ids;
+
+    const plantillas = await tx.productoAtributoPlantilla.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, atributos: { select: { atributoId: true } } },
+    });
+    const porId = new Map(plantillas.map((p) => [p.id, p]));
+
+    return ids.filter((id) => {
+      if (recienAplicadas.has(id)) return true;
+      const plantilla = porId.get(id);
+      if (!plantilla) return false;
+      return plantilla.atributos.some((a) => atributosConValor.has(a.atributoId));
+    });
+  }
+
   private async invalidarListas(empresaId: string): Promise<void> {
     try {
       await this.cacheService.invalidateProductosLists(empresaId);
@@ -111,10 +147,12 @@ export class ProductoAtributoValorService {
       const seccionesNuevas = (dto.plantillasAtributosIds ?? []).filter(
         (id) => !producto.plantillasAtributosIds.includes(id),
       );
-      const plantillasAtributosIds = [
-        ...producto.plantillasAtributosIds,
-        ...new Set(seccionesNuevas),
-      ];
+      const plantillasAtributosIds = await this.podarSecciones(
+        tx,
+        [...producto.plantillasAtributosIds, ...new Set(seccionesNuevas)],
+        new Set(dto.plantillasAtributosIds ?? []),
+        new Set(valoresCreados.map((v) => v.atributoId)),
+      );
 
       // El bump NO es cosmético: el delta-sync del app trae productos por
       // `actualizadoEn`, así que sin esto los atributos recién guardados no

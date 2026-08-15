@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { CacheService } from '../redis/cache.service';
 import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CreateProductoAtributoPlantillaDto } from './dto/create-producto-atributo-plantilla.dto';
 import { UpdateProductoAtributoPlantillaDto } from './dto/update-producto-atributo-plantilla.dto';
@@ -18,6 +19,7 @@ export class ProductoAtributoPlantillaService {
     private prisma: PrismaService,
     private planLimitsService: PlanLimitsService,
     loggerService: AppLoggerService,
+    private readonly cacheService: CacheService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ProductoAtributoPlantillaService.name);
@@ -422,6 +424,21 @@ export class ProductoAtributoPlantillaService {
       }
       return created;
     });
+
+    // El listado vive en Redis 30 min (`findAll` es un `getOrSet`): sin esto
+    // la ficha recién aplicada quedaba invisible media hora para cualquiera
+    // que haga sync COMPLETO. El bump de `actualizadoEn` solo cubre el
+    // delta-sync, que va directo a la base.
+    if (result.count > 0) {
+      try {
+        await this.cacheService.invalidateProductosLists(empresaId);
+      } catch (e) {
+        // Que falle el cache no puede tumbar una aplicación ya confirmada.
+        this.logger.warn(
+          `No se pudo invalidar el cache de productos de ${empresaId}: ${e}`,
+        );
+      }
+    }
 
     const omitidos = atributosActivos.length - result.count;
     this.logger.log(

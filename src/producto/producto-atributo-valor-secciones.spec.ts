@@ -34,6 +34,14 @@ const mkPrisma = (producto: any) => {
       ]),
     },
     producto: { update: jest.fn().mockResolvedValue({}) },
+    // La sección PROCESADOR contiene el atributo a1; MEMORIA contiene a9, que
+    // nunca tiene valor en estas pruebas.
+    productoAtributoPlantilla: {
+      findMany: jest.fn().mockResolvedValue([
+        { id: 'pl-procesador', atributos: [{ atributoId: 'a1' }] },
+        { id: 'pl-memoria', atributos: [{ atributoId: 'a9' }] },
+      ]),
+    },
   };
 
   const prisma = {
@@ -161,6 +169,58 @@ describe('setProductoAtributos — secciones de la ficha técnica', () => {
    * quedan bien en la base y el celular sigue mostrando los viejos, sin ningún
    * error que lo delate.
    */
+  /**
+   * Sin poda, `plantillasAtributosIds` era de SOLO AGREGAR: una plantilla
+   * aplicada por error a un producto CON VARIANTES no se podía sacar desde
+   * ninguna pantalla, ni borrándole todos los valores.
+   */
+  it('saca la sección que se quedó sin ningún valor', async () => {
+    const { prisma, tx } = mkPrisma({
+      id: 'p1',
+      empresaId: 'e1',
+      // MEMORIA (a9) no tiene ningún valor en la ficha que llega.
+      plantillasAtributosIds: ['pl-procesador', 'pl-memoria'],
+    });
+
+    await svc(prisma).setProductoAtributos('e1', 'p1', dto as any);
+
+    expect(tx.producto.update.mock.calls[0][0].data.plantillasAtributosIds).toEqual([
+      'pl-procesador',
+    ]);
+  });
+
+  it('conserva la sección recién aplicada aunque todavía esté vacía', async () => {
+    const { prisma, tx } = mkPrisma({
+      id: 'p1',
+      empresaId: 'e1',
+      plantillasAtributosIds: [],
+    });
+
+    // Se aplica MEMORIA y se guarda sin llenar ninguno de sus campos.
+    await svc(prisma).setProductoAtributos('e1', 'p1', {
+      ...dto,
+      plantillasAtributosIds: ['pl-memoria'],
+    } as any);
+
+    expect(tx.producto.update.mock.calls[0][0].data.plantillasAtributosIds).toEqual([
+      'pl-memoria',
+    ]);
+  });
+
+  it('descarta el id de una plantilla que ya no existe en el catálogo', async () => {
+    const { prisma, tx } = mkPrisma({
+      id: 'p1',
+      empresaId: 'e1',
+      plantillasAtributosIds: ['pl-procesador', 'pl-borrada'],
+    });
+
+    await svc(prisma).setProductoAtributos('e1', 'p1', dto as any);
+
+    expect(tx.producto.update.mock.calls[0][0].data.plantillasAtributosIds).toEqual([
+      'pl-procesador',
+    ]);
+  });
+
   /**
    * El listado vive en Redis 30 min. Bumpear `actualizadoEn` alcanza para el
    * delta-sync —que va directo a la base— pero un cliente que hace sync
