@@ -57,7 +57,9 @@ export class ProductoAtributoValorService {
     // Validar que todos los atributos existen y pertenecen a la empresa
     await this.validateAtributos(empresaId, dto.atributos);
 
-    // Usar transacción para asegurar atomicidad
+    // 🔴 REEMPLAZA: lo que no venga en `dto.atributos` se borra. Es a
+    // propósito —así se quita un atributo— pero obliga a que quien llama mande
+    // la ficha COMPLETA, no solo los campos que acaba de tocar.
     return await this.prisma.$transaction(async (tx) => {
       // Eliminar todos los valores existentes del producto
       await tx.productoAtributoValor.deleteMany({
@@ -80,6 +82,24 @@ export class ProductoAtributoValorService {
             select: { nombre: true, clave: true, tipo: true, unidad: true },
           },
         },
+      });
+
+      // Las secciones aplicadas se SUMAN a las que ya tenía, sin repetir y
+      // respetando el orden en que se fueron agregando.
+      const seccionesNuevas = (dto.plantillasAtributosIds ?? []).filter(
+        (id) => !producto.plantillasAtributosIds.includes(id),
+      );
+      const plantillasAtributosIds = [
+        ...producto.plantillasAtributosIds,
+        ...new Set(seccionesNuevas),
+      ];
+
+      // El bump NO es cosmético: el delta-sync del app trae productos por
+      // `actualizadoEn`, así que sin esto los atributos recién guardados no
+      // llegan nunca al celular —y no hay error que lo delate—.
+      await tx.producto.update({
+        where: { id: productoId },
+        data: { plantillasAtributosIds, actualizadoEn: new Date() },
       });
 
       return valoresCreados.map((v) => this.mapToResponse(v));
@@ -182,6 +202,14 @@ export class ProductoAtributoValorService {
           `Nombre de variante regenerado: "${variante.nombre}" → "${nombreNuevo}"`,
         );
       }
+
+      // Las variantes viajan al app ADENTRO de su producto, y el delta-sync
+      // pide por `Producto.actualizadoEn`: sin bumpear el padre, los atributos
+      // de la variante se guardan pero el celular sigue viendo los viejos.
+      await tx.producto.update({
+        where: { id: variante.productoId },
+        data: { actualizadoEn: new Date() },
+      });
 
       return valoresCreados.map((v) => this.mapToResponse(v));
     });
