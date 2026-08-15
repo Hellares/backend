@@ -3,6 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { SetProductoAtributosDto, AtributoValorDto } from './dto/create-producto-atributo-valor.dto';
 import { AtributoTipo } from '@prisma/client';
+import {
+  construirNombreVariante,
+  nombreEsAutogenerado,
+} from './utils/nombre-variante.util';
 
 export interface AtributoValorResponse {
   id: string;
@@ -106,6 +110,17 @@ export class ProductoAtributoValorService {
 
     // Usar transacción para asegurar atomicidad
     return await this.prisma.$transaction(async (tx) => {
+      // Los valores de ANTES, para saber si el nombre actual lo generamos
+      // nosotros o lo escribió alguien a mano.
+      const valoresPrevios = await tx.productoAtributoValor.findMany({
+        where: { varianteId },
+        include: {
+          atributo: {
+            select: { orden: true, usarEnNombreVariante: true },
+          },
+        },
+      });
+
       // Eliminar todos los valores existentes de la variante
       await tx.productoAtributoValor.deleteMany({
         where: { varianteId },
@@ -124,10 +139,49 @@ export class ProductoAtributoValorService {
         where: { varianteId },
         include: {
           atributo: {
-            select: { nombre: true, clave: true, tipo: true, unidad: true },
+            select: {
+              nombre: true,
+              clave: true,
+              tipo: true,
+              unidad: true,
+              orden: true,
+              usarEnNombreVariante: true,
+            },
           },
         },
       });
+
+      // El nombre de la variante se REARMA acá.
+      //
+      // Antes no se tocaba: una variante creada por combinación quedaba con el
+      // nombre de ese momento y asignarle atributos después no lo cambiaba
+      // nunca. Solo se pisa si el nombre era autogenerado — si alguien lo
+      // escribió a mano, se respeta.
+      const paraNombre = valoresCreados.map((v) => ({
+        valor: v.valor,
+        orden: v.atributo.orden,
+        usarEnNombreVariante: v.atributo.usarEnNombreVariante,
+      }));
+      const nombreNuevo = construirNombreVariante(paraNombre);
+
+      const eraAutogenerado = nombreEsAutogenerado(
+        variante.nombre,
+        valoresPrevios.map((v) => ({
+          valor: v.valor,
+          orden: v.atributo.orden,
+          usarEnNombreVariante: v.atributo.usarEnNombreVariante,
+        })),
+      );
+
+      if (eraAutogenerado && nombreNuevo.length > 0 && nombreNuevo !== variante.nombre) {
+        await tx.productoVariante.update({
+          where: { id: varianteId },
+          data: { nombre: nombreNuevo },
+        });
+        this.logger.info(
+          `Nombre de variante regenerado: "${variante.nombre}" → "${nombreNuevo}"`,
+        );
+      }
 
       return valoresCreados.map((v) => this.mapToResponse(v));
     });

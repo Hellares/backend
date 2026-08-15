@@ -6,6 +6,7 @@ import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { simboloUnidad } from '../common/utils/unidad-presentacion.util';
+import { construirNombreVariante } from './utils/nombre-variante.util';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
@@ -847,6 +848,64 @@ export class ProductoVarianteService {
    * Genera variantes automáticamente a partir del producto cartesiano de atributos seleccionados.
    * Ej: Conexión [USB, BT] × Color [Negro, Blanco] = 4 variantes
    */
+  /**
+   * Rearma el nombre de una variante desde sus atributos, a pedido.
+   *
+   * A diferencia del rearmado automático que corre al guardar atributos, éste
+   * NO pregunta si el nombre era autogenerado: el usuario tocó el botón, así
+   * que pisa lo que haya. Es la salida para los nombres que quedaron viejos
+   * —de antes de que existiera el flag, o después de renombrar un valor—.
+   */
+  async regenerarNombre(
+    varianteId: string,
+    empresaId: string,
+  ): Promise<{ nombreAnterior: string; nombre: string }> {
+    const variante = await this.prisma.productoVariante.findFirst({
+      where: { id: varianteId, empresaId, deletedAt: null },
+      select: { id: true, nombre: true, productoId: true },
+    });
+    if (!variante) {
+      throw new NotFoundException(`Variante ${varianteId} no encontrada`);
+    }
+
+    const valores = await this.prisma.productoAtributoValor.findMany({
+      where: { varianteId },
+      include: {
+        atributo: { select: { orden: true, usarEnNombreVariante: true } },
+      },
+    });
+
+    const nombre = construirNombreVariante(
+      valores.map((v) => ({
+        valor: v.valor,
+        orden: v.atributo.orden,
+        usarEnNombreVariante: v.atributo.usarEnNombreVariante,
+      })),
+    );
+
+    if (nombre.length === 0) {
+      throw new BadRequestException(
+        'La variante no tiene atributos con valor: no hay con qué armar el nombre.',
+      );
+    }
+
+    const nombreAnterior = variante.nombre;
+    if (nombre !== nombreAnterior) {
+      await this.prisma.productoVariante.update({
+        where: { id: varianteId },
+        data: { nombre },
+      });
+      await this.cache.invalidateProductosLists(empresaId);
+      this.logger.success('Nombre de variante regenerado', {
+        varianteId,
+        nombreAnterior,
+        nombre,
+      });
+    }
+
+    return { nombreAnterior, nombre };
+  }
+
   async generarCombinaciones(
     productoId: string,
     empresaId: string,
@@ -987,7 +1046,19 @@ export class ProductoVarianteService {
         // selector, que es donde sí hace falta.
         // Ojo: el mensaje de duplicado de más arriba SÍ los conserva, porque
         // ahí se está señalando cuál combinación choca.
-        const nombre = combo.join(' / ');
+        // Mismo armador que usa el guardado de atributos: si acá se arma
+        // distinto, asignar un atributo después le cambia el nombre a la
+        // variante sin que nadie lo haya pedido.
+        const nombre = construirNombreVariante(
+          combo.map((valor, idx) => {
+            const atributo = atributosMap.get(dto.atributos[idx].atributoId)!;
+            return {
+              valor,
+              orden: atributo.orden,
+              usarEnNombreVariante: atributo.usarEnNombreVariante,
+            };
+          }),
+        );
 
         // Generar código de empresa único
         const { codigoEmpresa } = await this.configCodigosService.generarCodigoVariante(empresaId, tx);

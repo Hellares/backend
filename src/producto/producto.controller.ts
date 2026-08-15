@@ -896,6 +896,25 @@ export class ProductoController {
     return await this.varianteService.create(productoId, empresaId, dto);
   }
 
+  @Post('variantes/:varianteId/regenerar-nombre')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Rearmar el nombre de una variante desde sus atributos',
+    description:
+      'Pisa el nombre actual, sea autogenerado o escrito a mano. Es la salida ' +
+      'para los nombres que quedaron viejos: variantes de antes de que se ' +
+      'pudiera elegir qué atributos entran, o valores renombrados después.',
+  })
+  @ApiResponse({ status: 201, description: 'Nombre regenerado' })
+  @ApiResponse({ status: 400, description: 'La variante no tiene atributos con valor' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async regenerarNombreVariante(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ): Promise<{ nombreAnterior: string; nombre: string }> {
+    return await this.varianteService.regenerarNombre(varianteId, empresaId);
+  }
+
   @Post(':productoId/variantes/generar-combinaciones')
   @RequiresPermission(Permission.MANAGE_PRODUCTS)
   @ApiOperation({

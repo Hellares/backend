@@ -472,6 +472,15 @@ model ProductoAtributo {
   usarParaFiltros      Boolean @default(true)
   mostrarEnMarketplace Boolean @default(true)
 
+  /// Su valor entra en el NOMBRE de la variante.
+  ///
+  /// El nombre se arma con los valores de los atributos marcados, en el orden
+  /// de `orden`, unidos por " / ". Sirve para dejar fuera lo que ya está
+  /// implícito: con FABRICANTE → FAMILIA → PROCESADOR alcanza con el
+  /// procesador, y "AZUL / 860" se lee mejor que
+  /// "AZUL / QUALQON / SNAPDRAGON 8XX / 860" en un ticket de 58 mm.
+  usarEnNombreVariante Boolean @default(true)
+
   // Auditoría
   isActive      Boolean  @default(true)
   creadoEn      DateTime @default(now())

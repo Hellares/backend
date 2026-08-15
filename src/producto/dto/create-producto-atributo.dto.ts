@@ -106,6 +106,11 @@ export class CreateProductoAtributoDto {
   @IsOptional()
   usarParaFiltros?: boolean;
 
+  /** Su valor entra en el NOMBRE de la variante. Default true. */
+  @IsBoolean()
+  @IsOptional()
+  usarEnNombreVariante?: boolean;
+
   @IsBoolean()
   @IsOptional()
   mostrarEnMarketplace?: boolean;

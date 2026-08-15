@@ -31,6 +31,8 @@ export interface ProductoAtributoResponse {
   orden: number;
   mostrarEnListado: boolean;
   usarParaFiltros: boolean;
+  /** Su valor entra en el NOMBRE de la variante. */
+  usarEnNombreVariante: boolean;
   mostrarEnMarketplace: boolean;
   isActive: boolean;
   creadoEn: Date;
@@ -146,6 +148,7 @@ export class ProductoAtributoService {
             orden: dto.orden ?? 0,
             mostrarEnListado: dto.mostrarEnListado ?? true,
             usarParaFiltros: dto.usarParaFiltros ?? true,
+            usarEnNombreVariante: dto.usarEnNombreVariante ?? true,
             mostrarEnMarketplace: dto.mostrarEnMarketplace ?? true,
           },
         });
@@ -196,6 +199,7 @@ export class ProductoAtributoService {
           orden: dto.orden ?? 0,
           mostrarEnListado: dto.mostrarEnListado ?? true,
           usarParaFiltros: dto.usarParaFiltros ?? true,
+          usarEnNombreVariante: dto.usarEnNombreVariante ?? true,
           mostrarEnMarketplace: dto.mostrarEnMarketplace ?? true,
         },
       });
@@ -400,6 +404,7 @@ export class ProductoAtributoService {
           ...(dto.orden !== undefined && { orden: dto.orden }),
           ...(dto.mostrarEnListado !== undefined && { mostrarEnListado: dto.mostrarEnListado }),
           ...(dto.usarParaFiltros !== undefined && { usarParaFiltros: dto.usarParaFiltros }),
+          ...(dto.usarEnNombreVariante !== undefined && { usarEnNombreVariante: dto.usarEnNombreVariante }),
           ...(dto.mostrarEnMarketplace !== undefined && {
             mostrarEnMarketplace: dto.mostrarEnMarketplace,
           }),
@@ -801,6 +806,7 @@ export class ProductoAtributoService {
       orden: atributo.orden,
       mostrarEnListado: atributo.mostrarEnListado,
       usarParaFiltros: atributo.usarParaFiltros,
+      usarEnNombreVariante: atributo.usarEnNombreVariante ?? true,
       mostrarEnMarketplace: atributo.mostrarEnMarketplace,
       isActive: atributo.isActive,
       creadoEn: atributo.creadoEn,

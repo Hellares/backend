@@ -77,6 +77,11 @@ export class UpdateProductoAtributoDto {
   @IsOptional()
   usarParaFiltros?: boolean;
 
+  /** Su valor entra en el NOMBRE de la variante. */
+  @IsBoolean()
+  @IsOptional()
+  usarEnNombreVariante?: boolean;
+
   @IsBoolean()
   @IsOptional()
   mostrarEnMarketplace?: boolean;
