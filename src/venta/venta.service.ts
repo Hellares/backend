@@ -42,6 +42,7 @@ import { FacturacionService } from '../sunat/facturacion.service';
 import { OrdenServicioService } from '../servicio/orden-servicio.service';
 import { validarDocumentoParaComprobante } from '../common/utils/documento-peru.util';
 import { round2, round6 } from '../common/utils/money.util';
+import { calcularMontosLinea } from '../common/utils/montos-linea.util';
 import {
   clavePresentacion,
   montosDeclarados,
@@ -5594,26 +5595,22 @@ export class VentaService {
       );
     }
 
-    let subtotal: number;
-    let igv: number;
-    let total: number;
-
-    if (incluyeIgv) {
-      // Precio ya incluye IGV → extraer base e IGV
-      total = subtotalBruto - descuento;
-      subtotal = total / (1 + porcentajeIGV / 100);
-      igv = total - subtotal;
-    } else {
-      // Precio sin IGV → sumar IGV
-      subtotal = subtotalBruto - descuento;
-      igv = subtotal * (porcentajeIGV / 100);
-      total = subtotal + igv;
-    }
-
     // Tipo de afectación IGV (SUNAT Cat. 07)
     const tipoAfectacion = dto.tipoAfectacion || (porcentajeIGV > 0 ? '10' : '10');
     const icbperMonto = dto.icbper ?? 0;
-    const totalConIcbper = total + icbperMonto;
+
+    // 🔴 Los tres montos salen JUNTOS y ya redondeados, para que
+    // `subtotal + igv + icbper === total`. Redondearlos por separado —como se
+    // hacía— rompía la identidad en cuanto el total crudo caía entre centavos,
+    // que es lo que pasa vendiendo por peso. Ver `calcularMontosLinea`.
+    const montos = calcularMontosLinea({
+      cantidad,
+      precioUnitario,
+      descuento,
+      porcentajeIGV,
+      precioIncluyeIgv: incluyeIgv,
+      icbper: icbperMonto,
+    });
 
     // Snapshot de costo y margen: el costo viene de aplicarPreciosBackendNivel
     // (cero si la línea no es producto o el cálculo falló). Margen = ingreso
@@ -5645,10 +5642,10 @@ export class VentaService {
       descuento,
       porcentajeIGV,
       tipoAfectacion,
-      icbper: round2(icbperMonto),
-      igv: round2(igv),
-      subtotal: round2(subtotal),
-      total: round2(totalConIcbper),
+      icbper: montos.icbper,
+      igv: montos.igv,
+      subtotal: montos.subtotal,
+      total: montos.total,
       orden: index,
       origenComboId: dto.origenComboId || null,
       origenComboNombre: dto.origenComboNombre || null,

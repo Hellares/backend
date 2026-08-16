@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { calcularMontosLinea } from '../common/utils/montos-linea.util';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
 import { CompatibilidadService } from '../producto/compatibilidad.service';
 import {
@@ -1217,28 +1218,22 @@ export class CotizacionService {
     const porcentajeIGV = dto.porcentajeIGV ?? 18;
     const incluyeIgv = dto.precioIncluyeIgv ?? false;
 
-    const subtotalBruto = cantidad * precioUnitario;
-
-    let subtotal: number;
-    let igv: number;
-    let total: number;
-
-    if (incluyeIgv) {
-      // Precio ya incluye IGV → extraer base e IGV
-      total = subtotalBruto - descuento;
-      subtotal = total / (1 + porcentajeIGV / 100);
-      igv = total - subtotal;
-    } else {
-      // Precio sin IGV → sumar IGV
-      subtotal = subtotalBruto - descuento;
-      igv = subtotal * (porcentajeIGV / 100);
-      total = subtotal + igv;
-    }
-
     // Tipo de afectación IGV (SUNAT Cat. 07)
     const tipoAfectacion = dto.tipoAfectacion || (porcentajeIGV > 0 ? '10' : '10');
     const icbperMonto = dto.icbper ?? 0;
-    const totalConIcbper = total + icbperMonto;
+
+    // 🔴 La MISMA cuenta que la venta, y por la misma razón: redondeando
+    // `subtotal`, `igv` y `total` por separado, una línea cuyo total cae entre
+    // centavos deja de cuadrar. Acá pesa doble porque una cotización se
+    // convierte en venta: el centavo viajaba con ella.
+    const montos = calcularMontosLinea({
+      cantidad,
+      precioUnitario,
+      descuento,
+      porcentajeIGV,
+      precioIncluyeIgv: incluyeIgv,
+      icbper: icbperMonto,
+    });
 
     return {
       productoId: dto.productoId || null,
@@ -1261,10 +1256,10 @@ export class CotizacionService {
           : null,
       tipoAfectacion,
       porcentajeIGV,
-      igv: Math.round(igv * 100) / 100,
-      icbper: Math.round(icbperMonto * 100) / 100,
-      subtotal: Math.round(subtotal * 100) / 100,
-      total: Math.round(totalConIcbper * 100) / 100,
+      igv: montos.igv,
+      icbper: montos.icbper,
+      subtotal: montos.subtotal,
+      total: montos.total,
       orden: index,
     };
   }
