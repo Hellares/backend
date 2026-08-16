@@ -6,9 +6,16 @@ export class VarianteAtributoDto {
   @IsNotEmpty()
   atributoId: string; // ID del ProductoAtributo
 
+  /**
+   * Valor del atributo.
+   *
+   * 🔑 Admite CADENA VACÍA: es "el campo está asignado pero todavía sin
+   * llenar" —agregar CÓDIGO DE BARRAS para escanearlo después—. Si el atributo
+   * está marcado como `requerido`, lo rechaza el servicio, que es el único que
+   * tiene ese dato a mano.
+   */
   @IsString()
-  @IsNotEmpty()
-  valor: string; // Valor del atributo
+  valor: string;
 }
 
 export class CreateProductoVarianteDto {

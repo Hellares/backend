@@ -527,6 +527,18 @@ export class ProductoVarianteService {
           });
         }
       }
+
+      // Las variantes viajan al app ADENTRO de su producto y el delta-sync
+      // pide por `Producto.actualizadoEn`: editar la variante no toca ese
+      // sello, así que sin esto el cambio solo llegaba por el FCM de acá
+      // abajo. Un celular que estaba cerrado se lo perdía para siempre, y sin
+      // error que lo delate: se nota, por ejemplo, cargando el código de
+      // barras de una variante y encontrando que el escáner no la encuentra.
+      // Mismo bump que ya hace `remove()`.
+      await tx.producto.update({
+        where: { id: existing.productoId },
+        data: { actualizadoEn: new Date() },
+      });
     });
 
     // Un solo reload completo con todos los datos (corrige bug de stocksPorSede incompleto)
@@ -570,11 +582,33 @@ export class ProductoVarianteService {
         empresaId,
         isActive: true,
       },
-      select: { id: true },
+      // `nombre` y `requerido` son para el chequeo del valor vacío de acá
+      // abajo: sin ellos no se puede decir cuál se puede dejar en blanco ni
+      // nombrarlo en el error.
+      select: { id: true, nombre: true, requerido: true },
     });
 
     const existentesSet = new Set(atributosExistentes.map(a => a.id));
     const atributosValidos = atributosEstructurados.filter(a => existentesSet.has(a.atributoId));
+
+    // Un valor VACÍO es legítimo —el campo se agrega ahora y se llena después,
+    // como el código de barras que se escanea recién en el mostrador— salvo
+    // que el atributo sea `requerido`.
+    //
+    // Antes esto lo hacía el `@IsNotEmpty` del DTO, que no distingue: obligaba
+    // a tener el dato a mano para poder agregar el campo. La regla se mueve
+    // acá, que es donde se sabe si el atributo es obligatorio o no. Mismo
+    // criterio que `ProductoAtributoValorService.validateAtributos`.
+    const porId = new Map(atributosExistentes.map(a => [a.id, a]));
+    for (const a of atributosValidos) {
+      if (String(a.valor).trim().length > 0) continue;
+      const plantilla = porId.get(a.atributoId);
+      if (plantilla?.requerido) {
+        throw new BadRequestException(
+          `El atributo "${plantilla.nombre}" es requerido y no puede quedar vacío`,
+        );
+      }
+    }
 
     if (atributosValidos.length === 0) {
       this.logger.warn(`Ningún atributoId válido encontrado para empresa ${empresaId}. No se crearán valores.`);

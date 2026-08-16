@@ -208,6 +208,9 @@ export class ProductoResponseDto {
     id: string;
     nombre: string;
     sku: string;
+    /** El escáner del sheet de variantes busca por acá, por el SKU y por los
+     * atributos de tipo CODIGO_BARRAS. */
+    codigoBarras?: string | null;
     precio: number;
     stock: number;
     isActive: boolean;

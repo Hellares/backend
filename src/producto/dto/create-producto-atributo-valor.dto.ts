@@ -15,9 +15,17 @@ export class AtributoValorDto {
   @IsNotEmpty()
   atributoId: string; // ID del ProductoAtributo (plantilla)
 
+  /**
+   * Valor específico (siempre como string).
+   *
+   * 🔑 Admite CADENA VACÍA a propósito: significa "el campo está asignado a
+   * este producto/variante pero todavía sin llenar" —el caso típico es agregar
+   * CÓDIGO DE BARRAS para escanearlo después—. Quien decide si eso se acepta
+   * es `validateAtributos`, que a esa altura ya sabe si el atributo está
+   * marcado como `requerido`; acá no hay forma de saberlo.
+   */
   @IsString()
-  @IsNotEmpty()
-  valor: string; // Valor específico (siempre como string)
+  valor: string;
 }
 
 /**

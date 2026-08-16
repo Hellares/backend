@@ -407,6 +407,27 @@ export class ProductoAtributoValorService {
       const plantilla = existentesMap.get(atributo.atributoId);
       if (!plantilla) continue;
 
+      // Valor VACÍO = "el campo está, lo lleno después". Es el caso de agregar
+      // CÓDIGO DE BARRAS a una variante sin tener el código a mano.
+      //
+      // 🔴 Tiene que cortar ANTES del switch: todas las ramas de abajo lo
+      // rechazarían —un SELECT no tiene "" entre sus valores, un dependiente
+      // no tiene esa opción, un BOOLEAN espera true/false— y el error que
+      // devolvían ("solo acepta los valores: …") no se entiende para un campo
+      // que se dejó en blanco a propósito.
+      //
+      // Lo único que sí se exige es que el atributo no sea `requerido`. Esa
+      // regla la hacía cumplir el `@IsNotEmpty` del DTO, que la aplicaba a
+      // TODOS por igual porque a ese nivel no se sabe cuál es cuál.
+      if (atributo.valor.trim().length === 0) {
+        if (plantilla.requerido) {
+          throw new BadRequestException(
+            `El atributo "${plantilla.nombre}" es requerido y no puede quedar vacío`,
+          );
+        }
+        continue;
+      }
+
       // Validar según tipo
       switch (plantilla.tipo) {
         case AtributoTipo.NUMERO:

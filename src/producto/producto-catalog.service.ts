@@ -531,6 +531,11 @@ export class ProductoCatalogService {
           id: v.id,
           nombre: v.nombre,
           sku: v.sku,
+          // El código de barras PROPIO de la variante (el del formulario). El
+          // mapper lo descartaba, así que en el app llegaba siempre null y el
+          // escáner del sheet de variantes no podía encontrarla por ahí: solo
+          // por SKU o por un atributo de tipo CODIGO_BARRAS.
+          codigoBarras: v.codigoBarras ?? null,
           // Unidad y presentación PROPIAS de la variante. Sin esto el POS las
           // recibe en null y muestra el granel crudo ("S/ 0.01", "15000") en
           // vez de en la unidad en la que se cobra ("S/ 15.00/kg", "15 kg").
