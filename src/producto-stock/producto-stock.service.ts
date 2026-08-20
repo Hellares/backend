@@ -96,7 +96,7 @@ export class ProductoStockService {
       );
     }
 
-    return await this.prisma.productoStock.findFirst({
+    const stock = await this.prisma.productoStock.findFirst({
       where: {
         sedeId,
         productoId: productoId ?? null,
@@ -110,6 +110,12 @@ export class ProductoStockService {
             codigoEmpresa: true,
             sku: true,
             esInsumo: true,
+            // La presentación viaja con el STOCK, no con la pantalla: este
+            // endpoint es el que alimenta el diálogo de precios en las dos
+            // apps, y sin ella un granel se edita en gramos (S/0.008), que es
+            // un número que no entra en un campo de dos decimales.
+            factorPresentacion: true,
+            unidadPresentacion: { select: _selectSimbolo },
           },
         },
         variante: {
@@ -117,6 +123,16 @@ export class ProductoStockService {
             id: true,
             nombre: true,
             sku: true,
+            factorPresentacion: true,
+            unidadPresentacion: { select: _selectSimbolo },
+            // El producto DUEÑO, solo por su presentación: la variante la
+            // HEREDA cuando no tiene una propia.
+            producto: {
+              select: {
+                factorPresentacion: true,
+                unidadPresentacion: { select: _selectSimbolo },
+              },
+            },
           },
         },
         sede: {
@@ -128,6 +144,26 @@ export class ProductoStockService {
         },
       },
     });
+    if (!stock) return stock;
+
+    // Aplanada y con la herencia ya resuelta, igual que en el listado por sede:
+    // el cliente no tiene por qué repetir la regla en cada pantalla.
+    return {
+      ...stock,
+      producto: stock.producto
+        ? { ...stock.producto, ..._presentacionPlana(stock.producto) }
+        : null,
+      variante: stock.variante
+        ? {
+            ...stock.variante,
+            ..._presentacionPlana(
+              stock.variante.factorPresentacion != null
+                ? stock.variante
+                : stock.variante.producto,
+            ),
+          }
+        : null,
+    };
   }
 
   /**

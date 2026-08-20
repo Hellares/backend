@@ -544,7 +544,22 @@ export class PrecioNivelService {
   async obtenerGruposMayoreo(productoId: string, sedeId?: string) {
     const producto = await this.prisma.producto.findUnique({
       where: { id: productoId },
-      select: { id: true, nombre: true },
+      select: {
+        id: true,
+        nombre: true,
+        // La presentación del producto: la variante que no tiene una propia la
+        // HEREDA, igual que en el listado de stock por sede. Sin esto, un
+        // granel cuya presentación vive en el producto abriría el diálogo de
+        // precios en gramos.
+        factorPresentacion: true,
+        unidadPresentacion: {
+          select: {
+            simboloLocal: true,
+            simboloPersonalizado: true,
+            unidadMaestra: { select: { simbolo: true } },
+          },
+        },
+      },
     });
     if (!producto) {
       throw new NotFoundException(`Producto ${productoId} no encontrado`);
@@ -588,19 +603,26 @@ export class PrecioNivelService {
       }>;
     };
 
+    /** La propia de la variante, o la del producto si no tiene. */
+    const presentacionDe = (v: VarianteFila) => {
+      const origen = v.factorPresentacion != null ? v : producto;
+      return {
+        unidadPresentacionSimbolo: simboloUnidad(origen.unidadPresentacion),
+        // `.toNumber()` y no `Number(...)`: el Decimal de Prisma se convierte
+        // por su método, no por valueOf.
+        factorPresentacion: origen.factorPresentacion?.toNumber() ?? null,
+      };
+    };
+
     const datosDeVenta = (v: VarianteFila) => {
       const stock = v.stocksPorSede?.[0];
       return {
         precioVenta: stock?.precio ? stock.precio.toNumber() : null,
         stockActual: stock?.stockActual ?? null,
-        // Solo cuando la variante realmente tiene presentación propia: con
-        // factor 1 el diálogo debe hablar en unidad de venta, como siempre.
-        unidadPresentacionSimbolo: v.unidadPresentacionId
-          ? simboloUnidad(v.unidadPresentacion)
-          : null,
-        factorPresentacion: v.factorPresentacion
-          ? v.factorPresentacion.toNumber()
-          : null,
+        // La propia si la tiene; si no, la heredada del producto. Con factor
+        // 1 (o sin ninguna de las dos) el diálogo habla en unidad de venta,
+        // como siempre.
+        ...presentacionDe(v),
       };
     };
 

@@ -525,7 +525,73 @@ describe('PrecioNivelService.obtenerGruposMayoreo (el monitor)', () => {
     expect(r.grupos[0].variantes[0].factorPresentacion).toBe(1000);
   });
 
-  it('sin presentación propia no inventa símbolo', async () => {
+  it('sin presentación propia hereda la del producto', async () => {
+    // Un granel cuya presentación vive en el PRODUCTO y no en la variante:
+    // sin heredarla, el diálogo de precios se abriría en gramos.
+    const r = await call(
+      [
+        variante({
+          id: 'v-a',
+          nombre: 'A',
+          sku: 'A',
+          precioVenta: 0.008,
+          niveles: [nivel({ varianteId: 'v-a', precio: 0.007 })],
+        }),
+      ],
+      {
+        producto: {
+          id: EDREDONES,
+          nombre: 'ARROZ',
+          factorPresentacion: D(1000),
+          unidadPresentacion: {
+            simboloLocal: 'kg',
+            simboloPersonalizado: null,
+            unidadMaestra: { simbolo: 'kg' },
+          },
+        },
+      },
+    );
+    expect(r.grupos[0].variantes[0].unidadPresentacionSimbolo).toBe('kg');
+    expect(r.grupos[0].variantes[0].factorPresentacion).toBe(1000);
+  });
+
+  it('la presentación PROPIA de la variante le gana a la del producto', async () => {
+    const r = await call(
+      [
+        {
+          id: 'v-saco',
+          nombre: 'SACO',
+          sku: 'VAR-000901',
+          isActive: true,
+          preciosNivel: [nivel({ varianteId: 'v-saco', precio: 140 })],
+          unidadPresentacionId: 'uni-saco',
+          factorPresentacion: D(50),
+          unidadPresentacion: {
+            simboloLocal: 'saco',
+            simboloPersonalizado: null,
+            unidadMaestra: { simbolo: 'saco' },
+          },
+          stocksPorSede: [{ precio: D(150), stockActual: 4 }],
+        },
+      ],
+      {
+        producto: {
+          id: EDREDONES,
+          nombre: 'ARROZ',
+          factorPresentacion: D(1000),
+          unidadPresentacion: {
+            simboloLocal: 'kg',
+            simboloPersonalizado: null,
+            unidadMaestra: { simbolo: 'kg' },
+          },
+        },
+      },
+    );
+    expect(r.grupos[0].variantes[0].unidadPresentacionSimbolo).toBe('saco');
+    expect(r.grupos[0].variantes[0].factorPresentacion).toBe(50);
+  });
+
+  it('sin presentación en ninguna de las dos no inventa símbolo', async () => {
     const r = await call([
       variante({
         id: 'v-a',
