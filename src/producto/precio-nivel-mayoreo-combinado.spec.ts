@@ -503,6 +503,42 @@ describe('PrecioNivelService.obtenerGruposMayoreo (el monitor)', () => {
     expect(r.grupos.map((g: any) => g.variantes.length)).toEqual([2, 1]);
   });
 
+  it('lleva la presentación para que un granel no se edite en gramos', async () => {
+    const r = await call([
+      {
+        id: 'v-granel',
+        nombre: 'GRANEL',
+        sku: 'VAR-000900',
+        isActive: true,
+        preciosNivel: [nivel({ varianteId: 'v-granel', precio: 7 })],
+        unidadPresentacionId: 'uni-kg',
+        factorPresentacion: D(1000),
+        unidadPresentacion: {
+          simboloLocal: null,
+          simboloPersonalizado: null,
+          unidadMaestra: { simbolo: 'kg' },
+        },
+        stocksPorSede: [{ precio: D(0.008), stockActual: 15000 }],
+      },
+    ]);
+    expect(r.grupos[0].variantes[0].unidadPresentacionSimbolo).toBe('kg');
+    expect(r.grupos[0].variantes[0].factorPresentacion).toBe(1000);
+  });
+
+  it('sin presentación propia no inventa símbolo', async () => {
+    const r = await call([
+      variante({
+        id: 'v-a',
+        nombre: 'A',
+        sku: 'A',
+        precioVenta: 75,
+        niveles: [nivel({ varianteId: 'v-a', precio: 72 })],
+      }),
+    ]);
+    expect(r.grupos[0].variantes[0].unidadPresentacionSimbolo).toBeNull();
+    expect(r.grupos[0].variantes[0].factorPresentacion).toBeNull();
+  });
+
   it('producto inexistente → 404', async () => {
     await expect(call([], { producto: null })).rejects.toThrow(
       'Producto prod-edredones no encontrado',

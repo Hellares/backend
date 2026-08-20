@@ -11,6 +11,7 @@ import { UpdatePrecioNivelDto } from './dto/update-precio-nivel.dto';
 import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
 import { TipoPrecioNivel, Prisma } from '@prisma/client';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
+import { simboloUnidad } from '../common/utils/unidad-presentacion.util';
 
 // Usar Prisma.Decimal para los valores decimales
 const Decimal = Prisma.Decimal;
@@ -557,6 +558,17 @@ export class PrecioNivelService {
         sku: true,
         isActive: true,
         preciosNivel: { where: { isActive: true } },
+        // Presentación: sin esto, el monitor abriría el diálogo de precios de
+        // un granel en GRAMOS (S/0.008) en vez de en kilos (S/8.00).
+        unidadPresentacionId: true,
+        factorPresentacion: true,
+        unidadPresentacion: {
+          select: {
+            simboloLocal: true,
+            simboloPersonalizado: true,
+            unidadMaestra: { select: { simbolo: true } },
+          },
+        },
         ...(sedeId
           ? {
               stocksPorSede: {
@@ -581,6 +593,14 @@ export class PrecioNivelService {
       return {
         precioVenta: stock?.precio ? stock.precio.toNumber() : null,
         stockActual: stock?.stockActual ?? null,
+        // Solo cuando la variante realmente tiene presentación propia: con
+        // factor 1 el diálogo debe hablar en unidad de venta, como siempre.
+        unidadPresentacionSimbolo: v.unidadPresentacionId
+          ? simboloUnidad(v.unidadPresentacion)
+          : null,
+        factorPresentacion: v.factorPresentacion
+          ? v.factorPresentacion.toNumber()
+          : null,
       };
     };
 
