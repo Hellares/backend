@@ -394,6 +394,136 @@ export class PrecioNivelService {
   }
 
   /**
+   * Llave del GRUPO DE MAYOREO al que pertenece un nivel.
+   *
+   * Dos variantes del MISMO producto caen en el mismo grupo cuando tienen un
+   * nivel equivalente: igual mínimo, igual máximo, igual tipo e igual valor.
+   * Ese es todo el criterio — no hay tabla ni configuración que mantener.
+   *
+   * 🔴 El `nombre` del nivel NO entra en la llave a propósito: "Por Mayor" y
+   * "Mayorista" con el mismo mínimo y el mismo precio son el mismo trato
+   * comercial, y hacer que el rótulo los separe sería una trampa invisible.
+   *
+   * El `productoId` sí entra: el mayoreo combinado se acumula DENTRO de un
+   * producto. Dos productos distintos con el mismo precio por mayor no suman
+   * entre sí, y al estar la llave scopeada eso queda garantizado por
+   * construcción, sin filtros extra en el llamador.
+   */
+  private static claveGrupoMayoreo(
+    productoId: string,
+    nivel: {
+      cantidadMinima: number;
+      cantidadMaxima: number | null;
+      tipoPrecio: TipoPrecioNivel;
+      precio: Prisma.Decimal | null;
+      porcentajeDesc: Prisma.Decimal | null;
+    },
+  ): string {
+    const valor =
+      nivel.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO
+        ? nivel.precio?.toFixed(6) ?? 'sin-precio'
+        : nivel.porcentajeDesc?.toFixed(2) ?? 'sin-pct';
+    return [
+      productoId,
+      nivel.cantidadMinima,
+      nivel.cantidadMaxima ?? 'inf',
+      nivel.tipoPrecio,
+      valor,
+    ].join('|');
+  }
+
+  /**
+   * MAYOREO COMBINADO: cuántas unidades acumula cada grupo de mayoreo del
+   * carrito.
+   *
+   * El problema que resuelve: el mínimo de un nivel se evaluaba contra la
+   * cantidad de SU línea, así que quien se llevaba 3 edredones de tres diseños
+   * distintos —1 + 1 + 1— pagaba precio de lista aunque los tres compartieran
+   * el mismo "Por Mayor ≥ 3". El cliente ve tres edredones; el sistema veía
+   * tres líneas de uno.
+   *
+   * Devuelve un mapa `clave de grupo → unidades del carrito`, que
+   * `calcularPrecioSegunCantidad` usa para decidir si un nivel aplica. Sin
+   * mapa (o con un ítem que no está en ningún grupo) el comportamiento es el
+   * de siempre: manda la cantidad de la línea.
+   *
+   * Qué NO acumula:
+   * - Los componentes de un combo expandido (`ignorarNiveles`): el combo es su
+   *   propio deal de precio y no debe empujar el mayoreo del resto.
+   * - Las líneas sin variante. Los niveles de un producto SIN variantes son
+   *   los del producto y no hay con quién combinarlos.
+   *
+   * Qué SÍ acumula, aunque sorprenda: una línea en liquidación. Esa línea
+   * nunca recibe nivel (la liquidación gana), pero sus unidades son unidades
+   * que el cliente se está llevando, así que cuentan para el mínimo de las
+   * demás.
+   */
+  async calcularCantidadesGrupoMayoreo(
+    items: Array<{
+      varianteId?: string | null;
+      cantidad: number;
+      ignorarNiveles?: boolean;
+    }>,
+  ): Promise<Map<string, number>> {
+    const totales = new Map<string, number>();
+
+    const itemsQueAcumulan = items.filter(
+      (i) => i.varianteId && !i.ignorarNiveles,
+    );
+    // Una sola línea no puede combinar con nadie: ahorramos las dos queries y
+    // devolvemos el mapa vacío (= comportamiento de siempre).
+    //
+    // 🔴 Se cuentan LÍNEAS, no variantes distintas: la misma variante cargada
+    // en dos líneas de 1 también tiene que sumar 2. Filtrar por ids únicos acá
+    // dejaba ese carrito sin mayoreo.
+    if (itemsQueAcumulan.length < 2) return totales;
+
+    const varianteIds = [
+      ...new Set(itemsQueAcumulan.map((i) => i.varianteId as string)),
+    ];
+
+    const [variantes, niveles] = await Promise.all([
+      this.prisma.productoVariante.findMany({
+        where: { id: { in: varianteIds } },
+        select: { id: true, productoId: true },
+      }),
+      this.prisma.precioNivel.findMany({
+        where: { varianteId: { in: varianteIds }, isActive: true },
+      }),
+    ]);
+
+    const productoPorVariante = new Map(
+      variantes.map((v) => [v.id, v.productoId]),
+    );
+
+    // varianteId → llaves de los grupos a los que pertenece. Una variante
+    // puede estar en varios (un "≥2" y un "≥3" son grupos distintos), y el
+    // unique (varianteId, cantidadMinima) garantiza que nunca aparezca dos
+    // veces en la misma llave.
+    const clavesPorVariante = new Map<string, string[]>();
+    for (const nivel of niveles) {
+      if (!nivel.varianteId) continue;
+      const productoId = productoPorVariante.get(nivel.varianteId);
+      if (!productoId) continue;
+      const clave = PrecioNivelService.claveGrupoMayoreo(productoId, nivel);
+      const previas = clavesPorVariante.get(nivel.varianteId) ?? [];
+      previas.push(clave);
+      clavesPorVariante.set(nivel.varianteId, previas);
+    }
+
+    for (const item of items) {
+      if (!item.varianteId || item.ignorarNiveles) continue;
+      const claves = clavesPorVariante.get(item.varianteId);
+      if (!claves) continue;
+      for (const clave of claves) {
+        totales.set(clave, (totales.get(clave) ?? 0) + item.cantidad);
+      }
+    }
+
+    return totales;
+  }
+
+  /**
    * Calcular el precio según la cantidad para un producto o variante
    * @param sedeId - Requerido para obtener el precio base desde ProductoStock
    */
@@ -402,7 +532,17 @@ export class PrecioNivelService {
     varianteId: string | null,
     sedeId: string,
     cantidad: number,
-    opts?: { ignorarNiveles?: boolean; vips?: VipPrecioContexto[] },
+    opts?: {
+      ignorarNiveles?: boolean;
+      vips?: VipPrecioContexto[];
+      /**
+       * Unidades acumuladas por grupo de mayoreo en el carrito, de
+       * `calcularCantidadesGrupoMayoreo`. Un nivel se evalúa contra el total
+       * de SU grupo cuando ese total es mayor que la cantidad de la línea.
+       * Sin este mapa, cada nivel se evalúa contra la línea, como siempre.
+       */
+      cantidadesGrupo?: Map<string, number>;
+    },
   ): Promise<{
     precioUnitario: number;
     nivelAplicado: string;
@@ -448,6 +588,12 @@ export class PrecioNivelService {
         }
       | null = null;
     let itemNombre: string;
+    /**
+     * Producto al que pertenece el ítem: en una variante es el del padre, y es
+     * el que scopea la llave del grupo de mayoreo. Null en un producto suelto,
+     * que no combina con nadie.
+     */
+    let productoIdDelGrupo: string | null = null;
 
     if (varianteId) {
       const variante = await this.prisma.productoVariante.findUnique({
@@ -463,6 +609,7 @@ export class PrecioNivelService {
       }
       stock = s;
       itemNombre = variante.nombre;
+      productoIdDelGrupo = variante.productoId;
     } else if (productoId) {
       const producto = await this.prisma.producto.findUnique({
         where: { id: productoId },
@@ -489,20 +636,48 @@ export class PrecioNivelService {
     // VARIANTE: sus niveles se guardan con productoId NULL + varianteId, así
     // que se filtra SOLO por varianteId. Exigir ambos (productoId AND
     // varianteId) nunca matcheaba y las variantes quedaban sin nivel/VIP.
+    //
+    // 🔴 El rango (cantidadMinima/cantidadMaxima) ya NO se filtra en SQL: con
+    // mayoreo combinado, cada nivel se evalúa contra la cantidad de SU grupo,
+    // que solo se conoce acá con el mapa en la mano. Se traen los niveles
+    // activos del ítem —son un puñado— y el rango se resuelve en memoria.
     const niveles = await this.prisma.precioNivel.findMany({
       where: {
         ...(varianteId ? { varianteId } : { productoId }),
         isActive: true,
-        cantidadMinima: { lte: cantidad },
-        OR: [{ cantidadMaxima: { gte: cantidad } }, { cantidadMaxima: null }],
       },
       orderBy: { cantidadMinima: 'desc' },
     });
 
+    /**
+     * Cantidad contra la que se mide un nivel: la de su grupo de mayoreo si el
+     * carrito acumuló más que esta línea, y si no la de la línea. El `max` es
+     * lo que garantiza que esto nunca EMPEORE un precio existente — una línea
+     * de 10 unidades sigue midiéndose por sus 10 aunque el grupo sume menos.
+     */
+    const cantidadParaNivel = (nivel: (typeof niveles)[number]): number => {
+      if (!productoIdDelGrupo || !opts?.cantidadesGrupo) return cantidad;
+      const clave = PrecioNivelService.claveGrupoMayoreo(
+        productoIdDelGrupo,
+        nivel,
+      );
+      const delGrupo = opts.cantidadesGrupo.get(clave);
+      return delGrupo != null && delGrupo > cantidad ? delGrupo : cantidad;
+    };
+
+    const nivelesAplicables = niveles.filter((n) => {
+      const efectiva = cantidadParaNivel(n);
+      return (
+        n.cantidadMinima <= efectiva &&
+        (n.cantidadMaxima == null || n.cantidadMaxima >= efectiva)
+      );
+    });
+
     let precioConNivel: number | null = null;
     let nivelNombre: string | null = null;
-    if (niveles.length) {
-      const nivel = niveles[0];
+    if (nivelesAplicables.length) {
+      // El más específico = mayor cantidadMinima (el orderBy ya los dejó así).
+      const nivel = nivelesAplicables[0];
       if (nivel.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO) {
         precioConNivel = nivel.precio!.toNumber();
       } else {

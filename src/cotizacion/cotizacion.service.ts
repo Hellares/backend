@@ -74,6 +74,17 @@ export class CotizacionService {
       detalles,
     );
 
+    // Mayoreo combinado: el mínimo de un nivel se mide contra las unidades del
+    // GRUPO, no de la línea. Va acá y no solo en la venta porque si no la
+    // cotización mostraría S/75 y al convertirla en venta se cobraría S/72.
+    const cantidadesGrupo =
+      await this.precioNivelService.calcularCantidadesGrupoMayoreo(
+        detalles.map((d) => ({
+          varianteId: d.varianteId ?? null,
+          cantidad: d.cantidad,
+        })),
+      );
+
     const result: CreateCotizacionDetalleDto[] = [];
     for (const d of detalles) {
       const productoIdParaNivel = d.productoId ?? null;
@@ -90,7 +101,7 @@ export class CotizacionService {
           d.varianteId ?? null,
           sedeId,
           d.cantidad,
-          { vips },
+          { vips, cantidadesGrupo },
         );
         if (
           d.precioUnitario != null &&

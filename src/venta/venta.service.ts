@@ -231,6 +231,24 @@ export class VentaService {
       nivelAplicado: string | null;
     }> = [];
 
+    /// MAYOREO COMBINADO: unidades acumuladas por grupo en TODA la venta, no
+    /// por línea. Quien se lleva 3 edredones de 3 diseños distintos que
+    /// comparten el mismo "Por Mayor ≥ 3" paga por mayor los tres; antes cada
+    /// línea se medía sola con su 1 y ninguno bajaba.
+    ///
+    /// Se calcula UNA vez para todo el carrito y se pasa a cada línea: son dos
+    /// queries en total, no dos por línea.
+    const cantidadesGrupo =
+      await this.precioNivelService.calcularCantidadesGrupoMayoreo(
+        detalles.map((d) => ({
+          varianteId: d.varianteId ?? null,
+          cantidad: d.cantidad,
+          // Componentes de combo: no empujan el mayoreo del resto, igual que
+          // no reciben nivel (ver `ignorarNiveles` más abajo).
+          ignorarNiveles: !!d.origenComboId,
+        })),
+      );
+
     for (const d of detalles) {
       const productoIdParaNivel = d.productoId ?? d.comboId ?? null;
       if (!productoIdParaNivel && !d.varianteId) {
@@ -253,7 +271,7 @@ export class VentaService {
           d.cantidad,
           // Componentes de combo: sin niveles por mayor (el combo es su
           // propio deal). Evita divergencia 409 al editar cantidades.
-          { ignorarNiveles: !!d.origenComboId, vips: vipCtxs },
+          { ignorarNiveles: !!d.origenComboId, vips: vipCtxs, cantidadesGrupo },
         );
         // Precio VIP FAVORABLE: si el backend aplicó un precio especial de
         // cliente que es ≤ al que envió el cliente, NO se rebota con 409. El
@@ -5399,6 +5417,16 @@ export class VentaService {
       motivoLiquidacionSnapshot: MotivoLiquidacion | null;
       nivelAplicadoSnapshot: string | null;
     }> = [];
+    // El precio de la cotizacion NO se recalcula, pero la ETIQUETA del nivel
+    // si se resuelve aca: sin las cantidades del grupo, una cotizacion con
+    // mayoreo combinado quedaria sellada como "Precio base".
+    const cantidadesGrupo =
+      await this.precioNivelService.calcularCantidadesGrupoMayoreo(
+        detalles.map((d) => ({
+          varianteId: d.varianteId,
+          cantidad: Number(d.cantidad),
+        })),
+      );
     for (const d of detalles) {
       if (!d.productoId && !d.varianteId) {
         result.push({ precioCostoSnapshot: 0, margenSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
@@ -5410,6 +5438,7 @@ export class VentaService {
           d.varianteId,
           sedeId,
           Number(d.cantidad),
+          { cantidadesGrupo },
         );
         const precioUnit = Number(d.precioUnitario);
         const cantidadNum = Number(d.cantidad);
@@ -5460,6 +5489,13 @@ export class VentaService {
       motivoLiquidacionSnapshot: MotivoLiquidacion | null;
       nivelAplicadoSnapshot: string | null;
     }> = [];
+    const cantidadesGrupo =
+      await this.precioNivelService.calcularCantidadesGrupoMayoreo(
+        items.map((i) => ({
+          varianteId: i.varianteId ?? null,
+          cantidad: i.cantidad,
+        })),
+      );
     for (const item of items) {
       if (!item.productoId && !item.varianteId) {
         result.push({ precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
@@ -5471,6 +5507,7 @@ export class VentaService {
           item.varianteId ?? null,
           sedeId,
           item.cantidad,
+          { cantidadesGrupo },
         );
         result.push({
           precioCostoSnapshot: calc.precioCosto ?? 0,
