@@ -253,6 +253,263 @@ describe('PrecioNivelService.calcularCantidadesGrupoMayoreo', () => {
   });
 });
 
+describe('PrecioNivelService.obtenerGruposMayoreo (el monitor)', () => {
+  const EDREDONES = 'prod-edredones';
+
+  function call(
+    variantes: any[],
+    opts: { sedeId?: string; producto?: any } = {},
+  ) {
+    const fakeThis: any = {
+      prisma: {
+        producto: {
+          findUnique: jest.fn().mockResolvedValue(
+            // `in` y no `??`: el test del 404 pasa `producto: null` a propósito.
+            'producto' in opts
+              ? opts.producto
+              : { id: EDREDONES, nombre: 'EDREDONES' },
+          ),
+        },
+        productoVariante: { findMany: jest.fn().mockResolvedValue(variantes) },
+      },
+    };
+    return (PrecioNivelService.prototype as any)['obtenerGruposMayoreo'].call(
+      fakeThis,
+      EDREDONES,
+      opts.sedeId ?? 'sede-1',
+    );
+  }
+
+  const variante = (opts: {
+    id: string;
+    nombre: string;
+    sku: string;
+    precioVenta?: number | null;
+    stock?: number;
+    niveles?: any[];
+  }) => ({
+    id: opts.id,
+    nombre: opts.nombre,
+    sku: opts.sku,
+    isActive: true,
+    preciosNivel: opts.niveles ?? [],
+    stocksPorSede:
+      opts.precioVenta === undefined
+        ? []
+        : [
+            {
+              precio: opts.precioVenta == null ? null : D(opts.precioVenta),
+              stockActual: opts.stock ?? 0,
+            },
+          ],
+  });
+
+  it('junta en un grupo las variantes con el mismo nivel', async () => {
+    const r = await call([
+      variante({
+        id: 'v-alianza',
+        nombre: 'ALIANZA',
+        sku: 'VAR-000002',
+        precioVenta: 75,
+        stock: 6,
+        niveles: [nivel({ varianteId: 'v-alianza', precio: 72 })],
+      }),
+      variante({
+        id: 'v-ronaldo',
+        nombre: 'RONALDO',
+        sku: 'VAR-000007',
+        precioVenta: 75,
+        stock: 2,
+        niveles: [nivel({ varianteId: 'v-ronaldo', precio: 72 })],
+      }),
+    ]);
+
+    expect(r.totalVariantes).toBe(2);
+    expect(r.variantesEnGrupo).toBe(2);
+    expect(r.grupos).toHaveLength(1);
+    expect(r.grupos[0].nombreNivel).toBe('Por Mayor');
+    expect(r.grupos[0].cantidadMinima).toBe(3);
+    expect(r.grupos[0].precio).toBe(72);
+    expect(r.grupos[0].variantes.map((v: any) => v.sku)).toEqual([
+      'VAR-000002',
+      'VAR-000007',
+    ]);
+    expect(r.grupos[0].variantes[0].ahorroUnitario).toBe(3);
+    expect(r.grupos[0].preciosVentaDispares).toBe(false);
+    expect(r.sinNivel).toHaveLength(0);
+  });
+
+  it('separa por precio: mismo venta, distinto mayor → dos grupos', async () => {
+    const r = await call([
+      variante({
+        id: 'v-a',
+        nombre: 'A',
+        sku: 'A',
+        precioVenta: 83,
+        niveles: [nivel({ varianteId: 'v-a', precio: 76 })],
+      }),
+      variante({
+        id: 'v-b',
+        nombre: 'B',
+        sku: 'B',
+        precioVenta: 83,
+        niveles: [nivel({ varianteId: 'v-b', precio: 79 })],
+      }),
+    ]);
+    expect(r.grupos).toHaveLength(2);
+  });
+
+  it('las variantes sin nivel salen aparte: nunca harán mayoreo', async () => {
+    const r = await call([
+      variante({
+        id: 'v-alianza',
+        nombre: 'ALIANZA',
+        sku: 'VAR-000002',
+        precioVenta: 75,
+        niveles: [nivel({ varianteId: 'v-alianza', precio: 72 })],
+      }),
+      variante({
+        id: 'v-frozen',
+        nombre: 'FROZEN',
+        sku: 'VAR-000044',
+        precioVenta: 60,
+      }),
+    ]);
+
+    expect(r.variantesEnGrupo).toBe(1);
+    expect(r.sinNivel).toHaveLength(1);
+    expect(r.sinNivel[0].sku).toBe('VAR-000044');
+  });
+
+  it('marca el grupo cuyas variantes NO comparten precio de lista', async () => {
+    // Mismo mayor S/72 pero una vende a 75 y la otra a 80: la rebaja es la
+    // misma pero el descuento no, y casi siempre es un precio mal cargado.
+    const r = await call([
+      variante({
+        id: 'v-a',
+        nombre: 'A',
+        sku: 'A',
+        precioVenta: 75,
+        niveles: [nivel({ varianteId: 'v-a', precio: 72 })],
+      }),
+      variante({
+        id: 'v-b',
+        nombre: 'B',
+        sku: 'B',
+        precioVenta: 80,
+        niveles: [nivel({ varianteId: 'v-b', precio: 72 })],
+      }),
+    ]);
+    expect(r.grupos).toHaveLength(1);
+    expect(r.grupos[0].preciosVentaDispares).toBe(true);
+  });
+
+  it('marca el nivel que nunca va a aplicar porque no baja el precio', async () => {
+    const r = await call([
+      variante({
+        id: 'v-a',
+        nombre: 'A',
+        sku: 'A',
+        precioVenta: 70,
+        niveles: [nivel({ varianteId: 'v-a', precio: 72 })],
+      }),
+      variante({
+        id: 'v-b',
+        nombre: 'B',
+        sku: 'B',
+        precioVenta: 70,
+        niveles: [nivel({ varianteId: 'v-b', precio: 72 })],
+      }),
+    ]);
+    expect(r.grupos[0].nivelSinEfecto).toBe(true);
+  });
+
+  it('una variante con dos niveles aparece en los dos grupos', async () => {
+    const r = await call([
+      variante({
+        id: 'v-doble',
+        nombre: 'DOBLE',
+        sku: 'VAR-000215',
+        precioVenta: 80,
+        niveles: [
+          nivel({ varianteId: 'v-doble', precio: 60, min: 2 }),
+          nivel({ varianteId: 'v-doble', precio: 60, min: 3 }),
+        ],
+      }),
+    ]);
+    expect(r.grupos).toHaveLength(2);
+    expect(r.grupos.map((g: any) => g.cantidadMinima).sort()).toEqual([2, 3]);
+    expect(r.variantesEnGrupo).toBe(1);
+  });
+
+  it('un nivel PORCENTAJE resuelve el precio contra la lista de CADA variante', async () => {
+    const pct = (varianteId: string) => ({
+      varianteId,
+      nombre: 'Por Mayor',
+      cantidadMinima: 3,
+      cantidadMaxima: null,
+      tipoPrecio: TipoPrecioNivel.PORCENTAJE_DESCUENTO,
+      precio: null,
+      porcentajeDesc: D(10),
+      isActive: true,
+    });
+    const r = await call([
+      variante({
+        id: 'v-a',
+        nombre: 'A',
+        sku: 'A',
+        precioVenta: 100,
+        niveles: [pct('v-a')],
+      }),
+      variante({
+        id: 'v-b',
+        nombre: 'B',
+        sku: 'B',
+        precioVenta: 50,
+        niveles: [pct('v-b')],
+      }),
+    ]);
+    // Un solo grupo (el descuento es el mismo), dos precios distintos.
+    expect(r.grupos).toHaveLength(1);
+    expect(r.grupos[0].variantes.map((v: any) => v.precioConNivel)).toEqual([
+      90, 45,
+    ]);
+  });
+
+  it('los grupos más grandes van primero', async () => {
+    const r = await call([
+      variante({
+        id: 'v-a',
+        nombre: 'A',
+        sku: 'A',
+        precioVenta: 75,
+        niveles: [nivel({ varianteId: 'v-a', precio: 72 })],
+      }),
+      variante({
+        id: 'v-b',
+        nombre: 'B',
+        sku: 'B',
+        precioVenta: 75,
+        niveles: [nivel({ varianteId: 'v-b', precio: 72 })],
+      }),
+      variante({
+        id: 'v-c',
+        nombre: 'C',
+        sku: 'C',
+        precioVenta: 83,
+        niveles: [nivel({ varianteId: 'v-c', precio: 79 })],
+      }),
+    ]);
+    expect(r.grupos.map((g: any) => g.variantes.length)).toEqual([2, 1]);
+  });
+
+  it('producto inexistente → 404', async () => {
+    await expect(call([], { producto: null })).rejects.toThrow(
+      'Producto prod-edredones no encontrado',
+    );
+  });
+});
+
 describe('PrecioNivelService.calcularPrecioSegunCantidad (mayoreo combinado)', () => {
   const EDREDONES = 'prod-edredones';
   const CLAVE_72 = `${EDREDONES}|3|inf|PRECIO_FIJO|72.000000`;

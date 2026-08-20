@@ -524,6 +524,190 @@ export class PrecioNivelService {
   }
 
   /**
+   * MONITOR DE MAYOREO COMBINADO: cómo quedan agrupadas las variantes de un
+   * producto según su configuración de niveles.
+   *
+   * Existe porque el grupo es IMPLÍCITO —sale de que dos variantes tengan el
+   * mismo nivel, no de una tabla que alguien mantiene— y eso lo vuelve
+   * invisible: nadie puede saber, mirando la pantalla de variantes, cuáles van
+   * a combinar entre sí. Peor, cambiarle S/1 el mayor a una variante la saca
+   * del grupo sin avisar.
+   *
+   * 🔴 Agrupa con `claveGrupoMayoreo`, la MISMA que usa el cálculo de precio.
+   * Si el monitor agrupara por su cuenta podría mostrar algo distinto de lo que
+   * el POS va a cobrar, que es exactamente el problema que viene a resolver.
+   *
+   * `sedeId` es opcional y solo sirve para traer el precio de lista y el stock
+   * (que sí son por sede); la agrupación no depende de la sede.
+   */
+  async obtenerGruposMayoreo(productoId: string, sedeId?: string) {
+    const producto = await this.prisma.producto.findUnique({
+      where: { id: productoId },
+      select: { id: true, nombre: true },
+    });
+    if (!producto) {
+      throw new NotFoundException(`Producto ${productoId} no encontrado`);
+    }
+
+    const variantes = await this.prisma.productoVariante.findMany({
+      where: { productoId, deletedAt: null },
+      select: {
+        id: true,
+        nombre: true,
+        sku: true,
+        isActive: true,
+        preciosNivel: { where: { isActive: true } },
+        ...(sedeId
+          ? {
+              stocksPorSede: {
+                where: { sedeId },
+                select: { precio: true, stockActual: true },
+              },
+            }
+          : {}),
+      },
+      orderBy: { nombre: 'asc' },
+    });
+
+    type VarianteFila = (typeof variantes)[number] & {
+      stocksPorSede?: Array<{
+        precio: Prisma.Decimal | null;
+        stockActual: number;
+      }>;
+    };
+
+    const datosDeVenta = (v: VarianteFila) => {
+      const stock = v.stocksPorSede?.[0];
+      return {
+        precioVenta: stock?.precio ? stock.precio.toNumber() : null,
+        stockActual: stock?.stockActual ?? null,
+      };
+    };
+
+    const grupos = new Map<
+      string,
+      {
+        clave: string;
+        nombreNivel: string;
+        cantidadMinima: number;
+        cantidadMaxima: number | null;
+        tipoPrecio: TipoPrecioNivel;
+        precio: number | null;
+        porcentajeDesc: number | null;
+        variantes: Array<{
+          varianteId: string;
+          nombre: string;
+          sku: string;
+          isActive: boolean;
+          precioVenta: number | null;
+          stockActual: number | null;
+          precioConNivel: number | null;
+          ahorroUnitario: number | null;
+        }>;
+      }
+    >();
+    const sinNivel: Array<{
+      varianteId: string;
+      nombre: string;
+      sku: string;
+      isActive: boolean;
+      precioVenta: number | null;
+      stockActual: number | null;
+    }> = [];
+
+    for (const v of variantes as VarianteFila[]) {
+      const venta = datosDeVenta(v);
+      if (!v.preciosNivel.length) {
+        sinNivel.push({
+          varianteId: v.id,
+          nombre: v.nombre,
+          sku: v.sku,
+          isActive: v.isActive,
+          ...venta,
+        });
+        continue;
+      }
+      for (const nivel of v.preciosNivel) {
+        const clave = PrecioNivelService.claveGrupoMayoreo(productoId, nivel);
+        if (!grupos.has(clave)) {
+          grupos.set(clave, {
+            clave,
+            nombreNivel: nivel.nombre,
+            cantidadMinima: nivel.cantidadMinima,
+            cantidadMaxima: nivel.cantidadMaxima,
+            tipoPrecio: nivel.tipoPrecio,
+            precio: nivel.precio ? nivel.precio.toNumber() : null,
+            porcentajeDesc: nivel.porcentajeDesc
+              ? nivel.porcentajeDesc.toNumber()
+              : null,
+            variantes: [],
+          });
+        }
+        // Un nivel PORCENTAJE deja un precio distinto en cada variante (se
+        // aplica sobre SU precio de lista), así que se resuelve por variante.
+        const precioConNivel =
+          nivel.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO
+            ? nivel.precio?.toNumber() ?? null
+            : venta.precioVenta != null
+              ? round6(
+                  venta.precioVenta *
+                    (1 - (nivel.porcentajeDesc?.toNumber() ?? 0) / 100),
+                )
+              : null;
+        grupos.get(clave)!.variantes.push({
+          varianteId: v.id,
+          nombre: v.nombre,
+          sku: v.sku,
+          isActive: v.isActive,
+          ...venta,
+          precioConNivel,
+          ahorroUnitario:
+            venta.precioVenta != null && precioConNivel != null
+              ? round6(venta.precioVenta - precioConNivel)
+              : null,
+        });
+      }
+    }
+
+    const lista = [...grupos.values()]
+      .map((g) => {
+        const precios = g.variantes
+          .map((v) => v.precioVenta)
+          .filter((p): p is number => p != null);
+        const distintos = new Set(precios);
+        return {
+          ...g,
+          // Dos variantes en el mismo grupo pero con precio de lista distinto
+          // reciben descuentos distintos por la misma rebaja. No es un error,
+          // pero casi siempre es un precio mal cargado.
+          preciosVentaDispares: distintos.size > 1,
+          // Un nivel que no baja el precio nunca va a aplicar: el motor
+          // descarta el nivel que no mejora la base.
+          nivelSinEfecto: g.variantes.some(
+            (v) =>
+              v.precioVenta != null &&
+              v.precioConNivel != null &&
+              v.precioConNivel >= v.precioVenta,
+          ),
+        };
+      })
+      // Los grupos grandes primero: son los que más mueven la aguja.
+      .sort((a, b) => b.variantes.length - a.variantes.length);
+
+    return {
+      productoId: producto.id,
+      productoNombre: producto.nombre,
+      sedeId: sedeId ?? null,
+      totalVariantes: variantes.length,
+      /** Variantes que SÍ pueden combinar (están en al menos un grupo). */
+      variantesEnGrupo: variantes.length - sinNivel.length,
+      grupos: lista,
+      /** Estas nunca van a hacer mayoreo: no tienen ningún nivel cargado. */
+      sinNivel,
+    };
+  }
+
+  /**
    * Calcular el precio según la cantidad para un producto o variante
    * @param sedeId - Requerido para obtener el precio base desde ProductoStock
    */

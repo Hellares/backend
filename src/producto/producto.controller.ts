@@ -1328,6 +1328,40 @@ export class ProductoController {
     return await this.precioNivelService.remove(nivelId);
   }
 
+  @Get(':id/grupos-mayoreo')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Grupos de mayoreo combinado de las variantes de un producto',
+    description:
+      'Qué variantes suman entre sí para llegar al mínimo de un nivel. El ' +
+      'grupo es implícito (dos variantes con un nivel equivalente combinan), ' +
+      'así que este endpoint es la única forma de VERLO antes de vender. ' +
+      'Agrupa con la misma llave que el cálculo de precio, así que muestra ' +
+      'exactamente lo que el POS va a cobrar.',
+  })
+  @ApiQuery({
+    name: 'sedeId',
+    description:
+      'Sede para leer precio de lista y stock. La agrupación no depende de ' +
+      'la sede; sin este parámetro los precios vienen en null.',
+    required: false,
+    type: String,
+  })
+  @ApiHeader({
+    name: 'x-tenant-id',
+    description: 'ID de la empresa (tenant)',
+    required: true,
+  })
+  async getGruposMayoreo(
+    @Param('id') productoId: string,
+    @Query('sedeId') sedeId?: string,
+  ) {
+    return await this.precioNivelService.obtenerGruposMayoreo(
+      productoId,
+      sedeId,
+    );
+  }
+
   @Get(':id/calcular-precio')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Calcular precio según cantidad para un producto' })
