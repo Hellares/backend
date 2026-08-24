@@ -14,6 +14,7 @@ import {
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateCompraDetalleDto } from './create-compra-detalle.dto';
+import { CreateCompraGastoDto } from './create-compra-gasto.dto';
 import { TerminosPago } from '@prisma/client';
 
 export class CreateCompraDto {
@@ -98,4 +99,15 @@ export class CreateCompraDto {
   @ValidateNested({ each: true })
   @Type(() => CreateCompraDetalleDto)
   detalles: CreateCompraDetalleDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Gastos de la factura que no son productos (flete, movilidad, interés). Suman al total de la compra; los que tienen prorratea=true además suben el costo de los productos.',
+    type: [CreateCompraGastoDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateCompraGastoDto)
+  gastos?: CreateCompraGastoDto[];
 }

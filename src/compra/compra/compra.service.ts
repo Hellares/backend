@@ -14,6 +14,7 @@ import { OrdenCompraService } from '../orden-compra/orden-compra.service';
 import {
   CreateCompraDto,
   CreateCompraDetalleDto,
+  CreateCompraGastoDto,
   CreateCompraDesdeOcDto,
   DistribuirCompraDto,
   QueryComprasDto,
@@ -26,6 +27,7 @@ import {
   TipoCambioPrecio,
   MetodoPagoVenta,
   FuentePagoCompra,
+  CriterioProrrateo,
   Prisma,
 } from '@prisma/client';
 import { CajaService } from '../../caja/caja.service';
@@ -76,10 +78,28 @@ export class CompraService {
         this.calcularDetalle(d, index, factoresMap, precioIncluyeIgv),
       );
 
-      const subtotal = detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0);
+      // Gastos de la factura que no son productos. Suman al total SIEMPRE
+      // (si no, la compra no cuadra con la factura ni con la cuenta por pagar);
+      // que suban o no el costo del producto se decide al confirmar.
+      const gastosCalculados = (dto.gastos ?? []).map((g, i) =>
+        CompraService.calcularGasto(g, i),
+      );
+      const totalGastos = round2(
+        gastosCalculados.reduce((sum, g) => sum + g.monto, 0),
+      );
+
+      const subtotal = round2(
+        detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0) +
+          gastosCalculados.reduce((sum, g) => sum + g.base, 0),
+      );
       const totalDescuento = detallesCalculados.reduce((sum, d) => sum + d.descuento, 0);
-      const totalImpuestos = detallesCalculados.reduce((sum, d) => sum + d.igv, 0);
-      const total = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
+      const totalImpuestos = round2(
+        detallesCalculados.reduce((sum, d) => sum + d.igv, 0) +
+          gastosCalculados.reduce((sum, g) => sum + g.igv, 0),
+      );
+      const total = round2(
+        detallesCalculados.reduce((sum, d) => sum + d.total, 0) + totalGastos,
+      );
 
       // Crédito: resuelve términos/días/vencimiento (calcula fechaVencimiento =
       // fechaRecepción + días si no viene explícita) y valida el límite de
@@ -114,6 +134,7 @@ export class CompraService {
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
+          totalGastos,
           fechaRecepcion,
           observaciones: dto.observaciones,
           creadoPor: usuarioId,
@@ -137,6 +158,9 @@ export class CompraService {
               nuevoPrecioVenta: d.nuevoPrecioVenta,
             })),
           },
+          ...(gastosCalculados.length > 0 && {
+            gastos: { create: gastosCalculados },
+          }),
         },
         include: this.getInclude(),
       });
@@ -364,6 +388,7 @@ export class CompraService {
         where: { id, empresaId },
         include: {
           detalles: true,
+          gastos: true,
           proveedor: true,
         },
       });
@@ -412,6 +437,18 @@ export class CompraService {
         }
       }
 
+      // Flete / movilidad repartido entre las líneas. Se calcula ANTES del
+      // loop porque el reparto necesita ver TODAS las líneas, y se congela acá:
+      // este es el momento en que el costo entra al inventario.
+      const gastoPorLinea = CompraService.prorratearGastos(
+        compra.detalles,
+        compra.gastos.map((g) => ({
+          monto: Number(g.monto),
+          prorratea: g.prorratea,
+          criterio: g.criterio,
+        })),
+      );
+
       // 3. Procesar cada detalle
       for (const detalle of compra.detalles) {
         if (!detalle.productoId && !detalle.varianteId) {
@@ -454,9 +491,14 @@ export class CompraService {
         // precio venta que también es con IGV). Independiente de si
         // la compra fue cargada con precioIncluyeIgv true o false:
         // total siempre incluye IGV.
+        // El flete prorrateado entra ACÁ y en ningún otro lado: de este único
+        // valor salen el costo promedio ponderado del ProductoStock y el
+        // precioCosto del Lote, así que el costo real de adquisición se propaga
+        // solo al kardex, a los márgenes y a la apertura de bultos.
+        const gastoLinea = gastoPorLinea.get(detalle.id) ?? 0;
         const precioCompra =
           detalle.cantidad > 0
-            ? Number(detalle.total) / detalle.cantidad
+            ? (Number(detalle.total) + gastoLinea) / detalle.cantidad
             : Number(detalle.precioUnitario);
 
         // b. Calcular costo promedio ponderado
@@ -588,7 +630,9 @@ export class CompraService {
         // f. Vincular detalle al lote
         await tx.compraDetalle.update({
           where: { id: detalle.id },
-          data: { loteId: lote.id },
+          // Se guarda para poder explicar después por qué el costo del producto
+          // no es el precio que facturó el proveedor.
+          data: { loteId: lote.id, gastoProrrateado: gastoLinea },
         });
 
         // g. Registrar historial de precio de costo por sede
@@ -1322,7 +1366,6 @@ export class CompraService {
       dto.precioIncluyeIgv ?? compra.precioIncluyeIgv;
 
     return this.prisma.$transaction(async (tx) => {
-      let montosData = {};
       if (dto.detalles && dto.detalles.length > 0) {
         await tx.compraDetalle.deleteMany({ where: { compraId: id } });
 
@@ -1352,12 +1395,24 @@ export class CompraService {
           })),
         });
 
-        const subtotal = detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0);
-        const totalDescuento = detallesCalculados.reduce((sum, d) => sum + d.descuento, 0);
-        const totalImpuestos = detallesCalculados.reduce((sum, d) => sum + d.igv, 0);
-        const total = detallesCalculados.reduce((sum, d) => sum + d.total, 0);
-        montosData = { subtotal, descuento: totalDescuento, impuestos: totalImpuestos, total };
       }
+
+      if (dto.gastos) {
+        await tx.compraGasto.deleteMany({ where: { compraId: id } });
+        if (dto.gastos.length > 0) {
+          await tx.compraGasto.createMany({
+            data: dto.gastos.map((g, i) => ({
+              compraId: id,
+              ...CompraService.calcularGasto(g, i),
+            })),
+          });
+        }
+      }
+
+      // 🔑 Los totales se recalculan SIEMPRE desde lo que quedó guardado, no
+      // desde el dto: editar solo los gastos dejaba los totales viejos (y al
+      // revés). Es una lectura barata dentro de la misma transacción.
+      const montosData = await this._recalcularTotales(tx, id);
 
       return tx.compra.update({
         where: { id },
@@ -1869,6 +1924,115 @@ export class CompraService {
     }
   }
 
+  /**
+   * Parte el monto del gasto en base + IGV, con la misma convención que una
+   * línea: `monto` es lo que cobra el proveedor y el IGV se EXTRAE si el gasto
+   * va gravado. Con porcentajeIGV = 0 (el caso normal: recibo de movilidad) la
+   * base es el monto entero.
+   */
+  private static calcularGasto(dto: CreateCompraGastoDto, index: number) {
+    const monto = round2(dto.monto ?? 0);
+    const porcentajeIGV = dto.porcentajeIGV ?? 0;
+    const base =
+      porcentajeIGV > 0 ? round2(monto / (1 + porcentajeIGV / 100)) : monto;
+    const igv = round2(monto - base);
+    return {
+      concepto: dto.concepto.trim(),
+      monto,
+      porcentajeIGV,
+      base,
+      igv,
+      prorratea: dto.prorratea ?? true,
+      criterio: dto.criterio ?? CriterioProrrateo.VALOR,
+      orden: dto.orden ?? index,
+    };
+  }
+
+  /**
+   * Reparte los gastos prorrateables entre las líneas que MUEVEN STOCK.
+   *
+   * 🔴 Cierra EXACTO: lo que reparte suma centavo a centavo el monto del gasto.
+   * La última línea se lleva el resto del redondeo, igual que el prorrateo de
+   * combos. Si no cerrara, el costo del inventario no coincidiría con lo que
+   * se le pagó al proveedor y la diferencia aparecería como margen fantasma.
+   *
+   * Las líneas sin producto ni variante (servicios sueltos) no participan: no
+   * hay costo que subir. Si NINGUNA línea mueve stock, el gasto no se reparte
+   * —igual sigue sumando al total de la compra—.
+   */
+  static prorratearGastos(
+    detalles: Array<{ id: string; cantidad: number; total: unknown; productoId?: string | null; varianteId?: string | null }>,
+    gastos: Array<{ monto: number; prorratea: boolean; criterio: CriterioProrrateo }>,
+  ): Map<string, number> {
+    const reparto = new Map<string, number>();
+    const elegibles = detalles.filter((d) => d.productoId || d.varianteId);
+    if (elegibles.length === 0) return reparto;
+
+    for (const gasto of gastos) {
+      if (!gasto.prorratea || gasto.monto <= 0) continue;
+
+      const peso = (d: (typeof elegibles)[number]) =>
+        gasto.criterio === CriterioProrrateo.CANTIDAD
+          ? d.cantidad
+          : Number(d.total);
+      const totalPeso = elegibles.reduce((sum, d) => sum + peso(d), 0);
+      // Todo en cero (una compra en 0 o cantidades 0): se reparte parejo en
+      // vez de dividir por cero.
+      const parejo = totalPeso <= 0;
+
+      let acumulado = 0;
+      elegibles.forEach((d, i) => {
+        const esUltima = i === elegibles.length - 1;
+        const parte = esUltima
+          ? round2(gasto.monto - acumulado)
+          : round2(
+              parejo
+                ? gasto.monto / elegibles.length
+                : (gasto.monto * peso(d)) / totalPeso,
+            );
+        acumulado = round2(acumulado + parte);
+        reparto.set(d.id, round2((reparto.get(d.id) ?? 0) + parte));
+      });
+    }
+    return reparto;
+  }
+
+  /**
+   * Totales de la compra a partir de lo PERSISTIDO (líneas + gastos).
+   *
+   * Invariante que se mantiene: `subtotal + impuestos = total`. Un gasto sin
+   * IGV entra entero al subtotal —no hay base que separar— y por eso el
+   * subtotal de una compra con fletes no es solo la base gravada de los
+   * productos; `totalGastos` queda aparte justamente para poder mostrarlo
+   * como renglón propio.
+   */
+  private async _recalcularTotales(tx: Prisma.TransactionClient, compraId: string) {
+    const [detalles, gastos] = await Promise.all([
+      tx.compraDetalle.findMany({
+        where: { compraId },
+        select: { subtotal: true, descuento: true, igv: true, total: true },
+      }),
+      tx.compraGasto.findMany({
+        where: { compraId },
+        select: { monto: true, base: true, igv: true },
+      }),
+    ]);
+    const suma = (xs: Array<Prisma.Decimal | number>) =>
+      round2(xs.reduce<number>((acc, x) => acc + Number(x), 0));
+    const totalGastos = suma(gastos.map((g) => g.monto));
+    return {
+      subtotal: round2(
+        suma(detalles.map((d) => d.subtotal)) + suma(gastos.map((g) => g.base)),
+      ),
+      descuento: suma(detalles.map((d) => d.descuento)),
+      impuestos: round2(
+        suma(detalles.map((d) => d.igv)) + suma(gastos.map((g) => g.igv)),
+      ),
+      total: round2(suma(detalles.map((d) => d.total)) + totalGastos),
+      totalGastos,
+    };
+  }
+
   private calcularDetalle(
     dto: CreateCompraDetalleDto,
     index: number,
@@ -2024,6 +2188,7 @@ export class CompraService {
    */
   private getInclude() {
     return {
+      gastos: { orderBy: { orden: 'asc' as const } },
       detalles: {
         include: {
           producto: {

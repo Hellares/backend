@@ -194,6 +194,12 @@ model Compra {
   impuestos Decimal @default(0) @db.Decimal(12, 2)
   total     Decimal @default(0) @db.Decimal(12, 2)
 
+  // Suma de CompraGasto (fletes, movilidad, intereses...). Está incluida en
+  // `total` —el total tiene que cuadrar con la factura del proveedor— y se
+  // guarda aparte para poder mostrarla como renglón propio y reportarla sin
+  // recorrer los gastos.
+  totalGastos Decimal @default(0) @db.Decimal(12, 2)
+
   // Fechas
   fechaRecepcion DateTime @default(now())
 
@@ -222,6 +228,7 @@ model Compra {
   proveedor       Proveedor         @relation(fields: [proveedorId], references: [id])
   ordenCompra     OrdenCompra?      @relation(fields: [ordenCompraId], references: [id])
   detalles        CompraDetalle[]
+  gastos          CompraGasto[]
   lotes           Lote[]
   movimientos     MovimientoStock[]
   devoluciones    Devolucion[]
@@ -267,7 +274,7 @@ model CompraDetalle {
   // los totales y stock siguen tomando `cantidad` y `precioUnitario`.
   usaUnidadCompra       Boolean  @default(false)
   cantidadOriginal      Decimal? @db.Decimal(12, 4) // Ej: 10 (paquetes)
-  unidadOriginalSimbolo String?  // Ej: "PAQ" (snapshot del símbolo)
+  unidadOriginalSimbolo String? // Ej: "PAQ" (snapshot del símbolo)
   factorAplicado        Decimal? @db.Decimal(12, 4) // Ej: 100 (snapshot del factor en el momento de la compra)
 
   // ─── Ajuste de precio venta al confirmar ──────────────────────
@@ -284,6 +291,14 @@ model CompraDetalle {
   // Totales
   subtotal Decimal @default(0) @db.Decimal(12, 2)
   total    Decimal @default(0) @db.Decimal(12, 2)
+
+  // ─── Gasto prorrateado (flete/movilidad) ──────────────────────
+  // Parte de los CompraGasto con `prorratea = true` que le tocó a esta
+  // línea, repartida POR VALOR. Se calcula y congela AL CONFIRMAR, que es
+  // cuando el costo entra al inventario, y queda guardada para poder
+  // explicar después por qué el costo del producto no es el precio que
+  // facturó el proveedor.
+  gastoProrrateado Decimal @default(0) @db.Decimal(12, 2)
 
   // Lote asignado al confirmar
   loteId String?
@@ -303,6 +318,58 @@ model CompraDetalle {
   @@index([productoId])
   @@index([varianteId])
   @@index([loteId])
+}
+
+// ========== GASTO DE COMPRA ==========
+
+/// Gasto que viene en la factura del proveedor y NO es un producto:
+/// flete, movilidad, embalaje, interés por pago diferido, recargos.
+///
+/// Dos preguntas distintas sobre el mismo monto:
+///  1. Va en el DOCUMENTO: siempre. Suma al total de la compra para que
+///     cuadre con la factura y para que la cuenta por pagar sea la real.
+///  2. Va al COSTO del producto: solo si `prorratea`. Un flete sí (es costo
+///     de adquisición: lo que cuesta poner la mercadería en el almacén); un
+///     interés por pagar a 30 días no (es costo financiero, y meterlo al
+///     inventario infla el costo del producto).
+model CompraGasto {
+  id       String @id @default(cuid())
+  compraId String
+
+  /// "Movilidad Lima-Trujillo", "Embalaje", "Interés por pago a 30 días"
+  concepto String
+
+  /// Lo que cobra el proveedor por este concepto, con IGV adentro si lo tiene.
+  monto Decimal @db.Decimal(12, 2)
+
+  /// 0 es lo normal: la movilidad suele venir en recibo simple, sin IGV.
+  /// Si el gasto viene DENTRO de la factura y va gravado, acá va 18 y el
+  /// service parte `monto` en base + IGV, igual que una línea de producto.
+  porcentajeIGV Decimal @default(0) @db.Decimal(5, 2)
+  igv           Decimal @default(0) @db.Decimal(12, 2)
+  /// `monto` − `igv`. Suma al subtotal de la compra.
+  base          Decimal @default(0) @db.Decimal(12, 2)
+
+  /// ¿Sube el costo de los productos? Viene en true porque el caso normal
+  /// es el flete; desmarcarlo es la excepción y queda registrado acá.
+  prorratea Boolean @default(true)
+
+  /// Cómo se reparte entre las líneas. VALOR = proporcional al total de cada
+  /// línea (default, y lo contablemente estándar: el ítem caro absorbe más).
+  /// CANTIDAD = por unidades, para cuando el flete se cobra por bulto.
+  criterio CriterioProrrateo @default(VALOR)
+
+  orden    Int      @default(0)
+  creadoEn DateTime @default(now())
+
+  compra Compra @relation(fields: [compraId], references: [id], onDelete: Cascade)
+
+  @@index([compraId])
+}
+
+enum CriterioProrrateo {
+  VALOR
+  CANTIDAD
 }
 
 // ========== LOTE (BATCH DE PRODUCTO) ==========
@@ -387,16 +454,16 @@ enum FuentePagoCompra {
 
 /// Pagos realizados a proveedores por compras
 model PagoCompra {
-  id            String          @id @default(cuid())
-  compraId      String
-  metodoPago    MetodoPagoVenta
-  monto         Decimal         @db.Decimal(10, 2)
-  referencia    String? // Número de operación, voucher
-  bancoDestino  String? // Nombre del banco del proveedor
-  cuentaDestino String? // Número de cuenta destino
+  id             String          @id @default(cuid())
+  compraId       String
+  metodoPago     MetodoPagoVenta
+  monto          Decimal         @db.Decimal(10, 2)
+  referencia     String? // Número de operación, voucher
+  bancoDestino   String? // Nombre del banco del proveedor
+  cuentaDestino  String? // Número de cuenta destino
   comprobanteUrl String? // Foto/PDF del voucher (Yape/Plin/transferencia) en S3
-  fechaPago     DateTime        @default(now())
-  creadoEn      DateTime        @default(now())
+  fechaPago      DateTime        @default(now())
+  creadoEn       DateTime        @default(now())
 
   // Origen del dinero (Tesorería/Caja/Banco). Se setea bancoId si BANCO y
   // movimientoCajaId si TESORERIA/CAJA, para poder revertir al anular.

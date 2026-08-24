@@ -5,6 +5,7 @@ export { UpdateEstadoOrdenCompraDto } from './update-estado-orden-compra.dto';
 export { CreateCompraDto } from './create-compra.dto';
 export { ConfirmarCompraDto, PagoContadoCompraDto } from './confirmar-compra.dto';
 export { CreateCompraDetalleDto } from './create-compra-detalle.dto';
+export { CreateCompraGastoDto } from './create-compra-gasto.dto';
 export { CreateCompraDesdeOcDto, LineaRecepcionOcDto } from './create-compra-desde-oc.dto';
 export { QueryOrdenesCompraDto } from './query-ordenes-compra.dto';
 export { QueryComprasDto } from './query-compras.dto';

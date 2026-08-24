@@ -518,3 +518,114 @@ describe('CompraService._validarLimiteCredito', () => {
     ).rejects.toThrow(/[Ll]ímite de crédito/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gastos de compra (flete / movilidad) y su prorrateo al costo
+// ─────────────────────────────────────────────────────────────────────────────
+
+const calcularGasto = (dto: any, index = 0) =>
+  (CompraService as any).calcularGasto(dto, index);
+
+const linea = (id: string, total: number, cantidad: number, conProducto = true) => ({
+  id,
+  cantidad,
+  total,
+  productoId: conProducto ? 'p-' + id : null,
+  varianteId: null,
+});
+
+describe('CompraService.calcularGasto', () => {
+  it('sin IGV (recibo de movilidad): la base es el monto entero', () => {
+    const g = calcularGasto({ concepto: 'Movilidad Lima-Trujillo', monto: 30 });
+    expect(g.base).toBe(30);
+    expect(g.igv).toBe(0);
+    expect(g.prorratea).toBe(true); // el default es que sí sube el costo
+    expect(g.criterio).toBe('VALOR');
+  });
+
+  it('gravado dentro de la factura: EXTRAE el IGV, igual que una línea', () => {
+    const g = calcularGasto({ concepto: 'Flete', monto: 118, porcentajeIGV: 18 });
+    expect(g.base).toBe(100);
+    expect(g.igv).toBe(18);
+    expect(g.base + g.igv).toBe(g.monto); // el desglose cierra
+  });
+
+  it('respeta prorratea=false (interés por pago diferido)', () => {
+    const g = calcularGasto({ concepto: 'Interés 30 días', monto: 15, prorratea: false });
+    expect(g.prorratea).toBe(false);
+  });
+});
+
+describe('CompraService.prorratearGastos', () => {
+  it('reparte POR VALOR: el ítem caro absorbe más flete', () => {
+    // 10 edredones a S/60 = 600 · 20 cojines a S/15 = 300 · movilidad 30 + 20
+    const reparto = CompraService.prorratearGastos(
+      [linea('edredones', 600, 10), linea('cojines', 300, 20)],
+      [
+        { monto: 30, prorratea: true, criterio: 'VALOR' as any },
+        { monto: 20, prorratea: true, criterio: 'VALOR' as any },
+      ],
+    );
+    expect(reparto.get('edredones')).toBeCloseTo(33.33, 2);
+    expect(reparto.get('cojines')).toBeCloseTo(16.67, 2);
+    // Y el costo unitario queda como se le explicó al user
+    expect((600 + reparto.get('edredones')!) / 10).toBeCloseTo(63.333, 3);
+    expect((300 + reparto.get('cojines')!) / 20).toBeCloseTo(15.8335, 4);
+  });
+
+  it('🔴 cierra EXACTO aunque el reparto no sea divisible', () => {
+    // 3 líneas iguales y S/10: 3.33 + 3.33 + 3.34
+    const reparto = CompraService.prorratearGastos(
+      [linea('a', 100, 1), linea('b', 100, 1), linea('c', 100, 1)],
+      [{ monto: 10, prorratea: true, criterio: 'VALOR' as any }],
+    );
+    const suma = [...reparto.values()].reduce((s, v) => s + v, 0);
+    expect(Number(suma.toFixed(2))).toBe(10);
+  });
+
+  it('ignora los gastos con prorratea=false', () => {
+    const reparto = CompraService.prorratearGastos(
+      [linea('a', 100, 1)],
+      [
+        { monto: 30, prorratea: true, criterio: 'VALOR' as any },
+        { monto: 15, prorratea: false, criterio: 'VALOR' as any },
+      ],
+    );
+    expect(reparto.get('a')).toBe(30); // el interés NO entró al costo
+  });
+
+  it('por CANTIDAD reparte por unidades, no por plata', () => {
+    const reparto = CompraService.prorratearGastos(
+      [linea('caro', 900, 1), linea('barato', 100, 9)],
+      [{ monto: 100, prorratea: true, criterio: 'CANTIDAD' as any }],
+    );
+    expect(reparto.get('caro')).toBeCloseTo(10, 2);
+    expect(reparto.get('barato')).toBeCloseTo(90, 2);
+  });
+
+  it('deja afuera las líneas que no mueven stock', () => {
+    const reparto = CompraService.prorratearGastos(
+      [linea('producto', 100, 1), linea('servicio', 100, 1, false)],
+      [{ monto: 20, prorratea: true, criterio: 'VALOR' as any }],
+    );
+    expect(reparto.get('producto')).toBe(20);
+    expect(reparto.has('servicio')).toBe(false);
+  });
+
+  it('sin líneas con stock no explota ni reparte', () => {
+    const reparto = CompraService.prorratearGastos(
+      [linea('servicio', 100, 1, false)],
+      [{ monto: 20, prorratea: true, criterio: 'VALOR' as any }],
+    );
+    expect(reparto.size).toBe(0);
+  });
+
+  it('compra en cero: reparte parejo en vez de dividir por cero', () => {
+    const reparto = CompraService.prorratearGastos(
+      [linea('a', 0, 0), linea('b', 0, 0)],
+      [{ monto: 10, prorratea: true, criterio: 'VALOR' as any }],
+    );
+    expect(reparto.get('a')).toBe(5);
+    expect(reparto.get('b')).toBe(5);
+  });
+});
