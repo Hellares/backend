@@ -509,6 +509,66 @@ export class WhatsappService {
     return 'Buenas noches';
   }
 
+  /**
+   * ¿El sistema puede escribirle a un cliente por su cuenta?
+   *
+   * Deliberadamente NO consulta a Evolution, a diferencia de `getConfig`: esto
+   * se llama cada vez que alguien abre el cuadro de mensaje, y una ida al
+   * proveedor por cada apertura no vale lo que cuesta. El webhook
+   * CONNECTION_UPDATE mantiene `estado` al día; si aun así la instancia se
+   * cayó, el envío falla y el cliente cae a abrir WhatsApp — que es el mismo
+   * lugar donde habría terminado.
+   *
+   * Sin permiso de administrador a propósito: el técnico que atiende una orden
+   * necesita saber si puede escribir, y no puede ver la configuración.
+   */
+  async estadoEnvio(empresaId: string) {
+    const cfg = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId },
+      select: { estado: true, habilitado: true, numero: true },
+    });
+    const conectado =
+      this.evolution.disponible &&
+      !!cfg &&
+      cfg.habilitado &&
+      cfg.estado === EstadoWhatsappInstancia.CONECTADO;
+    return { conectado, numero: conectado ? (cfg?.numero ?? null) : null };
+  }
+
+  /**
+   * Manda un mensaje de texto al cliente desde el número de la empresa.
+   *
+   * Es la misma capacidad que ya usa el bot; acá queda expuesta para que
+   * escribirle a un cliente sobre su orden no obligue a salir de la app.
+   */
+  async enviarMensaje(
+    empresaId: string,
+    numero: string,
+    mensaje: string,
+  ): Promise<{ enviado: boolean }> {
+    const cfg = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId },
+    });
+    if (
+      !this.evolution.disponible ||
+      !cfg ||
+      !cfg.habilitado ||
+      cfg.estado !== EstadoWhatsappInstancia.CONECTADO
+    ) {
+      throw new BadRequestException(
+        'El WhatsApp de la empresa no está conectado',
+      );
+    }
+
+    await this.evolution.sendText({
+      instanceName: cfg.instanceName,
+      number: this.normalizarCelular(numero),
+      text: mensaje,
+    });
+    this.logger.log(`Mensaje enviado por WhatsApp (empresa ${empresaId})`);
+    return { enviado: true };
+  }
+
   /** Celular peruano de 9 dígitos → 51XXXXXXXXX (mismo criterio app). */
   private normalizarCelular(celular: string): string {
     let phone = celular.replace(/[^\d+]/g, '');

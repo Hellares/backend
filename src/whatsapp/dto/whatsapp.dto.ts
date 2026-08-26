@@ -1,6 +1,7 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
@@ -90,4 +91,31 @@ export class UpdateWhatsappDto {
   @IsOptional()
   @IsBoolean()
   habilitado?: boolean;
+}
+
+/**
+ * Un mensaje suelto al WhatsApp de un cliente, desde el número de la empresa.
+ *
+ * Es la misma capacidad que ya usa el bot, expuesta para que el sistema pueda
+ * escribirle a un cliente sobre su orden sin salir de la app.
+ */
+export class EnviarMensajeWhatsappDto {
+  @ApiProperty({
+    description:
+      'Celular del destinatario. Se normaliza acá: un celular peruano de 9 dígitos recibe el 51.',
+    example: '987654321',
+  })
+  @IsString()
+  @IsNotEmpty()
+  numero: string;
+
+  @ApiProperty({
+    description: 'Texto del mensaje. Admite el formato de WhatsApp (*negrita*).',
+  })
+  @IsString()
+  @IsNotEmpty()
+  // Tope de WhatsApp para un mensaje de texto. Sin esto, un pegado accidental
+  // de algo enorme se va al proveedor y vuelve como un error opaco.
+  @MaxLength(4096)
+  mensaje: string;
 }

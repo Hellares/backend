@@ -15,7 +15,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { WhatsappService } from './whatsapp.service';
-import { UpdateWhatsappDto } from './dto/whatsapp.dto';
+import {
+  EnviarMensajeWhatsappDto,
+  UpdateWhatsappDto,
+} from './dto/whatsapp.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -34,6 +37,32 @@ export class WhatsappEmpresaController {
   @ApiOperation({ summary: 'Config + estado de la vinculación de WhatsApp' })
   async getConfig(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.getConfig(id, user.sub);
+  }
+
+  @Get(':id/whatsapp/estado')
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      '¿El sistema puede enviar mensajes por su cuenta? Liviano y sin permiso de administrador: lo consulta quien atiende una orden para saber si escribe desde el sistema o abre WhatsApp.',
+  })
+  async estadoEnvio(@Param('id') id: string) {
+    return this.service.estadoEnvio(id);
+  }
+
+  @Post(':id/whatsapp/enviar')
+  @HttpCode(200)
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Envía un mensaje de texto al cliente desde el número de la empresa. 400 si no está conectado.',
+  })
+  async enviarMensaje(
+    @Param('id') id: string,
+    @Body() dto: EnviarMensajeWhatsappDto,
+  ) {
+    return this.service.enviarMensaje(id, dto.numero, dto.mensaje);
   }
 
   @Post(':id/whatsapp/vincular')
