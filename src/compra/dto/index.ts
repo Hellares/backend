@@ -3,6 +3,7 @@ export { CreateOrdenCompraDetalleDto } from './create-orden-compra-detalle.dto';
 export { UpdateOrdenCompraDto } from './update-orden-compra.dto';
 export { UpdateEstadoOrdenCompraDto } from './update-estado-orden-compra.dto';
 export { CreateCompraDto } from './create-compra.dto';
+export { UpdateCompraDto } from './update-compra.dto';
 export { ConfirmarCompraDto, PagoContadoCompraDto } from './confirmar-compra.dto';
 export { CreateCompraDetalleDto } from './create-compra-detalle.dto';
 export { CreateCompraGastoDto } from './create-compra-gasto.dto';

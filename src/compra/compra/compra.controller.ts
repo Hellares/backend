@@ -26,7 +26,7 @@ import { Permission } from '../../auth/enums/permission.enum';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { CompraService } from './compra.service';
-import { CreateCompraDto, CreateCompraDesdeOcDto, DistribuirCompraDto, QueryComprasDto, ConfirmarCompraDto } from '../dto';
+import { CreateCompraDto, UpdateCompraDto, CreateCompraDesdeOcDto, DistribuirCompraDto, QueryComprasDto, ConfirmarCompraDto } from '../dto';
 
 @ApiTags('Compras')
 @Controller('empresas/:empresaId/compras')
@@ -136,12 +136,15 @@ export class CompraController {
 
   @Put(':id')
   @RequiresPermission(Permission.MANAGE_COMPRAS)
-  @ApiOperation({ summary: 'Actualizar compra (solo BORRADOR)' })
+  @ApiOperation({
+    summary:
+      'Actualizar compra (solo BORRADOR). Es un merge: lo que no viene se conserva, y los detalles solo se reemplazan si el body los trae.',
+  })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async update(
     @Headers('x-tenant-id') empresaId: string,
     @Param('id') id: string,
-    @Body() dto: CreateCompraDto,
+    @Body() dto: UpdateCompraDto,
     @CurrentUser() user: JwtPayload,
   ) {
     return this.compraService.update(id, empresaId, dto, user.sub);
