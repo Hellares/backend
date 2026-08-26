@@ -2214,7 +2214,16 @@ export class CompraService {
    */
   private getInclude() {
     return {
-      gastos: { orderBy: { orden: 'asc' as const } },
+      gastos: {
+        orderBy: { orden: 'asc' as const },
+        // La categoría viaja con el gasto para que el detalle pueda
+        // mostrarla sin ir a buscar el catálogo por su cuenta.
+        include: {
+          categoriaGasto: {
+            select: { id: true, nombre: true, icono: true, color: true },
+          },
+        },
+      },
       detalles: {
         include: {
           producto: {
