@@ -344,6 +344,12 @@ export class CompraService {
           fechaVencimientoPago: credito.fechaVencimientoPago,
           moneda: dto.moneda ?? oc.moneda,
           tipoCambio: dto.tipoCambio ?? oc.tipoCambio,
+          // 🔴 La recepción calcula `igv = subtotal × %` y `total = subtotal +
+          // igv`: el precio de la OC es la BASE. Quedaba guardado con el
+          // default `true` (precio con IGV adentro), y al editar el borrador
+          // se recalculaban las líneas con la convención contraria: los
+          // mismos precios daban otro total.
+          precioIncluyeIgv: false,
           subtotal,
           descuento: totalDescuento,
           impuestos: totalImpuestos,
@@ -1436,6 +1442,11 @@ export class CompraService {
         await tx.compraDetalle.createMany({
           data: detallesCalculados.map((d) => ({
             compraId: id,
+            // 🔴 El vínculo con la línea de la OC viaja de vuelta o se pierde:
+            // sin él, confirmar la compra ya no incrementa `cantidadRecibida`
+            // y la orden queda pendiente para siempre, lista para recibirse
+            // dos veces.
+            ordenCompraDetalleId: d.ordenCompraDetalleId,
             productoId: d.productoId,
             varianteId: d.varianteId,
             descripcion: d.descripcion,
@@ -2283,6 +2294,17 @@ export class CompraService {
     return map;
   }
 
+  /** Lo mínimo para resolver el símbolo y el nombre de una unidad como lo
+   *  hace el app: personalizado → local → el de la maestra. */
+  private static readonly SELECT_UNIDAD = {
+    id: true,
+    nombreLocal: true,
+    nombrePersonalizado: true,
+    simboloLocal: true,
+    simboloPersonalizado: true,
+    unidadMaestra: { select: { id: true, nombre: true, simbolo: true } },
+  } as const;
+
   /**
    * Include estándar para queries
    */
@@ -2306,17 +2328,27 @@ export class CompraService {
               nombre: true,
               codigoEmpresa: true,
               factorCompra: true,
-              unidadCompra: {
-                select: {
-                  id: true,
-                  simboloLocal: true,
-                  simboloPersonalizado: true,
-                  unidadMaestra: { select: { simbolo: true } },
-                },
-              },
+              unidadCompra: { select: CompraService.SELECT_UNIDAD },
+              // Presentación y unidad atómica: con esto el formulario puede
+              // REABRIR un borrador mostrando la línea en la unidad en que se
+              // escribió (15 kg), y no en la que se guarda (15000 g).
+              factorPresentacion: true,
+              unidadPresentacion: { select: CompraService.SELECT_UNIDAD },
+              unidadMedida: { select: CompraService.SELECT_UNIDAD },
             },
           },
-          variante: { select: { id: true, nombre: true, sku: true } },
+          variante: {
+            select: {
+              id: true,
+              nombre: true,
+              sku: true,
+              // La presentación se resuelve POR VARIANTE: un saco cerrado se
+              // compra por unidad aunque su producto se guarde en gramos.
+              factorPresentacion: true,
+              unidadPresentacion: { select: CompraService.SELECT_UNIDAD },
+              unidadMedida: { select: CompraService.SELECT_UNIDAD },
+            },
+          },
           lote: { select: { id: true, codigo: true, precioCosto: true } },
           ordenCompraDetalle: {
             select: { id: true, descripcion: true, cantidad: true },
