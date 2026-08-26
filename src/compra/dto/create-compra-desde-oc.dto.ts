@@ -13,6 +13,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { CreateCompraGastoDto } from './create-compra-gasto.dto';
 import { TerminosPago } from '@prisma/client';
 
 export class LineaRecepcionOcDto {
@@ -113,4 +114,15 @@ export class CreateCompraDesdeOcDto {
   @ValidateNested({ each: true })
   @Type(() => LineaRecepcionOcDto)
   lineas: LineaRecepcionOcDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Gastos de la factura que no son productos (flete, movilidad, interés). El flete llega con la mercadería, así que la recepción los acepta igual que la compra standalone: suman al total, y los que tienen prorratea=true además suben el costo de los productos.',
+    type: [CreateCompraGastoDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateCompraGastoDto)
+  gastos?: CreateCompraGastoDto[];
 }

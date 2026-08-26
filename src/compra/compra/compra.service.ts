@@ -283,10 +283,31 @@ export class CompraService {
         });
       }
 
-      const subtotal = detallesData.reduce((sum, d) => sum + d.subtotal, 0);
+      // Gastos de la factura del proveedor (flete, movilidad, interés). El
+      // flete llega junto con la mercadería, así que la recepción los trata
+      // igual que la compra standalone: suman al total SIEMPRE, y los que
+      // tienen prorratea=true suben el costo de los productos al confirmar.
+      const gastosCalculados = (dto.gastos ?? []).map((g, i) =>
+        CompraService.calcularGasto(g, i),
+      );
+      const totalGastos = round2(
+        gastosCalculados.reduce((sum, g) => sum + g.monto, 0),
+      );
+
+      const subtotal = round2(
+        detallesData.reduce((sum, d) => sum + d.subtotal, 0) +
+          gastosCalculados.reduce((sum, g) => sum + g.base, 0),
+      );
       const totalDescuento = detallesData.reduce((sum, d) => sum + d.descuento, 0);
-      const totalImpuestos = detallesData.reduce((sum, d) => sum + d.igv, 0);
-      const total = detallesData.reduce((sum, d) => sum + d.total, 0);
+      const totalImpuestos = round2(
+        detallesData.reduce((sum, d) => sum + d.igv, 0) +
+          gastosCalculados.reduce((sum, g) => sum + g.igv, 0),
+      );
+      // Con los gastos adentro, porque la cuenta por pagar al proveedor los
+      // incluye: el límite de crédito se valida contra lo que se le debe.
+      const total = round2(
+        detallesData.reduce((sum, d) => sum + d.total, 0) + totalGastos,
+      );
 
       const codigo = await this.configuracionCodigos.generarCodigoCompra(empresaId, tx);
 
@@ -327,6 +348,7 @@ export class CompraService {
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
+          totalGastos,
           fechaRecepcion,
           observaciones: dto.observaciones,
           creadoPor: usuarioId,
@@ -351,6 +373,9 @@ export class CompraService {
               nuevoPrecioVenta: d.nuevoPrecioVenta,
             })),
           },
+          ...(gastosCalculados.length > 0 && {
+            gastos: { create: gastosCalculados },
+          }),
         },
         include: this.getInclude(),
       });
