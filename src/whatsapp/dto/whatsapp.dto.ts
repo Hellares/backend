@@ -119,3 +119,44 @@ export class EnviarMensajeWhatsappDto {
   @MaxLength(4096)
   mensaje: string;
 }
+
+/**
+ * Una imagen al WhatsApp del cliente, desde el número de la empresa.
+ *
+ * La imagen viaja en base64 y NO se guarda en ningún lado: va directo al
+ * proveedor. Si algún día hay que conservarla, el camino es el
+ * media-processor y un `Archivo`, no engordar este endpoint.
+ */
+export class EnviarImagenWhatsappDto {
+  @ApiProperty({ description: 'Celular del destinatario', example: '987654321' })
+  @IsString()
+  @IsNotEmpty()
+  numero: string;
+
+  @ApiProperty({
+    description:
+      'Imagen en base64 SIN el prefijo data:. El app la redimensiona antes de mandarla.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  // ~8 MB de base64 ≈ 6 MB de imagen. Muy por encima de lo que manda el app
+  // (1600px al 70%, unos 300 KB) y muy por debajo de volverse un problema.
+  @MaxLength(8_000_000)
+  base64: string;
+
+  @ApiPropertyOptional({
+    description: 'Texto que acompaña a la imagen (el mensaje redactado).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  caption?: string;
+
+  @ApiPropertyOptional({ example: 'image/jpeg' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^image\/(jpeg|jpg|png|webp)$/, {
+    message: 'mimetype debe ser image/jpeg, image/png o image/webp',
+  })
+  mimetype?: string;
+}

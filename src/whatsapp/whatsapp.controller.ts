@@ -16,6 +16,7 @@ import {
 } from '@nestjs/swagger';
 import { WhatsappService } from './whatsapp.service';
 import {
+  EnviarImagenWhatsappDto,
   EnviarMensajeWhatsappDto,
   UpdateWhatsappDto,
 } from './dto/whatsapp.dto';
@@ -63,6 +64,21 @@ export class WhatsappEmpresaController {
     @Body() dto: EnviarMensajeWhatsappDto,
   ) {
     return this.service.enviarMensaje(id, dto.numero, dto.mensaje);
+  }
+
+  @Post(':id/whatsapp/enviar-imagen')
+  @HttpCode(200)
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Envía una imagen (base64) con su texto al cliente. No se guarda: va directo al proveedor.',
+  })
+  async enviarImagen(
+    @Param('id') id: string,
+    @Body() dto: EnviarImagenWhatsappDto,
+  ) {
+    return this.service.enviarImagen(id, dto);
   }
 
   @Post(':id/whatsapp/vincular')

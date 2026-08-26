@@ -510,6 +510,29 @@ export class WhatsappService {
   }
 
   /**
+   * La vinculación, o 400 si no se puede enviar.
+   *
+   * Una sola guarda para texto e imagen: si divergen, tarde o temprano un
+   * canal termina mandando sin instancia viva.
+   */
+  private async exigirConectado(empresaId: string) {
+    const cfg = await this.prisma.integracionWhatsapp.findUnique({
+      where: { empresaId },
+    });
+    if (
+      !this.evolution.disponible ||
+      !cfg ||
+      !cfg.habilitado ||
+      cfg.estado !== EstadoWhatsappInstancia.CONECTADO
+    ) {
+      throw new BadRequestException(
+        'El WhatsApp de la empresa no está conectado',
+      );
+    }
+    return cfg;
+  }
+
+  /**
    * ¿El sistema puede escribirle a un cliente por su cuenta?
    *
    * Deliberadamente NO consulta a Evolution, a diferencia de `getConfig`: esto
@@ -546,19 +569,7 @@ export class WhatsappService {
     numero: string,
     mensaje: string,
   ): Promise<{ enviado: boolean }> {
-    const cfg = await this.prisma.integracionWhatsapp.findUnique({
-      where: { empresaId },
-    });
-    if (
-      !this.evolution.disponible ||
-      !cfg ||
-      !cfg.habilitado ||
-      cfg.estado !== EstadoWhatsappInstancia.CONECTADO
-    ) {
-      throw new BadRequestException(
-        'El WhatsApp de la empresa no está conectado',
-      );
-    }
+    const cfg = await this.exigirConectado(empresaId);
 
     await this.evolution.sendText({
       instanceName: cfg.instanceName,
@@ -566,6 +577,35 @@ export class WhatsappService {
       text: mensaje,
     });
     this.logger.log(`Mensaje enviado por WhatsApp (empresa ${empresaId})`);
+    return { enviado: true };
+  }
+
+  /**
+   * Manda una imagen con su texto al cliente.
+   *
+   * No se guarda: va directo al proveedor en base64. Conservarla sería otro
+   * problema (media-processor + `Archivo`), no un parámetro más acá.
+   */
+  async enviarImagen(
+    empresaId: string,
+    args: {
+      numero: string;
+      base64: string;
+      caption?: string;
+      mimetype?: string;
+    },
+  ): Promise<{ enviado: boolean }> {
+    const cfg = await this.exigirConectado(empresaId);
+
+    await this.evolution.sendImage({
+      instanceName: cfg.instanceName,
+      number: this.normalizarCelular(args.numero),
+      base64: args.base64,
+      caption: args.caption ?? '',
+      mimetype: args.mimetype ?? 'image/jpeg',
+      fileName: 'imagen.jpg',
+    });
+    this.logger.log(`Imagen enviada por WhatsApp (empresa ${empresaId})`);
     return { enviado: true };
   }
 
