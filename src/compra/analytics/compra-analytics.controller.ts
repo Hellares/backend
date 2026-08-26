@@ -57,6 +57,20 @@ export class CompraAnalyticsController {
     }
   }
 
+  @Get('gastos-factura')
+  @RequiresPermission(Permission.VIEW_COMPRAS)
+  @ApiOperation({
+    summary:
+      'Reporte de los GASTOS DE LA FACTURA (flete, movilidad, embalaje, intereses) por categoría, período y proveedor. No confundir con /gastos-periodo, que es cuánta plata se puso en mercadería.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getGastosDeFactura(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query() query: CompraAnalyticsQueryDto,
+  ) {
+    return this.analyticsService.getGastosDeFactura(empresaId, query);
+  }
+
   @Get('resumen')
   @RequiresPermission(Permission.VIEW_COMPRAS)
   @ApiOperation({ summary: 'Resumen general de compras (KPIs)' })

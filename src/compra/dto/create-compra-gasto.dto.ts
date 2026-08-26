@@ -65,6 +65,14 @@ export class CreateCompraGastoDto {
   @IsEnum(CriterioProrrateo)
   criterio?: CriterioProrrateo;
 
+  @ApiPropertyOptional({
+    description:
+      'Categoría del catálogo de gastos (la misma de caja chica y movimientos de caja). Es lo que permite sumar "movilidad del año"; `concepto` queda como el detalle libre. Opcional: sin ella el gasto cae en "Sin categoría".',
+  })
+  @IsOptional()
+  @IsString()
+  categoriaGastoId?: string;
+
   @ApiPropertyOptional({ description: 'Orden de presentación' })
   @IsOptional()
   @IsInt()

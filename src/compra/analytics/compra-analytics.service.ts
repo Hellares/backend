@@ -444,6 +444,152 @@ export class CompraAnalyticsService {
     return alertas;
   }
 
+  /**
+   * Reporte de los GASTOS DE LA FACTURA (flete, movilidad, embalaje,
+   * intereses) — no de lo que se gastó comprando.
+   *
+   * 🔴 No confundir con `getGastosPorPeriodo`, que suma `compra.total`: eso
+   * es cuánta plata se puso en mercadería. Esto es cuánto costó traerla.
+   *
+   * Solo cuenta compras CONFIRMADAS (`buildCompraWhere`): un borrador todavía
+   * no es plata gastada.
+   *
+   * Separa `alCosto` de `financiero` porque contablemente no son lo mismo: el
+   * flete entra al costo del inventario y el interés por pagar a 30 días es
+   * costo financiero. Sumarlos en un solo total miente el margen.
+   */
+  async getGastosDeFactura(empresaId: string, query: CompraAnalyticsQueryDto) {
+    const where = this.buildCompraWhere(empresaId, query);
+    const periodo = query.periodo || PeriodoAgrupacion.MENSUAL;
+
+    const [gastos, compras] = await Promise.all([
+      this.prisma.compraGasto.findMany({
+        where: {
+          compra: where,
+          ...(query.categoriaGastoId
+            ? { categoriaGastoId: query.categoriaGastoId }
+            : {}),
+        },
+        select: {
+          monto: true,
+          prorratea: true,
+          concepto: true,
+          categoriaGastoId: true,
+          categoriaGasto: {
+            select: { id: true, nombre: true, icono: true, color: true },
+          },
+          compra: {
+            select: {
+              id: true,
+              confirmadoEn: true,
+              proveedorId: true,
+              nombreProveedor: true,
+            },
+          },
+        },
+      }),
+      // Para poder decir "el flete fue el 2.1% de lo que compraste", que es
+      // el número con el que se decide si vale la pena negociarlo.
+      this.prisma.compra.aggregate({ where, _sum: { total: true } }),
+    ]);
+
+    const acumular = (
+      mapa: Map<string, { total: number; alCosto: number; financiero: number; cantidad: number }>,
+      clave: string,
+      monto: number,
+      prorratea: boolean,
+    ) => {
+      const actual =
+        mapa.get(clave) ?? { total: 0, alCosto: 0, financiero: 0, cantidad: 0 };
+      actual.total += monto;
+      if (prorratea) actual.alCosto += monto;
+      else actual.financiero += monto;
+      actual.cantidad += 1;
+      mapa.set(clave, actual);
+    };
+
+    const porCategoria = new Map<string, any>();
+    const porPeriodo = new Map<string, any>();
+    const porProveedor = new Map<string, any>();
+    const comprasConGasto = new Set<string>();
+
+    let total = 0;
+    let alCosto = 0;
+    let financiero = 0;
+
+    for (const g of gastos) {
+      const monto = Number(g.monto);
+      total += monto;
+      if (g.prorratea) alCosto += monto;
+      else financiero += monto;
+      comprasConGasto.add(g.compra.id);
+
+      // Sin categoría van todos juntos en un balde propio, para que se vea
+      // cuánto falta clasificar en vez de repartirse en conceptos sueltos.
+      const catId = g.categoriaGastoId ?? 'SIN_CATEGORIA';
+      acumular(porCategoria, catId, monto, g.prorratea);
+      porCategoria.get(catId).nombre =
+        g.categoriaGasto?.nombre ?? 'Sin categoría';
+      porCategoria.get(catId).icono = g.categoriaGasto?.icono ?? null;
+      porCategoria.get(catId).color = g.categoriaGasto?.color ?? null;
+
+      const fecha = g.compra.confirmadoEn ?? new Date();
+      acumular(porPeriodo, this.getPeriodoKey(fecha, periodo), monto, g.prorratea);
+
+      const provId = g.compra.proveedorId ?? 'SIN_PROVEEDOR';
+      acumular(porProveedor, provId, monto, g.prorratea);
+      porProveedor.get(provId).nombre = g.compra.nombreProveedor ?? 'Sin proveedor';
+    }
+
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    const totalComprado = Number(compras._sum.total ?? 0);
+
+    return {
+      resumen: {
+        total: r2(total),
+        alCosto: r2(alCosto),
+        financiero: r2(financiero),
+        cantidadGastos: gastos.length,
+        comprasConGasto: comprasConGasto.size,
+        totalComprado: r2(totalComprado),
+        porcentajeSobreCompras:
+          totalComprado > 0 ? r2((total / totalComprado) * 100) : 0,
+      },
+      porCategoria: Array.from(porCategoria.entries())
+        .map(([categoriaGastoId, d]) => ({
+          categoriaGastoId:
+            categoriaGastoId === 'SIN_CATEGORIA' ? null : categoriaGastoId,
+          nombre: d.nombre,
+          icono: d.icono,
+          color: d.color,
+          total: r2(d.total),
+          alCosto: r2(d.alCosto),
+          financiero: r2(d.financiero),
+          cantidad: d.cantidad,
+        }))
+        .sort((a, b) => b.total - a.total),
+      porPeriodo: Array.from(porPeriodo.entries())
+        .map(([periodo, d]) => ({
+          periodo,
+          total: r2(d.total),
+          alCosto: r2(d.alCosto),
+          financiero: r2(d.financiero),
+          cantidad: d.cantidad,
+        }))
+        .sort((a, b) => a.periodo.localeCompare(b.periodo)),
+      porProveedor: Array.from(porProveedor.entries())
+        .map(([proveedorId, d]) => ({
+          proveedorId: proveedorId === 'SIN_PROVEEDOR' ? null : proveedorId,
+          nombre: d.nombre,
+          total: r2(d.total),
+          alCosto: r2(d.alCosto),
+          financiero: r2(d.financiero),
+          cantidad: d.cantidad,
+        }))
+        .sort((a, b) => b.total - a.total),
+    };
+  }
+
   private getPeriodoKey(fecha: Date, periodo: PeriodoAgrupacion): string {
     switch (periodo) {
       case PeriodoAgrupacion.DIARIO:

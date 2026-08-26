@@ -23,6 +23,10 @@ model CategoriaGasto {
   movimientosCaja   MovimientoCaja[]
   gastosCajaChica   GastoCajaChica[]
   gastosRecurrentes GastoRecurrente[]
+  // El flete/movilidad que viene DENTRO de la factura del proveedor. Comparte
+  // catálogo con los de arriba para que "movilidad del año" sea un solo
+  // número y no uno por cada lugar donde se paga.
+  gastosCompra      CompraGasto[]
 
   @@unique([empresaId, nombre, tipo])
   @@index([empresaId, tipo])

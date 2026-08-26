@@ -34,6 +34,14 @@ export class CompraAnalyticsQueryDto {
   @IsString()
   productoId?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Filtra el reporte de gastos de factura a una sola categoría (para el drill-down desde el gráfico)',
+  })
+  @IsOptional()
+  @IsString()
+  categoriaGastoId?: string;
+
   @ApiPropertyOptional({ enum: PeriodoAgrupacion })
   @IsOptional()
   @IsEnum(PeriodoAgrupacion)

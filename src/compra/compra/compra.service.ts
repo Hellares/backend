@@ -1969,6 +1969,7 @@ export class CompraService {
       igv,
       prorratea: dto.prorratea ?? true,
       criterio: dto.criterio ?? CriterioProrrateo.VALOR,
+      categoriaGastoId: dto.categoriaGastoId ?? null,
       orden: dto.orden ?? index,
     };
   }

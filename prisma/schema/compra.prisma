@@ -359,12 +359,24 @@ model CompraGasto {
   /// CANTIDAD = por unidades, para cuando el flete se cobra por bulto.
   criterio CriterioProrrateo @default(VALOR)
 
+  /// Categoría del catálogo de gastos, la MISMA que usan caja chica, los
+  /// movimientos de caja y los gastos recurrentes. `concepto` queda como el
+  /// detalle libre ("Lima→Trujillo"); la categoría es lo que permite sumar
+  /// "cuánto va en movilidad este año" sin agrupar por texto tecleado a mano.
+  ///
+  /// Opcional a propósito: un gasto sin clasificar se registra igual, y cae
+  /// en "Sin categoría" en el reporte. Si se borra la categoría, el gasto
+  /// sobrevive sin ella (SetNull) — nunca al revés.
+  categoriaGastoId String?
+
   orden    Int      @default(0)
   creadoEn DateTime @default(now())
 
-  compra Compra @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  compra         Compra          @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  categoriaGasto CategoriaGasto? @relation(fields: [categoriaGastoId], references: [id], onDelete: SetNull)
 
   @@index([compraId])
+  @@index([categoriaGastoId])
 }
 
 enum CriterioProrrateo {
