@@ -138,7 +138,7 @@ export class CompraController {
   @RequiresPermission(Permission.MANAGE_COMPRAS)
   @ApiOperation({
     summary:
-      'Actualizar compra (solo BORRADOR). Es un merge: lo que no viene se conserva, y los detalles solo se reemplazan si el body los trae.',
+      'Actualizar compra (solo BORRADOR). Es un merge: lo que no viene se conserva. Detalles y gastos se reemplazan enteros solo si el body los trae; proveedor y sede se pueden cambiar (el nombre y el documento del proveedor se re-snapshotean).',
   })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   async update(

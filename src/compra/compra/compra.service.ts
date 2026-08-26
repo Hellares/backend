@@ -1359,7 +1359,11 @@ export class CompraService {
   }
 
   /**
-   * Actualizar compra (solo BORRADOR)
+   * Actualizar compra (solo BORRADOR).
+   *
+   * Es un MERGE: lo que no viene en el dto se conserva. Detalles y gastos se
+   * reemplazan ENTEROS y solo si el body los trae, así "me olvidé el flete"
+   * manda `{ gastos: [...] }` sin reenviar la compra completa.
    */
   async update(
     id: string,
@@ -1381,6 +1385,15 @@ export class CompraService {
       );
     }
 
+    // 🔴 `detalles: []` es "saqué todos los productos", no "no toqué los
+    // detalles": se ignoraba en silencio, la compra quedaba con las líneas
+    // viejas y el usuario veía guardado un cambio que nunca ocurrió.
+    if (dto.detalles && dto.detalles.length === 0) {
+      throw new BadRequestException(
+        'La compra tiene que quedar con al menos un producto.',
+      );
+    }
+
     const factoresMap = dto.detalles
       ? await this._resolverFactoresCompra(empresaId, dto.detalles)
       : new Map();
@@ -1391,6 +1404,28 @@ export class CompraService {
       dto.precioIncluyeIgv ?? compra.precioIncluyeIgv;
 
     return this.prisma.$transaction(async (tx) => {
+      // 🔴 El proveedor se re-lee SIEMPRE, cambie o no: la compra guarda su
+      // nombre y su documento denormalizados, así que mover solo `proveedorId`
+      // dejaba la cabecera, la lista y el PDF mostrando al proveedor anterior.
+      const proveedorId = dto.proveedorId ?? compra.proveedorId;
+      const proveedor = await tx.proveedor.findFirst({
+        where: { id: proveedorId, empresaId },
+      });
+      if (!proveedor) {
+        throw new NotFoundException('Proveedor no encontrado');
+      }
+
+      // La sede se puede mover mientras sea BORRADOR: todavía no tocó stock.
+      const sedeId = dto.sedeId ?? compra.sedeId;
+      if (sedeId !== compra.sedeId) {
+        const sede = await tx.sede.findFirst({
+          where: { id: sedeId, empresaId },
+        });
+        if (!sede) {
+          throw new NotFoundException('Sede no encontrada');
+        }
+      }
+
       if (dto.detalles && dto.detalles.length > 0) {
         await tx.compraDetalle.deleteMany({ where: { compraId: id } });
 
@@ -1439,15 +1474,54 @@ export class CompraService {
       // revés). Es una lectura barata dentro de la misma transacción.
       const montosData = await this._recalcularTotales(tx, id);
 
+      // El vencimiento se recalcula SOLO si se tocaron los términos o los
+      // días: agregar un flete no tiene por qué mover una fecha que el usuario
+      // escribió a mano. Y al revés, pasar de CONTADO a crédito sin esto
+      // dejaba la compra a crédito con vencimiento NULL.
+      const fechaRecepcion = dto.fechaRecepcion
+        ? new Date(dto.fechaRecepcion)
+        : compra.fechaRecepcion;
+      const cambiaCredito =
+        (dto.terminosPago !== undefined &&
+          dto.terminosPago !== compra.terminosPago) ||
+        (dto.diasCredito !== undefined &&
+          dto.diasCredito !== compra.diasCredito);
+      const credito = this._resolverCredito({
+        terminos: dto.terminosPago ?? compra.terminosPago,
+        diasCredito: dto.diasCredito ?? compra.diasCredito,
+        fechaBase: fechaRecepcion,
+        fechaVencimientoExplicita:
+          dto.fechaVencimientoPago ??
+          (cambiaCredito
+            ? undefined
+            : compra.fechaVencimientoPago?.toISOString()),
+      });
+      // El límite del proveedor se revalida contra el total NUEVO: subiendo
+      // las líneas de un borrador a crédito se lo esquivaba, porque solo se
+      // validaba al crear.
+      await this._validarLimiteCredito(
+        tx,
+        empresaId,
+        proveedor,
+        montosData.total,
+        credito.terminosPago,
+      );
+
       return tx.compra.update({
         where: { id },
         data: {
           ...montosData,
+          sedeId,
+          proveedorId: proveedor.id,
+          nombreProveedor: proveedor.nombre,
+          documentoProveedor: proveedor.numeroDocumento,
           tipoDocumentoProveedor: dto.tipoDocumentoProveedor ?? compra.tipoDocumentoProveedor,
           serieDocumentoProveedor: dto.serieDocumentoProveedor ?? compra.serieDocumentoProveedor,
           numeroDocumentoProveedor: dto.numeroDocumentoProveedor ?? compra.numeroDocumentoProveedor,
-          terminosPago: dto.terminosPago ?? compra.terminosPago,
-          diasCredito: dto.diasCredito ?? compra.diasCredito,
+          terminosPago: credito.terminosPago,
+          diasCredito: credito.diasCredito,
+          fechaVencimientoPago: credito.fechaVencimientoPago,
+          fechaRecepcion,
           moneda: dto.moneda ?? compra.moneda,
           tipoCambio: dto.tipoCambio ?? compra.tipoCambio,
           precioIncluyeIgv,
