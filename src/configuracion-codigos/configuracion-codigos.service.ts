@@ -16,6 +16,11 @@ import {
   TipoCodigo,
 } from './dto/preview-codigo.dto';
 import { ConfiguracionResponseDto } from './dto/configuracion-response.dto';
+import {
+  siguienteContador,
+  fijarContador,
+  leerContadores,
+} from './contador-codigo.util';
 
 /**
  * ConfiguracionCodigosService
@@ -116,102 +121,106 @@ export class ConfiguracionCodigosService {
       });
     }
 
+    // Los contadores ya no viven en ConfiguracionCodigos sino en ContadorCodigo,
+    // una fila por tipo. Ver contador-codigo.util.ts.
+    const contadores = await leerContadores(this.prisma, empresaId);
+
     // Calcular próximos códigos
     const proximoProducto = this.formatCodigo(
       config.productoCodigo,
       config.productoSeparador,
-      config.ultimoProducto + 1,
+      contadores.PRODUCTO + 1,
       config.productoLongitud,
     );
 
     const proximaVariante = this.formatCodigo(
       config.varianteCodigo,
       config.varianteSeparador,
-      config.ultimaVariante + 1,
+      contadores.VARIANTE + 1,
       config.varianteLongitud,
     );
 
     const proximoServicio = this.formatCodigo(
       config.servicioCodigo,
       config.servicioSeparador,
-      config.ultimoServicio + 1,
+      contadores.SERVICIO + 1,
       config.servicioLongitud,
     );
 
     const proximaVenta = this.formatCodigo(
       config.ventaCodigo,
       config.ventaSeparador,
-      config.ultimaVenta + 1,
+      contadores.VENTA + 1,
       config.ventaLongitud,
     );
 
     const proximoComponente = this.formatCodigo(
       config.componenteCodigo,
       config.componenteSeparador,
-      config.ultimoComponente + 1,
+      contadores.COMPONENTE + 1,
       config.componenteLongitud,
     );
 
     const proximaOrdenServicio = this.formatCodigo(
       config.ordenServicioCodigo,
       config.ordenServicioSeparador,
-      config.ultimaOrdenServicio + 1,
+      contadores.ORDEN_SERVICIO + 1,
       config.ordenServicioLongitud,
     );
 
     const proximoProveedor = this.formatCodigo(
       config.proveedorCodigo,
       config.proveedorSeparador,
-      config.ultimoProveedor + 1,
+      contadores.PROVEEDOR + 1,
       config.proveedorLongitud,
     );
 
     const proximaTransferencia = this.formatCodigo(
       config.transferenciaCodigo,
       config.transferenciaSeparador,
-      config.ultimaTransferencia + 1,
+      contadores.TRANSFERENCIA + 1,
       config.transferenciaLongitud,
     );
 
     const proximaOrdenCompra = this.formatCodigo(
       config.ordenCompraCodigo,
       config.ordenCompraSeparador,
-      config.ultimaOrdenCompra + 1,
+      contadores.ORDEN_COMPRA + 1,
       config.ordenCompraLongitud,
     );
 
     const proximaCompra = this.formatCodigo(
       config.compraCodigo,
       config.compraSeparador,
-      config.ultimaCompra + 1,
+      contadores.COMPRA + 1,
       config.compraLongitud,
     );
 
     const proximoLote = this.formatCodigo(
       config.loteCodigo,
       config.loteSeparador,
-      config.ultimoLote + 1,
+      contadores.LOTE + 1,
       config.loteLongitud,
     );
 
     const proximaSede = this.formatCodigo(
       config.sedeCodigo,
       config.sedeSeparador,
-      config.ultimaSede + 1,
+      contadores.SEDE + 1,
       config.sedeLongitud,
     );
 
     const proximoReporteIncidencia = this.formatCodigo(
       config.reporteIncidenciaCodigo,
       config.reporteIncidenciaSeparador,
-      config.ultimoReporteIncidencia + 1,
+      contadores.REPORTE_INCIDENCIA + 1,
       config.reporteIncidenciaLongitud,
     );
 
     const proximoInventario = this.formatCodigo(
       config.inventarioCodigo,
       config.inventarioSeparador,
-      config.ultimoInventario + 1,
+      contadores.INVENTARIO + 1,
       config.inventarioLongitud,
     );
 
@@ -237,14 +246,14 @@ export class ConfiguracionCodigosService {
         separador: config.productoSeparador,
         longitud: config.productoLongitud,
         incluirSede: config.productoIncluirSede,
-        ultimoContador: config.ultimoProducto,
+        ultimoContador: contadores.PRODUCTO,
         proximoCodigo: proximoProducto,
       },
       variantes: {
         codigo: config.varianteCodigo,
         separador: config.varianteSeparador,
         longitud: config.varianteLongitud,
-        ultimoContador: config.ultimaVariante,
+        ultimoContador: contadores.VARIANTE,
         proximoCodigo: proximaVariante,
       },
       servicios: {
@@ -252,7 +261,7 @@ export class ConfiguracionCodigosService {
         separador: config.servicioSeparador,
         longitud: config.servicioLongitud,
         incluirSede: config.servicioIncluirSede,
-        ultimoContador: config.ultimoServicio,
+        ultimoContador: contadores.SERVICIO,
         proximoCodigo: proximoServicio,
       },
       ventas: {
@@ -260,77 +269,77 @@ export class ConfiguracionCodigosService {
         separador: config.ventaSeparador,
         longitud: config.ventaLongitud,
         incluirSede: config.ventaIncluirSede,
-        ultimoContador: config.ultimaVenta,
+        ultimoContador: contadores.VENTA,
         proximoCodigo: proximaVenta,
       },
       componentes: {
         codigo: config.componenteCodigo,
         separador: config.componenteSeparador,
         longitud: config.componenteLongitud,
-        ultimoContador: config.ultimoComponente,
+        ultimoContador: contadores.COMPONENTE,
         proximoCodigo: proximoComponente,
       },
       ordenesServicio: {
         codigo: config.ordenServicioCodigo,
         separador: config.ordenServicioSeparador,
         longitud: config.ordenServicioLongitud,
-        ultimoContador: config.ultimaOrdenServicio,
+        ultimoContador: contadores.ORDEN_SERVICIO,
         proximoCodigo: proximaOrdenServicio,
       },
       proveedores: {
         codigo: config.proveedorCodigo,
         separador: config.proveedorSeparador,
         longitud: config.proveedorLongitud,
-        ultimoContador: config.ultimoProveedor,
+        ultimoContador: contadores.PROVEEDOR,
         proximoCodigo: proximoProveedor,
       },
       transferencias: {
         codigo: config.transferenciaCodigo,
         separador: config.transferenciaSeparador,
         longitud: config.transferenciaLongitud,
-        ultimoContador: config.ultimaTransferencia,
+        ultimoContador: contadores.TRANSFERENCIA,
         proximoCodigo: proximaTransferencia,
       },
       ordenesCompra: {
         codigo: config.ordenCompraCodigo,
         separador: config.ordenCompraSeparador,
         longitud: config.ordenCompraLongitud,
-        ultimoContador: config.ultimaOrdenCompra,
+        ultimoContador: contadores.ORDEN_COMPRA,
         proximoCodigo: proximaOrdenCompra,
       },
       compras: {
         codigo: config.compraCodigo,
         separador: config.compraSeparador,
         longitud: config.compraLongitud,
-        ultimoContador: config.ultimaCompra,
+        ultimoContador: contadores.COMPRA,
         proximoCodigo: proximaCompra,
       },
       lotes: {
         codigo: config.loteCodigo,
         separador: config.loteSeparador,
         longitud: config.loteLongitud,
-        ultimoContador: config.ultimoLote,
+        ultimoContador: contadores.LOTE,
         proximoCodigo: proximoLote,
       },
       sedes: {
         codigo: config.sedeCodigo,
         separador: config.sedeSeparador,
         longitud: config.sedeLongitud,
-        ultimoContador: config.ultimaSede,
+        ultimoContador: contadores.SEDE,
         proximoCodigo: proximaSede,
       },
       reportesIncidencia: {
         codigo: config.reporteIncidenciaCodigo,
         separador: config.reporteIncidenciaSeparador,
         longitud: config.reporteIncidenciaLongitud,
-        ultimoContador: config.ultimoReporteIncidencia,
+        ultimoContador: contadores.REPORTE_INCIDENCIA,
         proximoCodigo: proximoReporteIncidencia,
       },
       inventarios: {
         codigo: config.inventarioCodigo,
         separador: config.inventarioSeparador,
         longitud: config.inventarioLongitud,
-        ultimoContador: config.ultimoInventario,
+        ultimoContador: contadores.INVENTARIO,
         proximoCodigo: proximoInventario,
       },
       // Documentos de facturación: series y correlativos se gestionan por Sede (punto de emisión)
@@ -524,7 +533,7 @@ export class ConfiguracionCodigosService {
       },
     });
 
-    let nuevoContador = config.ultimoProducto;
+    let nuevoContador = 0;
 
     // Si hay productos, extraer el número del último código
     if (ultimoProducto) {
@@ -533,26 +542,13 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoProducto" = GREATEST("ultimoProducto", ${nuevoContador})
-            WHERE "empresaId" = ${empresaId}
-          `;
         }
       }
     }
 
-    // Incrementar contador atómicamente
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimoProducto: {
-          increment: 1,
-        },
-      },
-    });
-
-    nuevoContador = updated.ultimoProducto;
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    nuevoContador = await siguienteContador(tx, empresaId, 'PRODUCTO', nuevoContador);
 
     // Generar código
     const numero = nuevoContador
@@ -649,7 +645,7 @@ export class ConfiguracionCodigosService {
       },
     });
 
-    let nuevoContador = config.ultimaVariante;
+    let nuevoContador = 0;
 
     if (ultimaVariante) {
       const match = ultimaVariante.codigoEmpresa.match(/(\d+)$/);
@@ -657,26 +653,13 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaVariante" = GREATEST("ultimaVariante", ${nuevoContador})
-            WHERE "empresaId" = ${empresaId}
-          `;
         }
       }
     }
 
-    // Incrementar atómicamente
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimaVariante: {
-          increment: 1,
-        },
-      },
-    });
-
-    nuevoContador = updated.ultimaVariante;
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    nuevoContador = await siguienteContador(tx, empresaId, 'VARIANTE', nuevoContador);
 
     const numero = nuevoContador
       .toString()
@@ -732,6 +715,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<{ codigoSede: string }> {
     this.assertRetryLimit(depth, 'sede');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -745,22 +730,17 @@ export class ConfiguracionCodigosService {
       const match = ultimaSede.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimaSede) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaSede" = GREATEST("ultimaSede", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimaSede: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'SEDE', minimoContador);
 
-    const numero = updated.ultimaSede.toString().padStart(config.sedeLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.sedeLongitud, '0');
     const codigoSede = `${config.sedeCodigo}${config.sedeSeparador}${numero}`;
 
     const existe = await tx.sede.findFirst({
@@ -820,20 +800,22 @@ export class ConfiguracionCodigosService {
       });
     }
 
-    // TODO: Cuando se implemente el modelo Venta, sincronizar contador con BD
-    // como se hace en generarCodigoProducto y generarCodigoVariante
+    // PENDIENTE: este es el unico generador que NO sincroniza contra la tabla
+    // real antes de reservar (por eso el piso va en 0). Si el contador quedara
+    // atrasado — restaurar un backup es el caso realista — repetiria un codigo
+    // y chocaria contra @@unique([empresaId, codigo]) con un 500, dejando al
+    // cajero sin poder vender.
+    //
+    // No se puede copiar el patron de generarCodigoProducto tal cual: ese busca
+    // el maximo con `orderBy: { codigo: 'desc' }`, que es orden de TEXTO, y el
+    // codigo de venta lleva la sede en el medio (VTA-SED-00000001, porque
+    // ventaIncluirSede viene en true por defecto). Ordenando texto,
+    // VTA-ZZZ-00000001 gana contra VTA-AAA-00000999 y el piso saldria mas bajo
+    // que el real. Hay que sacar el maximo NUMERICO con SQL.
 
-    // Incrementar contador atómicamente
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimaVenta: {
-          increment: 1,
-        },
-      },
-    });
-
-    const nuevoContador = updated.ultimaVenta;
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'VENTA', 0);
 
     // Generar código
     const numero = nuevoContador.toString().padStart(config.ventaLongitud, '0');
@@ -889,6 +871,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'transferencia');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -902,22 +886,17 @@ export class ConfiguracionCodigosService {
       const match = ultimaTransferencia.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimaTransferencia) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaTransferencia" = GREATEST("ultimaTransferencia", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimaTransferencia: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'TRANSFERENCIA', minimoContador);
 
-    const numero = updated.ultimaTransferencia.toString().padStart(config.transferenciaLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.transferenciaLongitud, '0');
     const codigo = `${config.transferenciaCodigo}${config.transferenciaSeparador}${numero}`;
 
     const existe = await tx.transferenciaStock.findFirst({
@@ -962,6 +941,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'ordenCompra');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -974,22 +955,17 @@ export class ConfiguracionCodigosService {
       const match = ultimaOC.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimaOrdenCompra) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaOrdenCompra" = GREATEST("ultimaOrdenCompra", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimaOrdenCompra: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'ORDEN_COMPRA', minimoContador);
 
-    const numero = updated.ultimaOrdenCompra.toString().padStart(config.ordenCompraLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.ordenCompraLongitud, '0');
     const codigo = `${config.ordenCompraCodigo}${config.ordenCompraSeparador}${numero}`;
 
     const existe = await tx.ordenCompra.findFirst({
@@ -1027,6 +1003,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'compra');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -1039,22 +1017,17 @@ export class ConfiguracionCodigosService {
       const match = ultimaCompra.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimaCompra) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaCompra" = GREATEST("ultimaCompra", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimaCompra: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'COMPRA', minimoContador);
 
-    const numero = updated.ultimaCompra.toString().padStart(config.compraLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.compraLongitud, '0');
     const codigo = `${config.compraCodigo}${config.compraSeparador}${numero}`;
 
     const existe = await tx.compra.findFirst({
@@ -1092,6 +1065,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'lote');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -1104,22 +1079,17 @@ export class ConfiguracionCodigosService {
       const match = ultimoLote.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimoLote) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoLote" = GREATEST("ultimoLote", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimoLote: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'LOTE', minimoContador);
 
-    const numero = updated.ultimoLote.toString().padStart(config.loteLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.loteLongitud, '0');
     const codigo = `${config.loteCodigo}${config.loteSeparador}${numero}`;
 
     const existe = await tx.lote.findFirst({
@@ -1268,10 +1238,7 @@ export class ConfiguracionCodigosService {
           }
         }
 
-        await this.prisma.configuracionCodigos.update({
-          where: { empresaId },
-          data: { ultimoProducto: ultimoNumero },
-        });
+        await fijarContador(this.prisma, empresaId, 'PRODUCTO', ultimoNumero);
         break;
 
       case 'VARIANTE':
@@ -1292,10 +1259,7 @@ export class ConfiguracionCodigosService {
           }
         }
 
-        await this.prisma.configuracionCodigos.update({
-          where: { empresaId },
-          data: { ultimaVariante: ultimoNumero },
-        });
+        await fijarContador(this.prisma, empresaId, 'VARIANTE', ultimoNumero);
         break;
 
       case 'SERVICIO':
@@ -1316,10 +1280,7 @@ export class ConfiguracionCodigosService {
           }
         }
 
-        await this.prisma.configuracionCodigos.update({
-          where: { empresaId },
-          data: { ultimoServicio: ultimoNumero },
-        });
+        await fijarContador(this.prisma, empresaId, 'SERVICIO', ultimoNumero);
         break;
     }
 
@@ -1389,7 +1350,7 @@ export class ConfiguracionCodigosService {
       },
     });
 
-    let nuevoContador = config.ultimaCotizacion;
+    let nuevoContador = 0;
 
     if (ultimaCotizacion) {
       const match = ultimaCotizacion.codigo.match(/(\d+)$/);
@@ -1397,26 +1358,13 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaCotizacion" = GREATEST("ultimaCotizacion", ${nuevoContador})
-            WHERE "empresaId" = ${empresaId}
-          `;
         }
       }
     }
 
-    // Incrementar contador atómicamente
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimaCotizacion: {
-          increment: 1,
-        },
-      },
-    });
-
-    nuevoContador = updated.ultimaCotizacion;
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    nuevoContador = await siguienteContador(tx, empresaId, 'COTIZACION', nuevoContador);
 
     // Generar código
     const numero = nuevoContador
@@ -1522,7 +1470,7 @@ export class ConfiguracionCodigosService {
       },
     });
 
-    let nuevoContador = config.ultimoServicio;
+    let nuevoContador = 0;
 
     if (ultimoServicio) {
       const match = ultimoServicio.codigoEmpresa.match(/(\d+)$/);
@@ -1530,26 +1478,13 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoServicio" = GREATEST("ultimoServicio", ${nuevoContador})
-            WHERE "empresaId" = ${empresaId}
-          `;
         }
       }
     }
 
-    // Incrementar contador atómicamente
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimoServicio: {
-          increment: 1,
-        },
-      },
-    });
-
-    nuevoContador = updated.ultimoServicio;
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    nuevoContador = await siguienteContador(tx, empresaId, 'SERVICIO', nuevoContador);
 
     // Generar código
     const numero = nuevoContador
@@ -1624,6 +1559,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'ordenServicio');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -1636,22 +1573,17 @@ export class ConfiguracionCodigosService {
       const match = ultimaOrden.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimaOrdenServicio) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaOrdenServicio" = GREATEST("ultimaOrdenServicio", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimaOrdenServicio: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'ORDEN_SERVICIO', minimoContador);
 
-    const numero = updated.ultimaOrdenServicio.toString().padStart(config.ordenServicioLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.ordenServicioLongitud, '0');
     const codigo = `${config.ordenServicioCodigo}${config.ordenServicioSeparador}${numero}`;
 
     const existe = await tx.ordenServicio.findFirst({
@@ -1722,7 +1654,7 @@ export class ConfiguracionCodigosService {
       },
     });
 
-    let nuevoContador = config.ultimoComponente;
+    let nuevoContador = 0;
 
     if (ultimoComp) {
       const match = ultimoComp.codigo.match(/(\d+)$/);
@@ -1730,26 +1662,13 @@ export class ConfiguracionCodigosService {
         const ultimoNumero = parseInt(match[1], 10);
         if (ultimoNumero >= nuevoContador) {
           nuevoContador = ultimoNumero;
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoComponente" = GREATEST("ultimoComponente", ${nuevoContador})
-            WHERE "empresaId" = ${empresaId}
-          `;
         }
       }
     }
 
-    // Incrementar contador atómicamente
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimoComponente: {
-          increment: 1,
-        },
-      },
-    });
-
-    nuevoContador = updated.ultimoComponente;
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    nuevoContador = await siguienteContador(tx, empresaId, 'COMPONENTE', nuevoContador);
 
     // Generar código
     const numero = nuevoContador
@@ -1804,6 +1723,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'inventario');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -1816,22 +1737,17 @@ export class ConfiguracionCodigosService {
       const match = ultimoInv.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimoInventario) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoInventario" = GREATEST("ultimoInventario", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimoInventario: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'INVENTARIO', minimoContador);
 
-    const numero = updated.ultimoInventario.toString().padStart(config.inventarioLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.inventarioLongitud, '0');
     const codigo = `${config.inventarioCodigo}${config.inventarioSeparador}${numero}`;
 
     const existe = await tx.inventario.findFirst({
@@ -1875,6 +1791,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<{ codigoProveedor: string }> {
     this.assertRetryLimit(depth, 'proveedor');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -1887,22 +1805,17 @@ export class ConfiguracionCodigosService {
       const match = ultimoProv.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimoProveedor) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoProveedor" = GREATEST("ultimoProveedor", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimoProveedor: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'PROVEEDOR', minimoContador);
 
-    const numero = updated.ultimoProveedor.toString().padStart(config.proveedorLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.proveedorLongitud, '0');
     const codigoProveedor = `${config.proveedorCodigo}${config.proveedorSeparador}${numero}`;
 
     const existe = await tx.proveedor.findFirst({
@@ -1945,6 +1858,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'reporteIncidencia');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -1957,22 +1872,17 @@ export class ConfiguracionCodigosService {
       const match = ultimoReporte.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimoReporteIncidencia) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoReporteIncidencia" = GREATEST("ultimoReporteIncidencia", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimoReporteIncidencia: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'REPORTE_INCIDENCIA', minimoContador);
 
-    const numero = updated.ultimoReporteIncidencia.toString().padStart(config.reporteIncidenciaLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.reporteIncidenciaLongitud, '0');
     const codigo = `${config.reporteIncidenciaCodigo}${config.reporteIncidenciaSeparador}${numero}`;
 
     const existe = await tx.reporteIncidencia.findFirst({
@@ -2008,6 +1918,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<{ codigoClienteEmpresa: string }> {
     this.assertRetryLimit(depth, 'clienteEmpresa');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -2020,22 +1932,17 @@ export class ConfiguracionCodigosService {
       const match = ultimoCE.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimoClienteEmpresa) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimoClienteEmpresa" = GREATEST("ultimoClienteEmpresa", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimoClienteEmpresa: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'CLIENTE_EMPRESA', minimoContador);
 
-    const numero = updated.ultimoClienteEmpresa.toString().padStart(config.clienteEmpresaLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.clienteEmpresaLongitud, '0');
     const codigoClienteEmpresa = `${config.clienteEmpresaCodigo}${config.clienteEmpresaSeparador}${numero}`;
 
     const existe = await tx.clienteEmpresa.findFirst({
@@ -2077,6 +1984,8 @@ export class ConfiguracionCodigosService {
     depth = 0,
   ): Promise<string> {
     this.assertRetryLimit(depth, 'cita');
+    // Piso del contador segun lo que ya existe en la BD (0 = sin datos).
+    let minimoContador = 0;
     let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
     if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
@@ -2089,22 +1998,17 @@ export class ConfiguracionCodigosService {
       const match = ultimaCita.codigo.match(/(\d+)$/);
       if (match) {
         const ultimoNumero = parseInt(match[1], 10);
-        if (ultimoNumero >= config.ultimaCita) {
-          await tx.$executeRaw`
-            UPDATE "ConfiguracionCodigos"
-            SET "ultimaCita" = GREATEST("ultimaCita", ${ultimoNumero})
-            WHERE "empresaId" = ${empresaId}
-          `;
+        if (ultimoNumero > minimoContador) {
+          minimoContador = ultimoNumero;
         }
       }
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimaCita: { increment: 1 } },
-    });
+    // Reserva el siguiente numero: crea la fila si falta, la sube al piso
+    // observado en la BD y la incrementa, todo en un solo statement.
+    const nuevoContador = await siguienteContador(tx, empresaId, 'CITA', minimoContador);
 
-    const numero = updated.ultimaCita.toString().padStart(config.citaLongitud, '0');
+    const numero = nuevoContador.toString().padStart(config.citaLongitud, '0');
     const codigo = `${config.citaCodigo}${config.citaSeparador}${numero}`;
 
     const existe = await tx.cita.findFirst({

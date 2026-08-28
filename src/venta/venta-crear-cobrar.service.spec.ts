@@ -156,6 +156,23 @@ describe('VentaService.crearYCobrar', () => {
     expect(cajaService.registrarMovimientoSiHayCaja).toHaveBeenCalled();
   });
 
+  // El contador de VENTA se bloquea hasta el commit (así la numeración no
+  // tiene huecos), así que cuanto más tarde se reserve, menos espera la venta
+  // siguiente. Si alguien lo vuelve a subir al principio de la transacción,
+  // el lock pasa a cubrir precios, presentaciones y validaciones de nuevo.
+  it('reserva el código DESPUÉS de los precios y justo antes de crear la venta', async () => {
+    await service.crearYCobrar('emp-1', dtoBase() as any, 'caj-1');
+
+    const precios = (service as any).aplicarPreciosBackendNivel.mock
+      .invocationCallOrder[0];
+    const codigo =
+      configuracionCodigos.generarCodigoVenta.mock.invocationCallOrder[0];
+    const crear = tx.venta.create.mock.invocationCallOrder[0];
+
+    expect(precios).toBeLessThan(codigo);
+    expect(codigo).toBeLessThan(crear);
+  });
+
   it('crédito pagado 100% al crear (adelanto = total, 0 cuotas) → PAGADA_COMPLETA, no CONFIRMADA', async () => {
     // Caso real (VTA-SED-00000650): venta marcada esCredito pero pagada completa
     // al momento → sin saldo financiado. Debe quedar PAGADA_COMPLETA, no colgada

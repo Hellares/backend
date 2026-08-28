@@ -17,6 +17,7 @@ import {
   TipoNotificacion,
 } from '@prisma/client';
 import { CrearSolicitudDto, RechazarSolicitudDto } from './dto/solicitud-cotizacion.dto';
+import { siguienteContador } from '../configuracion-codigos/contador-codigo.util';
 
 @Injectable()
 export class SolicitudCotizacionService {
@@ -761,12 +762,9 @@ export class SolicitudCotizacionService {
       });
     }
 
-    const updated = await this.prisma.configuracionCodigos.update({
-      where: { empresaId },
-      data: { ultimaSolicitudCotizacion: { increment: 1 } },
-    });
+    const nuevoContador = await siguienteContador(this.prisma, empresaId, 'SOLICITUD_COTIZACION');
 
-    const numero = updated.ultimaSolicitudCotizacion
+    const numero = nuevoContador
       .toString()
       .padStart(config.solicitudCotizacionLongitud, '0');
 

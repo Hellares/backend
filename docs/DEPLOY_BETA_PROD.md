@@ -297,6 +297,29 @@ ssh root@86.48.26.221 "docker exec -i postgres pg_restore -U postgres -d db_saas
 > propósito: el código viejo convive con el schema nuevo. Ante un problema, el rollback
 > de CÓDIGO casi siempre basta; el de BD es excepcional.
 
+### ⚠️ Contadores de código: paso extra si se revierte más allá del 27-08
+
+Desde la migración `20260827000000_contador_codigo_fila_por_tipo`, los 22 contadores
+(`ultimaVenta`, `ultimaCompra`, `ultimoProducto`…) viven en la tabla `ContadorCodigo`,
+una fila por (empresa, tipo). Las columnas `ultimo*` de `ConfiguracionCodigos` siguen
+existiendo pero **ya no se actualizan**.
+
+Si se revierte el código a una versión anterior a esa migración, el código viejo vuelve
+a leer las columnas — que quedaron congeladas — y **empieza a repetir códigos** hasta
+chocar contra `@@unique([empresaId, codigo])`. Antes de levantar la versión vieja hay
+que copiar los valores de vuelta:
+
+```bash
+# Copia los 22 contadores de ContadorCodigo de vuelta a las columnas.
+# Idempotente y con GREATEST: nunca hace retroceder un contador.
+cat prisma/fixes/2026-08-27_rollback_contadores_a_configuracioncodigos.sql \
+  | ssh root@86.48.26.221 "docker exec -i postgres psql -U postgres -d db_saas"
+```
+
+> **Sin este paso el rollback deja el mostrador sin poder vender.** El mapeo
+> columna ↔ tipo está en `src/configuracion-codigos/contador-codigo.util.ts` y en el
+> backfill de la migración.
+
 ---
 
 ## ✅ Checklist rápido (imprimir mentalmente)

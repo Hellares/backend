@@ -9,6 +9,7 @@ import { EstadoEmpleado, Prisma } from '@prisma/client';
 import { CreateEmpleadoDto } from './dto/create-empleado.dto';
 import { UpdateEmpleadoDto } from './dto/update-empleado.dto';
 import { QueryEmpleadosDto } from './dto/query-empleados.dto';
+import { siguienteContador } from '../../configuracion-codigos/contador-codigo.util';
 
 @Injectable()
 export class EmpleadoService {
@@ -435,13 +436,12 @@ export class EmpleadoService {
   // =============================================================
 
   private async _generarCodigoEmpleado(tx: any, empresaId: string): Promise<string> {
-    const config = await tx.configuracionCodigos.upsert({
-      where: { empresaId },
-      update: { ultimoEmpleado: { increment: 1 } },
-      create: { empresaId, ultimoEmpleado: 1 },
-    });
+    let config = await tx.configuracionCodigos.findUnique({ where: { empresaId } });
+    if (!config) config = await tx.configuracionCodigos.create({ data: { empresaId } });
 
-    const numero = String(config.ultimoEmpleado).padStart(config.empleadoLongitud, '0');
+    const nuevoContador = await siguienteContador(tx, empresaId, 'EMPLEADO');
+
+    const numero = String(nuevoContador).padStart(config.empleadoLongitud, '0');
     return `${config.empleadoCodigo}${config.empleadoSeparador}${numero}`;
   }
 }

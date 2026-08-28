@@ -76,6 +76,7 @@ model Empresa {
   resumenesDiarios         ResumenDiario[]
   configuracionCampos      ConfiguracionCamposServicio[]
   configuracionCodigos     ConfiguracionCodigos?
+  contadoresCodigo         ContadorCodigo[]
   configuracionFacturacion ConfiguracionFacturacion?
   planSuscripcion          PlanSuscripcion?              @relation(fields: [planSuscripcionId], references: [id])
   personasAsociadas        EmpresaPersona[]
@@ -339,6 +340,36 @@ model ConfiguracionCodigos {
   actualizadoEn                DateTime @updatedAt
   empresa                      Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
 
+  @@index([empresaId])
+}
+
+/// Contador de codigos correlativos, UNA FILA POR (empresa, tipo).
+///
+/// Antes los 22 contadores vivian como columnas de la unica fila de
+/// ConfiguracionCodigos. Como Postgres bloquea la FILA hasta el commit, el
+/// UPDATE de ultimaCompra en una recepcion bloqueaba el de ultimaVenta en una
+/// venta: la caja quedaba esperando a que terminara la compra, reteniendo su
+/// conexion del pool. Separado por tipo, cada flujo hace cola solo consigo
+/// mismo.
+///
+/// El contador se incrementa DENTRO de la transaccion del documento a
+/// proposito: si se soltara antes del commit, una venta fallida dejaria un
+/// hueco en la numeracion. Sin huecos implica lock hasta el commit.
+///
+/// `tipo` es texto y no enum para que el upsert atomico de
+/// `siguienteContador()` no tenga que castear el parametro en SQL crudo.
+/// Los valores validos son la union TipoContador de contador-codigo.util.ts.
+model ContadorCodigo {
+  id        String @id @default(cuid())
+  empresaId String
+  tipo      String @db.VarChar(40)
+  valor     Int    @default(0)
+
+  actualizadoEn DateTime @updatedAt
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, tipo])
   @@index([empresaId])
 }
 

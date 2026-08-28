@@ -16,6 +16,7 @@ import {
 import { CrearCajaChicaDto } from './dto/crear-caja-chica.dto';
 import { CrearGastoCajaChicaDto } from './dto/crear-gasto-caja-chica.dto';
 import { CrearRendicionDto } from './dto/crear-rendicion.dto';
+import { siguienteContador } from '../configuracion-codigos/contador-codigo.util';
 
 @Injectable()
 export class CajaChicaService {
@@ -523,14 +524,9 @@ export class CajaChicaService {
       });
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimaRendicion: { increment: 1 },
-      },
-    });
+    const nuevoContador = await siguienteContador(tx, empresaId, 'RENDICION');
 
-    const numero = updated.ultimaRendicion
+    const numero = nuevoContador
       .toString()
       .padStart(config.rendicionLongitud, '0');
 

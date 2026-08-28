@@ -25,6 +25,7 @@ import { CrearMovimientoDto } from './dto/crear-movimiento.dto';
 import { CrearArqueoDto } from './dto/crear-arqueo.dto';
 import { AjusteTesoreriaDto } from './dto/ajuste-tesoreria.dto';
 import { destinoBarrido } from './caja-barrido.util';
+import { siguienteContador } from '../configuracion-codigos/contador-codigo.util';
 
 /**
  * Mapeo categoria → tipo natural. Una categoría representa un evento de negocio
@@ -2994,14 +2995,9 @@ export class CajaService {
       });
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimaCaja: { increment: 1 },
-      },
-    });
+    const nuevoContador = await siguienteContador(tx, empresaId, 'CAJA');
 
-    const numero = updated.ultimaCaja
+    const numero = nuevoContador
       .toString()
       .padStart(config.cajaLongitud, '0');
 

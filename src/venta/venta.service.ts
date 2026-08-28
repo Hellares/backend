@@ -1407,13 +1407,6 @@ export class VentaService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const { codigoVenta } =
-        await this.configuracionCodigos.generarCodigoVenta(
-          empresaId,
-          dto.sedeId,
-          tx,
-        );
-
       // Forzar precios del backend (defensa contra manipulación cliente).
       const detallesEnforced = await this.aplicarPreciosBackendNivel(
         dto.detalles,
@@ -1474,6 +1467,18 @@ export class VentaService {
         email: dto.emailCliente,
         direccion: dto.direccionCliente,
       });
+
+      // El contador de VENTA se reserva lo mas tarde posible: el lock de su
+      // fila se sostiene hasta el commit (si se soltara antes, una venta que
+      // despues falla dejaria un hueco en la numeracion). Todo lo que no
+      // necesita el codigo — precios, presentaciones, validaciones — corre
+      // ANTES, sin bloquear a la venta siguiente.
+      const { codigoVenta } =
+        await this.configuracionCodigos.generarCodigoVenta(
+          empresaId,
+          dto.sedeId,
+          tx,
+        );
 
       const venta = await tx.venta.create({
         data: {
@@ -1595,15 +1600,7 @@ export class VentaService {
 
     const result = await this.prisma.$transaction(
       async (tx) => {
-        // 1. Generar código
-        const { codigoVenta } =
-          await this.configuracionCodigos.generarCodigoVenta(
-            empresaId,
-            dto.sedeId,
-            tx,
-          );
-
-        // 2. Forzar precios del backend (defensa contra manipulación cliente)
+        // 1. Forzar precios del backend (defensa contra manipulación cliente)
         //    y luego calcular detalles.
         const detallesEnforced = await this.aplicarPreciosBackendNivel(
           dto.detalles,
@@ -1743,7 +1740,19 @@ export class VentaService {
           direccion: dto.direccionCliente,
         });
 
-        // 3. Crear venta con estado final
+        // 2. Reservar el código de venta y crear la venta con estado final.
+        //    El contador de VENTA se reserva lo más tarde posible: el lock de
+        //    su fila se sostiene hasta el commit (si se soltara antes, una
+        //    venta que después falla dejaría un hueco en la numeración). Todo
+        //    lo que no necesita el código — precios, presentaciones,
+        //    validaciones — corre ANTES, sin bloquear a la venta siguiente.
+        const { codigoVenta } =
+          await this.configuracionCodigos.generarCodigoVenta(
+            empresaId,
+            dto.sedeId,
+            tx,
+          );
+
         const venta = await tx.venta.create({
           data: {
             empresaId,
@@ -1875,7 +1884,7 @@ export class VentaService {
           });
         }
 
-        // 4. Descontar stock (optimizado: batch queries en vez de N loops)
+        // 3. Descontar stock (optimizado: batch queries en vez de N loops)
         const detallesConProducto = detallesCalculados.filter(
           (d) => d.productoId || d.varianteId,
         );
@@ -2105,7 +2114,7 @@ export class VentaService {
           );
         }
 
-        // 5. Registrar pagos (batch con createMany)
+        // 4. Registrar pagos (batch con createMany)
         if (dto.pagos && dto.pagos.length > 0) {
           await tx.pagoVenta.createMany({
             data: dto.pagos.map((pago) => ({
@@ -2179,7 +2188,7 @@ export class VentaService {
           }
         }
 
-        // 6. Generar comprobante electrónico (solo BOLETA/FACTURA, no TICKET)
+        // 5. Generar comprobante electrónico (solo BOLETA/FACTURA, no TICKET)
         let comprobanteIdGenerado: string | null = null;
         let comprobanteGenerado: { id: string; codigoGenerado: string } | null = null;
         const tipoComprobante = dto.tipoComprobante || 'TICKET';
@@ -2336,7 +2345,7 @@ export class VentaService {
           );
         }
 
-        // 7. Registrar movimientos en caja — UNO POR PAGO REAL (multi-medio).
+        // 6. Registrar movimientos en caja — UNO POR PAGO REAL (multi-medio).
         // Cada PagoVenta no-CREDITO genera su propio MovimientoCaja con su método.
         // Así el cierre Z agrupa correctamente sin necesidad de tocar el groupBy.
         if (montoPagadoInmediato > 0) {
@@ -2835,14 +2844,6 @@ export class VentaService {
         clienteVenta.direccionCliente = dto.direccionCliente ?? null;
       }
 
-      // 3. Generar código de venta
-      const { codigoVenta } =
-        await this.configuracionCodigos.generarCodigoVenta(
-          empresaId,
-          cotizacion.sedeId,
-          tx,
-        );
-
       // 3b. Filtrar detalles excluidos, ajustar cantidades y aplicar
       //     descuentos por línea del cajero (cola POS).
       const excluirIds = new Set(dto.excluirDetalleIds ?? []);
@@ -3110,6 +3111,18 @@ export class VentaService {
           direccion: clienteVenta.direccionCliente,
         },
       );
+
+      // El contador de VENTA se reserva lo mas tarde posible: el lock de su
+      // fila se sostiene hasta el commit (si se soltara antes, una venta que
+      // despues falla dejaria un hueco en la numeracion). Todo lo que no
+      // necesita el codigo — precios, presentaciones, validaciones — corre
+      // ANTES, sin bloquear a la venta siguiente.
+      const { codigoVenta } =
+        await this.configuracionCodigos.generarCodigoVenta(
+          empresaId,
+          cotizacion.sedeId,
+          tx,
+        );
 
       // 4. Crear venta con datos de la cotización
       const venta = await tx.venta.create({

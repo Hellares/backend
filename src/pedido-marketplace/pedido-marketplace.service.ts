@@ -12,6 +12,7 @@ import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracter
 import { PedidoMarketplaceEmpresaService } from './pedido-marketplace-empresa.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { CarritoService } from './carrito.service';
+import { siguienteContador } from '../configuracion-codigos/contador-codigo.util';
 import {
   CaracteristicaPremium,
   EstadoPedidoMarketplace,
@@ -671,14 +672,9 @@ export class PedidoMarketplaceService {
       });
     }
 
-    const updated = await tx.configuracionCodigos.update({
-      where: { empresaId },
-      data: {
-        ultimoPedidoMarketplace: { increment: 1 },
-      },
-    });
+    const nuevoContador = await siguienteContador(tx, empresaId, 'PEDIDO_MARKETPLACE');
 
-    const numero = updated.ultimoPedidoMarketplace
+    const numero = nuevoContador
       .toString()
       .padStart(config.pedidoMarketplaceLongitud, '0');
 
