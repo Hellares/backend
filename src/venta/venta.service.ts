@@ -2202,123 +2202,48 @@ export class VentaService {
           tipoComprobante !== 'TICKET' &&
           (!opts?.diferirComprobante || estaPagada)
         ) {
-        // Validar documento del cliente para comprobante electrónico
-        const validacionDoc = validarDocumentoParaComprobante(tipoComprobante, dto.documentoCliente);
-        if (!validacionDoc.valido) {
-          throw new BadRequestException(validacionDoc.error);
-        }
-
-        // Fuente de serie/correlativo: EMISOR socio (multi-RUC) o sede
-        const fuente = await this.resolverSerieCorrelativo(tx, {
-          empresaId,
-          tipoComprobante,
-          emisorId: dto.emisorId,
-          sedeId: dto.sedeFacturacionId || dto.sedeId,
-        });
-
-        if (fuente) {
-          const serie = fuente.serie;
-          const correlativo = String(fuente.correlativo);
-
-          const codigoGenerado = `${serie}-${correlativo.padStart(8, '0')}`;
-
-          // Calcular totales tributarios por tipo de afectación
-          const tributario = this.calcularTotalesTributarios(detallesCalculados);
-
-          const comprobante = await tx.comprobanteElectronico.create({
-            data: {
-              ventaId: venta.id,
-              empresaId,
-              // Con emisor socio, la sede del comprobante es la que VENDE
-              // (el emisor no es una sede); legacy: sedeFacturacionId.
-              sedeId: dto.emisorId ? dto.sedeId : (dto.sedeFacturacionId || dto.sedeId),
-              rucEmisor: fuente.rucEmisor,
+          // Emisión del comprobante: UNA sola definición para todos los
+          // caminos, en `_emitirComprobante`. Este bloque era una copia
+          // literal de esa función (de hecho salió de acá) y quedó viva
+          // cuando se extrajo para el flujo Yape diferido. Ver el test
+          // `venta-comprobante-unica-definicion.spec.ts`, que falla si
+          // vuelve a aparecer una segunda copia.
+          const emitido = await this._emitirComprobante(tx, {
+            empresaId,
+            ventaId: venta.id,
+            ventaCodigo: codigoVenta,
+            tipoComprobante,
+            detallesCalculados,
+            presentaciones,
+            cliente: {
+              documentoCliente: dto.documentoCliente,
               clienteId: dto.clienteId,
               clienteEmpresaId: dto.clienteEmpresaId,
-              tipoComprobante: tipoComprobante as any,
-              serie,
-              correlativo: correlativo.padStart(8, '0'),
-              codigoGenerado,
-              // Sin tipo explícito se deriva por longitud: 9 dígitos = CE (4).
-              tipoDocumento:
-                dto.tipoDocumentoCliente ||
-                (tipoComprobante === 'FACTURA'
-                  ? '6'
-                  : dto.documentoCliente?.length === 9
-                    ? '4'
-                    : '1'),
-              numeroDocumento: dto.documentoCliente,
-              nombreCliente: dto.nombreCliente || 'CLIENTE VARIOS',
+              tipoDocumentoCliente: dto.tipoDocumentoCliente,
+              nombreCliente: dto.nombreCliente,
               direccionCliente: dto.direccionCliente,
               emailCliente: dto.emailCliente,
-              moneda: dto.moneda || 'PEN',
-              gravada: new Prisma.Decimal(tributario.gravada.toFixed(2)),
-              exonerada: new Prisma.Decimal(tributario.exonerada.toFixed(2)),
-              inafecta: new Prisma.Decimal(tributario.inafecta.toFixed(2)),
-              igv: new Prisma.Decimal(tributario.igv.toFixed(2)),
-              totalIgv: new Prisma.Decimal(tributario.igv.toFixed(2)),
-              icbper: new Prisma.Decimal(tributario.icbper.toFixed(2)),
-              total: new Prisma.Decimal(totalVenta.toFixed(2)),
-              estado: 'REGISTRADO' as any,
-              detalles: {
-                create: this.construirDetallesComprobante(
-                  detallesCalculados,
-                  presentaciones,
-                ),
-              },
             },
+            sedeFacturacionId: dto.sedeFacturacionId,
+            emisorId: dto.emisorId,
+            sedeId: dto.sedeId,
+            moneda: dto.moneda,
+            pagos: dto.pagos,
+            metodoPagoFallback: dto.metodoPago,
+            ordenesACobrar,
+            esCredito,
+            totalVenta,
+            totalACobrarHoy,
+            montoRecibido,
           });
 
-          // Multi-medio: 1 PagoComprobante por cada PagoVenta no-CREDITO.
-          // Si la venta es a crédito puro o no hay pagos[], crear UN registro
-          // marcador (PENDIENTE para crédito, COMPLETADO para legacy).
-          // Adelantos de órdenes aplicados al comprobante: completan el
-          // total (total = adelantos + cobrado hoy).
-          const pagosAdelantoComprobante = ordenesACobrar
-            .filter((o) => Number(o.adelanto ?? 0) > 0)
-            .map((o) => ({
-              comprobanteId: comprobante.id,
-              metodoPago: OrdenServicioService.toMetodoPagoVenta(
-                o.metodoPagoAdelanto,
-              ) as string,
-              monto: new Prisma.Decimal(Number(o.adelanto).toFixed(2)),
-              referencia: `Adelanto ${o.codigo}`,
-              estado: 'COMPLETADO',
-            }));
-
-          const pagosComprobanteData = (!esCredito && dto.pagos && dto.pagos.length > 0)
-            ? dto.pagos
-                .filter((p) => p.metodoPago !== 'CREDITO')
-                .map((p) => ({
-                  comprobanteId: comprobante.id,
-                  metodoPago: p.metodoPago,
-                  monto: new Prisma.Decimal(Number(p.monto).toFixed(2)),
-                  referencia: p.referencia || null,
-                  estado: 'COMPLETADO',
-                }))
-            : (!esCredito &&
-                totalACobrarHoy <= 0 &&
-                pagosAdelantoComprobante.length > 0)
-              // Orden 100% adelantada: el comprobante queda saldado por los
-              // adelantos — sin marker de S/ 0.00 que ensucie los pagos.
-              ? []
-              : [{
-                  comprobanteId: comprobante.id,
-                  metodoPago: dto.metodoPago || 'EFECTIVO',
-                  monto: new Prisma.Decimal(
-                    (esCredito ? 0 : Math.min(montoRecibido || totalACobrarHoy, totalACobrarHoy)).toFixed(2),
-                  ),
-                  estado: esCredito ? 'PENDIENTE' : 'COMPLETADO',
-                }];
-
-          await tx.pagoComprobante.createMany({
-            data: [...pagosComprobanteData, ...pagosAdelantoComprobante],
-          });
-
-          this.logger.log(`Comprobante ${codigoGenerado} generado para venta POS ${venta.codigo}`);
-          comprobanteIdGenerado = comprobante.id;
-          comprobanteGenerado = { id: comprobante.id, codigoGenerado };
-        }
+          if (emitido) {
+            comprobanteIdGenerado = emitido.comprobanteId;
+            comprobanteGenerado = {
+              id: emitido.comprobanteId,
+              codigoGenerado: emitido.codigoGenerado,
+            };
+          }
         } // fin if tipoComprobante !== 'TICKET'
 
         // 6b. Órdenes de servicio cobradas → FINALIZADO + historial +
@@ -2658,6 +2583,14 @@ export class VentaService {
       ventaCodigo: string;
       tipoComprobante: string;
       detallesCalculados: any[];
+      /**
+       * Presentaciones ya resueltas por el caller. `crearYCobrar` las
+       * necesita antes para el snapshot de las líneas de la venta, así que
+       * las pasa y evitamos consultarlas dos veces dentro de la misma
+       * transacción. Sin esto, converger sobre este método costaba una
+       * query extra por venta.
+       */
+      presentaciones?: Map<string, PresentacionLinea>;
       cliente: {
         documentoCliente?: string | null;
         clienteId?: string | null;
@@ -2705,13 +2638,13 @@ export class VentaService {
     // Calcular totales tributarios por tipo de afectación
     const tributario = this.calcularTotalesTributarios(p.detallesCalculados);
 
-    // Unidad en la que se declara cada línea. Este camino (Yape diferido)
-    // emite sobre `detallesCalculados` en memoria, no sobre la venta ya
-    // guardada, así que resuelve la presentación por su cuenta.
-    const presentaciones = await this.resolverPresentaciones(
-      tx,
-      p.detallesCalculados,
-    );
+    // Unidad en la que se declara cada línea. Si el caller ya las resolvió
+    // (crearYCobrar las necesita antes para el snapshot de la venta) se
+    // reusan; el flujo Yape diferido emite sobre `detallesCalculados` en
+    // memoria y las resuelve acá.
+    const presentaciones =
+      p.presentaciones ??
+      (await this.resolverPresentaciones(tx, p.detallesCalculados));
 
     const comprobante = await tx.comprobanteElectronico.create({
       data: {
