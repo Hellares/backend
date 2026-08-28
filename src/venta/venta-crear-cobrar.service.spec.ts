@@ -47,6 +47,8 @@ describe('VentaService.crearYCobrar', () => {
           detalles: [{ productoId: 'prod-1', varianteId: null }],
         }),
       ),
+      // sellarCodigoVenta reemplaza el código temporal por el definitivo
+      update: jest.fn().mockResolvedValue({}),
     },
     descuentoUsoHistorial: { createMany: jest.fn() },
     productoStock: {
@@ -70,6 +72,8 @@ describe('VentaService.crearYCobrar', () => {
         ultimoNumeroFactura: 0, ultimoNumeroBoleta: 5,
       },
     ]),
+    // Parches del código temporal al sellar (sellarCodigoVenta)
+    $executeRaw: jest.fn().mockResolvedValue(1),
     sede: { update: jest.fn().mockResolvedValue({ ultimoNumeroBoleta: 6 }) },
     comprobanteElectronico: { create: jest.fn().mockResolvedValue({ id: 'comp-1' }) },
     pagoComprobante: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
@@ -156,21 +160,90 @@ describe('VentaService.crearYCobrar', () => {
     expect(cajaService.registrarMovimientoSiHayCaja).toHaveBeenCalled();
   });
 
-  // El contador de VENTA se bloquea hasta el commit (así la numeración no
-  // tiene huecos), así que cuanto más tarde se reserve, menos espera la venta
-  // siguiente. Si alguien lo vuelve a subir al principio de la transacción,
-  // el lock pasa a cubrir precios, presentaciones y validaciones de nuevo.
-  it('reserva el código DESPUÉS de los precios y justo antes de crear la venta', async () => {
-    await service.crearYCobrar('emp-1', dtoBase() as any, 'caj-1');
+  // ── Numeración sin huecos, con el lock lo más corto posible ──────────────
+  //
+  // El contador de VENTA queda bloqueado hasta el commit — eso es lo que hace
+  // que la numeración no tenga huecos, y no se puede evitar. Lo único que se
+  // puede hacer es tomarlo al final. Medido en beta antes del cambio: el
+  // contador quedaba tomado ~200 ms sobre ventas de ~420 ms.
+  describe('sellado del código de venta', () => {
+    it('la venta nace con un código TEMPORAL, no con el definitivo', async () => {
+      await service.crearYCobrar('emp-1', dtoBase() as any, 'caj-1');
 
-    const precios = (service as any).aplicarPreciosBackendNivel.mock
-      .invocationCallOrder[0];
-    const codigo =
-      configuracionCodigos.generarCodigoVenta.mock.invocationCallOrder[0];
-    const crear = tx.venta.create.mock.invocationCallOrder[0];
+      expect(tx.venta.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            codigo: expect.stringMatching(/^TMP-[0-9a-f-]{36}$/),
+          }),
+        }),
+      );
+    });
 
-    expect(precios).toBeLessThan(codigo);
-    expect(codigo).toBeLessThan(crear);
+    it('el contador se reserva DESPUÉS de todo lo demás (último lock posible)', async () => {
+      await service.crearYCobrar('emp-1', dtoBase() as any, 'caj-1');
+
+      const crear = tx.venta.create.mock.invocationCallOrder[0];
+      const stock = tx.productoStock.update.mock.invocationCallOrder[0];
+      const comprobante =
+        tx.comprobanteElectronico.create.mock.invocationCallOrder[0];
+      const caja =
+        cajaService.registrarMovimientoSiHayCaja.mock.invocationCallOrder[0];
+      const contador =
+        configuracionCodigos.generarCodigoVenta.mock.invocationCallOrder[0];
+
+      expect(contador).toBeGreaterThan(crear);
+      expect(contador).toBeGreaterThan(stock);
+      expect(contador).toBeGreaterThan(comprobante);
+      expect(contador).toBeGreaterThan(caja);
+    });
+
+    // Sin esto la venta queda BIEN en la base pero el ticket que se imprime
+    // sale con el TMP-…: es el objeto que viaja al cajero.
+    it('el objeto devuelto lleva el código definitivo, no el temporal', async () => {
+      const venta = await service.crearYCobrar('emp-1', dtoBase() as any, 'caj-1');
+
+      expect(venta.codigo).toBe('VTA-SED-00000001');
+      expect(venta.codigo).not.toMatch(/^TMP-/);
+    });
+
+    it('persiste el código definitivo en la fila de la venta', async () => {
+      await service.crearYCobrar('emp-1', dtoBase() as any, 'caj-1');
+
+      expect(tx.venta.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'venta-1' },
+          data: { codigo: 'VTA-SED-00000001' },
+        }),
+      );
+    });
+
+    // La ventana del lock tiene que ser de tamaño FIJO: si alguien la hace
+    // crecer con las líneas o los pagos, volvemos al problema de origen.
+    it('los parches son de cantidad fija, no crecen con las líneas', async () => {
+      const dosLineas = dtoBase();
+      dosLineas.detalles = [
+        ...dosLineas.detalles,
+        {
+          productoId: 'prod-1',
+          descripcion: 'Otro item',
+          cantidad: 2,
+          precioUnitario: 30,
+          descuento: 0,
+          porcentajeIGV: 18,
+          precioIncluyeIgv: true,
+        },
+      ];
+
+      await service.crearYCobrar('emp-1', dosLineas as any, 'caj-1');
+      const conDos = tx.$executeRaw.mock.calls.length;
+
+      tx = buildTx();
+      prisma.$transaction = jest.fn().mockImplementation(async (cb: any) => cb(tx));
+      await service.crearYCobrar('emp-1', dtoBase() as any, 'caj-1');
+      const conUna = tx.$executeRaw.mock.calls.length;
+
+      expect(conDos).toBe(conUna);
+    });
   });
 
   it('crédito pagado 100% al crear (adelanto = total, 0 cuotas) → PAGADA_COMPLETA, no CONFIRMADA', async () => {

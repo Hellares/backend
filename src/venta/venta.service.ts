@@ -16,6 +16,7 @@ import { RealtimeInvalidationService } from '../notificacion/realtime-invalidati
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
 import { CaracteristicaPremium } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { CacheService } from '../redis/cache.service';
@@ -1740,18 +1741,17 @@ export class VentaService {
           direccion: dto.direccionCliente,
         });
 
-        // 2. Reservar el código de venta y crear la venta con estado final.
-        //    El contador de VENTA se reserva lo más tarde posible: el lock de
-        //    su fila se sostiene hasta el commit (si se soltara antes, una
-        //    venta que después falla dejaría un hueco en la numeración). Todo
-        //    lo que no necesita el código — precios, presentaciones,
-        //    validaciones — corre ANTES, sin bloquear a la venta siguiente.
-        const { codigoVenta } =
-          await this.configuracionCodigos.generarCodigoVenta(
-            empresaId,
-            dto.sedeId,
-            tx,
-          );
+        // 2. Crear la venta con un código TEMPORAL y estado final.
+        //    El número definitivo se reserva recién al FINAL de la transacción
+        //    (ver `sellarCodigoVenta`). El lock del contador se sostiene hasta
+        //    el commit — es lo que garantiza que la numeración no tenga huecos —
+        //    así que cuanto más tarde se tome, menos espera la venta siguiente.
+        //    Con esto la ventana pasa de ~18 statements a ~4.
+        //
+        //    El temporal es un UUID: único (satisface @@unique([empresaId,
+        //    codigo])) y sin chance de coincidir como subcadena cuando después
+        //    se lo reemplaza dentro de textos. Nunca sale de esta transacción.
+        const codigoVenta = `TMP-${randomUUID()}`;
 
         const venta = await tx.venta.create({
           data: {
@@ -2396,6 +2396,14 @@ export class VentaService {
           }
         }
 
+        await this.sellarCodigoVenta(tx, {
+          empresaId,
+          sedeId: dto.sedeId,
+          venta,
+          codigoTemporal: codigoVenta,
+          ordenServicioIds: ordenesCobradas.map((o) => o.id),
+        });
+
         this.logger.log(`Venta POS creada y cobrada: ${venta.codigo}`);
         return { venta, comprobanteIdGenerado, ordenesCobradas };
       },
@@ -2452,6 +2460,82 @@ export class VentaService {
     return result.venta;
   }
 
+  /**
+   * Reserva el número definitivo de la venta y reemplaza el código temporal en
+   * todo lo que ya se escribió con él.
+   *
+   * Va como ÚLTIMO paso de la transacción a propósito. El lock de la fila del
+   * contador se sostiene hasta el commit — eso es lo que garantiza que la
+   * numeración NO tenga huecos, y no se puede evitar — así que lo único que se
+   * puede hacer es tomarlo lo más tarde posible. Medido en beta antes de este
+   * cambio: el contador quedaba tomado ~200 ms sobre ventas de ~420 ms, o sea
+   * la mitad de la transacción.
+   *
+   * Los UPDATE son de cantidad FIJA: no crecen con las líneas ni con los pagos
+   * de la venta. Se evaluó la alternativa de diferir hasta acá la CREACIÓN de
+   * los movimientos (así no haría falta reemplazar nada) y es peor: la ventana
+   * pasaría a crecer con el tamaño de la venta, que es justo lo que se quiere
+   * evitar.
+   *
+   * `replace()` es seguro porque el temporal es un UUID: no puede aparecer por
+   * casualidad como subcadena de otra cosa.
+   *
+   * Parchea también `venta.codigo` EN MEMORIA: ese objeto es el que se devuelve
+   * al cajero y el que termina impreso en el ticket. Sin esto la venta queda
+   * bien en la BD pero el ticket sale con el temporal.
+   */
+  private async sellarCodigoVenta(
+    tx: Prisma.TransactionClient,
+    params: {
+      empresaId: string;
+      sedeId: string;
+      venta: { id: string; codigo: string };
+      codigoTemporal: string;
+      ordenServicioIds?: string[];
+    },
+  ): Promise<string> {
+    const { empresaId, sedeId, venta, codigoTemporal, ordenServicioIds } =
+      params;
+
+    const { codigoVenta } = await this.configuracionCodigos.generarCodigoVenta(
+      empresaId,
+      sedeId,
+      tx,
+    );
+
+    await tx.venta.update({
+      where: { id: venta.id },
+      data: { codigo: codigoVenta },
+    });
+
+    // El movimiento de stock lleva el código en DOS campos: `numeroDocumento`
+    // (lo que se ve en el kardex) y `motivo`, que además trae la descripción de
+    // la línea — por eso ese va por `replace` y no por asignación.
+    await tx.$executeRaw`
+      UPDATE "MovimientoStock"
+         SET "numeroDocumento" = ${codigoVenta},
+             "motivo" = replace("motivo", ${codigoTemporal}, ${codigoVenta})
+       WHERE "ventaId" = ${venta.id}`;
+
+    await tx.$executeRaw`
+      UPDATE "MovimientoCaja"
+         SET "descripcion" = replace("descripcion", ${codigoTemporal}, ${codigoVenta})
+       WHERE "ventaId" = ${venta.id}`;
+
+    // El historial de la orden de servicio NO tiene `ventaId`: se llega por la
+    // orden. Sin acotar por `ordenServicioId` (que sí está indexado) esto sería
+    // un scan de toda la tabla.
+    if (ordenServicioIds?.length) {
+      await tx.$executeRaw`
+        UPDATE "HistorialOrdenServicio"
+           SET "notas" = replace("notas", ${codigoTemporal}, ${codigoVenta})
+         WHERE "ordenServicioId" IN (${Prisma.join(ordenServicioIds)})
+           AND "notas" LIKE ${`%${codigoTemporal}%`}`;
+    }
+
+    venta.codigo = codigoVenta;
+    return codigoVenta;
+  }
   /**
    * Crea una venta Yape/Plin con REGISTRO DIFERIDO: nace CONFIRMADA con el stock
    * descontado pero SIN comprobante (se emite al confirmarse el pago) y SIN
@@ -3112,17 +3196,9 @@ export class VentaService {
         },
       );
 
-      // El contador de VENTA se reserva lo mas tarde posible: el lock de su
-      // fila se sostiene hasta el commit (si se soltara antes, una venta que
-      // despues falla dejaria un hueco en la numeracion). Todo lo que no
-      // necesita el codigo — precios, presentaciones, validaciones — corre
-      // ANTES, sin bloquear a la venta siguiente.
-      const { codigoVenta } =
-        await this.configuracionCodigos.generarCodigoVenta(
-          empresaId,
-          cotizacion.sedeId,
-          tx,
-        );
+      // Código TEMPORAL: el definitivo se reserva al final de la transacción.
+      // Ver `sellarCodigoVenta` y el comentario largo en `crearYCobrar`.
+      const codigoVenta = `TMP-${randomUUID()}`;
 
       // 4. Crear venta con datos de la cotización
       const venta = await tx.venta.create({
@@ -3637,6 +3713,13 @@ export class VentaService {
           }
         }
       }
+
+      await this.sellarCodigoVenta(tx, {
+        empresaId,
+        sedeId: cotizacion.sedeId,
+        venta,
+        codigoTemporal: codigoVenta,
+      });
 
       this.logger.log(
         `Venta ${venta.codigo} creada desde cotizacion ${cotizacion.codigo}`,
