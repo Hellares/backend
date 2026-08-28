@@ -37,7 +37,14 @@ model Cotizacion {
   // Referencia a comprobante (si se convierte)
   comprobanteId String?
 
-  // Referencia a venta (cuando se convierte a venta)
+  // Venta que consume esta cotización AHORA (no el histórico). Se limpia al
+  // anular esa venta, junto con estado → APROBADA, para que la cotización pueda
+  // volver a convertirse.
+  //
+  // 🔴 Sostiene el candado anti doble conversión de
+  // `VentaService.crearDesdeCotizacion` — si este campo desaparece, la misma
+  // cotización se puede convertir dos veces. Ver el comentario de
+  // `Venta.cotizacionId`: son dos hechos distintos, no un duplicado.
   ventaId String?
 
   // Reserva de stock + pago adelantado.

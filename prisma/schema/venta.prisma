@@ -38,7 +38,17 @@ model Venta {
   clienteEmpresaId String?
   vendedorId       String
   cajeroId         String? // Usuario que procesó el cobro (POS)
-  cotizacionId     String? // Cotización origen (si se creó desde una)
+  /// Cotización de la que SALIÓ esta venta. Dato HISTÓRICO y permanente:
+  /// NO se limpia al anular, la venta anulada sigue diciendo de dónde vino.
+  ///
+  /// 🔴 No es el simple inverso de `Cotizacion.ventaId` y los dos campos NO se
+  /// pueden unificar. Aquel apunta a la venta que consume la cotización AHORA y
+  /// sí se limpia al anular (VentaService.anular), para que la cotización vuelva
+  /// a ser convertible. Consecuencia: una cotización convertida, anulada y
+  /// reconvertida queda referenciada por VARIAS ventas mientras ella apunta a una
+  /// sola. Colapsarlos pierde esa historia, y derivar el candado anti doble
+  /// conversión desde acá obliga a acordarse de excluir las ANULADAS.
+  cotizacionId     String?
   canalVenta       CanalVenta @default(POS)
 
   // Identificación
