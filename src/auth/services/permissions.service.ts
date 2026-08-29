@@ -231,12 +231,26 @@ export class PermissionsService {
       canManageCaja:
         isAnyAdmin || isCajero ||
         puedeAbrirCaja || puedeCerrarCaja,
-      // Granulares: permiten abrir y/o cerrar por separado vía flag
-      // legacy o vía catálogo (caja.abrir / caja.cerrar).
-      canAbrirCaja:
-        isAnyAdmin || isCajero || puedeAbrirCaja,
-      canCerrarCaja:
-        isAnyAdmin || isCajero || puedeCerrarCaja,
+      // Abrir y cerrar se conceden por separado, vía flag legacy o vía
+      // catálogo (`caja.abrir` / `caja.cerrar`).
+      //
+      // 🔴 `isCajero` SALIÓ de estas dos (29-08), y es el punto: el uso real
+      // del negocio es "abre pero no cierra" —el cierre lo hace el admin—, y
+      // era el único caso en prod y 5 de 8 en beta. Con `isCajero` acá,
+      // destildarle "puede cerrar caja" a un cajero no le quitaba nada: el
+      // permiso seguía dando true por su rol, la UI le escondía el botón y el
+      // endpoint `CERRAR_CAJA` le aceptaba la petición igual. La restricción
+      // era cosmética.
+      //
+      // Ahora el rol no concede: el flag es el interruptor real. El preset del
+      // CAJERO prende los dos, así que un cajero nuevo sigue pudiendo abrir y
+      // cerrar por defecto — pero destildarlo ahora SÍ se lo quita, en la UI y
+      // en el servidor.
+      //
+      // `canViewCaja` y `canManageCaja` conservan `isCajero` a propósito: un
+      // cajero tiene que ver y operar su caja igualmente.
+      canAbrirCaja: isAnyAdmin || puedeAbrirCaja,
+      canCerrarCaja: isAnyAdmin || puedeCerrarCaja,
 
       // ==================== RRHH - EMPLEADOS ====================
       canViewEmpleados:
