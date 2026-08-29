@@ -26,6 +26,11 @@ export enum Permission {
   VIEW_DISCOUNTS = 'canViewDiscounts',           // Ver políticas de descuento
   MANAGE_DISCOUNTS = 'canManageDiscounts',       // Crear, editar, eliminar políticas
   ASSIGN_DISCOUNTS = 'canAssignDiscounts',       // Asignar descuentos a usuarios
+  // Granulares aditivos: admin siempre, y además quien tenga el ID del
+  // catálogo granular en UsuarioSedeRol.permisos.
+  DESCUENTO_LIBRE = 'canDescuentoLibre',         // Descontar sin autorización
+  EDITAR_PRECIO_VENTA = 'canEditarPrecioVenta',  // Cambiar precio al cobrar
+  EDITAR_COSTO_PRODUCTO = 'canEditarCostoProducto', // Editar el costo
   APPROVE_FAMILY = 'canApproveFamily',           // Aprobar familiares de trabajadores
   VIEW_DISCOUNT_REPORTS = 'canViewDiscountReports', // Ver reportes de descuentos
 

@@ -75,6 +75,28 @@ export class PermissionsService {
     const puedeAbrirCaja = puedeAbrirCajaPorFlag || tieneCajaAbrirGranular;
     const puedeCerrarCaja = puedeCerrarCajaPorFlag || tieneCajaCerrarGranular;
 
+    // Granulares que AMPLÍAN lo que da el rol. Todos siguen el mismo patrón:
+    // el permiso base queda como estaba y se le hace OR con el granular, así
+    // un usuario puntual puede recibir la capacidad sin cambiarle el rol.
+    //
+    // 🔴 Solo se agregan acá permisos ADITIVOS. Uno pensado para restringir
+    // ("que este no vea los costos") no se puede expresar con un OR y termina
+    // siendo una casilla muerta — ver el comentario del catálogo.
+    const tieneDevolucionCrear =
+      overrides?.permisos?.includes(GranularPermissionId.DEVOLUCION_CREAR) ??
+      false;
+    const tieneProductoEditarCosto =
+      overrides?.permisos?.includes(
+        GranularPermissionId.PRODUCTO_EDITAR_COSTO,
+      ) ?? false;
+    const tieneVentaDescuentoLibre =
+      overrides?.permisos?.includes(
+        GranularPermissionId.VENTA_DESCUENTO_LIBRE,
+      ) ?? false;
+    const tieneVentaEditarPrecio =
+      overrides?.permisos?.includes(GranularPermissionId.VENTA_EDITAR_PRECIO) ??
+      false;
+
     return {
       // ==================== USUARIOS ====================
       canViewUsers:
@@ -127,6 +149,20 @@ export class PermissionsService {
       canManageDiscounts: isAdmin,
       canAssignDiscounts: isAdmin,
 
+      // ==================== GRANULARES ADITIVOS ====================
+      // Descuento sin pedir autorización superior. El app lo usa para saltear
+      // el diálogo de autorización: sin esto, un vendedor de confianza tenía
+      // que hacer venir a un admin en cada venta.
+      canDescuentoLibre: isAdmin || tieneVentaDescuentoLibre,
+
+      // Cambiar el precio de una línea al cobrar.
+      canEditarPrecioVenta: isAdmin || tieneVentaEditarPrecio,
+
+      // Editar el precio de COSTO de un producto. Ojo: `canManageProducts`
+      // sigue siendo solo-admin y cubre TODO el producto; este es la llave
+      // fina, solo para el costo.
+      canEditarCostoProducto: isAnyAdmin || tieneProductoEditarCosto,
+
       // ==================== COTIZACIONES ====================
       canViewCotizaciones:
         isAnyAdmin || isVendedor || isCajero || isContador || isViewer,
@@ -142,7 +178,9 @@ export class PermissionsService {
       // ==================== DEVOLUCIONES ====================
       canViewDevoluciones:
         isAnyAdmin || isVendedor || isCajero || isContador || isViewer,
-      canManageDevoluciones: isAnyAdmin,
+      // Por defecto solo admin; el granular `devolucion.crear` habilita a una
+      // persona puntual sin tener que cambiarle el rol.
+      canManageDevoluciones: isAnyAdmin || tieneDevolucionCrear,
 
       // ==================== PROVEEDORES ====================
       canViewProveedores:

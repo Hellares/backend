@@ -59,6 +59,31 @@ export class EmpresaPermissionsDto {
   canAssignDiscounts: boolean;
 
   @ApiProperty({
+    description:
+      'Puede aplicar descuentos sin pedir autorización de un superior. ' +
+      'Admin siempre; el resto solo con el granular `venta.descuento-libre`.',
+    example: false,
+  })
+  canDescuentoLibre: boolean;
+
+  @ApiProperty({
+    description:
+      'Puede cambiar el precio de una línea al cobrar. Admin siempre; el ' +
+      'resto solo con el granular `venta.editar-precio`.',
+    example: false,
+  })
+  canEditarPrecioVenta: boolean;
+
+  @ApiProperty({
+    description:
+      'Puede editar el precio de COSTO de un producto. Es más fino que ' +
+      '`canManageProducts`, que cubre todo el producto y es solo-admin: ' +
+      'el granular `producto.editar-costo` habilita únicamente el costo.',
+    example: false,
+  })
+  canEditarCostoProducto: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de clientes',
     example: true,
   })

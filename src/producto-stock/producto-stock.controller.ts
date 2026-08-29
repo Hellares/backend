@@ -452,7 +452,17 @@ export class ProductoStockController {
   // 💰 ENDPOINTS DE GESTIÓN DE PRECIOS POR SEDE
   // =====================================================
 
+  // 🔴 Este endpoint NO tenía ningún permiso: bastaba estar logueado en la
+  // empresa, y el DTO admite `precioCosto`. O sea que cualquier vendedor o
+  // cajero podía cambiar el costo de un producto —y con él el margen y los
+  // reportes— sin ser administrador.
+  //
+  // Se exige `canEditarCostoProducto`, que es admin de empresa/sede o quien
+  // tenga el granular `producto.editar-costo`. Se eligió ese y no
+  // `MANAGE_PRODUCTS` para que un almacenero puntual pueda corregir costos sin
+  // recibir de paso el control de todo el catálogo.
   @Patch(':id/precios')
+  @RequiresPermission(Permission.EDITAR_COSTO_PRODUCTO)
   @ApiOperation({
     summary: 'Actualizar precios de producto en sede',
     description:

@@ -17,6 +17,22 @@
  *    enum + `PermissionsService.calculatePermissions`.
  *  - Si es solo de UI (ej. ocultar un acceso rápido) →
  *    `accesosRapidosOcultos`.
+ *  - 🔴 **Si lo que se quiere es QUITARLE algo a alguien que su rol ya le
+ *    da.** Este mecanismo solo SUMA: `calculatePermissions` hace un OR del
+ *    granular sobre el rol, y un admin tiene todos los granulares por
+ *    definición. Un permiso pensado como "que el vendedor NO vea X" es
+ *    inexpresable acá y termina siendo una casilla que no hace nada.
+ *
+ * Esa última regla no es teórica: el catálogo llegó a tener 11 permisos de los
+ * cuales 9 no los consultaba nadie (29-08). Los que querían restringir —
+ * `producto.ver-costo`, `cliente.ver-credito`, `caja.movimiento-anular`— eran
+ * justamente los sustractivos, y se eliminaron: ocultar un campo según quién
+ * pregunta es filtrar la respuesta, no conceder un permiso. `venta.anular` se
+ * fue porque la anulación ya valida el rol de quien autoriza, y
+ * `cotizacion.aprobar-grande` porque nunca se definió cuánto era "grande".
+ *
+ * **Regla práctica**: si no podés nombrar el endpoint que va a consultarlo,
+ * no lo agregues.
  *
  * **Convención de IDs**: `dominio.accion`, kebab-case (`caja.abrir`,
  * `venta.descuento-libre`, `producto.ver-costo`).
@@ -42,12 +58,6 @@ export const GRANULAR_PERMISSIONS_CATALOG: readonly GranularPermission[] = [
     description: 'Permite cerrar caja con conteo físico.',
     category: 'Caja',
   },
-  {
-    id: 'caja.movimiento-anular',
-    label: 'Anular movimiento de caja',
-    description: 'Anular un ingreso/egreso registrado en caja.',
-    category: 'Caja',
-  },
 
   // ── Venta ──
   {
@@ -57,33 +67,13 @@ export const GRANULAR_PERMISSIONS_CATALOG: readonly GranularPermission[] = [
     category: 'Venta',
   },
   {
-    id: 'venta.anular',
-    label: 'Anular venta',
-    description: 'Anular ventas ya registradas.',
-    category: 'Venta',
-  },
-  {
     id: 'venta.editar-precio',
     label: 'Editar precio en venta',
     description: 'Modificar el precio de un producto al momento de cobrar.',
     category: 'Venta',
   },
 
-  // ── Cotización ──
-  {
-    id: 'cotizacion.aprobar-grande',
-    label: 'Aprobar cotización grande',
-    description: 'Aprobar cotizaciones que excedan el límite estándar.',
-    category: 'Cotización',
-  },
-
   // ── Producto ──
-  {
-    id: 'producto.ver-costo',
-    label: 'Ver costo de productos',
-    description: 'Ver el campo costo en producto y reportes.',
-    category: 'Producto',
-  },
   {
     id: 'producto.editar-costo',
     label: 'Editar costo de productos',
@@ -95,16 +85,10 @@ export const GRANULAR_PERMISSIONS_CATALOG: readonly GranularPermission[] = [
   {
     id: 'devolucion.crear',
     label: 'Crear devolución',
-    description: 'Registrar devolución de venta.',
+    description:
+      'Registrar devoluciones de venta sin ser administrador (por defecto ' +
+      'solo los admin pueden).',
     category: 'Devolución',
-  },
-
-  // ── Cliente ──
-  {
-    id: 'cliente.ver-credito',
-    label: 'Ver crédito de clientes',
-    description: 'Ver línea de crédito y deuda actual de cada cliente.',
-    category: 'Cliente',
   },
 ] as const;
 
@@ -115,20 +99,13 @@ export const GRANULAR_PERMISSIONS_CATALOG: readonly GranularPermission[] = [
 export class GranularPermissionId {
   static readonly CAJA_ABRIR = 'caja.abrir';
   static readonly CAJA_CERRAR = 'caja.cerrar';
-  static readonly CAJA_MOVIMIENTO_ANULAR = 'caja.movimiento-anular';
 
   static readonly VENTA_DESCUENTO_LIBRE = 'venta.descuento-libre';
-  static readonly VENTA_ANULAR = 'venta.anular';
   static readonly VENTA_EDITAR_PRECIO = 'venta.editar-precio';
 
-  static readonly COTIZACION_APROBAR_GRANDE = 'cotizacion.aprobar-grande';
-
-  static readonly PRODUCTO_VER_COSTO = 'producto.ver-costo';
   static readonly PRODUCTO_EDITAR_COSTO = 'producto.editar-costo';
 
   static readonly DEVOLUCION_CREAR = 'devolucion.crear';
-
-  static readonly CLIENTE_VER_CREDITO = 'cliente.ver-credito';
 }
 
 /** IDs válidos del catálogo (validación de input). */
