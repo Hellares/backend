@@ -28,6 +28,10 @@ import { SetPasswordDto } from './dto/set-password.dto';
 import { CheckAuthMethodsDto } from './dto/check-auth-methods.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AutorizarOperacionDto } from './dto/autorizar-operacion.dto';
+import {
+  OPERACIONES_AUTORIZABLES,
+  normalizarOperacion,
+} from './services/operaciones-autorizables.catalog';
 import { JwtPayload, RefreshTokenPayload } from './interfaces/jwt-payload.interface';
 
 @Injectable()
@@ -2264,6 +2268,22 @@ export class AuthService {
    * Un admin/gerente valida con su DNI+contraseña para autorizar la operación
    */
   async autorizarOperacion(empresaId: string, solicitanteId: string, dto: AutorizarOperacionDto) {
+    // 0. Qué se está autorizando. Antes era un string libre que solo se
+    // escribía en el log: nada garantizaba que fuera una operación real, y los
+    // nombres se fueron separando solos (`DESCUENTO` y `APLICAR_DESCUENTO`
+    // para lo mismo), así que la única traza de quién autorizó qué no servía
+    // para auditar.
+    //
+    // Se normaliza ANTES de validar credenciales: si la operación no existe,
+    // no tiene sentido siquiera mirar la contraseña.
+    const operacion = normalizarOperacion(dto.operacion);
+    if (!operacion) {
+      throw new BadRequestException(
+        `Operación no reconocida: "${dto.operacion}". ` +
+          `Las válidas son: ${OPERACIONES_AUTORIZABLES.join(', ')}.`,
+      );
+    }
+
     // 1. Find persona by DNI
     const persona = await this.prisma.persona.findFirst({
       where: { dni: dto.dni },
@@ -2315,8 +2335,11 @@ export class AuthService {
       throw new UnauthorizedException('El usuario no tiene permisos de administrador para autorizar esta operacion');
     }
 
-    // 4. Log the authorization
-    this.logger.log(`Operacion autorizada: ${dto.operacion} por ${persona.nombres} ${persona.apellidos} (DNI: ${dto.dni}), solicitado por userId: ${solicitanteId}`);
+    // 4. Log the authorization.
+    // Se registra la operación NORMALIZADA, no la que mandó el cliente: así un
+    // APK viejo que dice `DESCUENTO` queda en el log como `APLICAR_DESCUENTO`
+    // y la auditoría cierra sin depender de qué versión tenga cada celular.
+    this.logger.log(`Operacion autorizada: ${operacion} por ${persona.nombres} ${persona.apellidos} (DNI: ${dto.dni}), solicitado por userId: ${solicitanteId}`);
 
     return {
       authorized: true,
