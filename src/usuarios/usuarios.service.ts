@@ -19,6 +19,10 @@ import { CacheService } from '../redis/cache.service';
 import { AuthSessionService } from '../auth/auth.session.service';
 import { VALID_GRANULAR_PERMISSION_IDS } from '../auth/services/granular-permissions.catalog';
 import { VALID_ELEMENTO_OCULTABLE_IDS } from '../auth/services/elementos-ocultables.catalog';
+import {
+  PermissionsService,
+  PermisoExplicado,
+} from '../auth/services/permissions.service';
 
 @Injectable()
 export class UsuariosService {
@@ -30,6 +34,7 @@ export class UsuariosService {
     private cache: CacheService,
     loggerService: AppLoggerService,
     private authSessionService: AuthSessionService,
+    private permissionsService: PermissionsService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(UsuariosService.name);
@@ -1491,4 +1496,112 @@ export class UsuariosService {
       mensaje: 'Usuario reactivado exitosamente en la empresa',
     };
   }
+
+  /**
+   * Reporte de "qué puede hacer y qué ve" un usuario.
+   *
+   * Existe porque los permisos NO se guardan: se calculan al vuelo desde los
+   * roles. Para responder "¿por qué este cajero ve el libro contable?" un
+   * admin tenía que mirar el rol, mirar los permisos especiales y aplicar
+   * mentalmente una función de 200 líneas. Nadie hace eso.
+   *
+   * Devuelve tres cosas, porque responden preguntas distintas:
+   *  - `permisos`: qué PUEDE hacer, y de dónde le viene cada permiso.
+   *  - `asignado`: lo único que un admin editó a mano (permisos especiales y
+   *    flags de caja).
+   *  - `ocultos`: qué NO VE aunque pueda. Distinguirlo importa: "no aparece"
+   *    puede ser falta de permiso o puede ser que se lo ocultaron, y son dos
+   *    problemas con arreglos opuestos.
+   */
+  async obtenerPermisosDeUsuario(usuarioId: string, empresaId: string) {
+    const usuario = await this.prisma.usuario.findFirst({
+      where: { id: usuarioId },
+      select: {
+        id: true,
+        persona: { select: { nombres: true, apellidos: true, dni: true } },
+      },
+    });
+    if (!usuario) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const [rolesEmpresa, sedeRoles] = await Promise.all([
+      this.prisma.empresaUsuarioRol.findMany({
+        where: { usuarioId, empresaId, isActive: true, deletedAt: null },
+        select: { rol: true },
+      }),
+      this.prisma.usuarioSedeRol.findMany({
+        where: {
+          usuarioId,
+          sede: { empresaId, deletedAt: null },
+          isActive: true,
+          deletedAt: null,
+        },
+        select: {
+          rol: true,
+          puedeAbrirCaja: true,
+          puedeCerrarCaja: true,
+          permisos: true,
+          accesosRapidosOcultos: true,
+          sede: { select: { id: true, nombre: true } },
+        },
+      }),
+    ]);
+
+    if (rolesEmpresa.length === 0) {
+      throw new NotFoundException('El usuario no pertenece a esta empresa');
+    }
+
+    const roles = rolesEmpresa.map((r) => r.rol);
+    // Consolidado entre sedes, igual que hace el guard: si lo tiene en una,
+    // lo tiene. Mostrarlo de otra forma haría que esta pantalla y el sistema
+    // real no coincidieran.
+    const permisosGranulares = Array.from(
+      new Set(sedeRoles.flatMap((s) => s.permisos)),
+    );
+    const ocultos = Array.from(
+      new Set(sedeRoles.flatMap((s) => s.accesosRapidosOcultos)),
+    );
+    const overrides = {
+      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
+      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
+      permisos: permisosGranulares,
+    };
+
+    const permisos: PermisoExplicado[] = this.permissionsService.explicarPermisos(
+      roles,
+      overrides,
+    );
+
+    return {
+      usuario: {
+        id: usuario.id,
+        nombre: `${usuario.persona?.nombres ?? ''} ${usuario.persona?.apellidos ?? ''}`.trim(),
+        dni: usuario.persona?.dni ?? null,
+      },
+      roles,
+      sedes: sedeRoles.map((s) => ({
+        sedeId: s.sede.id,
+        sedeNombre: s.sede.nombre,
+        rol: s.rol,
+      })),
+      permisos,
+      resumen: {
+        concedidos: permisos.filter((p) => p.valor).length,
+        total: permisos.length,
+      },
+      asignado: {
+        permisosEspeciales: permisosGranulares,
+        puedeAbrirCaja: overrides.puedeAbrirCaja,
+        puedeCerrarCaja: overrides.puedeCerrarCaja,
+      },
+      // Cosmético, pero es la otra mitad de "¿por qué no encuentra la
+      // pantalla?". Se separa el dashboard del menú por el prefijo.
+      ocultos: {
+        dashboard: ocultos.filter((id) => !id.startsWith('menu.')),
+        menu: ocultos.filter((id) => id.startsWith('menu.')),
+      },
+    };
+  }
+
 }

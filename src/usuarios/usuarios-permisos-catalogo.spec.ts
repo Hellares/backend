@@ -36,6 +36,7 @@ describe('UsuariosService — permisos especiales fuera de catálogo', () => {
       {} as any,
       logger as any,
       {} as any,
+      {} as any,
     );
   });
 

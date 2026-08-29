@@ -37,6 +37,7 @@ describe('UsuariosService — elementos ocultables fuera de catalogo', () => {
       {} as any,
       logger as any,
       {} as any,
+      {} as any,
     );
   });
 

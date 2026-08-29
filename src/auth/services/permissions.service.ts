@@ -30,6 +30,23 @@ export interface PermissionsOverrides {
   permisos?: readonly string[];
 }
 
+/**
+ * Un permiso con su procedencia, para la pantalla "qué puede hacer este
+ * usuario".
+ *
+ * `origen`:
+ *  - `rol`      → se lo da un rol de empresa; `detalle` dice cuál.
+ *  - `especial` → se lo da un permiso granular; `detalle` dice cuál.
+ *  - `flag`     → los flags legacy de caja (`puedeAbrirCaja`/`Cerrar`).
+ *  - `null`     → no lo tiene.
+ */
+export interface PermisoExplicado {
+  clave: string;
+  valor: boolean;
+  origen: 'rol' | 'especial' | 'flag' | null;
+  detalle: string | null;
+}
+
 @Injectable()
 export class PermissionsService {
   /**
@@ -358,4 +375,70 @@ export class PermissionsService {
       'canManageGastosRecurrentes',
     ];
   }
+
+  /**
+   * Explica, permiso por permiso, si el usuario lo tiene y DE DÓNDE le viene.
+   *
+   * Es lo que convierte un volcado de 45 booleanos en algo accionable: la
+   * pregunta real de un admin nunca es "¿tiene canViewCaja?" sino "¿por qué
+   * este cajero ve el libro contable?".
+   *
+   * 🔴 No toca `calculatePermissions` — la usa tal cual, tres veces, y deduce
+   * el origen por diferencia. Meterle mano a esa función para que registrara
+   * su propia procedencia habría duplicado cada regla, con el riesgo clásico
+   * de que la explicación y el cálculo se separen y la pantalla mienta.
+   *
+   *  - Lo que dan los roles solos vs. lo que da con los granulares: la
+   *    diferencia vino sí o sí de un permiso especial.
+   *  - Y para saber CUÁL rol lo aporta, se calcula rol por rol.
+   */
+  explicarPermisos(
+    roles: Rol[],
+    overrides?: PermissionsOverrides,
+  ): PermisoExplicado[] {
+    const efectivos = this.calculatePermissions(roles, overrides);
+    // Sin granulares ni flags: solo lo que otorga el rol por sí mismo.
+    const soloRoles = this.calculatePermissions(roles);
+
+    // Qué aporta cada rol por separado, para poder nombrarlo.
+    const porRol = roles.map(
+      (rol) => [rol, this.calculatePermissions([rol])] as const,
+    );
+
+    // Qué aporta cada permiso especial por separado. Se prueba de a uno
+    // ENCIMA de los roles: así se ve exactamente cuál destrabó qué.
+    const granulares = overrides?.permisos ?? [];
+    const porGranular = granulares.map(
+      (id) =>
+        [id, this.calculatePermissions(roles, { ...overrides, permisos: [id] })] as const,
+    );
+
+    return Object.keys(efectivos).map((clave) => {
+      const valor = efectivos[clave] === true;
+      if (!valor) {
+        return { clave, valor: false, origen: null, detalle: null };
+      }
+
+      // Vino del rol: se nombra el primero que lo otorga.
+      if (soloRoles[clave] === true) {
+        const rol = porRol.find(([, p]) => p[clave] === true)?.[0];
+        return {
+          clave,
+          valor: true,
+          origen: 'rol' as const,
+          detalle: rol ?? null,
+        };
+      }
+
+      // No lo dan los roles ⇒ salió de un permiso especial o de un flag.
+      const granular = porGranular.find(([, p]) => p[clave] === true)?.[0];
+      if (granular) {
+        return { clave, valor: true, origen: 'especial' as const, detalle: granular };
+      }
+      // Queda el caso de los flags legacy `puedeAbrirCaja` / `puedeCerrarCaja`,
+      // que amplían sin pasar por el catálogo.
+      return { clave, valor: true, origen: 'flag' as const, detalle: null };
+    });
+  }
+
 }

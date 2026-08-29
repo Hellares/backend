@@ -104,6 +104,31 @@ export class UsuariosController {
   }
 
   /**
+   * GET /usuarios/:id/permisos
+   * Qué puede hacer este usuario, y de dónde le viene cada permiso.
+   */
+  @Get(':id/permisos')
+  @RequiresPermission(Permission.VIEW_USERS)
+  @ApiOperation({
+    summary: 'Permisos efectivos de un usuario, con su origen',
+    description:
+      'Los permisos no se guardan: se calculan desde los roles. Este endpoint ' +
+      'los resuelve para un usuario cualquiera y explica de donde sale cada ' +
+      'uno (rol, permiso especial o flag de caja). Incluye ademas lo que el ' +
+      'admin le asigno a mano y los elementos que le oculto del dashboard y ' +
+      'del menu — que es la otra mitad de "por que no encuentra tal pantalla".',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @ApiResponse({ status: 200, description: 'Reporte de permisos' })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado en la empresa' })
+  async obtenerPermisos(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+  ) {
+    return this.usuariosService.obtenerPermisosDeUsuario(id, empresaId);
+  }
+
+  /**
    * GET /usuarios/:id
    * Obtener un usuario específico
    */
