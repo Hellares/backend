@@ -56,8 +56,9 @@ export class UsuariosService {
     // (Validación de sedes movida a cada CASO, dentro de su $transaction
     // — cierra TOCTOU contra un admin desactivando sede entre check y use.)
 
-    // Log de drift de catálogo (no bloqueante).
-    this.logIdsDesconocidos(createUsuarioDto.permisos, 'registrarUsuario');
+    // Permisos especiales: los IDs fuera de catálogo se rechazan acá, antes
+    // de crear nada.
+    this.validarIdsGranulares(createUsuarioDto.permisos, 'registrarUsuario');
 
     // Buscar si existe una persona con este DNI
     const personaExistente = await this.prisma.persona.findUnique({
@@ -285,26 +286,49 @@ export class UsuariosService {
   }
 
   /**
-   * Loguea warning si el payload trae IDs de `permisos` que no están
-   * en el catálogo granular. No rechaza para no romper deploys donde
-   * el cliente Flutter va adelante del backend (o viceversa), pero
-   * deja huella en logs para detectar drift de catálogo o llamadas
-   * mal-formadas. `accesosRapidosOcultos` no se valida porque su
-   * catálogo vive solo en Flutter (UI-only).
+   * RECHAZA los IDs de `permisos` que no estén en el catálogo granular.
+   *
+   * Antes esto solo dejaba un warning y guardaba igual. El problema de guardar
+   * es que un `caja.abir` con un typo se persiste para siempre: no concede
+   * nada, no avisa a nadie, y quien después investigue por qué el permiso "no
+   * funciona" va a revisar el rol, el guard y el cálculo — y el problema va a
+   * ser una letra.
+   *
+   * Importa sobre todo porque el catálogo está **duplicado a mano** entre
+   * `granular-permissions.catalog.ts` y `granular_permissions_catalog.dart`:
+   * si alguien agrega un permiso de un lado y se olvida del otro, esto lo
+   * grita en vez de tragárselo.
+   *
+   * 🔴 El motivo por el que ANTES no rechazaba era no romper un deploy donde
+   * el APK fuera adelante del backend. Eso lo cubre la regla de despliegue del
+   * proyecto —backend primero, APK después—: respetándola, el app nunca puede
+   * mandar un ID que este backend no conozca. Si algún día se invierte el
+   * orden, el síntoma va a ser un 400 al guardar un usuario, no un permiso
+   * silenciosamente muerto; y ese es el intercambio buscado: falla ruidosa en
+   * vez de falla muda.
+   *
+   * `accesosRapidosOcultos` sigue sin validarse porque su catálogo vive solo
+   * en Flutter (es UI, no autorización): acá no hay contra qué comparar.
    */
-  private logIdsDesconocidos(
+  private validarIdsGranulares(
     permisos: string[] | undefined,
     contexto: string,
   ): void {
     if (!permisos || permisos.length === 0) return;
-    const desconocidos = permisos.filter(
-      (p) => !VALID_GRANULAR_PERMISSION_IDS.has(p),
+    const desconocidos = [
+      ...new Set(permisos.filter((p) => !VALID_GRANULAR_PERMISSION_IDS.has(p))),
+    ];
+    if (desconocidos.length === 0) return;
+
+    // El warning se conserva: el 400 se lo lleva el cliente, pero el drift de
+    // catálogo es un problema de operación y tiene que quedar en el log.
+    this.logger.warn(
+      `[${contexto}] IDs de permiso granular fuera de catálogo: ${desconocidos.join(', ')}`,
     );
-    if (desconocidos.length > 0) {
-      this.logger.warn(
-        `[${contexto}] IDs de permiso granular fuera de catálogo: ${desconocidos.join(', ')}`,
-      );
-    }
+    throw new BadRequestException(
+      `Permiso(s) especial(es) no reconocido(s): ${desconocidos.join(', ')}. ` +
+        `Los IDs válidos son: ${[...VALID_GRANULAR_PERMISSION_IDS].join(', ')}.`,
+    );
   }
 
   /**
@@ -1053,8 +1077,9 @@ export class UsuariosService {
       );
     }
 
-    // Log de drift de catálogo (no bloqueante).
-    this.logIdsDesconocidos(permisos, 'actualizarUsuario');
+    // Permisos especiales: los IDs fuera de catálogo se rechazan acá, antes
+    // de tocar al usuario.
+    this.validarIdsGranulares(permisos, 'actualizarUsuario');
 
     // Validar email único (si está cambiando)
     if (email && email !== empresaUsuario.usuario.email) {
