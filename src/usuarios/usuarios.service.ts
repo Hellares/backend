@@ -18,6 +18,7 @@ import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CacheService } from '../redis/cache.service';
 import { AuthSessionService } from '../auth/auth.session.service';
 import { VALID_GRANULAR_PERMISSION_IDS } from '../auth/services/granular-permissions.catalog';
+import { VALID_ELEMENTO_OCULTABLE_IDS } from '../auth/services/elementos-ocultables.catalog';
 
 @Injectable()
 export class UsuariosService {
@@ -59,6 +60,10 @@ export class UsuariosService {
     // Permisos especiales: los IDs fuera de catálogo se rechazan acá, antes
     // de crear nada.
     this.validarIdsGranulares(createUsuarioDto.permisos, 'registrarUsuario');
+    this.validarIdsOcultables(
+      createUsuarioDto.accesosRapidosOcultos,
+      'registrarUsuario',
+    );
 
     // Buscar si existe una persona con este DNI
     const personaExistente = await this.prisma.persona.findUnique({
@@ -328,6 +333,37 @@ export class UsuariosService {
     throw new BadRequestException(
       `Permiso(s) especial(es) no reconocido(s): ${desconocidos.join(', ')}. ` +
         `Los IDs válidos son: ${[...VALID_GRANULAR_PERMISSION_IDS].join(', ')}.`,
+    );
+  }
+
+  /**
+   * Rechaza los IDs de `accesosRapidosOcultos` que no estén en el catálogo.
+   *
+   * La lista guarda dos familias: los 21 botones del dashboard y los ítems del
+   * menú lateral (prefijo `menu.`). Un id inventado se guardaba en silencio y
+   * el elemento seguía apareciendo, sin ninguna pista de por qué.
+   *
+   * A diferencia de los permisos granulares, esto NO autoriza nada: oculta. Un
+   * id malo no abre ninguna puerta — pero deja al admin creyendo que configuró
+   * algo que no configuró, que es su propia clase de problema.
+   */
+  private validarIdsOcultables(
+    ids: string[] | undefined,
+    contexto: string,
+  ): void {
+    if (!ids || ids.length === 0) return;
+    const desconocidos = [
+      ...new Set(ids.filter((id) => !VALID_ELEMENTO_OCULTABLE_IDS.has(id))),
+    ];
+    if (desconocidos.length === 0) return;
+
+    this.logger.warn(
+      `[${contexto}] IDs ocultables fuera de catálogo: ${desconocidos.join(', ')}`,
+    );
+    // No se listan los 57 válidos en el mensaje: sería ilegible. El catálogo
+    // está en `elementos-ocultables.catalog.ts`.
+    throw new BadRequestException(
+      `Elemento(s) a ocultar no reconocido(s): ${desconocidos.join(', ')}.`,
     );
   }
 
@@ -1080,6 +1116,7 @@ export class UsuariosService {
     // Permisos especiales: los IDs fuera de catálogo se rechazan acá, antes
     // de tocar al usuario.
     this.validarIdsGranulares(permisos, 'actualizarUsuario');
+    this.validarIdsOcultables(accesosRapidosOcultos, 'actualizarUsuario');
 
     // Validar email único (si está cambiando)
     if (email && email !== empresaUsuario.usuario.email) {
