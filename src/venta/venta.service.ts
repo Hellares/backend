@@ -5166,6 +5166,25 @@ export class VentaService {
   ) {
     this.logger.info('Anulando venta', { id, empresaId });
 
+    // Quién autorizó tiene que tener rol para hacerlo, y lo decide el SERVIDOR.
+    // `autorizadoPorId` llega en el body: el front valida DNI+contraseña contra
+    // /auth/autorizar-operacion antes de mandarlo, pero eso es una defensa de
+    // UI — nada impedía que un cliente modificado mandara cualquier id y la
+    // venta quedara anulada "autorizada" por un cajero.
+    //
+    // Va ANTES de abrir la transacción: si el autorizador no sirve, no hay
+    // ninguna razón para tocar stock ni caja.
+    //
+    // Sin `dto` no se valida: ese es el camino del cron de Yape
+    // (`soloSiPendienteSinPagos`), que anula por TTL sin autorizador humano.
+    if (dto) {
+      await this.assertAutorizadorGerencial(
+        dto.autorizadoPorId,
+        empresaId,
+        'la anulación de la venta',
+      );
+    }
+
     const result = await this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
         where: { id, empresaId },
@@ -5717,38 +5736,65 @@ export class VentaService {
         });
       }
 
-      // Validar que el autorizador tiene rol válido en la empresa.
-      // Reutilizamos la misma policy que liquidaciones: GERENTE_SEDE/ADMINISTRADOR
-      // (sede) o SUPER_ADMIN/EMPRESA_ADMIN (empresa).
-      const [empresaRol, sedeRol] = await Promise.all([
-        this.prisma.empresaUsuarioRol.findFirst({
-          where: {
-            usuarioId: autorizadoPorId,
-            empresaId,
-            isActive: true,
-            deletedAt: null,
-            rol: { in: ['SUPER_ADMIN', 'EMPRESA_ADMIN'] },
-          },
-          select: { id: true },
-        }),
-        this.prisma.usuarioSedeRol.findFirst({
-          where: {
-            usuarioId: autorizadoPorId,
-            sede: { empresaId },
-            rol: { in: ['GERENTE_SEDE', 'ADMINISTRADOR'] },
-            isActive: true,
-          },
-          select: { id: true },
-        }),
-      ]);
-      if (!empresaRol && !sedeRol) {
-        throw new BadRequestException(
-          'El autorizador de la venta bajo costo no tiene rol GERENTE_SEDE/ADMINISTRADOR',
-        );
-      }
+      await this.assertAutorizadorGerencial(
+        autorizadoPorId,
+        empresaId,
+        'la venta bajo costo',
+      );
     }
 
     return round2(perdidaTotal);
+  }
+
+  /**
+   * Exige que quien autorizó una operación sensible tenga rol para hacerlo:
+   * `SUPER_ADMIN`/`EMPRESA_ADMIN` en la empresa, o `GERENTE_SEDE`/
+   * `ADMINISTRADOR` en alguna de sus sedes. Misma policy que liquidaciones y
+   * ajustes de stock (`assertAutorizadorGerencial` de producto-stock).
+   *
+   * 🔴 Es una defensa de SERVIDOR y ese es el punto. El front llama antes a
+   * `/auth/autorizar-operacion`, que valida DNI + contraseña, pero después el
+   * `autorizadoPorId` resultante viaja en el body: sin este chequeo, cualquier
+   * id servía.
+   *
+   * Cuando quien opera YA es administrador, el app manda su propio id y esto
+   * lo deja pasar — autorizarse a sí mismo es legítimo justamente porque tiene
+   * el rol, y es lo que permite que al admin no se le pidan credenciales.
+   */
+  private async assertAutorizadorGerencial(
+    autorizadoPorId: string,
+    empresaId: string,
+    operacion: string,
+  ): Promise<void> {
+    const [empresaRol, sedeRol] = await Promise.all([
+      this.prisma.empresaUsuarioRol.findFirst({
+        where: {
+          usuarioId: autorizadoPorId,
+          empresaId,
+          isActive: true,
+          deletedAt: null,
+          rol: { in: ['SUPER_ADMIN', 'EMPRESA_ADMIN'] },
+        },
+        select: { id: true },
+      }),
+      this.prisma.usuarioSedeRol.findFirst({
+        where: {
+          usuarioId: autorizadoPorId,
+          sede: { empresaId },
+          rol: { in: ['GERENTE_SEDE', 'ADMINISTRADOR'] },
+          isActive: true,
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    if (!empresaRol && !sedeRol) {
+      throw new BadRequestException(
+        `El autorizador de ${operacion} no tiene rol para hacerlo: ` +
+          `hace falta ser administrador de la empresa o GERENTE_SEDE/` +
+          `ADMINISTRADOR en una sede.`,
+      );
+    }
   }
 
   private calcularDetalle(dto: CreateVentaDetalleDto | DetalleConSnapshot, index: number) {
