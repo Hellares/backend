@@ -59,6 +59,13 @@ import {
  * de costo y motivo de liquidación. Persiste a VentaDetalle como
  * precioCostoSnapshot/margenSnapshot/motivoLiquidacionSnapshot.
  */
+/**
+ * Un identificador con la nota que lo describe ("351...123" + "SIM1"). Viajan
+ * pegados porque se filtran juntos: separarlos corría los índices y la nota
+ * terminaba en el código de al lado.
+ */
+type CodigoConNota = { codigo: string; nota: string };
+
 type DetalleConSnapshot = CreateVentaDetalleDto & {
   precioCostoSnapshot: number;
   motivoLiquidacionSnapshot: MotivoLiquidacion | null;
@@ -426,15 +433,15 @@ export class VentaService {
           : undefined;
       if (!etiqueta) return d;
 
-      // Los códigos AGRUPADOS por unidad. Una unidad puede llevar más de uno
-      // (un celular dual SIM tiene dos IMEI), y el grupo es lo que permite
-      // saber qué par es de qué aparato y a qué unidad va cada nota.
+      // Los códigos AGRUPADOS por unidad, cada uno con SU nota. Una unidad
+      // puede llevar más de uno (un celular dual SIM tiene dos IMEI), y el
+      // grupo es lo que permite saber qué par es de qué aparato.
       const grupos = this.agruparIdentificadores(d);
       // Aplanado: es lo que se guarda en la columna `text[]` y lo que se
       // compara para detectar repetidos. Cada código sigue siendo una entrada
       // suelta, que es lo que hace que el índice GIN pueda encontrarlo exacto
-      // ante un reclamo de garantía.
-      const valores = grupos.flat();
+      // ante un reclamo de garantía. La nota NO entra acá.
+      const valores = grupos.flat().map((par) => par.codigo);
 
       // Un producto serializado se vende por unidades enteras: media unidad no
       // tiene identificador.
@@ -481,24 +488,19 @@ export class VentaService {
         vistos.add(v);
       }
 
-      // Nota opcional por unidad ("NEGRO 128GB"). Va entre paréntesis en el
-      // texto y NO dentro de `identificadores`: el identificador se guarda
-      // limpio para poder buscarlo exacto con el índice GIN ante un reclamo
-      // de garantía. Mezclarlos rompería esa búsqueda y la detección de
-      // duplicados, que compara el valor completo.
-      //
-      // 🔴 La nota se empareja con la UNIDAD, no con el código: si se
-      // emparejara por código, en un celular con dos IMEI la nota de la
-      // segunda unidad se le pegaría al segundo IMEI de la primera.
-      const notas = d.notasIdentificador ?? [];
-      const etiquetados = grupos.map((codigos, i) => {
-        const nota = (notas[i] ?? '').trim();
+      // Nota opcional POR CÓDIGO ("SIM1", "NEGRO 128GB"). Va entre paréntesis
+      // en el texto y NO dentro de `identificadores`: el identificador se
+      // guarda limpio para poder buscarlo exacto con el índice GIN ante un
+      // reclamo de garantía. Mezclarlos rompería esa búsqueda y la detección
+      // de duplicados, que compara el valor completo.
+      const etiquetados = grupos.map((codigos) =>
         // Los códigos de UNA unidad van juntos con " / " y las unidades se
         // separan con ", ", así se lee que 351..123 y 351..124 son del mismo
         // aparato. Barra ASCII, por lo mismo que el guión de abajo.
-        const juntos = codigos.join(' / ');
-        return nota ? `${juntos} (${nota})` : juntos;
-      });
+        codigos
+          .map((par) => (par.nota ? `${par.codigo} (${par.nota})` : par.codigo))
+          .join(' / '),
+      );
 
       return {
         ...d,
@@ -522,34 +524,65 @@ export class VentaService {
   private static readonly MAX_CODIGOS_POR_UNIDAD = 5;
 
   /**
-   * Los códigos de la línea, agrupados por unidad y ya limpios.
+   * Los códigos de la línea, agrupados por unidad, ya limpios y cada uno con
+   * SU nota.
    *
    * Acepta las DOS formas a propósito:
-   *  - `identificadoresPorUnidad` (nueva): un sub-array por unidad. Manda.
-   *  - `identificadores` (plana, la de siempre): un código por unidad.
+   *  - `identificadoresPorUnidad` + `notasIdentificadorPorUnidad` (nuevas): un
+   *    sub-array por unidad, y una nota por código. Mandan.
+   *  - `identificadores` + `notasIdentificador` (planas, las de siempre): un
+   *    código por unidad, con su nota emparejada por índice.
    *
    * La segunda no es solo herencia: es lo que hace que un APK viejo —que no
-   * conoce el campo nuevo— siga cobrando exactamente igual contra este mismo
-   * backend. Con un código por unidad las dos formas producen el mismo
+   * conoce los campos nuevos— siga cobrando exactamente igual contra este
+   * mismo backend. Con un código por unidad las dos formas producen el mismo
    * resultado, incluida la descripción sellada.
+   *
+   * 🔴 El par (código, nota) se arma y se filtra JUNTO. Filtrar los códigos
+   * vacíos por un lado y las notas por otro corría los índices, y la nota
+   * terminaba pegada al código de al lado — en un documento que se imprime y
+   * se declara.
    *
    * Se valida acá y no con class-validator porque el DTO no puede describir un
    * `string[][]` sin declarar una clase para el sub-array; y esto es entrada
    * del cliente, así que se asume hostil: cualquier cosa que no sea string se
    * descarta en vez de romper más adelante.
    */
-  private agruparIdentificadores(d: DetalleConSnapshot): string[][] {
-    const limpiar = (valores: unknown[]): string[] =>
-      valores
-        .map((v) => (typeof v === 'string' ? v.trim() : ''))
-        .filter((v) => v.length > 0);
+  private agruparIdentificadores(d: DetalleConSnapshot): CodigoConNota[][] {
+    const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+    const notasPlanas = d.notasIdentificador ?? [];
+    const notasAgrupadas = d.notasIdentificadorPorUnidad;
 
     const agrupado = d.identificadoresPorUnidad;
     if (Array.isArray(agrupado)) {
-      return agrupado.map((g) => limpiar(Array.isArray(g) ? g : []));
+      return agrupado.map((grupo, u) => {
+        const codigos = Array.isArray(grupo) ? grupo : [];
+        const notasDeLaUnidad = Array.isArray(notasAgrupadas?.[u])
+          ? notasAgrupadas[u]
+          : null;
+        return codigos
+          .map((codigo, k) => ({
+            codigo: texto(codigo),
+            // Con notas agrupadas cada código lleva la suya. Si el cliente
+            // mandó códigos agrupados pero notas planas (una por unidad), esa
+            // nota va sobre el PRIMER código: es el único que esa forma sabe
+            // describir.
+            nota: notasDeLaUnidad
+              ? texto(notasDeLaUnidad[k])
+              : k === 0
+                ? texto(notasPlanas[u])
+                : '',
+          }))
+          .filter((par) => par.codigo.length > 0);
+      });
     }
-    // Forma plana: cada código es su propia unidad.
-    return limpiar(d.identificadores ?? []).map((v) => [v]);
+
+    // Forma plana: cada código es su propia unidad. La nota se empareja por
+    // índice contra los códigos YA filtrados, que es como venía haciéndose.
+    return (d.identificadores ?? [])
+      .map((v) => texto(v))
+      .filter((v) => v.length > 0)
+      .map((codigo, i) => [{ codigo, nota: texto(notasPlanas[i]) }]);
   }
 
   /**

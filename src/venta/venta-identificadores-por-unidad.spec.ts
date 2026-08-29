@@ -75,18 +75,51 @@ describe('VentaService.sellarIdentificadores', () => {
       linea({
         cantidad: 1,
         identificadoresPorUnidad: [['351234567890123', '351234567890124']],
-        notasIdentificador: ['NEGRO 128GB'],
+        notasIdentificadorPorUnidad: [['SIM1', 'SIM2']],
       }),
     );
 
-    // Aplanados en la columna: cada código sigue siendo buscable exacto por GIN.
+    // Aplanados en la columna: cada código sigue siendo buscable exacto por
+    // GIN, y la nota NO entra ahí.
     expect(out.identificadores).toEqual(['351234567890123', '351234567890124']);
     expect(out.descripcion).toBe(
-      'CELULAR REDMI - IMEI: 351234567890123 / 351234567890124 (NEGRO 128GB)',
+      'CELULAR REDMI - IMEI: 351234567890123 (SIM1) / 351234567890124 (SIM2)',
     );
   });
 
-  it('la nota se empareja con la UNIDAD, no con el código', async () => {
+  it('cada código lleva SU nota, y las unidades se separan entre sí', async () => {
+    const [out] = await sellar(
+      linea({
+        cantidad: 2,
+        identificadoresPorUnidad: [
+          ['351234567890123', '351234567890124'],
+          ['351234567890125'],
+        ],
+        notasIdentificadorPorUnidad: [['SIM1', 'SIM2'], ['BLANCO 256GB']],
+      }),
+    );
+
+    expect(out.descripcion).toBe(
+      'CELULAR REDMI - IMEI: 351234567890123 (SIM1) / 351234567890124 (SIM2), ' +
+        '351234567890125 (BLANCO 256GB)',
+    );
+  });
+
+  it('un código sin nota queda pelado, sin paréntesis vacíos', async () => {
+    const [out] = await sellar(
+      linea({
+        cantidad: 1,
+        identificadoresPorUnidad: [['351234567890123', '351234567890124']],
+        notasIdentificadorPorUnidad: [['SIM1', '']],
+      }),
+    );
+
+    expect(out.descripcion).toBe(
+      'CELULAR REDMI - IMEI: 351234567890123 (SIM1) / 351234567890124',
+    );
+  });
+
+  it('códigos agrupados con notas PLANAS: la nota va al primer código', async () => {
     const [out] = await sellar(
       linea({
         cantidad: 2,
@@ -98,11 +131,27 @@ describe('VentaService.sellarIdentificadores', () => {
       }),
     );
 
-    // BLANCO es de la SEGUNDA unidad; emparejando por código habría caído en
-    // el segundo IMEI de la primera.
+    // BLANCO es de la SEGUNDA unidad: no puede caer en el segundo IMEI de la
+    // primera.
     expect(out.descripcion).toBe(
-      'CELULAR REDMI - IMEI: 351234567890123 / 351234567890124 (NEGRO 128GB), ' +
+      'CELULAR REDMI - IMEI: 351234567890123 (NEGRO 128GB) / 351234567890124, ' +
         '351234567890125 (BLANCO 256GB)',
+    );
+  });
+
+  it('🔴 el par (código, nota) se filtra JUNTO: un código vacío no corre las notas', async () => {
+    const [out] = await sellar(
+      linea({
+        cantidad: 1,
+        // La casilla del medio quedó vacía; su nota tiene que irse con ella.
+        identificadoresPorUnidad: [['351234567890123', '', '351234567890125']],
+        notasIdentificadorPorUnidad: [['SIM1', 'HUERFANA', 'SERIE']],
+      }),
+    );
+
+    expect(out.identificadores).toEqual(['351234567890123', '351234567890125']);
+    expect(out.descripcion).toBe(
+      'CELULAR REDMI - IMEI: 351234567890123 (SIM1) / 351234567890125 (SERIE)',
     );
   });
 

@@ -88,7 +88,8 @@ export class CreateVentaDetalleDto {
       '("NEGRO 128GB"). Va entre paréntesis en la descripción de la línea. ' +
       'No se guarda como columna aparte: es descriptiva y su lugar es el ' +
       'texto del comprobante — el identificador se guarda limpio para poder ' +
-      'buscarlo exacto ante un reclamo de garantía.',
+      'buscarlo exacto ante un reclamo de garantía. Cuando una unidad lleva ' +
+      'varios códigos y cada uno su nota, usar `notasIdentificadorPorUnidad`.',
     example: ['NEGRO 128GB', 'AZUL 256GB'],
   })
   @IsOptional()
@@ -96,6 +97,24 @@ export class CreateVentaDetalleDto {
   @ArrayMaxSize(50)
   @IsString({ each: true })
   notasIdentificador?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Las notas agrupadas igual que `identificadoresPorUnidad` y en el mismo ' +
+      'orden: una nota por CÓDIGO, no por unidad, porque los dos IMEI de un ' +
+      'mismo aparato pueden querer distinguirse ("SIM1" / "SIM2"). Si viene, ' +
+      'manda sobre `notasIdentificador`. Si no viene, la nota plana de la ' +
+      'unidad se aplica al PRIMER código de esa unidad — que es el único que ' +
+      'la forma plana sabe describir, y por eso los APK viejos siguen ' +
+      'sellando la descripción idéntica.',
+    example: [['SIM1', 'SIM2'], ['BLANCO 256GB']],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  // Sin `@IsString({ each: true })` por lo mismo que arriba: los elementos son
+  // arrays. La forma de adentro se valida en `sellarIdentificadores`.
+  notasIdentificadorPorUnidad?: string[][];
 
   @ApiProperty({ description: 'Cantidad', example: 1 })
   @IsNumber()
