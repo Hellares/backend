@@ -124,8 +124,16 @@ export class PermissionsService {
       canManageSedes: isAdmin,
 
       // ==================== REPORTES ====================
-      canViewReports:
-        isAnyAdmin || isContador || isCajero || isViewer,
+      // 🔴 El CAJERO salió de acá (29-08). Este permiso no da "ver reportes de
+      // lo mío": es la llave de los módulos financieros de administración —
+      // libro contable, préstamos, flujo proyectado, metas, cuentas bancarias
+      // y de recaudación—, y además abría en el drawer las secciones Finanzas
+      // y Facturación SUNAT enteras.
+      //
+      // Un cajero seguía viendo el libro contable de la empresa por tener este
+      // flag. Lo suyo —su caja, sus ventas, su facturación— pasa por
+      // `canViewCaja`, `canViewVentas` y `canManageInvoices`, que conserva.
+      canViewReports: isAnyAdmin || isContador || isViewer,
 
       // ==================== FACTURAS ====================
       canManageInvoices:
