@@ -1177,7 +1177,11 @@ export class VentaService {
       detalles: {
         include: {
           producto: {
-            select: { id: true, nombre: true, codigoEmpresa: true },
+            // `sku` va acá porque el TICKET lo imprime: identifica el artículo
+            // exacto ante un cambio o una garantía. Es opcional en el
+            // producto, así que el ticket cae a `codigoEmpresa`, que sí es
+            // obligatorio.
+            select: { id: true, nombre: true, codigoEmpresa: true, sku: true },
           },
           variante: { select: { id: true, nombre: true, sku: true } },
           servicio: {
