@@ -25,4 +25,14 @@ export class AgregarAdelantoDto {
   @IsString()
   @MaxLength(200)
   nota?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Componente de la orden al que se imputa el abono ("estos 100 son la ' +
+      'carcasa"). Omitirlo = al costo del servicio. Es una ETIQUETA: el saldo ' +
+      'sigue siendo facturable − adelanto − descuento sobre la orden entera.',
+  })
+  @IsOptional()
+  @IsString()
+  servicioComponenteId?: string;
 }

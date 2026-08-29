@@ -216,6 +216,8 @@ export class OrdenServicioService {
       metodoPago?: string | null;
       /** Nota para la fila del libro de adelantos. */
       nota?: string | null;
+      /** Componente al que se imputa el abono. null = al costo del servicio. */
+      servicioComponenteId?: string | null;
       /** true = anulación de una fila existente: registra caja SIN crear fila. */
       sinFila?: boolean;
     },
@@ -248,6 +250,10 @@ export class OrdenServicioService {
           nota:
             params.nota ??
             (delta < 0 ? 'Ajuste/corrección del total de adelanto' : null),
+          // Solo los abonos se imputan: una fila de ajuste negativo corrige el
+          // total de la orden, no el pago de un repuesto.
+          servicioComponenteId:
+            delta > 0 ? (params.servicioComponenteId ?? null) : null,
           creadoPor: params.usuarioId,
           creadoPorNombre,
         },
@@ -1215,7 +1221,12 @@ export class OrdenServicioService {
     empresaId: string,
     id: string,
     usuarioId: string,
-    dto: { monto: number; metodoPago?: string; nota?: string },
+    dto: {
+      monto: number;
+      metodoPago?: string;
+      nota?: string;
+      servicioComponenteId?: string;
+    },
   ) {
     if (!dto.monto || dto.monto <= 0) {
       throw new BadRequestException('El monto del adelanto debe ser mayor a 0');
@@ -1231,7 +1242,9 @@ export class OrdenServicioService {
       const orden = await tx.ordenServicio.findFirst({
         where: { id, empresaId },
         include: {
-          componentes: { select: { costoAccion: true, costoRepuestos: true } },
+          componentes: {
+            select: { id: true, costoAccion: true, costoRepuestos: true },
+          },
           ventaDetalle: { select: { id: true } },
         },
       });
@@ -1243,6 +1256,44 @@ export class OrdenServicioService {
         throw new BadRequestException(
           'La orden ya fue cobrada: no se pueden registrar más adelantos',
         );
+      }
+
+      // Imputación a un componente: es una ETIQUETA sobre el mismo saldo de la
+      // orden, pero tiene que ser verdadera — un componente de OTRA orden o un
+      // id inventado dejaría el libro diciendo algo falso.
+      if (dto.servicioComponenteId) {
+        const comp = orden.componentes.find(
+          (c) => c.id === dto.servicioComponenteId,
+        );
+        if (!comp) {
+          throw new BadRequestException(
+            'El componente indicado no pertenece a esta orden',
+          );
+        }
+        const costoComp =
+          Number(comp.costoAccion ?? 0) + Number(comp.costoRepuestos ?? 0);
+        // Con el componente todavía sin costear no hay contra qué validar
+        // (mismo criterio que `costoTotal` null): se permite imputar.
+        if (costoComp > 0) {
+          const yaImputado = await tx.adelantoOrdenServicio.aggregate({
+            where: {
+              ordenServicioId: id,
+              servicioComponenteId: dto.servicioComponenteId,
+              anulado: false,
+            },
+            _sum: { monto: true },
+          });
+          const acumulado =
+            Math.round(
+              (Number(yaImputado._sum.monto ?? 0) + dto.monto) * 100,
+            ) / 100;
+          if (acumulado > costoComp) {
+            throw new BadRequestException(
+              `Imputado a ese componente ya habría S/ ${acumulado.toFixed(2)} ` +
+                `y su costo es S/ ${costoComp.toFixed(2)}`,
+            );
+          }
+        }
       }
 
       const adelantoAnterior = Number(orden.adelanto ?? 0);
@@ -1274,6 +1325,7 @@ export class OrdenServicioService {
         adelantoNuevo,
         metodoPago: dto.metodoPago ?? orden.metodoPagoAdelanto,
         nota: dto.nota ?? null,
+        servicioComponenteId: dto.servicioComponenteId ?? null,
       });
 
       return tx.ordenServicio.findUnique({

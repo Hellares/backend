@@ -247,4 +247,50 @@ describe('OrdenServicioService.registrarDeltaAdelantoEnCaja', () => {
     );
     expect(tx.adelantoOrdenServicio.create).not.toHaveBeenCalled();
   });
+
+  // ── Imputación a un componente ("estos 100 son la carcasa") ──
+  // Es una ETIQUETA sobre el mismo saldo de la orden, no una cuenta aparte.
+
+  it('abono imputado → la fila guarda el componente', async () => {
+    const self = makeSelf();
+    const tx = makeTx();
+    await registrar.call(
+      self,
+      tx,
+      baseParams({ servicioComponenteId: 'comp-carcasa' }),
+    );
+
+    const data = tx.adelantoOrdenServicio.create.mock.calls[0][0].data;
+    expect(data.servicioComponenteId).toBe('comp-carcasa');
+  });
+
+  it('abono sin imputar → la fila queda en null (= costo del servicio)', async () => {
+    const self = makeSelf();
+    const tx = makeTx();
+    await registrar.call(self, tx, baseParams());
+
+    const data = tx.adelantoOrdenServicio.create.mock.calls[0][0].data;
+    expect(data.servicioComponenteId).toBeNull();
+  });
+
+  it('ajuste NEGATIVO no se imputa aunque le pasen componente', async () => {
+    // Una fila de ajuste corrige el TOTAL de adelanto de la orden; no es el
+    // pago de un repuesto. Dejarla imputada haría que la suma por componente
+    // reste de un repuesto que nadie devolvió.
+    const self = makeSelf();
+    const tx = makeTx();
+    await registrar.call(
+      self,
+      tx,
+      baseParams({
+        adelantoAnterior: 80,
+        adelantoNuevo: 50,
+        servicioComponenteId: 'comp-carcasa',
+      }),
+    );
+
+    const data = tx.adelantoOrdenServicio.create.mock.calls[0][0].data;
+    expect(Number(data.monto)).toBe(-30);
+    expect(data.servicioComponenteId).toBeNull();
+  });
 });

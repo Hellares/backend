@@ -286,6 +286,7 @@ model ServicioComponente {
   componente        Componente               @relation(fields: [componenteId], references: [id])
   ordenServicio     OrdenServicio            @relation(fields: [ordenServicioId], references: [id], onDelete: Cascade)
   comprobantes      ComprobanteElectronico[] @relation("ComprobanteComponente")
+  adelantos         AdelantoOrdenServicio[]
 
   @@index([ordenServicioId])
   @@index([componenteId])
@@ -304,6 +305,10 @@ model AdelantoOrdenServicio {
   monto           Decimal   @db.Decimal(10, 2) // >0 abono; <0 ajuste/corrección
   metodoPago      String    @default("EFECTIVO")
   nota            String?
+  /// A qué se imputa el abono. null = al costo del servicio (o sin imputar).
+  /// ETIQUETA, no cuenta aparte: el saldo sigue siendo
+  /// facturable − adelanto − descuento sobre la orden entera.
+  servicioComponenteId String?
   creadoPor       String? // usuarioId que registró el cobro
   creadoPorNombre String? // snapshot para auditoría (usuario puede borrarse)
   creadoEn        DateTime  @default(now())
@@ -312,8 +317,12 @@ model AdelantoOrdenServicio {
   anuladoPor      String?
 
   orden OrdenServicio @relation(fields: [ordenServicioId], references: [id], onDelete: Cascade)
+  // SetNull y no Cascade: si se borra el componente, la plata cobrada sigue
+  // existiendo — pierde la imputación, no la fila.
+  servicioComponente ServicioComponente? @relation(fields: [servicioComponenteId], references: [id], onDelete: SetNull)
 
   @@index([ordenServicioId])
+  @@index([servicioComponenteId])
 }
 
 model HistorialOrdenServicio {
