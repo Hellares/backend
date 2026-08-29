@@ -426,9 +426,15 @@ export class VentaService {
           : undefined;
       if (!etiqueta) return d;
 
-      const valores = (d.identificadores ?? [])
-        .map((v) => v.trim())
-        .filter((v) => v.length > 0);
+      // Los códigos AGRUPADOS por unidad. Una unidad puede llevar más de uno
+      // (un celular dual SIM tiene dos IMEI), y el grupo es lo que permite
+      // saber qué par es de qué aparato y a qué unidad va cada nota.
+      const grupos = this.agruparIdentificadores(d);
+      // Aplanado: es lo que se guarda en la columna `text[]` y lo que se
+      // compara para detectar repetidos. Cada código sigue siendo una entrada
+      // suelta, que es lo que hace que el índice GIN pueda encontrarlo exacto
+      // ante un reclamo de garantía.
+      const valores = grupos.flat();
 
       // Un producto serializado se vende por unidades enteras: media unidad no
       // tiene identificador.
@@ -438,18 +444,38 @@ export class VentaService {
             `lleva su ${etiqueta}.`,
         );
       }
-      if (valores.length !== d.cantidad) {
+      if (grupos.length !== d.cantidad) {
         throw new BadRequestException(
           `"${d.descripcion}": faltan datos. Se venden ${d.cantidad} ` +
             `unidad(es) y hay que indicar ${d.cantidad} ${etiqueta}, ` +
-            `llegaron ${valores.length}.`,
+            `llegaron ${grupos.length}.`,
+        );
+      }
+      // Una unidad sin ningún código. En la forma plana no puede pasar (los
+      // vacíos se filtran y caen en el conteo de arriba); con grupos sí, si
+      // el cliente manda la unidad con el sub-array vacío.
+      const sinCodigo = grupos.findIndex((g) => g.length === 0);
+      if (sinCodigo >= 0) {
+        throw new BadRequestException(
+          `"${d.descripcion}": a la unidad ${sinCodigo + 1} le falta el ` +
+            `${etiqueta}.`,
+        );
+      }
+      const conDemasiados = grupos.findIndex(
+        (g) => g.length > VentaService.MAX_CODIGOS_POR_UNIDAD,
+      );
+      if (conDemasiados >= 0) {
+        throw new BadRequestException(
+          `"${d.descripcion}": la unidad ${conDemasiados + 1} tiene ` +
+            `${grupos[conDemasiados].length} ${etiqueta} y el máximo es ` +
+            `${VentaService.MAX_CODIGOS_POR_UNIDAD}.`,
         );
       }
       for (const v of valores) {
         if (vistos.has(v)) {
           throw new BadRequestException(
-            `El ${etiqueta} "${v}" está repetido en la venta: dos unidades no ` +
-              `pueden tener el mismo.`,
+            `El ${etiqueta} "${v}" está repetido en la venta: no puede ` +
+              `figurar dos veces.`,
           );
         }
         vistos.add(v);
@@ -460,10 +486,18 @@ export class VentaService {
       // limpio para poder buscarlo exacto con el índice GIN ante un reclamo
       // de garantía. Mezclarlos rompería esa búsqueda y la detección de
       // duplicados, que compara el valor completo.
+      //
+      // 🔴 La nota se empareja con la UNIDAD, no con el código: si se
+      // emparejara por código, en un celular con dos IMEI la nota de la
+      // segunda unidad se le pegaría al segundo IMEI de la primera.
       const notas = d.notasIdentificador ?? [];
-      const etiquetados = valores.map((v, i) => {
+      const etiquetados = grupos.map((codigos, i) => {
         const nota = (notas[i] ?? '').trim();
-        return nota ? `${v} (${nota})` : v;
+        // Los códigos de UNA unidad van juntos con " / " y las unidades se
+        // separan con ", ", así se lee que 351..123 y 351..124 son del mismo
+        // aparato. Barra ASCII, por lo mismo que el guión de abajo.
+        const juntos = codigos.join(' / ');
+        return nota ? `${juntos} (${nota})` : juntos;
       });
 
       return {
@@ -477,6 +511,45 @@ export class VentaService {
         descripcion: `${d.descripcion} - ${etiqueta}: ${etiquetados.join(', ')}`,
       };
     });
+  }
+
+  /**
+   * Techo de códigos por unidad. Un celular dual SIM lleva dos IMEI; el margen
+   * deja lugar a un tercero (IMEI + IMEI2 + N° de serie) sin que un bug del
+   * cliente pueda inflar la descripción, que termina impresa en el ticket y
+   * declarada en el XML de SUNAT.
+   */
+  private static readonly MAX_CODIGOS_POR_UNIDAD = 5;
+
+  /**
+   * Los códigos de la línea, agrupados por unidad y ya limpios.
+   *
+   * Acepta las DOS formas a propósito:
+   *  - `identificadoresPorUnidad` (nueva): un sub-array por unidad. Manda.
+   *  - `identificadores` (plana, la de siempre): un código por unidad.
+   *
+   * La segunda no es solo herencia: es lo que hace que un APK viejo —que no
+   * conoce el campo nuevo— siga cobrando exactamente igual contra este mismo
+   * backend. Con un código por unidad las dos formas producen el mismo
+   * resultado, incluida la descripción sellada.
+   *
+   * Se valida acá y no con class-validator porque el DTO no puede describir un
+   * `string[][]` sin declarar una clase para el sub-array; y esto es entrada
+   * del cliente, así que se asume hostil: cualquier cosa que no sea string se
+   * descarta en vez de romper más adelante.
+   */
+  private agruparIdentificadores(d: DetalleConSnapshot): string[][] {
+    const limpiar = (valores: unknown[]): string[] =>
+      valores
+        .map((v) => (typeof v === 'string' ? v.trim() : ''))
+        .filter((v) => v.length > 0);
+
+    const agrupado = d.identificadoresPorUnidad;
+    if (Array.isArray(agrupado)) {
+      return agrupado.map((g) => limpiar(Array.isArray(g) ? g : []));
+    }
+    // Forma plana: cada código es su propia unidad.
+    return limpiar(d.identificadores ?? []).map((v) => [v]);
   }
 
   /**

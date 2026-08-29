@@ -52,7 +52,8 @@ export class CreateVentaDetalleDto {
       'Identificadores por unidad (IMEI, N° de serie, placa). Obligatorio y ' +
       'con EXACTAMENTE `cantidad` valores cuando el producto tiene ' +
       'requiereIdentificador. El servidor los sella en la descripción de la ' +
-      'línea, que es lo que se imprime y lo que viaja a SUNAT.',
+      'línea, que es lo que se imprime y lo que viaja a SUNAT. Cuando una ' +
+      'unidad lleva más de un código, usar `identificadoresPorUnidad`.',
     example: ['351234567890123', '351234567890124'],
   })
   @IsOptional()
@@ -60,6 +61,26 @@ export class CreateVentaDetalleDto {
   @ArrayMaxSize(50)
   @IsString({ each: true })
   identificadores?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Los mismos códigos pero AGRUPADOS por unidad: un sub-array por unidad ' +
+      'vendida, porque una sola puede llevar más de uno (un celular dual SIM ' +
+      'tiene dos IMEI). Sin la agrupación no habría forma de saber qué par ' +
+      'de códigos es de qué aparato ni a qué unidad corresponde cada nota. ' +
+      'Si viene, MANDA sobre `identificadores`, que el servidor recalcula ' +
+      'aplanando esto; si no viene, se asume un código por unidad — que es ' +
+      'el comportamiento anterior, y por eso los APK viejos siguen cobrando ' +
+      'igual. Máximo 5 códigos por unidad.',
+    example: [['351234567890123', '351234567890124'], ['351234567890125']],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  // Sin `@IsString({ each: true })`: cada elemento es un ARRAY, no un string.
+  // La forma de adentro se valida en `sellarIdentificadores`, que es por donde
+  // pasan los tres flujos de venta.
+  identificadoresPorUnidad?: string[][];
 
   @ApiPropertyOptional({
     description:
