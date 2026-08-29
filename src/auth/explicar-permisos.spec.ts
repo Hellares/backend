@@ -21,7 +21,7 @@ describe('PermissionsService.explicarPermisos', () => {
   const buscar = (
     roles: Rol[],
     clave: string,
-    overrides?: { permisos?: string[]; puedeAbrirCaja?: boolean },
+    overrides?: { permisos?: string[] },
   ) => service.explicarPermisos(roles, overrides).find((p) => p.clave === clave)!;
 
   it('un permiso que da el rol se atribuye a ESE rol', () => {
@@ -57,10 +57,15 @@ describe('PermissionsService.explicarPermisos', () => {
     expect(p.detalle).toBe('devolucion.crear');
   });
 
-  it('los flags legacy de caja se distinguen del catalogo', () => {
-    const p = buscar([Rol.VENDEDOR], 'canAbrirCaja', { puedeAbrirCaja: true });
+  it('la capacidad de caja se atribuye al permiso especial', () => {
+    // Ya no hay origen 'flag': las columnas legacy salieron del calculo y el
+    // catalogo es la unica fuente.
+    const p = buscar([Rol.VENDEDOR], 'canAbrirCaja', {
+      permisos: [GranularPermissionId.CAJA_ABRIR],
+    });
     expect(p.valor).toBe(true);
-    expect(p.origen).toBe('flag');
+    expect(p.origen).toBe('especial');
+    expect(p.detalle).toBe('caja.abrir');
   });
 
   it('lo que no tiene se reporta sin origen', () => {

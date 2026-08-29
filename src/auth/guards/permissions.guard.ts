@@ -83,7 +83,7 @@ export class PermissionsGuard implements CanActivate {
     }
 
     // 4.5. Cargar overrides granulares desde UsuarioSedeRol. Si el usuario
-    //      tiene `puedeAbrirCaja` o `puedeCerrarCaja` en CUALQUIER sede de
+    //      tiene el permiso granular en CUALQUIER sede de
     //      la empresa, le otorgamos el permiso. La validación de que la
     //      sede específica esté autorizada queda en el service del endpoint.
     //      También cargamos el array `permisos` (catálogo granular)
@@ -96,8 +96,6 @@ export class PermissionsGuard implements CanActivate {
         deletedAt: null,
       },
       select: {
-        puedeAbrirCaja: true,
-        puedeCerrarCaja: true,
         permisos: true,
       },
     });
@@ -111,8 +109,6 @@ export class PermissionsGuard implements CanActivate {
     request._granularPermissions = granularPermissions;
 
     const overrides = {
-      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
-      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
       // El array granular se incluye para que calculatePermissions
       // resuelva `caja.abrir` / `caja.cerrar` por catálogo además del
       // flag legacy (Fase A — dropear flags en Fase B).

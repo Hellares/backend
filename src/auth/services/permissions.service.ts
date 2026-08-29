@@ -17,16 +17,21 @@ import { GranularPermissionId } from './granular-permissions.catalog';
  * empresa, se concede a nivel global (el guard a nivel sede específica
  * se valida en el endpoint si aplica).
  *
- * - `puedeAbrirCaja` / `puedeCerrarCaja`: flags legacy en columnas de
- *   `UsuarioSedeRol`. Pendientes de drop en Fase B (cuando el backfill
- *   esté consolidado en `permisos[]`).
  * - `permisos`: array consolidado de IDs del catálogo granular
- *   (`UsuarioSedeRol.permisos`). Es el sistema nuevo. Hoy se hace OR
- *   contra los flags legacy para que ambos lados resuelvan igual.
+ *   (`UsuarioSedeRol.permisos`). Es la ÚNICA fuente.
+ *
+ * 🔴 Las columnas `puedeAbrirCaja` / `puedeCerrarCaja` de `UsuarioSedeRol` ya
+ * NO se leen (29-08). Eran la "Fase A" de una migración a medias: dos fuentes
+ * para la misma capacidad, unidas por un OR. Se verificó en las dos bases que
+ * todo usuario con el flag prendido tiene también el id del catálogo, así que
+ * el backfill que la Fase B esperaba está completo.
+ *
+ * Las columnas NO se dropearon a propósito: las migraciones de este proyecto
+ * son aditivas para que el rollback de prod sea "volver a la imagen anterior"
+ * y nada más. Una imagen vieja las sigue leyendo y encuentra lo que necesita,
+ * porque el app las sigue escribiendo derivadas del catálogo.
  */
 export interface PermissionsOverrides {
-  puedeAbrirCaja?: boolean;
-  puedeCerrarCaja?: boolean;
   permisos?: readonly string[];
 }
 
@@ -37,13 +42,12 @@ export interface PermissionsOverrides {
  * `origen`:
  *  - `rol`      → se lo da un rol de empresa; `detalle` dice cuál.
  *  - `especial` → se lo da un permiso granular; `detalle` dice cuál.
- *  - `flag`     → los flags legacy de caja (`puedeAbrirCaja`/`Cerrar`).
  *  - `null`     → no lo tiene.
  */
 export interface PermisoExplicado {
   clave: string;
   valor: boolean;
-  origen: 'rol' | 'especial' | 'flag' | null;
+  origen: 'rol' | 'especial' | null;
   detalle: string | null;
 }
 
@@ -78,19 +82,12 @@ export class PermissionsService {
     const isOperativo = isVendedor || isCajero || isTecnico || isOperador;
     const isViewer = isLectura; // solo lectura, nunca MANAGE
 
-    // Overrides granulares: se aplican como OR sobre el rol base. Si el
-    // usuario tiene el flag legacy O el ID en el array granular en
-    // cualquier sede de la empresa, le otorgamos el permiso. La doble
-    // fuente permite migrar gradualmente: Fase A hace OR, Fase B dropea
-    // los flags cuando el backfill esté validado.
-    const puedeAbrirCajaPorFlag = overrides?.puedeAbrirCaja === true;
-    const puedeCerrarCajaPorFlag = overrides?.puedeCerrarCaja === true;
-    const tieneCajaAbrirGranular =
+    // Capacidad de caja: sale del catálogo granular y de nada más. Si el
+    // usuario tiene el ID en cualquier sede de la empresa, se concede.
+    const puedeAbrirCaja =
       overrides?.permisos?.includes(GranularPermissionId.CAJA_ABRIR) ?? false;
-    const tieneCajaCerrarGranular =
+    const puedeCerrarCaja =
       overrides?.permisos?.includes(GranularPermissionId.CAJA_CERRAR) ?? false;
-    const puedeAbrirCaja = puedeAbrirCajaPorFlag || tieneCajaAbrirGranular;
-    const puedeCerrarCaja = puedeCerrarCajaPorFlag || tieneCajaCerrarGranular;
 
     // Granulares que AMPLÍAN lo que da el rol. Todos siguen el mismo patrón:
     // el permiso base queda como estaba y se le hace OR con el granular, así
@@ -318,20 +315,9 @@ export class PermissionsService {
     ) {
       return true;
     }
-    // Compat con flags legacy.
-    if (
-      permId === GranularPermissionId.CAJA_ABRIR &&
-      options?.overrides?.puedeAbrirCaja
-    ) {
-      return true;
-    }
-    if (
-      permId === GranularPermissionId.CAJA_CERRAR &&
-      options?.overrides?.puedeCerrarCaja
-    ) {
-      return true;
-    }
-    // Catálogo: presencia explícita en el array.
+    // Catálogo: presencia explícita en el array. La compatibilidad con los
+    // flags legacy de caja se quitó junto con su lectura en
+    // `calculatePermissions` — hoy el catálogo es la única fuente.
     return permisos.includes(permId);
   }
 
@@ -449,9 +435,10 @@ export class PermissionsService {
       if (granular) {
         return { clave, valor: true, origen: 'especial' as const, detalle: granular };
       }
-      // Queda el caso de los flags legacy `puedeAbrirCaja` / `puedeCerrarCaja`,
-      // que amplían sin pasar por el catálogo.
-      return { clave, valor: true, origen: 'flag' as const, detalle: null };
+      // No deberia llegar acá: si lo tiene y no viene ni del rol ni de un
+      // granular, es que alguien agregó una fuente nueva y se olvidó de
+      // reflejarla. Mejor decir "no sé" que inventar una procedencia.
+      return { clave, valor: true, origen: null, detalle: null };
     });
   }
 

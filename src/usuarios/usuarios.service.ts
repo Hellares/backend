@@ -1562,11 +1562,7 @@ export class UsuariosService {
     const ocultos = Array.from(
       new Set(sedeRoles.flatMap((s) => s.accesosRapidosOcultos)),
     );
-    const overrides = {
-      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
-      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
-      permisos: permisosGranulares,
-    };
+    const overrides = { permisos: permisosGranulares };
 
     const permisos: PermisoExplicado[] = this.permissionsService.explicarPermisos(
       roles,
@@ -1590,10 +1586,11 @@ export class UsuariosService {
         concedidos: permisos.filter((p) => p.valor).length,
         total: permisos.length,
       },
+      // Los flags `puedeAbrirCaja`/`puedeCerrarCaja` NO se listan: ya no
+      // conceden nada. La capacidad de caja se lee en `caja.abrir` /
+      // `caja.cerrar` como cualquier otro permiso especial.
       asignado: {
         permisosEspeciales: permisosGranulares,
-        puedeAbrirCaja: overrides.puedeAbrirCaja,
-        puedeCerrarCaja: overrides.puedeCerrarCaja,
       },
       // Cosmético, pero es la otra mitad de "¿por qué no encuentra la
       // pantalla?". Se separa el dashboard del menú por el prefijo.

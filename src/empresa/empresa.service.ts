@@ -1000,7 +1000,7 @@ export class EmpresaService {
     };
 
     // 5. Calcular permisos basados en roles + overrides individuales
-    //    cargados de UsuarioSedeRol (puedeAbrirCaja, puedeCerrarCaja).
+    //    cargados de UsuarioSedeRol (permisos granulares).
     //    También recolectamos `accesosRapidosOcultos` consolidado entre
     //    todas las sedes del usuario para enviarlo al frontend.
     const sedeRoles = await this.prisma.usuarioSedeRol.findMany({
@@ -1011,8 +1011,6 @@ export class EmpresaService {
         deletedAt: null,
       },
       select: {
-        puedeAbrirCaja: true,
-        puedeCerrarCaja: true,
         accesosRapidosOcultos: true,
         permisos: true,
       },
@@ -1030,8 +1028,6 @@ export class EmpresaService {
       new Set(sedeRoles.flatMap((s) => s.permisos)),
     );
     const overrides = {
-      puedeAbrirCaja: sedeRoles.some((s) => s.puedeAbrirCaja),
-      puedeCerrarCaja: sedeRoles.some((s) => s.puedeCerrarCaja),
       // Incluido para que calculatePermissions resuelva `caja.abrir` /
       // `caja.cerrar` por catálogo además del flag legacy (Fase A).
       permisos: granularPermissions,
@@ -1159,8 +1155,6 @@ export class EmpresaService {
   private calculatePermissions(
     userRoles: EmpresaUsuarioRol[],
     overrides?: {
-      puedeAbrirCaja?: boolean;
-      puedeCerrarCaja?: boolean;
       permisos?: readonly string[];
     },
   ): EmpresaPermissionsDto {
