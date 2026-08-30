@@ -9,6 +9,7 @@ import {
   Max,
   Matches,
   ValidateIf,
+  IsIn,
 } from 'class-validator';
 
 export enum FormatoPapelDto {
@@ -124,4 +125,15 @@ export class UpdatePlantillaDocumentoDto {
     message: 'colorCuerpo debe ser un color hex valido (#RRGGBB)',
   })
   colorCuerpo?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Donde va el logo en la hoja',
+    enum: ['IZQUIERDA', 'CENTRO', 'DERECHA'],
+    example: 'DERECHA',
+  })
+  @IsOptional()
+  @IsIn(['IZQUIERDA', 'CENTRO', 'DERECHA'], {
+    message: 'posicionLogo debe ser IZQUIERDA, CENTRO o DERECHA',
+  })
+  posicionLogo?: string;
 }

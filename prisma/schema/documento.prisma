@@ -80,6 +80,13 @@ model PlantillaDocumento {
   colorEncabezado String?
   colorCuerpo     String?
 
+  /// Dónde va el logo en la hoja: IZQUIERDA | CENTRO | DERECHA.
+  ///
+  /// String y no enum a propósito: es una perilla de layout que va a ganar
+  /// valores (arriba/abajo, marca de agua) y agregar valores a un enum de
+  /// Postgres es mucho más caro que validar en el DTO.
+  posicionLogo String @default("DERECHA")
+
   isActive     Boolean @default(true)
   esPorDefecto Boolean @default(true)
 
