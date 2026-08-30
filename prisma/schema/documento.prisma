@@ -80,6 +80,13 @@ model PlantillaDocumento {
   colorEncabezado String?
   colorCuerpo     String?
 
+  /// Logo propio de ESTE tipo de documento. null = usa el de la marca.
+  ///
+  /// Un logo cuadrado se ve bien en un ticket de 80 mm y se pierde en la
+  /// cabecera de una cotización A4, que pide uno apaisado. Por eso el logo
+  /// puede diversificarse por plantilla en vez de ser uno solo para todo.
+  logoUrl String?
+
   /// Dónde va el logo en la hoja: IZQUIERDA | CENTRO | DERECHA.
   ///
   /// String y no enum a propósito: es una perilla de layout que va a ganar

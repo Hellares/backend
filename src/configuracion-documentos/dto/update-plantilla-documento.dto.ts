@@ -127,6 +127,17 @@ export class UpdatePlantillaDocumentoDto {
   colorCuerpo?: string | null;
 
   @ApiPropertyOptional({
+    description:
+      'Logo propio de este tipo de documento (null = usa el de la marca). ' +
+      'Un logo cuadrado sirve para un ticket de 80mm y se pierde en la ' +
+      'cabecera de una cotizacion A4, que pide uno apaisado.',
+  })
+  @ValidateIf((o) => o.logoUrl !== null)
+  @IsOptional()
+  @IsString()
+  logoUrl?: string | null;
+
+  @ApiPropertyOptional({
     description: 'Donde va el logo en la hoja',
     enum: ['IZQUIERDA', 'CENTRO', 'DERECHA'],
     example: 'DERECHA',
