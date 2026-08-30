@@ -127,6 +127,44 @@ export class EnviarMensajeWhatsappDto {
  * proveedor. Si algún día hay que conservarla, el camino es el
  * media-processor y un `Archivo`, no engordar este endpoint.
  */
+export class EnviarDocumentoWhatsappDto {
+  @ApiProperty({ description: 'Celular del destinatario', example: '987654321' })
+  @IsString()
+  @IsNotEmpty()
+  numero: string;
+
+  @ApiProperty({
+    description: 'Documento en base64 SIN el prefijo data:.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  // ~8 MB de base64 ≈ 6 MB de archivo. Un PDF de cotización son decenas de KB;
+  // el tope está para que un adjunto enorme no llegue nunca al proveedor.
+  @MaxLength(8_000_000)
+  base64: string;
+
+  @ApiProperty({
+    description: 'Nombre con el que el cliente ve el archivo en su WhatsApp.',
+    example: 'cotizacion_COT-0028.pdf',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  nombreArchivo: string;
+
+  @ApiPropertyOptional({ description: 'Texto que acompaña al documento.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  caption?: string;
+
+  @ApiPropertyOptional({ example: 'application/pdf' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^application\/pdf$/, { message: 'mimetype debe ser application/pdf' })
+  mimetype?: string;
+}
+
 export class EnviarImagenWhatsappDto {
   @ApiProperty({ description: 'Celular del destinatario', example: '987654321' })
   @IsString()

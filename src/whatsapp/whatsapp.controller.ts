@@ -17,6 +17,7 @@ import {
 import { WhatsappService } from './whatsapp.service';
 import {
   EnviarImagenWhatsappDto,
+  EnviarDocumentoWhatsappDto,
   EnviarMensajeWhatsappDto,
   UpdateWhatsappDto,
 } from './dto/whatsapp.dto';
@@ -79,6 +80,21 @@ export class WhatsappEmpresaController {
     @Body() dto: EnviarImagenWhatsappDto,
   ) {
     return this.service.enviarImagen(id, dto);
+  }
+
+  @Post(':id/whatsapp/enviar-documento')
+  @HttpCode(200)
+  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Envía un documento (PDF, base64) al cliente. No se guarda: va directo al proveedor.',
+  })
+  async enviarDocumento(
+    @Param('id') id: string,
+    @Body() dto: EnviarDocumentoWhatsappDto,
+  ) {
+    return this.service.enviarDocumento(id, dto);
   }
 
   @Post(':id/whatsapp/vincular')

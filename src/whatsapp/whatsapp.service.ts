@@ -609,6 +609,37 @@ export class WhatsappService {
     return { enviado: true };
   }
 
+  /**
+   * Manda un documento (hoy solo PDF) al cliente.
+   *
+   * Como la imagen, NO se guarda: viaja en base64 y va directo al proveedor.
+   * El PDF lo arma el cliente web, que es quien tiene la plantilla y la marca;
+   * regenerarlo acá seria mantener dos veces el mismo documento.
+   */
+  async enviarDocumento(
+    empresaId: string,
+    args: {
+      numero: string;
+      base64: string;
+      nombreArchivo: string;
+      caption?: string;
+      mimetype?: string;
+    },
+  ): Promise<{ enviado: boolean }> {
+    const cfg = await this.exigirConectado(empresaId);
+
+    await this.evolution.sendDocument({
+      instanceName: cfg.instanceName,
+      number: this.normalizarCelular(args.numero),
+      base64: args.base64,
+      fileName: args.nombreArchivo,
+      caption: args.caption ?? '',
+      mimetype: args.mimetype ?? 'application/pdf',
+    });
+    this.logger.log(`Documento enviado por WhatsApp (empresa ${empresaId})`);
+    return { enviado: true };
+  }
+
   /** Celular peruano de 9 dígitos → 51XXXXXXXXX (mismo criterio app). */
   private normalizarCelular(celular: string): string {
     let phone = celular.replace(/[^\d+]/g, '');
