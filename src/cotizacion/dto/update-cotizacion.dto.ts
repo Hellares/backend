@@ -11,6 +11,13 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateCotizacionDetalleDto } from './create-cotizacion-detalle.dto';
 
 export class UpdateCotizacionDto {
+  @ApiPropertyOptional({
+    description: 'ID del cliente EMPRESA (ClienteEmpresa). Excluyente con clienteId.',
+  })
+  @IsOptional()
+  @IsString()
+  clienteEmpresaId?: string;
+
   @ApiPropertyOptional({ description: 'ID del cliente (EmpresaPersona)' })
   @IsOptional()
   @IsString()

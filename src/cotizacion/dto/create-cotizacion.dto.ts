@@ -20,6 +20,15 @@ export class CreateCotizacionDto {
   @IsNotEmpty()
   sedeId: string;
 
+  @ApiPropertyOptional({
+    description:
+      'ID del cliente EMPRESA (ClienteEmpresa). Excluyente con clienteId: ' +
+      'son tablas distintas y cada uno tiene su FK.',
+  })
+  @IsOptional()
+  @IsString()
+  clienteEmpresaId?: string;
+
   @ApiPropertyOptional({ description: 'ID del cliente (EmpresaPersona)' })
   @IsOptional()
   @IsString()

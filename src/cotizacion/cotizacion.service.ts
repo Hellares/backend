@@ -367,12 +367,19 @@ export class CotizacionService {
           empresaId,
           sedeId: dto.sedeId,
           clienteId: dto.clienteId,
+          clienteEmpresaId: dto.clienteEmpresaId,
           vendedorId: dto.vendedorId,
           // Con cliente REAL asignado (DNI) la cotización nace PENDIENTE:
           // es una propuesta formal dirigida a alguien y aparece de
           // inmediato en su cuenta del marketplace (match por Persona).
           // Sin cliente queda BORRADOR (default) — invisible al público.
-          ...(dto.clienteId ? { estado: EstadoCotizacion.PENDIENTE } : {}),
+          // Con cliente EMPRESA vale lo mismo: es una propuesta formal
+          // dirigida a alguien. No aparece en el marketplace (el match es por
+          // Persona), pero nacer BORRADOR solo porque el cliente es una
+          // empresa seria una diferencia que nadie puede explicar.
+          ...(dto.clienteId || dto.clienteEmpresaId
+            ? { estado: EstadoCotizacion.PENDIENTE }
+            : {}),
           codigo: codigoCotizacion,
           nombre: dto.nombre,
           nombreCliente: dto.nombreCliente,
@@ -886,6 +893,9 @@ export class CotizacionService {
           where: { id },
           data: {
             ...(dto.clienteId !== undefined && { clienteId: dto.clienteId }),
+            ...(dto.clienteEmpresaId !== undefined && {
+              clienteEmpresaId: dto.clienteEmpresaId,
+            }),
             ...(dto.vendedorId !== undefined && { vendedorId: dto.vendedorId }),
             ...(dto.nombre !== undefined && { nombre: dto.nombre }),
             ...(dto.nombreCliente !== undefined && { nombreCliente: dto.nombreCliente }),
@@ -933,6 +943,9 @@ export class CotizacionService {
         where: { id },
         data: {
           ...(dto.clienteId !== undefined && { clienteId: dto.clienteId }),
+          ...(dto.clienteEmpresaId !== undefined && {
+            clienteEmpresaId: dto.clienteEmpresaId,
+          }),
           ...(dto.vendedorId !== undefined && { vendedorId: dto.vendedorId }),
           ...(dto.nombreCliente !== undefined && { nombreCliente: dto.nombreCliente }),
           ...(dto.documentoCliente !== undefined && { documentoCliente: dto.documentoCliente }),
