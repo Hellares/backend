@@ -80,6 +80,13 @@ model PlantillaDocumento {
   colorEncabezado String?
   colorCuerpo     String?
 
+  /// Texto de condiciones con el que nace un documento nuevo de este tipo.
+  ///
+  /// Es un DEFAULT del formulario, no algo que se inyecte al imprimir: lo que
+  /// se guarda en la cotización es su propio texto, así que cambiarlo acá NO
+  /// reescribe las cotizaciones ya emitidas.
+  condicionesPorDefecto String?
+
   /// Logo propio de ESTE tipo de documento. null = usa el de la marca.
   ///
   /// Un logo cuadrado se ve bien en un ticket de 80 mm y se pierde en la

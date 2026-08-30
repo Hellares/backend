@@ -195,6 +195,9 @@ export class ConfiguracionDocumentosService {
         ...(dto.colorCuerpo !== undefined && {
           colorCuerpo: dto.colorCuerpo,
         }),
+        ...(dto.condicionesPorDefecto !== undefined && {
+          condicionesPorDefecto: dto.condicionesPorDefecto,
+        }),
         ...(dto.logoUrl !== undefined && { logoUrl: dto.logoUrl }),
         ...(dto.posicionLogo !== undefined && {
           posicionLogo: dto.posicionLogo,

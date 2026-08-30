@@ -88,6 +88,7 @@ describe('ConfiguracionDocumentosService — el update no puede perder campos', 
       colorCuerpo: '#222222',
       logoUrl: 'https://cdn/logo-cotizacion.png',
       posicionLogo: 'IZQUIERDA',
+      condicionesPorDefecto: '* Precios incluyen IGV / * Sujeto a stock',
     };
 
     await service.updatePlantilla('empresa-1', TipoDocumento.COTIZACION, dto);

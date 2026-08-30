@@ -10,6 +10,7 @@ import {
   Matches,
   ValidateIf,
   IsIn,
+  MaxLength,
 } from 'class-validator';
 
 export enum FormatoPapelDto {
@@ -125,6 +126,18 @@ export class UpdatePlantillaDocumentoDto {
     message: 'colorCuerpo debe ser un color hex valido (#RRGGBB)',
   })
   colorCuerpo?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Condiciones con las que nace un documento nuevo de este tipo. Es un ' +
+      'DEFAULT del formulario: la cotizacion guarda su propio texto, asi que ' +
+      'cambiarlo no reescribe las ya emitidas.',
+  })
+  @ValidateIf((o) => o.condicionesPorDefecto !== null)
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  condicionesPorDefecto?: string | null;
 
   @ApiPropertyOptional({
     description:
