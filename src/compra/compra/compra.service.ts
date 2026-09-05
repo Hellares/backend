@@ -1330,7 +1330,7 @@ export class CompraService {
       ? { cursor: { id: filtros.cursor }, skip: 1, take: limit }
       : { take: limit };
 
-    const [data, total] = await Promise.all([
+    const [filas, total] = await Promise.all([
       this.prisma.compra.findMany({
         where,
         include: {
@@ -1338,12 +1338,34 @@ export class CompraService {
           proveedor: { select: { id: true, nombre: true, codigo: true } },
           ordenCompra: { select: { id: true, codigo: true } },
           _count: { select: { detalles: true, lotes: true } },
+          // Solo el monto: alcanza para saber cuanto se pago y no infla la
+          // respuesta con el detalle de cada pago, que la lista no muestra.
+          pagos: { where: { anulado: false }, select: { monto: true } },
         },
         orderBy: { creadoEn: 'desc' },
         ...paginationArgs,
       }),
       this.prisma.compra.count({ where }),
     ]);
+
+    // 🔴 Cuanto se pago se CALCULA; no se lee de `pagoPendiente`.
+    //
+    // Ese flag dice "esta compra entra al circuito de cuentas por pagar" y NO
+    // se apaga al saldarla --a proposito: es lo que la deja en el historial de
+    // CxP, ver el test 'una compra saldada NO apaga pagoPendiente'--. La lista
+    // de compras lo mostraba como si fuera la deuda, asi que una compra pagada
+    // por completo seguia diciendo "pendiente" para siempre.
+    //
+    // Es la misma cuenta que hace `cuentas-por-pagar.service.listar`, y los
+    // pagos ANULADOS no cuentan.
+    const data = filas.map(({ pagos, ...compra }) => {
+      const totalPagado = pagos.reduce((suma, p) => suma + Number(p.monto), 0);
+      return {
+        ...compra,
+        totalPagado: Math.round(totalPagado * 100) / 100,
+        saldoPendiente: Math.round((Number(compra.total) - totalPagado) * 100) / 100,
+      };
+    });
 
     return createCursorPaginatedResponse(data, total, limit, (item) => item.id);
   }
