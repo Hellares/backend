@@ -121,7 +121,19 @@ export class CuentasPorPagarService {
         },
         sede: true,
       },
-      orderBy: { fechaVencimientoPago: 'asc' },
+      // La última compra primero.
+      //
+      // Antes ordenaba por `fechaVencimientoPago: 'asc'` --lo que vence antes,
+      // arriba--, y tenía dos problemas: el CONTADO no tiene vencimiento, así
+      // que TODAS esas filas caían al fondo con NULLS LAST y sin ningún orden
+      // entre ellas; y quien abre esta pantalla casi siempre viene a ver lo que
+      // acaba de cargar, no lo que vence primero.
+      //
+      // La urgencia sigue disponible: para eso está la pestaña "Vencidas".
+      // `codigo` desempata porque dos compras del mismo día son del mismo
+      // instante para `fechaRecepcion`, y al ser correlativo con ceros
+      // (COMPRA-00090) el orden alfabético descendente ES el numérico.
+      orderBy: [{ fechaRecepcion: 'desc' }, { codigo: 'desc' }],
     });
 
     const now = new Date();
