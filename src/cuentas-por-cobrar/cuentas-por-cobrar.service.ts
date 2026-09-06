@@ -683,13 +683,18 @@ export class CuentasPorCobrarService {
     // empresa (B2B), se resuelve de la tabla.
     let nombre: string | null = cuentas[0]?.nombreCliente ?? null;
     let documento: string | null = cuentas[0]?.documentoCliente ?? null;
-    if (!nombre && filtro.clienteEmpresaId) {
+    // El telefono sale de las ventas --no todas lo tienen-- y sirve para
+    // mandarle el estado de cuenta por WhatsApp sin buscarlo a mano.
+    let telefono: string | null =
+      cuentas.find((c) => c.telefonoCliente)?.telefonoCliente ?? null;
+    if ((!nombre || !telefono) && filtro.clienteEmpresaId) {
       const ce = await this.prisma.clienteEmpresa.findFirst({
         where: { id: filtro.clienteEmpresaId, empresaId },
-        select: { razonSocial: true, numeroDocumento: true },
+        select: { razonSocial: true, numeroDocumento: true, telefono: true },
       });
-      nombre = ce?.razonSocial ?? null;
-      documento = ce?.numeroDocumento ?? null;
+      nombre = nombre ?? ce?.razonSocial ?? null;
+      documento = documento ?? ce?.numeroDocumento ?? null;
+      telefono = telefono ?? ce?.telefono ?? null;
     }
 
     const conSaldo = cuentas.filter((c) => c.saldoPendiente > 0);
@@ -729,6 +734,7 @@ export class CuentasPorCobrarService {
         tipo: filtro.clienteEmpresaId ? 'EMPRESA' : 'PERSONA',
         nombre,
         documento,
+        telefono,
       },
       resumen: {
         saldoPendiente,
