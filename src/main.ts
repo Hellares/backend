@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -21,13 +22,26 @@ process.on('uncaughtException', (error) => {
 });
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: new AppLoggerService(),
     bufferLogs: true,
     // Necesario para validar HMAC de webhooks sobre el body crudo.
     // Disponible en `req.rawBody` para las rutas que lo necesiten.
     rawBody: true,
   });
+
+  // 🔴 Sin esto rige el default de Express: 100 kB, y cualquier adjunto en
+  // base64 rebota con "request entity too large".
+  //
+  // Paso el 06-09: compartir la ficha de un producto por WhatsApp fallaba
+  // siempre --el PNG a 1080 px pesa megas-- mientras que el estado de cuenta
+  // funcionaba, porque su PDF son unos 50 kB. nginx no tenia nada que ver:
+  // el proxy admite 2000m.
+  //
+  // 12 MB deja pasar el tope real, que es el del DTO: MaxLength(8_000_000)
+  // de base64 ≈ 6 MB de archivo. El que decide sigue siendo el DTO, no esto.
+  app.useBodyParser('json', { limit: '12mb' });
+  app.useBodyParser('urlencoded', { limit: '12mb', extended: true });
 
   // Usar el logger personalizado
   app.useLogger(app.get(AppLoggerService));
