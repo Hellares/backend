@@ -80,6 +80,16 @@ export const GRANULAR_PERMISSIONS_CATALOG: readonly GranularPermission[] = [
     description: 'Modificar el costo registrado del producto.',
     category: 'Producto',
   },
+  {
+    id: 'producto.alta-rapida-venta',
+    label: 'Crear productos desde Venta Rápida',
+    description:
+      'Dar de alta un producto sin salir del mostrador, indicando solo ' +
+      'nombre, precio de venta y cantidad. No habilita ver ni cargar el ' +
+      'costo: la ficha se completa después desde Inventario. ' +
+      'Endpoint: POST /productos/alta-rapida.',
+    category: 'Producto',
+  },
 
   // ── Devolución ──
   {
@@ -104,6 +114,7 @@ export class GranularPermissionId {
   static readonly VENTA_EDITAR_PRECIO = 'venta.editar-precio';
 
   static readonly PRODUCTO_EDITAR_COSTO = 'producto.editar-costo';
+  static readonly PRODUCTO_ALTA_RAPIDA_VENTA = 'producto.alta-rapida-venta';
 
   static readonly DEVOLUCION_CREAR = 'devolucion.crear';
 }

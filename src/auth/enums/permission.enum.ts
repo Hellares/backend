@@ -31,6 +31,7 @@ export enum Permission {
   DESCUENTO_LIBRE = 'canDescuentoLibre',         // Descontar sin autorización
   EDITAR_PRECIO_VENTA = 'canEditarPrecioVenta',  // Cambiar precio al cobrar
   EDITAR_COSTO_PRODUCTO = 'canEditarCostoProducto', // Editar el costo
+  ALTA_RAPIDA_VENTA = 'canAltaRapidaVenta',      // Crear producto al vender
   APPROVE_FAMILY = 'canApproveFamily',           // Aprobar familiares de trabajadores
   VIEW_DISCOUNT_REPORTS = 'canViewDiscountReports', // Ver reportes de descuentos
 

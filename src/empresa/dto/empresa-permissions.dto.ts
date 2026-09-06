@@ -84,6 +84,16 @@ export class EmpresaPermissionsDto {
   canEditarCostoProducto: boolean;
 
   @ApiProperty({
+    description:
+      'Puede dar de alta un producto desde Venta Rápida indicando solo ' +
+      'nombre, precio de venta y cantidad. Granular ' +
+      '`producto.alta-rapida-venta`. Independiente de `canManageProducts` y ' +
+      'de `canEditarCostoProducto`: no habilita costos ni la ficha completa.',
+    example: false,
+  })
+  canAltaRapidaVenta: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de clientes',
     example: true,
   })

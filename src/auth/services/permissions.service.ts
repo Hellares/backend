@@ -110,6 +110,10 @@ export class PermissionsService {
     const tieneVentaEditarPrecio =
       overrides?.permisos?.includes(GranularPermissionId.VENTA_EDITAR_PRECIO) ??
       false;
+    const tieneProductoAltaRapida =
+      overrides?.permisos?.includes(
+        GranularPermissionId.PRODUCTO_ALTA_RAPIDA_VENTA,
+      ) ?? false;
 
     return {
       // ==================== USUARIOS ====================
@@ -184,6 +188,12 @@ export class PermissionsService {
       // sigue siendo solo-admin y cubre TODO el producto; este es la llave
       // fina, solo para el costo.
       canEditarCostoProducto: isAnyAdmin || tieneProductoEditarCosto,
+
+      // Dar de alta un producto desde el mostrador (nombre, precio y cantidad).
+      // Es DELIBERADAMENTE independiente de `canManageProducts` y de
+      // `canEditarCostoProducto`: se le da a un cajero o técnico para que la
+      // cola no se frene, sin abrirle el producto entero ni los costos.
+      canAltaRapidaVenta: isAnyAdmin || tieneProductoAltaRapida,
 
       // ==================== COTIZACIONES ====================
       canViewCotizaciones:

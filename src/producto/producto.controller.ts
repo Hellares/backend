@@ -41,6 +41,7 @@ import { RequiresPermission, Permission } from '../auth/decorators/requires-perm
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreateProductoDto } from './dto/create-producto.dto';
+import { AltaRapidaVentaDto } from './dto/alta-rapida-venta.dto';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { UpdateImagenesProductoDto } from './dto/update-imagenes-producto.dto';
 import {
@@ -93,6 +94,26 @@ export class ProductoController {
     @CurrentUser() user: any,
   ): Promise<ProductoResponseDto> {
     return await this.productoService.create(createProductoDto, user.sub);
+  }
+
+  @Post('alta-rapida')
+  @RequiresPermission(Permission.ALTA_RAPIDA_VENTA)
+  @ApiOperation({
+    summary: 'Alta de producto desde Venta Rápida (nombre, precio y cantidad)',
+    description:
+      'Crea el producto, su fila de stock en la sede, el precio de venta y el ' +
+      'stock inicial EN UNA SOLA TRANSACCIÓN, para que no queden productos a ' +
+      'medio crear si algo falla en el mostrador. Categoría, marca, unidad y ' +
+      'costo quedan vacíos: la ficha se completa después desde Inventario.',
+  })
+  @ApiResponse({ status: 201, description: 'Producto creado y listo para cobrar', type: ProductoResponseDto })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o sede inexistente' })
+  @ApiResponse({ status: 403, description: 'Sin el permiso producto.alta-rapida-venta' })
+  async altaRapida(
+    @Body() dto: AltaRapidaVentaDto,
+    @CurrentUser() user: any,
+  ): Promise<ProductoResponseDto> {
+    return await this.productoService.altaRapidaVenta(dto, user.sub);
   }
 
   // @Get()

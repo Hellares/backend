@@ -65,6 +65,35 @@ describe('Permisos granulares aditivos', () => {
     });
   });
 
+  describe('producto.alta-rapida-venta', () => {
+    it('sin el permiso, el cajero no da de alta productos', () => {
+      expect(permisos([Rol.CAJERO]).canAltaRapidaVenta).toBe(false);
+    });
+
+    it('con el permiso, sí — la cola no se frena esperando al admin', () => {
+      expect(
+        permisos([Rol.CAJERO], [GranularPermissionId.PRODUCTO_ALTA_RAPIDA_VENTA])
+          .canAltaRapidaVenta,
+      ).toBe(true);
+    });
+
+    it('🔴 dar el alta rápida NO abre el catálogo ni los costos', () => {
+      // Es exactamente el punto: quien vende en el mostrador carga nombre,
+      // precio y cantidad. Ni la ficha completa ni el costo.
+      const p = permisos(
+        [Rol.CAJERO],
+        [GranularPermissionId.PRODUCTO_ALTA_RAPIDA_VENTA],
+      );
+      expect(p.canAltaRapidaVenta).toBe(true);
+      expect(p.canManageProducts).toBe(false);
+      expect(p.canEditarCostoProducto).toBe(false);
+    });
+
+    it('el admin puede sin necesitar el permiso', () => {
+      expect(permisos([Rol.EMPRESA_ADMIN]).canAltaRapidaVenta).toBe(true);
+    });
+  });
+
   describe('venta.descuento-libre', () => {
     it('sin el permiso, el vendedor tiene que pedir autorización', () => {
       expect(permisos([Rol.VENDEDOR]).canDescuentoLibre).toBe(false);

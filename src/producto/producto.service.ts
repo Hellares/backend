@@ -7,6 +7,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
 import { CreateProductoDto } from './dto/create-producto.dto';
+import { AltaRapidaVentaDto } from './dto/alta-rapida-venta.dto';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { UpdateProductoDto } from './dto/update-producto.dto';
 import { QueryProductoDto } from './dto/query-producto.dto';
 import {
@@ -452,6 +454,146 @@ export class ProductoService {
       this.logger.error(`Error al crear producto: ${errorMessage}`);
       throw error;
     }
+  }
+
+  /**
+   * Alta de producto desde Venta Rápida: nombre, precio y cantidad, y listo
+   * para cobrar.
+   *
+   * ## Por qué no reusa `create()`
+   *
+   * 🔴 `create()` valida el rol contra una lista blanca
+   * (SUPER_ADMIN / EMPRESA_ADMIN / VENDEDOR) en `verifyUserPermissions`. El
+   * sentido de esta alta es justamente que un CAJERO o un TECNICO con el
+   * granular `producto.alta-rapida-venta` no frene la cola, así que acá la
+   * autorización es el permiso —lo hace el guard del controller— y lo único
+   * que se revalida es que el usuario pertenezca a la empresa y tenga la sede.
+   *
+   * ## Por qué es UNA transacción y no cuatro llamadas
+   *
+   * El diálogo de cotizaciones hace producto → buscar fila de stock → precio →
+   * ajuste en cuatro requests, y su propio comentario advierte el problema: si
+   * la primera funciona y falla otra, el producto queda creado sin precio y
+   * reintentar lo duplica. En un mostrador con cola eso es inaceptable, así que
+   * acá o entra todo o no entra nada.
+   *
+   * Categoría, marca, unidad y costo quedan NULL a propósito; la ficha se
+   * completa después desde Inventario. Para el comprobante no es un problema:
+   * sin unidad, el mapper de SUNAT declara `NIU`.
+   */
+  async altaRapidaVenta(
+    dto: AltaRapidaVentaDto,
+    userId: string,
+  ): Promise<ProductoResponseDto> {
+    const { empresaId, sedeId, nombre, precio, cantidad } = dto;
+
+    // 1. Pertenencia a la empresa (sin lista blanca de roles: ver arriba).
+    const acceso = await this.prisma.empresaUsuarioRol.findFirst({
+      where: { usuarioId: userId, empresaId, isActive: true, deletedAt: null },
+      select: { id: true },
+    });
+    if (!acceso) throw new ForbiddenException('No tienes acceso a esta empresa');
+
+    // 2. El límite del plan también aplica acá: si no, el alta rápida sería
+    //    la puerta de atrás para saltárselo.
+    await this.planLimitsService.checkProductosLimit(empresaId);
+
+    // 3. La sede tiene que ser de la empresa y estar entre las del usuario.
+    const sede = await this.prisma.sede.findFirst({
+      where: { id: sedeId, empresaId, isActive: true, deletedAt: null },
+      select: { id: true },
+    });
+    if (!sede) throw new BadRequestException('La sede no existe o no está activa');
+
+    const sedesUsuario = await this.sedeContextHelper.getSedesUsuario(empresaId, userId);
+    if (!sedesUsuario.some((s) => s.id === sedeId)) {
+      throw new ForbiddenException('No tenés acceso a esta sede');
+    }
+
+    const nombreLimpio = nombre.trim();
+
+    const producto = await this.prisma.$transaction(async (tx) => {
+      const { codigoEmpresa, codigoSistema } =
+        await this.configCodigosService.generarCodigoProducto(empresaId, sedeId, tx);
+
+      const creado = await tx.producto.create({
+        data: {
+          empresaId,
+          sedeId,
+          nombre: nombreLimpio,
+          codigoEmpresa,
+          codigoSistema,
+          visibleMarketplace: true,
+          destacado: false,
+        },
+        select: { id: true },
+      });
+
+      const stock = await tx.productoStock.create({
+        data: {
+          empresaId,
+          sedeId,
+          productoId: creado.id,
+          varianteId: null,
+          stockActual: cantidad,
+          stockMinimo: null,
+          stockMaximo: null,
+          ubicacion: null,
+          precio,
+          // 🔴 El precio del mostrador es el FINAL al cliente.
+          precioIncluyeIgv: true,
+          // Sin costo: quien vende no lo conoce y el permiso no se lo pide.
+          precioCosto: null,
+          precioOferta: null,
+          enOferta: false,
+          fechaInicioOferta: null,
+          fechaFinOferta: null,
+          precioConfigurado: true,
+        },
+      });
+
+      // Kardex: deja asentado de dónde salieron esas unidades. `precioCosto`
+      // va en null EXPLÍCITO —no undefined— para que el helper no intente
+      // leerlo del ProductoStock, que tampoco lo tiene.
+      if (cantidad > 0) {
+        await crearMovimientoStockConValoracion(tx, {
+          productoStockId: stock.id,
+          empresaId,
+          sedeId,
+          tipo: 'AJUSTE_ENTRADA',
+          cantidad,
+          cantidadAnterior: 0,
+          cantidadNueva: cantidad,
+          usuarioId: userId,
+          motivo: 'Alta rápida desde Venta Rápida',
+          precioCostoUnitario: null,
+        });
+      }
+
+      // 🔴 Se relee ACÁ, después de la fila de stock. Si se devolviera el
+      // objeto del `create`, vendría sin `stocksPorSede` —todavía no existía—
+      // y quien lo agrega al carrito lo rechaza por "no tiene precio
+      // configurado en esta sede", que es justo lo contrario de lo que pasó.
+      return tx.producto.findUniqueOrThrow({
+        where: { id: creado.id },
+        include: this.catalogService.buildIncludeClause(true, true, false, true),
+      });
+    });
+
+    // Fuera de la transacción, igual que en `create()`.
+    await this.invalidateEmpresaStats(empresaId);
+    // 🔑 Sin esto el producto NO aparece en la búsqueda unificada, que es
+    // exactamente lo que evita que la próxima vez lo carguen duplicado.
+    await this.textoBusqueda.recalcularProducto(producto.id);
+    this.realtime.notifyProductoCreado({ empresaId, productoId: producto.id });
+
+    this.logger.log(
+      `Alta rápida: ${producto.id} (${producto.codigoEmpresa}) "${nombreLimpio}" ` +
+        `precio ${precio} cantidad ${cantidad} sede ${sedeId} por ${userId}`,
+    );
+
+    const archivos = await this.catalogService.getProductoArchivos(producto.id, empresaId);
+    return this.catalogService.toResponseDto(producto, archivos);
   }
 
   /**
