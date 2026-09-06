@@ -86,7 +86,12 @@ export class CuentasPorCobrarService {
           },
         },
       },
-      orderBy: { fechaVencimientoPago: 'asc' },
+      // La ultima venta primero, igual que en cuentas por pagar. El orden por
+      // vencimiento ascendente dejaba al fondo --y sin orden entre si-- a todas
+      // las ventas sin fecha de vencimiento. La urgencia sigue en la pestana
+      // Vencidas. `codigo` desempata las del mismo dia y, al ser correlativo
+      // con ceros, su orden alfabetico ES el numerico.
+      orderBy: [{ fechaVenta: 'desc' }, { codigo: 'desc' }],
     });
 
     const now = new Date();
