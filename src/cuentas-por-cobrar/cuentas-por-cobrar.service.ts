@@ -937,14 +937,41 @@ export class CuentasPorCobrarService {
     });
   }
 
+  /**
+   * Los 5 clientes que mas deben.
+   *
+   * 🔴 Agrupa por ID y no por nombre. Con el nombre como clave, dos clientes
+   * distintos que se llaman igual sumaban su deuda en una sola fila, y el mismo
+   * cliente tipeado de dos formas --con y sin segundo apellido-- se partia en
+   * dos. El nombre queda de clave SOLO para las ventas sin cliente (publico
+   * general), que no tienen id con que agrupar.
+   *
+   * Devuelve tambien el id para poder abrir su estado de cuenta.
+   */
   private _topDeudores(cuentas: any[]) {
-    const deudaPorCliente = new Map<string, { nombre: string; total: number; cantidad: number }>();
+    const deudaPorCliente = new Map<
+      string,
+      {
+        nombre: string;
+        total: number;
+        cantidad: number;
+        clienteId: string | null;
+        clienteEmpresaId: string | null;
+      }
+    >();
 
     for (const c of cuentas) {
       if (c.estado === 'PAGADA') continue;
-      const key = c.nombreCliente;
+      // Prioridad clienteEmpresaId (B2B) sobre clienteId, igual que en la UI.
+      const key = c.clienteEmpresaId ?? c.clienteId ?? `sin-cliente:${c.nombreCliente}`;
       if (!deudaPorCliente.has(key)) {
-        deudaPorCliente.set(key, { nombre: key, total: 0, cantidad: 0 });
+        deudaPorCliente.set(key, {
+          nombre: c.nombreCliente,
+          total: 0,
+          cantidad: 0,
+          clienteId: c.clienteId ?? null,
+          clienteEmpresaId: c.clienteEmpresaId ?? null,
+        });
       }
       const d = deudaPorCliente.get(key)!;
       d.total += c.saldoPendiente;
