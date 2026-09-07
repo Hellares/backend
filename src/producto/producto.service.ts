@@ -510,7 +510,12 @@ export class ProductoService {
       throw new ForbiddenException('No tenés acceso a esta sede');
     }
 
-    const nombreLimpio = nombre.trim();
+    // MAYÚSCULAS siempre. Se normaliza acá y no solo en la web para que el
+    // app —que va a usar el mismo endpoint— no dependa de acordarse, y para
+    // que el catálogo no termine con "mouse", "Mouse" y "MOUSE" según quién
+    // vendió. No afecta la búsqueda: `textoBusqueda` normaliza a minúsculas y
+    // sin acentos de todos modos.
+    const nombreLimpio = nombre.trim().toUpperCase();
 
     const producto = await this.prisma.$transaction(async (tx) => {
       const { codigoEmpresa, codigoSistema } =
