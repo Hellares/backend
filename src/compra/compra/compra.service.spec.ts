@@ -629,3 +629,166 @@ describe('CompraService.prorratearGastos', () => {
     expect(reparto.get('b')).toBe(5);
   });
 });
+
+/**
+ * Bonificación: unidades de REGALO dentro de lo recibido.
+ *
+ * Los números salen de una factura real de Deltron (09-09-2026): promo 10+1 de
+ * webcams y 5+1 de mouse, con los precios SIN IGV. El proveedor imprime en su
+ * propia línea de promoción el "precio prorrateado" ($12.36 y $3.25) — que es
+ * exactamente el costo que tiene que terminar en el inventario.
+ *
+ * El costo que entra al stock lo calcula `confirmar()` como
+ * `(total + gastoProrrateado) / cantidad`: divide por lo que LLEGÓ, no por lo
+ * que se pagó. Acá se verifica esa división sobre el `total` de la línea.
+ */
+describe('CompraService.calcularDetalle — bonificación (unidades de regalo)', () => {
+  const costoQueEntra = (r: any) => r.total / r.cantidad;
+
+  it('promo 10+1: llegan 11, se pagan 10, el costo se prorratea entre las 11', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'WEB CAM 2K TEROS TE-9072',
+        cantidad: 11,
+        cantidadBonificada: 1,
+        precioUnitario: 13.6,
+      },
+      0,
+      undefined,
+      false, // Deltron factura con precios SIN IGV
+    );
+    expect(r.cantidad).toBe(11); // las 11 entran al stock
+    expect(r.cantidadBonificada).toBe(1);
+    expect(r.subtotal).toBe(136); // 10 × 13.60, no 11
+    expect(r.igv).toBe(24.48);
+    expect(r.total).toBe(160.48);
+    // 136 / 11 = 12.3636 → el "PRECIO PRORRATEADO $12.36" de la factura
+    expect(costoQueEntra(r) / 1.18).toBeCloseTo(12.3636, 4);
+  });
+
+  it('promo 5+1: llegan 6, se pagan 5', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'MOUSE STD WIRELESS TE1228 BK',
+        cantidad: 6,
+        cantidadBonificada: 1,
+        precioUnitario: 3.9,
+      },
+      0,
+      undefined,
+      false,
+    );
+    expect(r.cantidad).toBe(6);
+    expect(r.subtotal).toBe(19.5); // 5 × 3.90
+    // 19.50 / 6 = 3.25 → el "$3.25" que declara la promo
+    expect(costoQueEntra(r) / 1.18).toBeCloseTo(3.25, 4);
+  });
+
+  it('sin bonificación el resultado no cambia (retrocompatible)', () => {
+    const conCero = calcularDetalle(
+      { descripcion: 'X', cantidad: 10, precioUnitario: 5, cantidadBonificada: 0 },
+      0,
+      undefined,
+      true,
+    );
+    const sinCampo = calcularDetalle(
+      { descripcion: 'X', cantidad: 10, precioUnitario: 5 },
+      0,
+      undefined,
+      true,
+    );
+    expect(conCero.total).toBe(50);
+    expect(sinCampo.total).toBe(50);
+    expect(sinCampo.cantidadBonificada).toBe(0);
+  });
+
+  it('bonificación y descuento conviven: primero el regalo, después la rebaja', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'WEB CAM',
+        cantidad: 11,
+        cantidadBonificada: 1,
+        precioUnitario: 13.6,
+        descuento: 6,
+      },
+      0,
+      undefined,
+      false,
+    );
+    expect(r.subtotal).toBe(130); // 10 × 13.60 − 6
+    expect(costoQueEntra(r) / 1.18).toBeCloseTo(11.8182, 4);
+  });
+
+  it('🔴 por empaque, el regalo se convierte con el MISMO factor', () => {
+    // 10 sacos de 50 u + 1 saco de regalo: llegan 550 u, se pagan 500.
+    const r = calcularDetalle(
+      {
+        descripcion: 'Arroz',
+        productoId: 'arroz',
+        usaUnidadCompra: true,
+        cantidad: 11,
+        cantidadBonificada: 1,
+        precioUnitario: 100,
+      },
+      0,
+      mapDe({ arroz: { factor: 50, simbolo: 'Saco' } }),
+      true,
+    );
+    expect(r.cantidad).toBe(550);
+    expect(r.cantidadBonificada).toBe(50); // 1 saco = 50 u, no 1 u
+    expect(r.total).toBe(1000); // 10 sacos × 100
+    expect(costoQueEntra(r)).toBeCloseTo(1.8182, 4); // 1000 / 550
+  });
+
+  it('bonificar TODO (muestra gratis) deja la línea en cero, no negativa', () => {
+    const r = calcularDetalle(
+      { descripcion: 'Muestra', cantidad: 3, cantidadBonificada: 3, precioUnitario: 20 },
+      0,
+      undefined,
+      true,
+    );
+    expect(r.cantidad).toBe(3); // entran igual al stock
+    expect(r.total).toBe(0);
+    expect(r.igv).toBe(0);
+  });
+
+  it('más regalo que cantidad → BadRequestException', () => {
+    expect(() =>
+      calcularDetalle(
+        { descripcion: 'X', cantidad: 5, cantidadBonificada: 6, precioUnitario: 10 },
+        0,
+        undefined,
+        true,
+      ),
+    ).toThrow(/no puede superar la cantidad/i);
+  });
+
+  it('descuento mayor al importe → BadRequestException (costo negativo)', () => {
+    expect(() =>
+      calcularDetalle(
+        { descripcion: 'X', cantidad: 5, precioUnitario: 10, descuento: 60 },
+        0,
+        undefined,
+        true,
+      ),
+    ).toThrow(/supera el importe de la línea/i);
+  });
+
+  it('el descuento se mide contra lo que SÍ se paga, no contra lo recibido', () => {
+    // 11 recibidas, 1 gratis → importe 136. Un descuento de 140 lo supera.
+    expect(() =>
+      calcularDetalle(
+        {
+          descripcion: 'X',
+          cantidad: 11,
+          cantidadBonificada: 1,
+          precioUnitario: 13.6,
+          descuento: 140,
+        },
+        0,
+        undefined,
+        false,
+      ),
+    ).toThrow(/supera el importe de la línea/i);
+  });
+});

@@ -44,12 +44,32 @@ export class CreateCompraDetalleDto {
   @Type(() => Number)
   precioUnitario: number;
 
-  @ApiPropertyOptional({ description: 'Descuento por línea', example: 0 })
+  @ApiPropertyOptional({
+    description:
+      'Descuento por línea, en PLATA (no en %). Rebaja sobre lo que SÍ se paga; ' +
+      'no puede superar el importe de la línea ya descontadas las bonificadas.',
+    example: 0,
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   descuento?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Unidades de REGALO incluidas en `cantidad`. La promo 10+1 se carga como ' +
+      'cantidad=11 + cantidadBonificada=1: entran las 11 al stock y se pagan 10, ' +
+      'así que el costo unitario queda prorrateado entre las 11. Va en la MISMA ' +
+      'unidad que `cantidad` (con `usaUnidadCompra`, en unidad de COMPRA: 10 sacos ' +
+      '+ 1 saco de regalo). No puede superar a `cantidad`.',
+    example: 0,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  cantidadBonificada?: number;
 
   @ApiPropertyOptional({ description: 'Porcentaje de IGV', example: 18 })
   @IsOptional()

@@ -268,6 +268,20 @@ model CompraDetalle {
   precioUnitario Decimal @db.Decimal(14, 6)
   descuento      Decimal @default(0) @db.Decimal(12, 2)
 
+  // ─── Bonificación (unidades de regalo) ────────────────────────
+  // De `cantidad`, cuántas vinieron GRATIS: la promo "10+1" del proveedor
+  // entra como cantidad=11 + cantidadBonificada=1. Las 11 entran al stock
+  // —llegaron físicamente— y solo se pagan 10, así que el costo unitario que
+  // toca el inventario es el PRORRATEADO (136/11 = 12.3636): el mismo número
+  // que el proveedor imprime en su propia línea de promoción.
+  //
+  // Va en la MISMA unidad que `cantidad`: si la línea se cargó por empaque
+  // (10 sacos + 1 de regalo), el service la convierte con el mismo factor.
+  //
+  // Distinto de `descuento`, que es una rebaja en PLATA sobre lo que SÍ se
+  // paga. Los dos pueden convivir en la misma línea.
+  cantidadBonificada Int @default(0)
+
   // ─── Snapshot Unidad de Compra ────────────────────────────────
   // Trazabilidad de cómo se ingresó originalmente la línea cuando se
   // usó la unidad de compra del producto. Cero impacto en cálculos:

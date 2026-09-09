@@ -144,6 +144,7 @@ export class CompraService {
               varianteId: d.varianteId,
               descripcion: d.descripcion,
               cantidad: d.cantidad,
+              cantidadBonificada: d.cantidadBonificada,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
               porcentajeIGV: d.porcentajeIGV,
@@ -841,7 +842,18 @@ export class CompraService {
         const costoAnterior = stockLocked.precioCosto
           ? parseFloat(stockLocked.precioCosto)
           : 0;
-        const precioCompra = Number(detalle.precioUnitario);
+        // 🔴 El costo al que la línea ENTRÓ, no el precio de lista. Con
+        // bonificación, descuento o flete prorrateado los dos difieren, y
+        // revertir el promedio ponderado con el de lista deja el costo del
+        // producto corrido para siempre. El lote lo tiene congelado desde
+        // confirmar; si la línea no llegó a generar lote, se reconstruye igual
+        // que allá (`(total + gastoProrrateado) / cantidad`).
+        const precioCompra = detalle.lote
+          ? Number(detalle.lote.precioCosto)
+          : detalle.cantidad > 0
+            ? (Number(detalle.total) + Number(detalle.gastoProrrateado)) /
+              detalle.cantidad
+            : Number(detalle.precioUnitario);
 
         // BUG 1 FIX: Usar cantidadActual del lote (lo que realmente queda) en vez de detalle.cantidad
         const cantidadAReversar = detalle.lote
@@ -1473,6 +1485,7 @@ export class CompraService {
             varianteId: d.varianteId,
             descripcion: d.descripcion,
             cantidad: d.cantidad,
+            cantidadBonificada: d.cantidadBonificada,
             precioUnitario: d.precioUnitario,
             descuento: d.descuento,
             porcentajeIGV: d.porcentajeIGV,
@@ -2176,6 +2189,7 @@ export class CompraService {
     precioIncluyeIgv = true,
   ) {
     let cantidad = dto.cantidad;
+    let cantidadBonificada = dto.cantidadBonificada ?? 0;
     let precioUnitario = dto.precioUnitario;
     const descuento = dto.descuento ?? 0;
     const porcentajeIGV = dto.porcentajeIGV ?? 18;
@@ -2206,6 +2220,11 @@ export class CompraService {
       unidadOriginalSimbolo = info.simboloUnidadCompra;
       // Cantidad en unidad atómica (Int). Round defensivo por float.
       cantidad = Math.round(dto.cantidad * factor);
+      // 🔴 El regalo se escribe en la MISMA unidad que la cantidad (10 sacos
+      // + 1 saco de regalo), así que va por el MISMO factor. Sin convertirlo,
+      // "1 saco gratis" valdría 1 unidad atómica y el descuento saldría
+      // `factor` veces chico.
+      cantidadBonificada = Math.round(cantidadBonificada * factor);
       // Precio por unidad atómica (Decimal 14,6 → 6 decimales). Con 4 se
       // perdía plata al dividir por factores grandes: un saco de 22 000 g a
       // S/147.99 daba 0.0067/g, que ×22 000 vuelve como S/147.40 y la compra
@@ -2224,7 +2243,24 @@ export class CompraService {
     // los dos ya redondeados. Redondeando cada uno por su cuenta, la suma no
     // cerraba: un saco a S/147.99 daba subtotal 125.42 + igv 22.58 = 148.00
     // contra un total de 147.99.
-    const subtotalBruto = cantidad * precioUnitario - descuento;
+    // Las unidades de regalo NO se pagan, pero SÍ entran al stock: llegaron
+    // físicamente. Por eso salen del importe acá y no de `cantidad`, y el costo
+    // que entra al inventario (`total / cantidad`, en confirmar) queda
+    // prorrateado entre TODAS las unidades recibidas — que es el mismo número
+    // que el proveedor imprime como "precio prorrateado" en su factura.
+    if (cantidadBonificada > cantidad) {
+      throw new BadRequestException(
+        `"${dto.descripcion}": ${cantidadBonificada} unidad(es) de regalo sobre ${cantidad} recibida(s). La bonificación no puede superar la cantidad.`,
+      );
+    }
+    const cantidadPagada = cantidad - cantidadBonificada;
+    const importeLinea = round2(cantidadPagada * precioUnitario);
+    if (descuento > importeLinea) {
+      throw new BadRequestException(
+        `"${dto.descripcion}": el descuento (${round2(descuento)}) supera el importe de la línea (${importeLinea}). Un descuento mayor dejaría un costo negativo en el inventario.`,
+      );
+    }
+    const subtotalBruto = cantidadPagada * precioUnitario - descuento;
     let subtotal: number;
     let igv: number;
     let total: number;
@@ -2245,6 +2281,7 @@ export class CompraService {
       ordenCompraDetalleId: dto.ordenCompraDetalleId || null,
       descripcion: dto.descripcion,
       cantidad,
+      cantidadBonificada,
       precioUnitario,
       descuento,
       porcentajeIGV,
