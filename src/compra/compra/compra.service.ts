@@ -616,7 +616,9 @@ export class CompraService {
           });
         }
 
-        // d. Crear MovimientoStock (valorado al precio unitario de la línea)
+        // d. Crear MovimientoStock, valorado al MISMO costo que el lote y el
+        //    promedio ponderado (`precioCompra`, con IGV y con el flete ya
+        //    prorrateado).
         await crearMovimientoStockConValoracion(tx, {
           sedeId: compra.sedeId,
           empresaId,
@@ -630,8 +632,13 @@ export class CompraService {
           motivo: `Compra ${compra.codigo} - ${detalle.descripcion}`,
           compraId: compra.id,
           usuarioId,
-          // Lo que realmente costó esta unidad en esta compra.
-          precioCostoUnitario: detalle.precioUnitario,
+          // 🔴 NO es `detalle.precioUnitario`: con bonificación, descuento o
+          // flete ese es el precio de LISTA, no lo que la unidad costó. Y la
+          // salida por venta se valora con `ProductoStock.precioCosto`, que
+          // sí sale de acá: valorar la entrada distinto hace que la misma
+          // unidad entre a un costo y salga a otro, y el kardex valorizado
+          // deja de poder sumarse.
+          precioCostoUnitario: precioCompra,
         });
 
         // e. Crear Lote
