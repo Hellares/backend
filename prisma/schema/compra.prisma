@@ -200,6 +200,20 @@ model Compra {
   // recorrer los gastos.
   totalGastos Decimal @default(0) @db.Decimal(12, 2)
 
+  // `total` × `tipoCambio`, CONGELADO. En una compra en PEN es igual a `total`.
+  //
+  // Es el valor de la compra en NUESTRA moneda el día que entró, y no se
+  // vuelve a tocar: el costo del inventario se mide al tipo de cambio de la
+  // fecha de la transacción, no al del día que se pague. Si siguiera al pago,
+  // pagar en noviembre cambiaría el costo de mercadería vendida en setiembre
+  // y los márgenes de ventas ya cerradas se moverían solos.
+  //
+  // Lo que SÍ se mueve es la DEUDA: se lleva en la moneda de la compra y cada
+  // pago la cancela al tipo de cambio de su propio día. La brecha entre este
+  // número y los soles que realmente salieron de caja es la diferencia de
+  // cambio, que es un resultado financiero y se calcula, no se registra.
+  totalSoles Decimal @default(0) @db.Decimal(12, 2)
+
   // Fechas
   fechaRecepcion DateTime @default(now())
 
@@ -480,10 +494,32 @@ enum FuentePagoCompra {
 
 /// Pagos realizados a proveedores por compras
 model PagoCompra {
-  id             String          @id @default(cuid())
-  compraId       String
-  metodoPago     MetodoPagoVenta
-  monto          Decimal         @db.Decimal(10, 2)
+  id         String          @id @default(cuid())
+  compraId   String
+  metodoPago MetodoPagoVenta
+
+  /// Lo que sale de la FUENTE, en la moneda de esa fuente: los soles que
+  /// salieron de la caja o el saldo que se le restó a la cuenta bancaria.
+  /// Es lo que mueve la plata, y por eso es lo que ve la caja.
+  monto Decimal @db.Decimal(10, 2)
+
+  /// Lo que este pago CANCELA de la deuda, en la moneda de la COMPRA.
+  ///
+  /// null cuando la fuente y la compra están en la misma moneda: ahí `monto`
+  /// ya lo dice. Se llena cuando difieren — el caso de una empresa que no
+  /// maneja dólares pagando una factura en dólares desde una caja en soles:
+  /// salen S/910.55 (`monto`) y cancelan US$242.49 (`montoAplicado`).
+  ///
+  /// 🔴 El saldo de la compra se calcula con `montoAplicado ?? monto`, nunca
+  /// con `monto` solo: restarle soles a una deuda en dólares la deja pagada
+  /// de más y la compra aparece cancelada sin estarlo.
+  montoAplicado Decimal? @db.Decimal(12, 2)
+
+  /// Tipo de cambio del DÍA DEL PAGO, cargado a mano. Es el que usó el banco
+  /// o la casa de cambio en ese momento, y no tiene por qué ser el de la
+  /// compra: esa diferencia es justamente la diferencia de cambio.
+  tipoCambio Decimal? @db.Decimal(10, 4)
+
   referencia     String? // Número de operación, voucher
   bancoDestino   String? // Nombre del banco del proveedor
   cuentaDestino  String? // Número de cuenta destino

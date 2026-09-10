@@ -96,29 +96,81 @@ describe('aplicarPagoCompra', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('moneda USD pagada desde Tesorería → BadRequest (debe ser banco)', async () => {
-    await expect(
-      aplicarPagoCompra(tx, caja, { ...base, moneda: 'USD', metodoPago: 'TRANSFERENCIA' as any, fuente: 'TESORERIA' as any }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
+  // ─── Compra en otra moneda ───────────────────────────────────────
+  // El caso real: la empresa NO maneja dólares y su proveedor factura en
+  // dólares. Antes esto se prohibía (había que tener una cuenta en USD); ahora
+  // se paga desde la caja en soles con el tipo de cambio del día, y el pago
+  // guarda las dos caras: los soles que salieron y los dólares que canceló.
 
-  it('compra USD pagada desde banco PEN → BadRequest (moneda no coincide)', async () => {
-    tx.empresaBanco.findFirst.mockResolvedValue({ id: 'banco-pen', moneda: 'PEN' });
+  it('compra USD desde Tesorería SIN tipo de cambio → BadRequest', async () => {
     await expect(
       aplicarPagoCompra(tx, caja, {
-        ...base, moneda: 'USD', metodoPago: 'TRANSFERENCIA' as any, fuente: 'BANCO' as any, bancoId: 'banco-pen',
+        ...base, moneda: 'USD', metodoPago: 'EFECTIVO' as any, fuente: 'TESORERIA' as any,
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(tx.empresaBanco.update).not.toHaveBeenCalled();
+    expect(tx.pagoCompra.create).not.toHaveBeenCalled();
   });
 
-  it('compra USD pagada desde banco USD → OK, decrementa', async () => {
+  it('compra USD desde Tesorería CON tipo de cambio → OK, guarda las dos caras', async () => {
+    const pago = await aplicarPagoCompra(tx, caja, {
+      ...base,
+      moneda: 'USD',
+      metodoPago: 'EFECTIVO' as any,
+      fuente: 'TESORERIA' as any,
+      monto: 910.55, // soles que salen de la caja
+      tipoCambio: 3.755,
+      montoAplicado: 242.49, // dólares que cancela
+    });
+    // La caja se mueve por los SOLES.
+    expect(caja.crearMovimientoAutomatico).toHaveBeenCalledWith(
+      'emp-1', 'central-1', expect.objectContaining({ monto: 910.55 }), tx,
+    );
+    expect(pago).toMatchObject({ monto: 910.55, montoAplicado: 242.49, tipoCambio: 3.755 });
+  });
+
+  it('sin montoAplicado lo deriva de monto / tipoCambio', async () => {
+    const pago = await aplicarPagoCompra(tx, caja, {
+      ...base,
+      moneda: 'USD',
+      metodoPago: 'EFECTIVO' as any,
+      fuente: 'TESORERIA' as any,
+      monto: 910.55,
+      tipoCambio: 3.755,
+    });
+    expect(pago).toMatchObject({ montoAplicado: 242.49 });
+  });
+
+  it('compra USD desde banco PEN → OK con tipo de cambio, y decrementa en SOLES', async () => {
+    tx.empresaBanco.findFirst.mockResolvedValue({ id: 'banco-pen', moneda: 'PEN' });
+    const pago = await aplicarPagoCompra(tx, caja, {
+      ...base,
+      moneda: 'USD',
+      metodoPago: 'TRANSFERENCIA' as any,
+      fuente: 'BANCO' as any,
+      bancoId: 'banco-pen',
+      monto: 910.55,
+      tipoCambio: 3.755,
+      montoAplicado: 242.49,
+    });
+    expect(tx.empresaBanco.update).toHaveBeenCalledWith({
+      where: { id: 'banco-pen' }, data: { saldoActual: { decrement: 910.55 } },
+    });
+    expect(pago).toMatchObject({ montoAplicado: 242.49 });
+  });
+
+  it('compra USD desde banco USD → sin conversión: montoAplicado queda null', async () => {
     tx.empresaBanco.findFirst.mockResolvedValue({ id: 'banco-usd', moneda: 'USD' });
     const pago = await aplicarPagoCompra(tx, caja, {
       ...base, moneda: 'USD', metodoPago: 'TRANSFERENCIA' as any, fuente: 'BANCO' as any, bancoId: 'banco-usd',
     });
     expect(tx.empresaBanco.update).toHaveBeenCalledWith({ where: { id: 'banco-usd' }, data: { saldoActual: { decrement: 100 } } });
-    expect(pago).toMatchObject({ fuente: 'BANCO', bancoId: 'banco-usd' });
+    // Misma moneda: `monto` ya dice cuánto cancela y el saldo lo lee de ahí.
+    expect(pago).toMatchObject({ fuente: 'BANCO', bancoId: 'banco-usd', montoAplicado: null, tipoCambio: null });
+  });
+
+  it('compra PEN desde caja en soles → sin conversión (el camino de siempre)', async () => {
+    const pago = await aplicarPagoCompra(tx, caja, { ...base, metodoPago: 'EFECTIVO' as any });
+    expect(pago).toMatchObject({ monto: 100, montoAplicado: null, tipoCambio: null });
   });
 });
 

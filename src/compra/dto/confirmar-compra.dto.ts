@@ -34,11 +34,42 @@ export class PagoContadoCompraDto {
   @IsString()
   referencia?: string;
 
-  @ApiProperty({ required: false, description: 'Pago parcial. Si se omite, paga el total.' })
+  @ApiProperty({
+    required: false,
+    description:
+      'Pago parcial, en la moneda de la FUENTE. Si se omite, paga el total.',
+  })
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   monto?: number;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'Tipo de cambio del DÍA DEL PAGO, a mano. OBLIGATORIO cuando la moneda ' +
+      'de la compra no es la de la fuente (pagar una factura en USD desde una ' +
+      'caja en soles). No tiene por qué ser el de la compra: esa diferencia es ' +
+      'la diferencia de cambio.',
+    example: 3.755,
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0.0001)
+  tipoCambio?: number;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'Lo que este pago CANCELA de la deuda, en la moneda de la COMPRA. Si se ' +
+      'omite y hay tipoCambio, sale de `monto / tipoCambio`. `monto` sigue ' +
+      'siendo lo que sale de la fuente (los soles de la caja).',
+    example: 242.49,
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  montoAplicado?: number;
 }
 
 export class ConfirmarCompraDto {

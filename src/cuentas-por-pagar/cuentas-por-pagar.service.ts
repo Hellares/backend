@@ -15,6 +15,12 @@ import {
   FuentePagoCompra,
 } from '@prisma/client';
 import { aplicarPagoCompra, revertirPagoCompra } from './aplicar-pago-compra.util';
+import {
+  diferenciaDeCambio,
+  saldoCompra,
+  totalPagadoCompra,
+  totalPagadoSoles,
+} from './saldo-compra.util';
 
 @Injectable()
 export class CuentasPorPagarService {
@@ -140,8 +146,8 @@ export class CuentasPorPagarService {
 
     const cuentas = compras.map((c) => {
       const totalCompra = Number(c.total);
-      const totalPagado = c.pagos.reduce((sum, p) => sum + Number(p.monto), 0);
-      const saldoPendiente = Math.round((totalCompra - totalPagado) * 100) / 100;
+      const totalPagado = totalPagadoCompra(c.pagos);
+      const saldoPendiente = saldoCompra(c.total, c.pagos);
       const estaVencida = c.fechaVencimientoPago ? c.fechaVencimientoPago < now : false;
       const estaPagada = saldoPendiente <= 0;
       const diasVencimiento = c.fechaVencimientoPago
@@ -211,8 +217,8 @@ export class CuentasPorPagarService {
     if (!compra) throw new NotFoundException('Compra no encontrada');
 
     const totalCompra = Number(compra.total);
-    const totalPagado = compra.pagos.reduce((s, p) => s + Number(p.monto), 0);
-    const saldoPendiente = Math.round((totalCompra - totalPagado) * 100) / 100;
+    const totalPagado = totalPagadoCompra(compra.pagos);
+    const saldoPendiente = saldoCompra(compra.total, compra.pagos);
     const now = new Date();
     const estaVencida = compra.fechaVencimientoPago
       ? compra.fechaVencimientoPago < now
@@ -246,6 +252,19 @@ export class CuentasPorPagarService {
       totalCompra,
       totalPagado: Math.round(totalPagado * 100) / 100,
       saldoPendiente,
+      // Lo que la compra vale en soles, congelado a su tipo de cambio, y los
+      // soles que de verdad salieron. En una compra en PEN los dos coinciden
+      // y la diferencia es 0.
+      totalSoles: Number(compra.totalSoles),
+      tipoCambio: compra.tipoCambio != null ? Number(compra.tipoCambio) : null,
+      pagadoSoles: totalPagadoSoles(compra.pagos),
+      // Solo cuando ya se canceló todo: mientras falte plata, la brecha es lo
+      // que falta pagar y no una diferencia de cambio.
+      diferenciaCambio: diferenciaDeCambio(
+        compra.total,
+        compra.totalSoles,
+        compra.pagos,
+      ),
       terminosPago: compra.terminosPago,
       diasCredito: compra.diasCredito,
       fechaCompra: compra.fechaRecepcion,
@@ -275,7 +294,12 @@ export class CuentasPorPagarService {
       pagos: compra.pagos.map((p) => ({
         id: p.id,
         metodoPago: p.metodoPago,
+        // `monto` son los soles que salieron; `montoAplicado` lo que canceló
+        // de la deuda en la moneda de la compra (null si son la misma).
         monto: Number(p.monto),
+        montoAplicado:
+          p.montoAplicado != null ? Number(p.montoAplicado) : null,
+        tipoCambio: p.tipoCambio != null ? Number(p.tipoCambio) : null,
         referencia: p.referencia,
         bancoDestino: p.bancoDestino,
         cuentaDestino: p.cuentaDestino,
@@ -413,6 +437,10 @@ export class CuentasPorPagarService {
       comprobanteUrl?: string;
       fuente?: FuentePagoCompra;
       bancoId?: string;
+      /** TC del día del pago. Obligatorio si la fuente y la compra difieren. */
+      tipoCambio?: number;
+      /** Lo que cancela, en la moneda de la COMPRA. Se deriva si falta. */
+      montoAplicado?: number;
     },
   ) {
     // Todo en una transacción: lock + recálculo del saldo + movimiento de la
@@ -448,14 +476,26 @@ export class CuentasPorPagarService {
 
       const pagosPrevios = await tx.pagoCompra.findMany({
         where: { compraId, anulado: false },
-        select: { monto: true },
+        select: { monto: true, montoAplicado: true },
       });
-      const totalPagado = pagosPrevios.reduce((s, p) => s + Number(p.monto), 0);
-      const saldoPendiente = Number(compra.total) - totalPagado;
+      const totalPagado = totalPagadoCompra(pagosPrevios);
+      const saldoPendiente = Math.round(
+        (Number(compra.total) - totalPagado) * 100,
+      ) / 100;
 
-      if (data.monto > saldoPendiente + 0.001) {
+      // 🔴 Lo que se compara contra el saldo es lo que el pago CANCELA, en la
+      // moneda de la compra — no los soles que salen de la caja. Con una deuda
+      // en dólares, comparar los soles rebotaba cualquier pago real por
+      // "excede el saldo pendiente".
+      const cancela =
+        data.montoAplicado ??
+        (data.tipoCambio && data.tipoCambio > 0
+          ? Math.round((data.monto / data.tipoCambio) * 100) / 100
+          : data.monto);
+
+      if (cancela > saldoPendiente + 0.001) {
         throw new BadRequestException(
-          `El monto (${data.monto}) excede el saldo pendiente (${saldoPendiente.toFixed(2)})`,
+          `El pago cancela ${cancela.toFixed(2)} ${compra.moneda} y el saldo pendiente es ${saldoPendiente.toFixed(2)} ${compra.moneda}`,
         );
       }
 
@@ -473,6 +513,8 @@ export class CuentasPorPagarService {
         moneda: compra.moneda,
         metodoPago: data.metodoPago,
         monto: data.monto,
+        tipoCambio: data.tipoCambio,
+        montoAplicado: data.montoAplicado,
         fuente: data.fuente,
         bancoId: data.bancoId,
         referencia: data.referencia,

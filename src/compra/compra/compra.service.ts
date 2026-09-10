@@ -32,6 +32,7 @@ import {
 } from '@prisma/client';
 import { CajaService } from '../../caja/caja.service';
 import { aplicarPagoCompra, revertirPagoCompra } from '../../cuentas-por-pagar/aplicar-pago-compra.util';
+import { totalPagadoCompra } from '../../cuentas-por-pagar/saldo-compra.util';
 import { RealtimeInvalidationService } from '../../notificacion/realtime-invalidation.service';
 
 @Injectable()
@@ -92,6 +93,8 @@ export class CompraService {
         detallesCalculados.reduce((sum, d) => sum + d.subtotal, 0) +
           gastosCalculados.reduce((sum, g) => sum + g.base, 0),
       );
+      // Falla ANTES de tocar nada si es en otra moneda y no vino el TC.
+      const tipoCambio = CompraService._tipoCambioDe(dto.moneda, dto.tipoCambio);
       const totalDescuento = detallesCalculados.reduce((sum, d) => sum + d.descuento, 0);
       const totalImpuestos = round2(
         detallesCalculados.reduce((sum, d) => sum + d.igv, 0) +
@@ -111,7 +114,13 @@ export class CompraService {
         fechaBase: fechaRecepcion,
         fechaVencimientoExplicita: dto.fechaVencimientoPago,
       });
-      await this._validarLimiteCredito(tx, empresaId, proveedor, total, credito.terminosPago);
+      await this._validarLimiteCredito(
+        tx,
+        empresaId,
+        proveedor,
+        round2(total * tipoCambio),
+        credito.terminosPago,
+      );
 
       const compra = await tx.compra.create({
         data: {
@@ -134,6 +143,8 @@ export class CompraService {
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
+          // Congelado: lo que vale la compra en NUESTRA moneda el día que entró.
+          totalSoles: round2(total * tipoCambio),
           totalGastos,
           fechaRecepcion,
           observaciones: dto.observaciones,
@@ -299,6 +310,10 @@ export class CompraService {
         detallesData.reduce((sum, d) => sum + d.subtotal, 0) +
           gastosCalculados.reduce((sum, g) => sum + g.base, 0),
       );
+      const tipoCambio = CompraService._tipoCambioDe(
+        dto.moneda ?? oc.moneda,
+        dto.tipoCambio ?? oc.tipoCambio,
+      );
       const totalDescuento = detallesData.reduce((sum, d) => sum + d.descuento, 0);
       const totalImpuestos = round2(
         detallesData.reduce((sum, d) => sum + d.igv, 0) +
@@ -325,7 +340,13 @@ export class CompraService {
         select: { id: true, limiteCredito: true },
       });
       if (proveedorOc) {
-        await this._validarLimiteCredito(tx, empresaId, proveedorOc, total, credito.terminosPago);
+        await this._validarLimiteCredito(
+          tx,
+          empresaId,
+          proveedorOc,
+          round2(total * tipoCambio),
+          credito.terminosPago,
+        );
       }
 
       const compra = await tx.compra.create({
@@ -355,6 +376,7 @@ export class CompraService {
           descuento: totalDescuento,
           impuestos: totalImpuestos,
           total,
+          totalSoles: round2(total * tipoCambio),
           totalGastos,
           fechaRecepcion,
           observaciones: dto.observaciones,
@@ -405,7 +427,9 @@ export class CompraService {
       fuente?: FuentePagoCompra;
       bancoId?: string;
       referencia?: string;
-      monto?: number; // pago parcial; default = total de la compra
+      monto?: number; // pago parcial, en la moneda de la FUENTE
+      tipoCambio?: number; // del día del pago; obligatorio si las monedas difieren
+      montoAplicado?: number; // lo que cancela, en la moneda de la COMPRA
     },
   ) {
     this.logger.info('Confirmando compra', { id, empresaId });
@@ -469,6 +493,16 @@ export class CompraService {
         }
       }
 
+      // 🔴 El costo del inventario se mide al tipo de cambio del DÍA DE LA
+      // COMPRA y no se vuelve a tocar. Si siguiera al tipo de cambio del pago,
+      // pagar en noviembre cambiaría el costo de mercadería vendida en
+      // setiembre y los márgenes de ventas ya cerradas se moverían solos.
+      // Lo único que se mueve después es la DEUDA.
+      const tipoCambio = CompraService._tipoCambioDe(
+        compra.moneda,
+        compra.tipoCambio,
+      );
+
       // Flete / movilidad repartido entre las líneas. Se calcula ANTES del
       // loop porque el reparto necesita ver TODAS las líneas, y se congela acá:
       // este es el momento en que el costo entra al inventario.
@@ -527,11 +561,14 @@ export class CompraService {
         // valor salen el costo promedio ponderado del ProductoStock y el
         // precioCosto del Lote, así que el costo real de adquisición se propaga
         // solo al kardex, a los márgenes y a la apertura de bultos.
+        // × tipoCambio: `ProductoStock.precioCosto` no tiene moneda — es soles
+        // por definición y se compara contra el precio de venta, que también
+        // lo es. En una compra en PEN el factor es 1 y no cambia nada.
         const gastoLinea = gastoPorLinea.get(detalle.id) ?? 0;
         const precioCompra =
-          detalle.cantidad > 0
+          (detalle.cantidad > 0
             ? (Number(detalle.total) + gastoLinea) / detalle.cantidad
-            : Number(detalle.precioUnitario);
+            : Number(detalle.precioUnitario)) * tipoCambio;
 
         // b. Calcular costo promedio ponderado
         const nuevoCosto = CompraService.calcularNuevoCostoPromedio(
@@ -657,7 +694,10 @@ export class CompraService {
             compraId: compra.id,
             codigo: codigoLote,
             precioCosto: precioCompra,
-            moneda: compra.moneda,
+            // 🔴 SOLES, no la moneda de la factura: `precioCosto` ya viene
+            // convertido y es lo que alimenta el costo del producto. Rotularlo
+            // USD diría que el lote vale dólares y el número son soles.
+            moneda: 'PEN',
             cantidadInicial: detalle.cantidad,
             cantidadActual: detalle.cantidad,
             proveedorId: compra.proveedorId,
@@ -719,13 +759,34 @@ export class CompraService {
       //   - Contado SIN pago → cae en CxP (lo paga después).
       const total = Number(compra.total);
       const esContado = !compra.terminosPago || compra.terminosPago === 'CONTADO';
-      const montoPago = Math.min(pago?.monto ?? total, total);
+      // 🔴 Dos monedas y dos preguntas distintas:
+      //  - `montoPago` es lo que SALE de la fuente (los soles de la caja).
+      //  - `cancela` es lo que eso paga de la deuda, en la moneda de la compra,
+      //    y es lo único comparable contra `total`.
+      // Comparándolos entre sí, un pago de S/910.55 sobre una deuda de
+      // US$242.49 quedaba topeado en 242.49 y la compra se daba por pagada
+      // habiendo salido menos de un tercio.
+      // Sin `monto` explicito se paga el total, que en una compra en soles es
+      // lo mismo en las dos puntas. En otra moneda no se puede adivinar: sale
+      // de una caja en soles o de un banco en dolares y son cifras distintas,
+      // asi que se exige decirlo.
+      if (pago && compra.moneda !== 'PEN' && pago.monto == null) {
+        throw new BadRequestException(
+          `La compra es en ${compra.moneda}: indica cuanto sale de la fuente y con que tipo de cambio.`,
+        );
+      }
+      const montoPago = pago?.monto ?? total;
       if (pago && montoPago <= 0) {
         throw new BadRequestException('El monto del pago debe ser mayor a 0');
       }
+      const cancela = Math.min(
+        pago?.montoAplicado ??
+          (pago?.tipoCambio ? round2(montoPago / pago.tipoCambio) : montoPago),
+        total,
+      );
       const pagarAhora = esContado && !!pago;
       // Queda pendiente si: es crédito, o contado sin pago, o contado con pago parcial.
-      const pagoPendiente = !esContado || !pago || montoPago < total - 0.001;
+      const pagoPendiente = !esContado || !pago || cancela < total - 0.001;
 
       // 5. Actualizar compra a CONFIRMADA
       const compraConfirmada = await tx.compra.update({
@@ -752,6 +813,10 @@ export class CompraService {
           moneda: compra.moneda,
           metodoPago: pago!.metodoPago,
           monto: montoPago,
+          tipoCambio: pago!.tipoCambio,
+          // El tope contra el total ya aplicado: pagar de más dejaría la deuda
+          // en negativo y el proveedor figurando a favor.
+          montoAplicado: pago!.tipoCambio ? cancela : undefined,
           fuente: pago!.fuente,
           bancoId: pago!.bancoId,
           referencia: pago!.referencia,
@@ -1271,7 +1336,8 @@ export class CompraService {
               compraId: compra.id,
               codigo: codigoLoteDestino,
               precioCosto: precioCostoLote,
-              moneda: compra.moneda,
+              // Ya convertido: viene del lote de origen, que está en soles.
+              moneda: 'PEN',
               cantidadInicial: dist.cantidad,
               cantidadActual: dist.cantidad,
               proveedorId: compra.proveedorId,
@@ -1359,7 +1425,12 @@ export class CompraService {
           _count: { select: { detalles: true, lotes: true } },
           // Solo el monto: alcanza para saber cuanto se pago y no infla la
           // respuesta con el detalle de cada pago, que la lista no muestra.
-          pagos: { where: { anulado: false }, select: { monto: true } },
+          // `montoAplicado` viaja siempre: sin él, una compra en moneda
+          // extranjera restaría soles a una deuda en dólares.
+          pagos: {
+            where: { anulado: false },
+            select: { monto: true, montoAplicado: true },
+          },
         },
         orderBy: { creadoEn: 'desc' },
         ...paginationArgs,
@@ -1378,7 +1449,7 @@ export class CompraService {
     // Es la misma cuenta que hace `cuentas-por-pagar.service.listar`, y los
     // pagos ANULADOS no cuentan.
     const data = filas.map(({ pagos, ...compra }) => {
-      const totalPagado = pagos.reduce((suma, p) => suma + Number(p.monto), 0);
+      const totalPagado = totalPagadoCompra(pagos);
       return {
         ...compra,
         totalPagado: Math.round(totalPagado * 100) / 100,
@@ -1526,6 +1597,14 @@ export class CompraService {
       // desde el dto: editar solo los gastos dejaba los totales viejos (y al
       // revés). Es una lectura barata dentro de la misma transacción.
       const montosData = await this._recalcularTotales(tx, id);
+      // El borrador todavía se puede editar, así que el equivalente en soles
+      // se vuelve a congelar con el TC que quede guardado. Al confirmar ya no
+      // se mueve más.
+      const tipoCambio = CompraService._tipoCambioDe(
+        dto.moneda ?? compra.moneda,
+        dto.tipoCambio ?? compra.tipoCambio,
+      );
+      montosData.totalSoles = round2(montosData.total * tipoCambio);
 
       // El vencimiento se recalcula SOLO si se tocaron los términos o los
       // días: agregar un flete no tiene por qué mover una fecha que el usuario
@@ -1556,7 +1635,7 @@ export class CompraService {
         tx,
         empresaId,
         proveedor,
-        montosData.total,
+        montosData.totalSoles,
         credito.terminosPago,
       );
 
@@ -2061,11 +2140,23 @@ export class CompraService {
         estado: 'CONFIRMADA',
         terminosPago: { not: 'CONTADO' },
       },
-      select: { total: true, pagos: { select: { monto: true } } },
+      select: {
+        total: true,
+        totalSoles: true,
+        pagos: { select: { monto: true, montoAplicado: true } },
+      },
     });
+    // 🔴 El límite del proveedor está en SOLES (lo dice el mensaje), así que
+    // la deuda también: sumando `total` a secas, una factura de US$242.49
+    // pesaba 242.49 contra el límite y entraban casi cuatro veces más compras
+    // de las que el límite permite. El saldo se lleva a soles con el tipo de
+    // cambio congelado de SU compra, en proporción a lo que falta pagar.
     const deuda = compras.reduce((s: number, c: any) => {
-      const pagado = c.pagos.reduce((p: number, x: any) => p + Number(x.monto), 0);
-      return s + Math.max(0, Number(c.total) - pagado);
+      const total = Number(c.total);
+      if (total <= 0) return s;
+      const saldo = Math.max(0, total - totalPagadoCompra(c.pagos));
+      const soles = Number(c.totalSoles) || total;
+      return s + (saldo / total) * soles;
     }, 0);
 
     if (deuda + totalCompra > limite + 0.01) {
@@ -2182,6 +2273,8 @@ export class CompraService {
         suma(detalles.map((d) => d.igv)) + suma(gastos.map((g) => g.igv)),
       ),
       total: round2(suma(detalles.map((d) => d.total)) + totalGastos),
+      // Lo pisa `update()` con el tipo de cambio vigente de la compra.
+      totalSoles: 0,
       totalGastos,
     };
   }
@@ -2302,6 +2395,32 @@ export class CompraService {
       unidadOriginalSimbolo,
       nuevoPrecioVenta: dto.nuevoPrecioVenta ?? null,
     };
+  }
+
+  /**
+   * El tipo de cambio con el que ESTA compra se lleva a soles.
+   *
+   * 1 cuando ya viene en soles, así multiplicar por él no cambia ningún
+   * número y el camino de la compra normal queda intacto.
+   *
+   * 🔴 En moneda extranjera es OBLIGATORIO: sin él, el costo del proveedor
+   * (US$12.36) entraría tal cual a `ProductoStock.precioCosto`, que no tiene
+   * moneda — es soles por definición y se compara contra el precio de venta,
+   * que también es soles. El producto quedaría con un costo casi cuatro veces
+   * más barato y todos sus márgenes serían ficción.
+   */
+  private static _tipoCambioDe(
+    moneda: string | null | undefined,
+    tipoCambio: number | Prisma.Decimal | null | undefined,
+  ): number {
+    if (!moneda || moneda === 'PEN') return 1;
+    const tc = tipoCambio != null ? Number(tipoCambio) : 0;
+    if (!(tc > 0)) {
+      throw new BadRequestException(
+        `Una compra en ${moneda} necesita el tipo de cambio del día: sin él no se sabe cuánto costó en soles.`,
+      );
+    }
+    return tc;
   }
 
   /**

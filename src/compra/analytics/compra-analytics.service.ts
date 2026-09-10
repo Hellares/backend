@@ -4,6 +4,15 @@ import { AppLoggerService } from '../../common/logger/logger.service';
 import { CompraAnalyticsQueryDto, PeriodoAgrupacion } from './dto/compra-analytics.dto';
 import { EstadoCompra, EstadoOrdenCompra, EstadoLote, Prisma } from '@prisma/client';
 
+/**
+ * 🔴 Los montos se agregan por `totalSoles`, NUNCA por `total`.
+ *
+ * `total` está en la moneda de la factura del proveedor, así que sumarlo
+ * mezcla soles con dólares: US$242.49 pesaba 242.49 al lado de una compra de
+ * S/242.49 y el reporte quedaba corto sin avisar. `totalSoles` es el mismo
+ * número llevado a soles con el tipo de cambio congelado de SU compra, y en
+ * una compra en PEN es igual a `total`.
+ */
 @Injectable()
 export class CompraAnalyticsService {
   private readonly logger: AppLoggerService;
@@ -48,7 +57,7 @@ export class CompraAnalyticsService {
       this.prisma.compra.aggregate({
         where,
         _count: { id: true },
-        _sum: { total: true },
+        _sum: { totalSoles: true },
         _avg: { total: true },
       }),
       this.prisma.compra.count({
@@ -69,7 +78,7 @@ export class CompraAnalyticsService {
 
     return {
       totalCompras: compras._count.id,
-      montoTotal: Number(compras._sum.total ?? 0),
+      montoTotal: Number(compras._sum.totalSoles ?? 0),
       promedioPorCompra: Math.round(Number(compras._avg.total ?? 0) * 100) / 100,
       comprasPendientes,
       totalOrdenesCompra: totalOC,
@@ -303,7 +312,7 @@ export class CompraAnalyticsService {
           ...baseWhere,
           confirmadoEn: { gte: inicioActual, lte: ahora },
         },
-        _sum: { total: true },
+        _sum: { totalSoles: true },
         _count: { id: true },
       }),
       this.prisma.compra.aggregate({
@@ -311,13 +320,13 @@ export class CompraAnalyticsService {
           ...baseWhere,
           confirmadoEn: { gte: inicioAnterior, lt: finAnterior },
         },
-        _sum: { total: true },
+        _sum: { totalSoles: true },
         _count: { id: true },
       }),
     ]);
 
-    const totalActual = Number(actual._sum.total ?? 0);
-    const totalAnterior = Number(anterior._sum.total ?? 0);
+    const totalActual = Number(actual._sum.totalSoles ?? 0);
+    const totalAnterior = Number(anterior._sum.totalSoles ?? 0);
     const diferencia = totalActual - totalAnterior;
     const porcentajeCambio = totalAnterior > 0
       ? Math.round(((diferencia / totalAnterior) * 100) * 100) / 100
@@ -490,7 +499,7 @@ export class CompraAnalyticsService {
       }),
       // Para poder decir "el flete fue el 2.1% de lo que compraste", que es
       // el número con el que se decide si vale la pena negociarlo.
-      this.prisma.compra.aggregate({ where, _sum: { total: true } }),
+      this.prisma.compra.aggregate({ where, _sum: { totalSoles: true } }),
     ]);
 
     const acumular = (
@@ -542,7 +551,7 @@ export class CompraAnalyticsService {
     }
 
     const r2 = (v: number) => Math.round(v * 100) / 100;
-    const totalComprado = Number(compras._sum.total ?? 0);
+    const totalComprado = Number(compras._sum.totalSoles ?? 0);
 
     return {
       resumen: {

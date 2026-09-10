@@ -20,7 +20,12 @@ export interface AplicarPagoCompraInput {
   moneda: string;
   // Pago
   metodoPago: MetodoPagoVenta;
+  /** Lo que SALE de la fuente, en la moneda de esa fuente. */
   monto: number;
+  /** TC del día del pago. Obligatorio si la fuente y la compra difieren. */
+  tipoCambio?: number;
+  /** Lo que cancela de la deuda, en la moneda de la COMPRA. Se deriva si falta. */
+  montoAplicado?: number;
   fuente?: FuentePagoCompra;
   bancoId?: string;
   referencia?: string;
@@ -36,7 +41,13 @@ export interface AplicarPagoCompraInput {
  *  - TESORERIA → EGRESO en la Caja Central de la sede (default efectivo).
  *  - CAJA      → EGRESO en la caja operativa abierta del usuario (400 si no hay).
  *  - BANCO     → decrementa EmpresaBanco.saldoActual (default digital).
- * Reglas: EFECTIVO no puede ser BANCO; moneda != PEN obliga BANCO.
+ * Reglas: EFECTIVO no puede ser BANCO.
+ *
+ * 🔴 La moneda de la FUENTE (soles en la caja, la del banco) no tiene por qué
+ * ser la de la compra: una empresa que no maneja dólares paga su factura en
+ * dólares desde la caja en soles. Cuando difieren hace falta el `tipoCambio`
+ * del día, y el pago guarda las dos caras: `monto` los soles que salieron y
+ * `montoAplicado` los dólares que canceló.
  */
 export async function aplicarPagoCompra(
   tx: Prisma.TransactionClient,
@@ -55,37 +66,50 @@ export async function aplicarPagoCompra(
   if (fuente === FuentePagoCompra.BANCO && !input.bancoId) {
     throw new BadRequestException('Falta la cuenta bancaria (bancoId) para fuente=BANCO');
   }
-  if (input.moneda && input.moneda !== 'PEN' && fuente !== FuentePagoCompra.BANCO) {
-    throw new BadRequestException(
-      `Una compra en ${input.moneda} debe pagarse desde una cuenta bancaria`,
-    );
-  }
 
   const descripcion = `Pago proveedor - ${input.nombreProveedor} (${input.codigo})`;
   let movimientoCajaId: string | null = null;
   let bancoId: string | null = null;
 
+  // La cuenta bancaria se resuelve ANTES de mover nada: su moneda es la de la
+  // fuente, y de ahí sale si hace falta tipo de cambio.
+  const banco =
+    fuente === FuentePagoCompra.BANCO
+      ? await tx.empresaBanco.findFirst({
+          where: { id: input.bancoId, empresaId: input.empresaId, isActive: true },
+          select: { id: true, moneda: true },
+        })
+      : null;
+  if (fuente === FuentePagoCompra.BANCO && !banco) {
+    throw new BadRequestException('Cuenta bancaria no encontrada');
+  }
+
+  // Las cajas son en soles; el banco tiene la suya.
+  const monedaFuente =
+    fuente === FuentePagoCompra.BANCO ? (banco!.moneda ?? 'PEN') : 'PEN';
+  const compraMoneda = input.moneda || 'PEN';
+  const conversion = monedaFuente !== compraMoneda;
+
+  if (conversion && !(input.tipoCambio && input.tipoCambio > 0)) {
+    throw new BadRequestException(
+      `La compra es en ${compraMoneda} y el pago sale en ${monedaFuente}: falta el tipo de cambio del día.`,
+    );
+  }
+  // Lo que el pago CANCELA de la deuda, en la moneda de la compra. Sin
+  // conversión queda null y el saldo lo sigue leyendo de `monto`, igual que
+  // antes de que existieran las compras en otra moneda.
+  const montoAplicado = conversion
+    ? Math.round(
+        (input.montoAplicado ?? input.monto / input.tipoCambio!) * 100,
+      ) / 100
+    : null;
+
   if (fuente === FuentePagoCompra.BANCO) {
-    const banco = await tx.empresaBanco.findFirst({
-      where: { id: input.bancoId, empresaId: input.empresaId, isActive: true },
-      select: { id: true, moneda: true },
-    });
-    if (!banco) throw new BadRequestException('Cuenta bancaria no encontrada');
-    // La moneda del banco debe coincidir con la de la compra: no se paga una
-    // deuda en USD desde una cuenta en soles (ni viceversa) — son saldos por
-    // moneda, mezclarlos descuadra.
-    const bancoMoneda = banco.moneda ?? 'PEN';
-    const compraMoneda = input.moneda || 'PEN';
-    if (bancoMoneda !== compraMoneda) {
-      throw new BadRequestException(
-        `La compra es en ${compraMoneda} pero la cuenta bancaria es en ${bancoMoneda}. Elegí una cuenta en ${compraMoneda}.`,
-      );
-    }
     await tx.empresaBanco.update({
-      where: { id: banco.id },
+      where: { id: banco!.id },
       data: { saldoActual: { decrement: input.monto } },
     });
-    bancoId = banco.id;
+    bancoId = banco!.id;
   } else if (fuente === FuentePagoCompra.CAJA) {
     const cajaOp = await tx.caja.findFirst({
       where: {
@@ -155,6 +179,8 @@ export async function aplicarPagoCompra(
       compraId: input.compraId,
       metodoPago: input.metodoPago,
       monto: input.monto,
+      montoAplicado,
+      tipoCambio: conversion ? input.tipoCambio : null,
       referencia: input.referencia,
       bancoDestino: input.bancoDestino,
       cuentaDestino: input.cuentaDestino,
