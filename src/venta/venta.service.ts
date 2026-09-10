@@ -29,6 +29,7 @@ import { UpdateVentaDto } from './dto/update-venta.dto';
 import { ProcesarPagoDto } from './dto/procesar-pago.dto';
 import { CreateVentaDetalleDto } from './dto/create-venta-detalle.dto';
 import {
+  EntidadTipo,
   EstadoVenta,
   EstadoCotizacion,
   TipoMovimientoStock,
@@ -1663,9 +1664,50 @@ export class VentaService {
         include: this.getInclude(),
       });
 
+      await this.vincularEvidencia(tx, empresaId, venta.id, dto.evidenciaIds);
+
       this.logger.log(`Venta creada: ${venta.codigo}`);
       return venta;
     });
+  }
+
+
+  /**
+   * Engancha a la venta recien creada las fotos que se subieron MIENTRAS se
+   * cobraba (`POST /ventas/evidencia`), que hasta ahora existian con
+   * `entidadId` en null.
+   *
+   * Vive aca y no en `VentaEvidenciaService` porque tiene que correr DENTRO de
+   * la transaccion de la venta; ese servicio se ocupa de los endpoints.
+   *
+   * 🔴 El `where` exige `empresaId` y `entidadId: null`: sin eso, mandar el id
+   * de una foto de OTRA venta se la robaria. Los ids que no califican se
+   * ignoran EN SILENCIO a proposito — la venta ya esta cobrada y no se tira
+   * abajo porque una foto no engancho.
+   */
+  private async vincularEvidencia(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    ventaId: string,
+    archivoIds?: string[],
+  ): Promise<void> {
+    const ids = [...new Set((archivoIds ?? []).filter(Boolean))];
+    if (ids.length === 0) return;
+    const { count } = await tx.archivo.updateMany({
+      where: {
+        id: { in: ids },
+        empresaId,
+        entidadTipo: EntidadTipo.VENTA,
+        entidadId: null,
+        deletedAt: null,
+      },
+      data: { entidadId: ventaId },
+    });
+    if (count !== ids.length) {
+      this.logger.warn(
+        `Venta ${ventaId}: se pidieron ${ids.length} evidencias y engancharon ${count}`,
+      );
+    }
   }
 
   /**

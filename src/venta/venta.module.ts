@@ -15,6 +15,8 @@ import { ServicioModule } from '../servicio/servicio.module';
 import { IntegracionYapeModule } from '../integracion-yape/integracion-yape.module';
 import { CaracteristicaEmpresaModule } from '../caracteristica-empresa/caracteristica-empresa.module';
 import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
+import { StorageModule } from '../storage/storage.module';
+import { VentaEvidenciaService } from './venta-evidencia.service';
 
 @Module({
   imports: [
@@ -28,9 +30,16 @@ import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
     ServicioModule,
     IntegracionYapeModule,
     CaracteristicaEmpresaModule,
+    StorageModule,
   ],
   controllers: [VentaAnalyticsController, VentaController],
-  providers: [VentaService, VentaAnalyticsService, VentaYapeTasksService, SedeAccessGuard],
-  exports: [VentaService],
+  providers: [
+    VentaService,
+    VentaAnalyticsService,
+    VentaYapeTasksService,
+    VentaEvidenciaService,
+    SedeAccessGuard,
+  ],
+  exports: [VentaService, VentaEvidenciaService],
 })
 export class VentaModule {}

@@ -10,13 +10,19 @@ import {
   UseGuards,
   Headers,
   HttpCode,
+  Delete,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
   ApiHeader,
+  ApiConsumes,
+  ApiBody,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
@@ -26,6 +32,7 @@ import { RequiresPermission } from '../auth/decorators/requires-permission.decor
 import { Permission } from '../auth/enums/permission.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { VentaService } from './venta.service';
+import { VentaEvidenciaService } from './venta-evidencia.service';
 import { CreateVentaDto } from './dto/create-venta.dto';
 import { CreateVentaDesdeCotizacionDto } from './dto/create-venta-desde-cotizacion.dto';
 import { CrearYCobrarVentaDto } from './dto/crear-y-cobrar-venta.dto';
@@ -41,7 +48,90 @@ import { EstadoVenta } from '@prisma/client';
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class VentaController {
-  constructor(private readonly ventaService: VentaService) {}
+  constructor(
+    private readonly ventaService: VentaService,
+    private readonly evidencias: VentaEvidenciaService,
+  ) {}
+
+  // --- Evidencia fotografica de la venta ------------------------------
+  // Como se vendio el producto y como se entrego. Es respaldo INTERNO ante un
+  // reclamo: no viaja al comprobante ni al ticket del cliente.
+  //
+  // 🔴 Van con `MANAGE_VENTAS` y no con el permiso de storage: el endpoint
+  // generico `POST /storage/upload` exige `MANAGE_SETTINGS`, que es de
+  // administrador, y quien saca estas fotos es el CAJERO.
+
+  @Post('evidencia')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Subir una foto ANTES de crear la venta; su archivoId viaja en evidenciaIds al crearla',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  subirEvidencia(
+    @Headers('x-tenant-id') empresaId: string,
+    @CurrentUser('id') usuarioId: string,
+    @UploadedFile() file: any,
+  ) {
+    return this.evidencias.subir(empresaId, usuarioId, file);
+  }
+
+  @Get(':id/evidencia')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Fotos de una venta' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  listarEvidencia(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') ventaId: string,
+  ) {
+    return this.evidencias.listar(empresaId, ventaId);
+  }
+
+  @Post(':id/evidencia')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Adjuntar una foto a una venta YA hecha (la entrega suele pasar horas despues del cobro)',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  adjuntarEvidencia(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') ventaId: string,
+    @CurrentUser('id') usuarioId: string,
+    @UploadedFile() file: any,
+  ) {
+    return this.evidencias.adjuntar(empresaId, ventaId, usuarioId, file);
+  }
+
+  @Delete(':id/evidencia/:archivoId')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Sacar una foto de la venta (soft-delete)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  eliminarEvidencia(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') ventaId: string,
+    @Param('archivoId') archivoId: string,
+  ) {
+    return this.evidencias.eliminar(empresaId, ventaId, archivoId);
+  }
 
   @Post()
   @UseGuards(SedeAccessGuard)

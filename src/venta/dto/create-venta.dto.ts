@@ -131,6 +131,18 @@ export class CreateVentaDto {
 
   @ApiPropertyOptional({
     description:
+      'Fotos de la venta (como se vendio, como se entrega) subidas antes de crearla ' +
+      'con POST /ventas/evidencia. Se enlazan a la venta al crearla. Es evidencia ' +
+      'INTERNA: no viaja al comprobante ni al ticket del cliente.',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidenciaIds?: string[];
+
+  @ApiPropertyOptional({
+    description:
       'ID del usuario GERENTE/ADMIN que autorizó vender bajo costo. Requerido si alguna línea tiene margen negativo y el producto NO está en liquidación.',
   })
   @IsOptional()
