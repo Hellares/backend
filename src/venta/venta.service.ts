@@ -2002,6 +2002,9 @@ export class VentaService {
           include: this.getInclude(),
         });
 
+        // 3a-bis. Las fotos que se subieron mientras se cobraba.
+        await this.vincularEvidencia(tx, empresaId, venta.id, dto.evidenciaIds);
+
         // 3b. Historial de uso de precio especial VIP (auditoría + reportería).
         // Solo se registran las líneas donde el precio VIP efectivamente ganó.
         const vipLineas = detallesCalculados.filter((d) => d.vipPoliticaId);

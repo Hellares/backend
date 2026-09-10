@@ -82,6 +82,17 @@ export class CrearYCobrarVentaDto {
   @IsString()
   observaciones?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Fotos de la venta subidas antes con POST /ventas/evidencia. Se enlazan al ' +
+      'crearla. Es evidencia INTERNA: no viaja al comprobante ni al ticket.',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidenciaIds?: string[];
+
   @ApiProperty({ description: 'Detalles de la venta', type: [CreateVentaDetalleDto] })
   @IsArray()
   @ArrayMinSize(1)
