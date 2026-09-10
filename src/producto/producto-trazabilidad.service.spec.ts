@@ -279,3 +279,89 @@ describe('ProductoTrazabilidadService.trazabilidad', () => {
     expect(r.compras).toHaveLength(2);
   });
 });
+
+/**
+ * Historial de compras del producto (el panel que se abre al comprar).
+ *
+ * 🔴 El costo tiene que venir SIEMPRE EN SOLES: es contra `ProductoStock.
+ * precioCosto` que el panel lo compara, y ese no tiene moneda. Sin convertir,
+ * una compra en dolares devolvia 14.59 al lado de una en soles de 54.15 y el
+ * panel las trataba como comparables.
+ */
+describe('ProductoTrazabilidadService.historialCompras — moneda', () => {
+  // La factura de Deltron: 11 webcams por US$160.48 al TC 3.712.
+  const filaUsd = {
+    cantidad: 11,
+    precioUnitario: 13.6,
+    total: 160.48,
+    usaUnidadCompra: false,
+    cantidadOriginal: null,
+    unidadOriginalSimbolo: null,
+    compra: {
+      id: 'c-usd',
+      codigo: 'COMPRA-00098',
+      fechaRecepcion: new Date('2026-09-09'),
+      proveedorId: 'deltron',
+      nombreProveedor: 'DELTRON',
+      moneda: 'USD',
+      tipoCambio: 3.712,
+    },
+  };
+  const filaPen = {
+    ...filaUsd,
+    total: 54.15 * 11,
+    compra: {
+      ...filaUsd.compra,
+      id: 'c-pen',
+      codigo: 'COMPRA-00090',
+      fechaRecepcion: new Date('2026-09-01'),
+      moneda: 'PEN',
+      tipoCambio: null,
+    },
+  };
+
+  const servicio = (filas: any[]) => {
+    const prisma = basePrisma({
+      producto: { findFirst: jest.fn().mockResolvedValue({ id: 'pf', variantes: [] }) },
+      compraDetalle: { findMany: jest.fn().mockResolvedValue(filas) },
+    });
+    return new ProductoTrazabilidadService(prisma as any);
+  };
+
+  it('una compra en USD vuelve convertida a soles', async () => {
+    const r = await servicio([filaUsd]).historialCompras('emp', 'pf');
+    // 160.48 / 11 = 14.5891 dolares → x 3.712 = 54.1547 soles
+    expect(r.compras[0].costoUnitario).toBeCloseTo(54.1547, 3);
+    expect(r.compras[0].costoUnitarioOriginal).toBeCloseTo(14.5891, 3);
+    expect(r.compras[0].moneda).toBe('USD');
+    expect(r.compras[0].tipoCambio).toBe(3.712);
+  });
+
+  it('una compra en soles no se toca: los dos costos coinciden', async () => {
+    const r = await servicio([filaPen]).historialCompras('emp', 'pf');
+    expect(r.compras[0].costoUnitario).toBeCloseTo(54.15, 2);
+    expect(r.compras[0].costoUnitarioOriginal).toBeCloseTo(54.15, 2);
+    expect(r.compras[0].tipoCambio).toBeNull();
+  });
+
+  it('🔴 el promedio por proveedor NO mezcla monedas', async () => {
+    // Las dos compras costaron practicamente lo mismo en soles (54.15), asi
+    // que el promedio tiene que dar eso. Sin convertir daba (14.59+54.15)/2.
+    const r = await servicio([filaUsd, filaPen]).historialCompras('emp', 'pf');
+    expect(r.proveedores).toHaveLength(1);
+    expect(r.proveedores[0].costoPromedio).toBeCloseTo(54.15, 1);
+    expect(r.proveedores[0].veces).toBe(2);
+  });
+
+  it('el ultimo costo es el de la compra mas reciente, en soles', async () => {
+    const r = await servicio([filaUsd, filaPen]).historialCompras('emp', 'pf');
+    expect(r.ultimoCosto).toBeCloseTo(54.1547, 3);
+  });
+
+  it('el TC solo aplica si la moneda no es PEN', async () => {
+    // Una compra en soles con un tipoCambio colgado (data vieja) no se escala.
+    const rara = { ...filaPen, compra: { ...filaPen.compra, tipoCambio: 3.9 } };
+    const r = await servicio([rara]).historialCompras('emp', 'pf');
+    expect(r.compras[0].costoUnitario).toBeCloseTo(54.15, 2);
+  });
+});

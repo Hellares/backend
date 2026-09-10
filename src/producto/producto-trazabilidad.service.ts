@@ -204,7 +204,24 @@ export class ProductoTrazabilidadService {
    * Historial LIGERO de compras de un producto/variante (para mostrar al comprar):
    * últimas compras CONFIRMADAS (fecha, proveedor, costo unitario) + agregado por
    * proveedor (veces, costo promedio, último costo, última fecha). Sin kardex ni
-   * el 360 completo. Costo unitario efectivo = total/cantidad (incluye IGV).
+   * el 360 completo.
+   *
+   * 🔴 `costoUnitario` va SIEMPRE EN SOLES: `total / cantidad × tipoCambio`, con
+   * el tipo de cambio CONGELADO de su propia compra. Sin convertir, una compra
+   * en dólares devolvía 14.59 al lado de una en soles de 54.15 y el panel las
+   * comparaba como si fueran lo mismo: el "último costo" salía con el símbolo de
+   * la compra que se estaba cargando y la variación % daba −73% habiendo
+   * comprado al mismo precio. El promedio por proveedor sumaba las dos monedas
+   * en una sola cifra.
+   *
+   * Es la misma base que `ProductoStock.precioCosto`, que es contra lo que el
+   * panel compara. El costo en la moneda del proveedor viaja aparte
+   * (`costoUnitarioOriginal` + `moneda` + `tipoCambio`) para poder mostrar qué
+   * facturó de verdad.
+   *
+   * El IGV NO se desglosa, y está bien: `total` lo lleva adentro en las DOS
+   * convenciones (`precioIncluyeIgv` true y false), así que el costo es
+   * comparable entre compras cargadas de una forma y de la otra.
    */
   async historialCompras(
     empresaId: string,
@@ -245,13 +262,22 @@ export class ProductoTrazabilidadService {
             proveedorId: true,
             nombreProveedor: true,
             moneda: true,
+            tipoCambio: true,
           },
         },
       },
     });
 
-    const costoUnit = (r: (typeof rows)[number]) =>
+    /** El TC congelado de esa compra. 1 en soles, así no cambia ningún número. */
+    const tcDe = (r: (typeof rows)[number]) => {
+      const tc = r.compra.tipoCambio != null ? Number(r.compra.tipoCambio) : 0;
+      return r.compra.moneda && r.compra.moneda !== 'PEN' && tc > 0 ? tc : 1;
+    };
+    /** Costo por unidad en la moneda del PROVEEDOR. */
+    const costoOriginal = (r: (typeof rows)[number]) =>
       r.cantidad > 0 ? Number(r.total) / r.cantidad : Number(r.precioUnitario);
+    /** Costo por unidad EN SOLES: lo único comparable entre compras. */
+    const costoUnit = (r: (typeof rows)[number]) => costoOriginal(r) * tcDe(r);
 
     const compras = rows.slice(0, limit).map((r) => ({
       compraId: r.compra.id,
@@ -260,10 +286,14 @@ export class ProductoTrazabilidadService {
       proveedorId: r.compra.proveedorId,
       proveedor: r.compra.nombreProveedor,
       moneda: r.compra.moneda,
+      tipoCambio: r.compra.tipoCambio != null ? Number(r.compra.tipoCambio) : null,
       cantidad: r.cantidad,
       precioUnitario: Number(r.precioUnitario),
       total: Number(r.total),
+      /** EN SOLES. Es contra esto que se compara el costo del producto. */
       costoUnitario: round6(costoUnit(r)),
+      /** Lo que facturó el proveedor, en SU moneda. Igual al anterior en PEN. */
+      costoUnitarioOriginal: round6(costoOriginal(r)),
       usaUnidadCompra: r.usaUnidadCompra,
       cantidadOriginal: r.cantidadOriginal != null ? Number(r.cantidadOriginal) : null,
       unidadOriginalSimbolo: r.unidadOriginalSimbolo,
