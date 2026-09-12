@@ -2,10 +2,14 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Body,
   Param,
   Query,
   UseGuards,
   Headers,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -19,7 +23,12 @@ import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { RequiresPermission } from '../../auth/decorators/requires-permission.decorator';
 import { Permission } from '../../auth/enums/permission.enum';
 import { LoteService } from './lote.service';
-import { QueryLotesDto } from '../dto';
+import {
+  CorregirVencimientoLoteDto,
+  DarDeBajaLoteDto,
+  QueryLotesDto,
+} from '../dto';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('Lotes')
 @Controller('empresas/:empresaId/lotes')
@@ -94,5 +103,52 @@ export class LoteController {
     @Headers('x-tenant-id') empresaId: string,
   ) {
     return this.loteService.marcarLotesVencidos(empresaId);
+  }
+
+  @Post(':id/baja')
+  @HttpCode(HttpStatus.OK)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Dar de baja un lote (venció, se rompió, se perdió)',
+    description:
+      'Saca las unidades del inventario: baja el lote Y el stock, en una ' +
+      'transacción.\n\n' +
+      '🔴 Es la ÚNICA salida cuando un producto de CADUCIDAD vence. El guard ' +
+      'de la venta lo bloquea sin autorización posible, y como FEFO pone lo ' +
+      'vencido PRIMERO en la fila, sin esto ese lote frena toda venta de ese ' +
+      'producto para siempre.\n\n' +
+      'Sin `cantidad` se da de baja todo lo que queda, que es el caso normal. ' +
+      'Exige `canManageProducts`: mueve inventario.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async darDeBaja(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: DarDeBajaLoteDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.loteService.darDeBaja(id, empresaId, user.sub, dto);
+  }
+
+  @Patch(':id/vencimiento')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Corregir la fecha de vencimiento de un lote',
+    description:
+      'La otra salida del bloqueo de CADUCIDAD: si la fecha se tipeó mal, no ' +
+      'hay que tirar mercadería buena, hay que arreglar el dato.\n\n' +
+      '🔴 Queda RASTRO en las observaciones del lote —qué decía antes, qué ' +
+      'dice ahora, quién y por qué—: cambiar un vencimiento es exactamente lo ' +
+      'que alguien haría para saltarse el bloqueo.\n\n' +
+      'Un lote VENCIDO cuya fecha corregida todavía no llegó vuelve a ACTIVO.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async corregirVencimiento(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CorregirVencimientoLoteDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.loteService.corregirVencimiento(id, empresaId, user.sub, dto);
   }
 }

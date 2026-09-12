@@ -6,8 +6,13 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppLoggerService } from '../../common/logger/logger.service';
 import { createCursorPaginatedResponse } from '../../common/utils/pagination.util';
-import { Prisma, EstadoLote } from '@prisma/client';
-import { QueryLotesDto } from '../dto';
+import { Prisma, EstadoLote, TipoMovimientoStock } from '@prisma/client';
+import {
+  CorregirVencimientoLoteDto,
+  DarDeBajaLoteDto,
+  QueryLotesDto,
+} from '../dto';
+import { crearMovimientoStockConValoracion } from '../../producto-stock/movimiento-stock.helper';
 
 @Injectable()
 export class LoteService {
@@ -262,5 +267,166 @@ export class LoteService {
       totalLotes: lotes.length,
       lotesActivos: lotesActivos.length,
     };
+  }
+  /**
+   * Saca un lote del inventario: se venció, se rompió, se perdió.
+   *
+   * 🔴 Es la ÚNICA salida cuando un producto de CADUCIDAD vence. El guard de
+   * la venta lo bloquea sin autorización posible, y como FEFO pone lo vencido
+   * PRIMERO en la fila, sin esto ese lote frena toda venta de ese producto
+   * para siempre. El mensaje de error le dice al cajero que haga esto; hasta
+   * hoy no había dónde.
+   *
+   * 🔑 Baja el lote Y el `stockActual` juntos, en una transacción: si moviera
+   * uno solo, la invariante `Σ lotes = stockActual` se rompe y el consumo
+   * FEFO empieza a repartir mercadería que no existe.
+   *
+   * El movimiento va con `lotesGestionadosPorElLlamador` porque acá se elige
+   * un lote CONCRETO; dejar que el helper consuma por FEFO descontaría de otro
+   * y además dos veces.
+   */
+  async darDeBaja(
+    id: string,
+    empresaId: string,
+    usuarioId: string,
+    dto: DarDeBajaLoteDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const lote = await tx.lote.findFirst({
+        where: { id, empresaId },
+        include: {
+          productoStock: { select: { id: true, stockActual: true } },
+          producto: { select: { nombre: true } },
+          variante: { select: { nombre: true } },
+        },
+      });
+      if (!lote) throw new NotFoundException('Lote no encontrado');
+      if (lote.cantidadActual <= 0) {
+        throw new BadRequestException(
+          `El lote ${lote.codigo} ya no tiene unidades: no hay nada que dar de baja.`,
+        );
+      }
+
+      const cantidad = dto.cantidad ?? lote.cantidadActual;
+      if (cantidad > lote.cantidadActual) {
+        throw new BadRequestException(
+          `El lote ${lote.codigo} tiene ${lote.cantidadActual} unidades y se ` +
+            `quieren dar de baja ${cantidad}.`,
+        );
+      }
+
+      const stock = lote.productoStock;
+      const quedaEnLote = lote.cantidadActual - cantidad;
+      // Piso en 0: si el stock ya estuviera por debajo (una inconsistencia
+      // vieja), dejarlo negativo lo empeora.
+      const nuevoStock = Math.max(0, stock.stockActual - cantidad);
+
+      await tx.lote.update({
+        where: { id: lote.id },
+        data: {
+          cantidadActual: quedaEnLote,
+          ...(quedaEnLote === 0 ? { estado: EstadoLote.AGOTADO } : {}),
+          observaciones: `Baja de ${cantidad}: ${dto.motivo}`,
+        },
+      });
+
+      await tx.productoStock.update({
+        where: { id: stock.id },
+        data: { stockActual: nuevoStock },
+      });
+
+      const nombre =
+        lote.variante?.nombre ?? lote.producto?.nombre ?? 'producto';
+      const movimiento = await crearMovimientoStockConValoracion(tx, {
+        empresaId,
+        sedeId: lote.sedeId,
+        productoStockId: stock.id,
+        tipo: TipoMovimientoStock.SALIDA_BAJA,
+        tipoDocumento: 'BAJA_LOTE',
+        numeroDocumento: lote.codigo,
+        cantidadAnterior: stock.stockActual,
+        cantidad: -cantidad,
+        cantidadNueva: nuevoStock,
+        motivo: `Baja del lote ${lote.codigo} (${nombre}): ${dto.motivo}`,
+        usuarioId,
+        // Valorado al costo DE ESTE LOTE: es la mercadería concreta que se
+        // pierde, no un promedio.
+        precioCostoUnitario: lote.precioCosto,
+        // Acá se elige el lote a mano; el helper no debe tocar ninguno.
+        lotesGestionadosPorElLlamador: true,
+      });
+
+      // La contrapartida en la tabla puente, para que el movimiento sepa de
+      // qué lote salió igual que cualquier otra salida.
+      await tx.movimientoStockLote.create({
+        data: {
+          movimientoStockId: movimiento.id,
+          loteId: lote.id,
+          cantidad,
+          costoUnitario: lote.precioCosto,
+        },
+      });
+
+      this.logger.warn(
+        `Baja de lote ${lote.codigo}: ${cantidad} unidades de ${nombre} — ${dto.motivo}`,
+      );
+
+      return {
+        loteId: lote.id,
+        codigo: lote.codigo,
+        dadasDeBaja: cantidad,
+        quedanEnLote: quedaEnLote,
+        stockActual: nuevoStock,
+      };
+    });
+  }
+
+  /**
+   * Corrige la fecha de vencimiento de un lote mal cargada.
+   *
+   * 🔑 La otra salida del bloqueo de CADUCIDAD: si la fecha se tipeó mal, no
+   * hay que tirar mercadería buena — hay que arreglar el dato.
+   *
+   * 🔴 Queda RASTRO en las observaciones a propósito. Cambiar un vencimiento
+   * es exactamente lo que alguien haría para saltarse el bloqueo, así que
+   * tiene que poder auditarse: qué decía antes, qué dice ahora, quién y por qué.
+   */
+  async corregirVencimiento(
+    id: string,
+    empresaId: string,
+    usuarioId: string,
+    dto: CorregirVencimientoLoteDto,
+  ) {
+    const lote = await this.prisma.lote.findFirst({ where: { id, empresaId } });
+    if (!lote) throw new NotFoundException('Lote no encontrado');
+
+    const nueva = dto.fechaVencimiento ? new Date(dto.fechaVencimiento) : null;
+    const antes = lote.fechaVencimiento
+      ? lote.fechaVencimiento.toISOString().slice(0, 10)
+      : 'sin vencimiento';
+    const ahora = nueva ? nueva.toISOString().slice(0, 10) : 'sin vencimiento';
+
+    // Un lote marcado VENCIDO cuya fecha corregida todavía no llegó vuelve a
+    // estar disponible. Al revés NO: marcarlo vencido es tarea del cron, que
+    // corre con su propio criterio.
+    const revive =
+      lote.estado === EstadoLote.VENCIDO && (!nueva || nueva > new Date());
+
+    const actualizado = await this.prisma.lote.update({
+      where: { id: lote.id },
+      data: {
+        fechaVencimiento: nueva,
+        ...(revive ? { estado: EstadoLote.ACTIVO } : {}),
+        observaciones:
+          `Vencimiento corregido: ${antes} → ${ahora}. ${dto.motivo} ` +
+          `(${usuarioId}, ${new Date().toISOString().slice(0, 16).replace('T', ' ')})`,
+      },
+    });
+
+    this.logger.warn(
+      `Vencimiento del lote ${lote.codigo}: ${antes} → ${ahora} — ${dto.motivo}`,
+    );
+
+    return actualizado;
   }
 }

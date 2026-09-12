@@ -11,6 +11,7 @@ export { CreateCompraDesdeOcDto, LineaRecepcionOcDto } from './create-compra-des
 export { QueryOrdenesCompraDto } from './query-ordenes-compra.dto';
 export { QueryComprasDto } from './query-compras.dto';
 export { QueryLotesDto } from './query-lotes.dto';
+export { DarDeBajaLoteDto, CorregirVencimientoLoteDto } from './lote-acciones.dto';
 export {
   DistribuirCompraDto,
   DistribucionItemDto,
