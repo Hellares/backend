@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import {
   consumirLotesFefo,
   devolverALotesDeOrigen,
+  heredarLotesDeTransferencia,
   planificarFefo,
 } from './lote-consumo.helper';
 
@@ -201,6 +202,127 @@ describe('Consumo de lotes (FEFO)', () => {
       expect(sinCubrir).toBe(5);
     });
   });
+  describe('transferencia recibida', () => {
+    // El lote que salió de la sede de origen.
+    const ORIGEN = {
+      id: 'lo-1',
+      codigo: 'LOTE-00000144',
+      numeroLote: 'F-77',
+      precioCosto: dec(56.17),
+      fechaVencimiento: dia('10-01'),
+      fechaProduccion: null,
+      proveedorId: 'prov-ceti',
+      nombreProveedor: 'CETI',
+      compraId: 'c-112',
+    };
+    const entrada = {
+      id: 'mov-in',
+      productoStockId: 'ps-dest',
+      empresaId: 'emp',
+      sedeId: 'sede-lima-0002',
+      transferenciaId: 'trf-1',
+      usuarioId: 'u1',
+    };
+
+    /**
+     * @param previas lo que recepciones anteriores de ESTA transferencia ya
+     *   heredaron (filas negativas de la tabla puente, por lote de origen)
+     * @param existente el lote de destino ya creado por una tanda anterior
+     */
+    const conTransferencia = (previas: any[] = [], existente: any = null) => {
+      conLotes([]);
+      tx.movimientoStock = {
+        findMany: jest.fn().mockResolvedValue([{ id: 'mov-out', productoStockId: 'ps-origen' }]),
+      };
+      tx.movimientoStockLote.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([{ cantidad: 5, lote: ORIGEN }]) // lo que consumió la salida
+        .mockResolvedValueOnce(previas);
+      tx.lote.findFirst = jest.fn().mockResolvedValue(existente);
+      tx.lote.create = jest.fn(({ data }: any) => Promise.resolve({ id: 'lo-dest', data }));
+    };
+
+    it('🔑 hereda vencimiento, costo y proveedor del lote de origen', async () => {
+      // Sin esto entraba como un lote AJU- sin fecha: la leche que viajaba a
+      // la sucursal llegaba "eterna".
+      conTransferencia();
+
+      const { asignaciones, sinCubrir } = await heredarLotesDeTransferencia(
+        tx, entrada, 5, { productoId: 'p1', varianteId: null },
+      );
+
+      expect(tx.lote.create.mock.calls[0][0].data).toMatchObject({
+        loteOrigenId: 'lo-1',
+        fechaVencimiento: dia('10-01'),
+        precioCosto: dec(56.17),
+        nombreProveedor: 'CETI',
+        proveedorId: 'prov-ceti',
+        numeroLote: 'F-77',
+        cantidadInicial: 5,
+        cantidadActual: 5,
+        // El código de origen con la sede pegada: se lee de dónde viene.
+        codigo: 'LOTE-00000144/0002',
+      });
+      expect(asignaciones).toEqual([
+        { loteId: 'lo-dest', cantidad: -5, costoUnitario: dec(56.17) },
+      ]);
+      expect(sinCubrir).toBe(0);
+    });
+
+    it('la segunda tanda SUMA al lote ya heredado, sin duplicarlo', async () => {
+      // De las 5 que salieron, 3 ya entraron en una recepción anterior.
+      conTransferencia(
+        [{ cantidad: -3, lote: { loteOrigenId: 'lo-1' } }],
+        { id: 'lo-dest' },
+      );
+
+      const { asignaciones, sinCubrir } = await heredarLotesDeTransferencia(
+        tx, entrada, 2, { productoId: 'p1', varianteId: null },
+      );
+
+      expect(tx.lote.create).not.toHaveBeenCalled();
+      // Mismo par de updateMany excluyentes que la devolución: solo lo
+      // AGOTADO vuelve a ACTIVO; un VENCIDO suma sin resucitar.
+      expect(updates.map((u) => u.data.cantidadActual)).toEqual([
+        { increment: 2 },
+        { increment: 2 },
+      ]);
+      expect(asignaciones).toEqual([
+        { loteId: 'lo-dest', cantidad: -2, costoUnitario: dec(56.17) },
+      ]);
+      expect(sinCubrir).toBe(0);
+    });
+
+    it('no hereda más de lo que la salida consumió', async () => {
+      // Salieron 5, ya entraron 3: quedan 2 por heredar aunque lleguen 4. El
+      // resto lo cubre el lote de ajuste, como siempre.
+      conTransferencia(
+        [{ cantidad: -3, lote: { loteOrigenId: 'lo-1' } }],
+        { id: 'lo-dest' },
+      );
+
+      const { sinCubrir } = await heredarLotesDeTransferencia(
+        tx, entrada, 4, { productoId: 'p1', varianteId: null },
+      );
+
+      expect(sinCubrir).toBe(2);
+    });
+
+    it('si la salida no dejó asignaciones (motor apagado), no hay nada que heredar', async () => {
+      conLotes([]);
+      tx.movimientoStock = {
+        findMany: jest.fn().mockResolvedValue([{ id: 'mov-out', productoStockId: 'ps-origen' }]),
+      };
+      tx.movimientoStockLote.findMany = jest.fn().mockResolvedValue([]);
+
+      const r = await heredarLotesDeTransferencia(
+        tx, entrada, 4, { productoId: 'p1', varianteId: null },
+      );
+
+      expect(r).toEqual({ asignaciones: [], sinCubrir: 4 });
+    });
+  });
+
   describe('planificarFefo (la previsualización del POS)', () => {
     it('🔑 devuelve el MISMO reparto que el consumo real', async () => {
       const lotes = [lote('a', 3, '03-01', 11.8), lote('b', 10, '06-01', 27.5)];

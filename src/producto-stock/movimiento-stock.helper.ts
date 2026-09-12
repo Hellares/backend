@@ -3,6 +3,7 @@ import {
   consumirLotesFefo,
   crearLoteDeEntrada,
   devolverALotesDeOrigen,
+  heredarLotesDeTransferencia,
   registrarAsignaciones,
   type AsignacionLote,
 } from './lote-consumo.helper';
@@ -157,6 +158,7 @@ async function sincronizarLotes(
     tipo: string;
     cantidad: number;
     ventaId: string | null;
+    transferenciaId: string | null;
     motivo: string | null;
     usuarioId: string;
   },
@@ -218,12 +220,30 @@ async function sincronizarLotes(
     }
   }
 
+  // 🔑 ¿Llega de OTRA sede? Hereda los lotes de los que salió allá — con su
+  // vencimiento, su costo y su proveedor. Sin esto la mercadería transferida
+  // entraba como un lote de ajuste sin fecha y FEFO la trataba como eterna.
+  const stock = await tx.productoStock.findUnique({
+    where: { id: movimiento.productoStockId },
+    select: { productoId: true, varianteId: true },
+  });
+  if (movimiento.transferenciaId && repuesto < movimiento.cantidad) {
+    const pendiente = movimiento.cantidad - repuesto;
+    const r = await heredarLotesDeTransferencia(
+      tx,
+      { ...movimiento, transferenciaId: movimiento.transferenciaId },
+      pendiente,
+      {
+        productoId: stock?.productoId ?? null,
+        varianteId: stock?.varianteId ?? null,
+      },
+    );
+    asignaciones.push(...r.asignaciones);
+    repuesto += pendiente - r.sinCubrir;
+  }
+
   const faltante = movimiento.cantidad - repuesto;
   if (faltante > 0) {
-    const stock = await tx.productoStock.findUnique({
-      where: { id: movimiento.productoStockId },
-      select: { productoId: true, varianteId: true },
-    });
     const nuevo = await crearLoteDeEntrada(tx, {
       productoStockId: movimiento.productoStockId,
       empresaId: movimiento.empresaId,

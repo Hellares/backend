@@ -158,6 +158,35 @@ no lo decide la política, no el estado del lote.
 Corolario: una devolución **no resucita** un lote VENCIDO a ACTIVO. Solo lo
 AGOTADO vuelve.
 
+## Revisión del 12-09 — cuatro arreglos de fondo
+
+**Un vencimiento es un DÍA, no un instante.** Se guarda como medianoche UTC
+del día del envase; compararlo contra `new Date()` lo daba por vencido desde
+las 19:00 del día ANTERIOR en Lima. Todo pasa por `date-utils`:
+`aFechaCalendario` (normaliza lo que manda cada cliente), `estaVencido`
+(juzga por día en Perú) e `inicioDeHoyCalendario` (umbral para queries). En la
+web, `diasParaVencer` y `formatearDiaCalendario`. 🔴 Nunca `new Date(iso)`
+sobre una fecha de vencimiento.
+
+**Mover stock entre sedes hereda el lote.** `Lote.loteOrigenId` (migración
+`20260912100000_lote_origen`, aditiva). La distribución de una compra copia
+vencimiento y número de lote al lote destino; una transferencia recibida
+replica en destino las asignaciones de la salida (`heredarLotesDeTransferencia`):
+un lote por lote de origen, con su fecha, costo y proveedor, código
+`<origen>/<sede>`. Una segunda recepción SUMA al ya heredado; una transferencia
+que vuelve a origen es una devolución. Si la salida no dejó asignaciones (se
+envió con el motor apagado), entra como `AJU-` igual que antes.
+
+**El costo se cotiza por LÍNEA (producto + lote).** `claveDeLinea`. Dos líneas
+del mismo producto con lotes distintos son dos costos. Lo elegido a mano se
+sirve primero, lo automático toma lo que queda, y la venta consume en ese
+mismo orden (`pendingUpdates` ordenado con los lotes elegidos adelante).
+
+**Si el lote elegido ya no está, 409 `LOTE_NO_DISPONIBLE`.** Nunca se cae a
+FEFO en silencio: ni en el precio (`resolverLineaACosto`, si el lote no
+encabeza el plan) ni en el consumo (si el lote no existe o no tiene unidades,
+también a precio de lista). La web devuelve la línea a automático y recotiza.
+
 ## Lo que falta (Fase 3)
 
 Cron que marque `MotivoLiquidacion.PROXIMO_A_VENCER` a `diasAlertaVencimiento`

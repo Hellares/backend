@@ -328,6 +328,191 @@ export async function crearLoteDeEntrada(
   };
 }
 
+/**
+ * Una transferencia RECIBIDA hereda los lotes de los que salió en origen.
+ *
+ * 🔴 Sin esto, la entrada creaba un lote `AJU-` sin vencimiento ni proveedor:
+ * la leche que viajaba a la sucursal llegaba "eterna", FEFO la mandaba al
+ * final de la fila y el guard nunca la veía. Para un sistema que existe para
+ * controlar vencimientos, ese era el agujero más grande.
+ *
+ * Cómo: se buscan las SALIDAS de la misma transferencia para el mismo
+ * producto, se leen sus asignaciones (de qué lote salió cada unidad) y se
+ * replican en destino — un lote por lote de origen, con su vencimiento, su
+ * costo y su proveedor, enlazado por `loteOrigenId`. Una segunda recepción de
+ * la misma transferencia SUMA al lote ya creado en vez de duplicarlo.
+ *
+ * Si la salida no tiene asignaciones (se envió con el motor apagado) no hay
+ * nada que heredar: quien llama crea el lote de ajuste como siempre.
+ */
+export async function heredarLotesDeTransferencia(
+  tx: Prisma.TransactionClient,
+  movimiento: {
+    id: string;
+    productoStockId: string;
+    empresaId: string;
+    sedeId: string;
+    transferenciaId: string;
+    usuarioId: string;
+  },
+  cantidad: number,
+  destino: { productoId: string | null; varianteId: string | null },
+): Promise<{ asignaciones: AsignacionLote[]; sinCubrir: number }> {
+  if (cantidad <= 0) return { asignaciones: [], sinCubrir: 0 };
+
+  const salidas = await tx.movimientoStock.findMany({
+    where: {
+      transferenciaId: movimiento.transferenciaId,
+      cantidad: { lt: 0 },
+      productoStock: {
+        productoId: destino.productoId,
+        varianteId: destino.varianteId,
+      },
+    },
+    select: { id: true, productoStockId: true },
+  });
+  if (!salidas.length) return { asignaciones: [], sinCubrir: cantidad };
+
+  // Entra en la MISMA sede de la que salió (una transferencia rechazada que
+  // vuelve): eso es una devolución, y vuelve a los lotes de origen.
+  const propias = salidas.filter(
+    (s) => s.productoStockId === movimiento.productoStockId,
+  );
+  if (propias.length) {
+    return devolverALotesDeOrigen(
+      tx,
+      propias.map((s) => s.id),
+      cantidad,
+    );
+  }
+
+  const consumos = await tx.movimientoStockLote.findMany({
+    where: {
+      movimientoStockId: { in: salidas.map((s) => s.id) },
+      cantidad: { gt: 0 },
+    },
+    select: {
+      cantidad: true,
+      lote: {
+        select: {
+          id: true,
+          codigo: true,
+          numeroLote: true,
+          precioCosto: true,
+          fechaVencimiento: true,
+          fechaProduccion: true,
+          proveedorId: true,
+          nombreProveedor: true,
+          compraId: true,
+        },
+      },
+    },
+    orderBy: { creadoEn: 'asc' },
+  });
+  if (!consumos.length) return { asignaciones: [], sinCubrir: cantidad };
+
+  // Lo que recepciones ANTERIORES de esta misma transferencia ya heredaron de
+  // cada lote de origen, para no duplicar unidades si llega en dos tandas.
+  // Se acota a ESTA transferencia: otra que mueva el mismo lote no cuenta.
+  const previas = await tx.movimientoStockLote.findMany({
+    where: {
+      cantidad: { lt: 0 },
+      movimiento: {
+        transferenciaId: movimiento.transferenciaId,
+        productoStockId: movimiento.productoStockId,
+        id: { not: movimiento.id },
+      },
+      lote: { loteOrigenId: { in: consumos.map((c) => c.lote.id) } },
+    },
+    select: { cantidad: true, lote: { select: { loteOrigenId: true } } },
+  });
+  const yaHeredado = new Map<string, number>();
+  for (const p of previas) {
+    const k = p.lote.loteOrigenId!;
+    yaHeredado.set(k, (yaHeredado.get(k) ?? 0) + Math.abs(p.cantidad));
+  }
+
+  const asignaciones: AsignacionLote[] = [];
+  let restante = cantidad;
+
+  for (const c of consumos) {
+    if (restante <= 0) break;
+    const origen = c.lote;
+    const disponible = c.cantidad - (yaHeredado.get(origen.id) ?? 0);
+    if (disponible <= 0) continue;
+    const toma = Math.min(disponible, restante);
+
+    // Uno por (lote de origen, stock de destino): la segunda tanda suma.
+    const existente = await tx.lote.findFirst({
+      where: {
+        productoStockId: movimiento.productoStockId,
+        loteOrigenId: origen.id,
+      },
+      select: { id: true },
+    });
+
+    let loteId: string;
+    if (existente) {
+      loteId = existente.id;
+      // Como en la devolución: se reactiva solo lo AGOTADO. Un VENCIDO no
+      // resucita porque le llegue mercadería.
+      await tx.lote.updateMany({
+        where: { id: existente.id, estado: 'AGOTADO' },
+        data: {
+          cantidadActual: { increment: toma },
+          cantidadInicial: { increment: toma },
+          estado: 'ACTIVO',
+        },
+      });
+      await tx.lote.updateMany({
+        where: { id: existente.id, estado: { in: [...ESTADOS_LOTE_PRESENTE] } },
+        data: {
+          cantidadActual: { increment: toma },
+          cantidadInicial: { increment: toma },
+        },
+      });
+    } else {
+      const nuevo = await tx.lote.create({
+        data: {
+          empresaId: movimiento.empresaId,
+          sedeId: movimiento.sedeId,
+          productoStockId: movimiento.productoStockId,
+          productoId: destino.productoId,
+          varianteId: destino.varianteId,
+          compraId: origen.compraId,
+          loteOrigenId: origen.id,
+          // El código de origen con la sede pegada: se lee de dónde viene, y
+          // es único por construcción (un origen, un destino, un solo lote).
+          codigo: `${origen.codigo}/${movimiento.sedeId.slice(-4).toUpperCase()}`,
+          numeroLote: origen.numeroLote,
+          precioCosto: origen.precioCosto,
+          moneda: 'PEN',
+          cantidadInicial: toma,
+          cantidadActual: toma,
+          fechaVencimiento: origen.fechaVencimiento,
+          fechaProduccion: origen.fechaProduccion,
+          proveedorId: origen.proveedorId,
+          nombreProveedor: origen.nombreProveedor,
+          observaciones: `Transferencia: hereda el lote ${origen.codigo}`,
+          creadoPor: movimiento.usuarioId,
+        },
+        select: { id: true },
+      });
+      loteId = nuevo.id;
+    }
+
+    asignaciones.push({
+      loteId,
+      cantidad: -toma,
+      costoUnitario: origen.precioCosto,
+    });
+    yaHeredado.set(origen.id, (yaHeredado.get(origen.id) ?? 0) + toma);
+    restante -= toma;
+  }
+
+  return { asignaciones, sinCubrir: restante };
+}
+
 /** Persiste el reparto en la tabla puente. */
 export async function registrarAsignaciones(
   tx: Prisma.TransactionClient,

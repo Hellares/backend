@@ -110,8 +110,12 @@ describe('CostoVentaService · elegir el lote', () => {
       'sede-1',
       'emp-1',
     );
-    return mapa.get('p:prod-1')!;
+    // La clave es por LÍNEA: producto + lote elegido.
+    return mapa.get(CostoVentaService.claveDeLinea('prod-1', null, loteId ?? null))!;
   };
+
+  const linea = (productoId: string, loteId: string | null) =>
+    CostoVentaService.claveDeLinea(productoId, null, loteId);
 
   it('ofrece TODOS los lotes presentes, en el orden en que FEFO los tomaría', async () => {
     const r = await pedir([LOTE_A, LOTE_B, LOTE_C], 1);
@@ -158,6 +162,51 @@ describe('CostoVentaService · elegir el lote', () => {
     // Promedio PONDERADO: (30×1 + 10×2) / 3. × 3 devuelve lo que costaron.
     expect(r.costoLote).toBeCloseTo(50 / 3, 6);
     expect(r.sinCubrir).toBe(0);
+  });
+
+  it('🔴 dos líneas del mismo producto con lotes distintos: cada una con SU costo', async () => {
+    // La compra de CETI y la de DELTRON en el mismo carrito. Antes se agrupaba
+    // por producto: un promedio de los dos y el lote de la primera para ambas.
+    const service = build([LOTE_A, LOTE_B, LOTE_C]);
+    const mapa = await service.costosDeItems(
+      [
+        { productoId: 'prod-1', cantidad: 1, loteId: 'lote-a' },
+        { productoId: 'prod-1', cantidad: 2, loteId: 'lote-c' },
+      ],
+      'sede-1',
+      'emp-1',
+    );
+    const a = mapa.get(linea('prod-1', 'lote-a'))!;
+    const c = mapa.get(linea('prod-1', 'lote-c'))!;
+
+    expect(a.costoLote).toBe(30);
+    expect(a.tramos.map((t) => [t.loteId, t.cantidad])).toEqual([['lote-a', 1]]);
+    expect(c.costoLote).toBe(10);
+    expect(c.tramos.map((t) => [t.loteId, t.cantidad])).toEqual([['lote-c', 2]]);
+    // Y cada entrada dice de qué lote es.
+    expect(a.loteId).toBe('lote-a');
+    expect(c.loteId).toBe('lote-c');
+  });
+
+  it('🔑 lo elegido a mano se sirve PRIMERO; lo automático toma lo que queda', async () => {
+    // C tiene 2. Una línea automática de 2 y, DESPUÉS en el carrito, una atada
+    // a C de 2: la atada se lleva las 2 de C igual, y la automática sigue con
+    // B. Es el mismo orden en que la venta consume.
+    const service = build([LOTE_A, LOTE_B, LOTE_C]);
+    const mapa = await service.costosDeItems(
+      [
+        { productoId: 'prod-1', cantidad: 2 },
+        { productoId: 'prod-1', cantidad: 2, loteId: 'lote-c' },
+      ],
+      'sede-1',
+      'emp-1',
+    );
+    const auto = mapa.get(linea('prod-1', null))!;
+    const c = mapa.get(linea('prod-1', 'lote-c'))!;
+
+    expect(c.tramos.map((t) => [t.loteId, t.cantidad])).toEqual([['lote-c', 2]]);
+    expect(auto.tramos.map((t) => [t.loteId, t.cantidad])).toEqual([['lote-b', 2]]);
+    expect(auto.costoLote).toBe(20);
   });
 
   it('sin lotes no hay nada que elegir, y no se inventa un costo de lote', async () => {

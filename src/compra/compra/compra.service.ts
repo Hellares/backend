@@ -10,6 +10,7 @@ import { AppLoggerService } from '../../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../../configuracion-codigos/configuracion-codigos.service';
 import { createCursorPaginatedResponse } from '../../common/utils/pagination.util';
 import { round2, round6 } from '../../common/utils/money.util';
+import { aFechaCalendario } from '../../common/utils/date-utils';
 import { OrdenCompraService } from '../orden-compra/orden-compra.service';
 import {
   CreateCompraDto,
@@ -1356,6 +1357,14 @@ export class CompraService {
               cantidadActual: dist.cantidad,
               proveedorId: compra.proveedorId,
               nombreProveedor: compra.nombreProveedor,
+              // 🔴 Es la MISMA mercadería en otra sede: hereda el vencimiento
+              // y el número de lote del fabricante. Sin esto la leche que se
+              // repartía a la sucursal llegaba "eterna" y FEFO la mandaba al
+              // final de la fila.
+              loteOrigenId: detalle.lote!.id,
+              numeroLote: detalle.lote!.numeroLote,
+              fechaVencimiento: detalle.lote!.fechaVencimiento,
+              fechaProduccion: detalle.lote!.fechaProduccion,
               observaciones: `Distribución desde ${compra.sede.nombre} - Compra ${compra.codigo}`,
               creadoPor: usuarioId,
             },
@@ -2399,8 +2408,10 @@ export class CompraService {
       cantidadBonificada,
       // La fecha impresa en el envase de ESTA entrega: al confirmar viaja
       // al Lote y es lo que le permite a FEFO priorizar lo que caduca antes.
+      // Normalizada a la medianoche UTC de ese día, venga como venga (la web
+      // manda yyyy-MM-dd, el app un ISO con hora): es un día, no un instante.
       fechaVencimiento: dto.fechaVencimiento
-        ? new Date(dto.fechaVencimiento)
+        ? aFechaCalendario(dto.fechaVencimiento)
         : null,
       precioUnitario,
       descuento,

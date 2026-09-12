@@ -436,6 +436,10 @@ model Lote {
   productoId      String?
   varianteId      String?
   compraId        String?
+  /// De qué lote viene, cuando la mercadería cambió de sede (transferencia o
+  /// distribución de una compra). Hereda vencimiento, costo y proveedor: sin
+  /// esto la leche que viajaba a la sucursal llegaba "eterna".
+  loteOrigenId    String?
 
   // Identificación
   codigo     String // LOTE-2026-00001
@@ -476,10 +480,13 @@ model Lote {
   variante       ProductoVariante? @relation(fields: [varianteId], references: [id])
   compra         Compra?           @relation(fields: [compraId], references: [id])
   proveedor      Proveedor?        @relation(fields: [proveedorId], references: [id])
+  loteOrigen     Lote?             @relation("LoteOrigen", fields: [loteOrigenId], references: [id])
+  derivados      Lote[]            @relation("LoteOrigen")
   detallesCompra CompraDetalle[]
   movimientos    MovimientoStockLote[]
 
   @@unique([empresaId, codigo])
+  @@index([loteOrigenId])
   @@index([productoStockId, estado])
   @@index([productoStockId, fechaIngreso])
   @@index([empresaId, fechaVencimiento])

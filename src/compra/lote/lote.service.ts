@@ -13,6 +13,11 @@ import {
   QueryLotesDto,
 } from '../dto';
 import { crearMovimientoStockConValoracion } from '../../producto-stock/movimiento-stock.helper';
+import {
+  aFechaCalendario,
+  estaVencido,
+  inicioDeHoyCalendario,
+} from '../../common/utils/date-utils';
 
 @Injectable()
 export class LoteService {
@@ -193,8 +198,8 @@ export class LoteService {
    * Lotes próximos a vencer
    */
   async getLotesProximosVencer(empresaId: string, dias: number = 30) {
-    const fechaLimite = new Date();
-    fechaLimite.setDate(fechaLimite.getDate() + dias);
+    // Por día de calendario en Perú: "vence en 30 días o menos".
+    const fechaLimite = inicioDeHoyCalendario(dias);
 
     return this.prisma.lote.findMany({
       where: {
@@ -223,7 +228,10 @@ export class LoteService {
    * Marcar lotes vencidos como VENCIDO
    */
   async marcarLotesVencidos(empresaId: string) {
-    const now = new Date();
+    // 🔴 Vencido = el día del envase ya PASÓ en Perú. El propio día todavía
+    // se vende; comparar contra el instante actual lo marcaba desde las 19:00
+    // del día anterior.
+    const hoy = inicioDeHoyCalendario();
 
     const result = await this.prisma.lote.updateMany({
       where: {
@@ -231,7 +239,7 @@ export class LoteService {
         estado: EstadoLote.ACTIVO,
         fechaVencimiento: {
           not: null,
-          lt: now,
+          lt: hoy,
         },
       },
       data: {
@@ -418,17 +426,19 @@ export class LoteService {
     const lote = await this.prisma.lote.findFirst({ where: { id, empresaId } });
     if (!lote) throw new NotFoundException('Lote no encontrado');
 
-    const nueva = dto.fechaVencimiento ? new Date(dto.fechaVencimiento) : null;
+    // Normalizada a la medianoche UTC del día que dice el envase, venga como
+    // venga (la web manda yyyy-MM-dd, el app un ISO con hora).
+    const nueva = dto.fechaVencimiento ? aFechaCalendario(dto.fechaVencimiento) : null;
     const antes = lote.fechaVencimiento
       ? lote.fechaVencimiento.toISOString().slice(0, 10)
       : 'sin vencimiento';
     const ahora = nueva ? nueva.toISOString().slice(0, 10) : 'sin vencimiento';
 
-    // Un lote marcado VENCIDO cuya fecha corregida todavía no llegó vuelve a
+    // Un lote marcado VENCIDO cuya fecha corregida todavía no pasó vuelve a
     // estar disponible. Al revés NO: marcarlo vencido es tarea del cron, que
-    // corre con su propio criterio.
-    const revive =
-      lote.estado === EstadoLote.VENCIDO && (!nueva || nueva > new Date());
+    // corre con su propio criterio. "No pasó" se juzga por día de calendario
+    // en Perú, igual que el guard de la venta.
+    const revive = lote.estado === EstadoLote.VENCIDO && !estaVencido(nueva);
 
     const actualizado = await this.prisma.lote.update({
       where: { id: lote.id },

@@ -1,4 +1,5 @@
 import { VentaService } from './venta.service';
+import { inicioDeHoyCalendario } from '../common/utils/date-utils';
 
 /**
  * Candado del guard de VENCIMIENTOS.
@@ -25,8 +26,12 @@ describe('VentaService · guard de vencimientos', () => {
     log: jest.fn(), error: jest.fn(), success: jest.fn(),
   };
 
-  const AYER = new Date(Date.now() - 24 * 3600 * 1000);
-  const MANANA = new Date(Date.now() + 24 * 3600 * 1000);
+  // Por DÍA de calendario en Perú, como el guard: "ayer" es la medianoche UTC
+  // del día anterior, no "hace 24 horas" (eso fallaba entre las 19:00 y las
+  // 24:00 de Lima, cuando restar un día no cambia de fecha en UTC).
+  const AYER = inicioDeHoyCalendario(-1);
+  const HOY = inicioDeHoyCalendario(0);
+  const MANANA = inicioDeHoyCalendario(1);
 
   const lote = (codigo: string, qty: number, vence: Date | null) => ({
     id: `l-${codigo}`,
@@ -127,6 +132,14 @@ describe('VentaService · guard de vencimientos', () => {
     build('CONSUMO_PREFERENTE', [lote('L1', 10, AYER)], false);
 
     await expect(validar(1, 'cajero-1')).rejects.toThrow(/no tiene rol para hacerlo/);
+  });
+
+  it('🔑 el que vence HOY todavía se vende: el envase vale el día entero', async () => {
+    // "VENCE 01/10" es válido el 01/10. Comparar contra el instante actual lo
+    // bloqueaba desde las 19:00 del 30/09 (medianoche UTC = 19:00 Lima).
+    build('CADUCIDAD', [lote('L1', 10, HOY)]);
+
+    await expect(validar()).resolves.toBeUndefined();
   });
 
   it('lote vigente: no molesta a nadie', async () => {

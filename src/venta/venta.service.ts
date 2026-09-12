@@ -23,6 +23,7 @@ import {
   ESTADOS_LOTE_PRESENTE,
   planificarFefo,
 } from '../producto-stock/lote-consumo.helper';
+import { estaVencido } from '../common/utils/date-utils';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
@@ -510,7 +511,9 @@ export class VentaService {
       );
     }
 
-    const clave = CostoVentaService.clave(d.productoId, d.varianteId);
+    // Por LÍNEA (producto + lote elegido): dos líneas del mismo producto con
+    // lotes distintos tienen costos distintos.
+    const clave = CostoVentaService.claveDeLinea(d.productoId, d.varianteId, d.loteId);
     const costosItem = costos.get(clave);
 
     // 🔴 Unidades que ningún lote respalda. Con la invariante sana esto es 0;
@@ -525,6 +528,28 @@ export class VentaService {
           `el inventario.`,
         descripcion: d.descripcion,
         sinCubrir: costosItem.sinCubrir,
+      });
+    }
+
+    // 🔴 El lote elegido tiene que ENCABEZAR el plan. Si ya no está —otro
+    // cajero lo agotó, se dio de baja, quedó bloqueado— el planificador cae a
+    // FEFO y el costo cambia. Cobrarle al cliente un número que el cajero no
+    // vio es exactamente el silencio que este modo no se puede permitir: se
+    // rebota con 409 y la UI vuelve a cotizar.
+    if (
+      d.loteId &&
+      modo !== 'COSTO_PROMEDIO' &&
+      costosItem?.tramos[0]?.loteId !== d.loteId
+    ) {
+      throw new ConflictException({
+        code: 'LOTE_NO_DISPONIBLE',
+        message:
+          `"${d.descripcion}": el lote elegido ya no tiene unidades en esta ` +
+          `sede (se vendió o se dio de baja). Elegí otro o dejalo en automático.`,
+        descripcion: d.descripcion,
+        loteId: d.loteId,
+        productoId: d.productoId ?? null,
+        varianteId: d.varianteId ?? null,
       });
     }
 
@@ -2390,6 +2415,36 @@ export class VentaService {
                 continue;
               }
 
+              // 🔴 El lote elegido tiene que EXISTIR y tener unidades. Si
+              // otro cajero lo agotó (o se dio de baja) entre cotizar y
+              // cobrar, el consumo caería a FEFO en silencio y saldría la
+              // mercadería de otro cliente. Se rebota con un código que la
+              // UI entiende; vale también para las líneas a precio de lista.
+              if (detalle.loteId) {
+                const lote = await tx.lote.findFirst({
+                  where: {
+                    id: detalle.loteId,
+                    productoStockId: productoStock.id,
+                    estado: { in: [...ESTADOS_LOTE_PRESENTE] },
+                    cantidadActual: { gt: 0 },
+                  },
+                  select: { id: true },
+                });
+                if (!lote) {
+                  throw new ConflictException({
+                    code: 'LOTE_NO_DISPONIBLE',
+                    message:
+                      `"${detalle.descripcion}": el lote elegido ya no tiene ` +
+                      `unidades en esta sede (se vendió o se dio de baja). ` +
+                      `Elegí otro o dejalo en automático.`,
+                    descripcion: detalle.descripcion,
+                    loteId: detalle.loteId,
+                    productoId: detalle.productoId ?? null,
+                    varianteId: detalle.varianteId ?? null,
+                  });
+                }
+              }
+
               pendingUpdates.push({
                 productoStockId: productoStock.id,
                 stockAnterior,
@@ -2400,6 +2455,11 @@ export class VentaService {
                 loteId: detalle.loteId ?? null,
               });
             }
+
+            // 🔑 Lo elegido a mano se sirve PRIMERO; lo automático toma lo que
+            // queda. Es el mismo orden con el que se cotizó, así que lo que
+            // el cajero vio es lo que sale.
+            pendingUpdates.sort((a, b) => Number(!a.loteId) - Number(!b.loteId));
 
             // Si alguno no tiene stock suficiente, abortar TODO con info
             // estructurada. El cliente atrapa el 409 STOCK_INSUFICIENTE
@@ -3741,6 +3801,9 @@ export class VentaService {
           ventaId: venta.id,
           usuarioId: cotizacion.vendedorId,
           precioCostoUnitario: (detalle as any).precioCostoSnapshot ?? undefined,
+          // Una cotización no trae lote elegido, pero si la línea lo tiene se
+          // respeta: mismo contrato que el POS.
+          loteIdPreferido: (detalle as any).loteId ?? null,
         });
       }
 
@@ -4770,6 +4833,8 @@ export class VentaService {
           usuarioId,
           precioCostoUnitario:
             (detalle as any).precioCostoSnapshot ?? undefined,
+          // Mismo contrato que el POS: si la línea eligió lote, se respeta.
+          loteIdPreferido: (detalle as any).loteId ?? null,
         });
       }
 
@@ -6130,7 +6195,10 @@ export class VentaService {
         d.loteId ?? null,
       );
       for (const { lote, cantidad } of plan) {
-        if (!lote.fechaVencimiento || lote.fechaVencimiento >= hoy) continue;
+        // 🔴 Por DÍA de calendario en Perú, no por instante: el envase que
+        // dice "VENCE 01/10" es válido el 01/10 entero. Comparar contra
+        // `new Date()` lo bloqueaba desde las 19:00 del día anterior.
+        if (!lote.fechaVencimiento || !estaVencido(lote.fechaVencimiento, hoy)) continue;
         const fila = {
           descripcion: d.descripcion,
           lote: lote.codigo,

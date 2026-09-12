@@ -72,8 +72,10 @@ describe('VentaService · vender a costo', () => {
     );
   };
 
+  // La clave es por LÍNEA (producto + lote elegido); sin lote, la parte del
+  // lote va vacía.
   const conCosto = () =>
-    new Map([[CostoVentaService.clave('prod-1', null), COSTOS]]);
+    new Map([[CostoVentaService.claveDeLinea('prod-1', null, null), COSTOS]]);
 
   /** Atajo al embudo privado por el que pasan los tres flujos de venta. */
   const aplicar = (detalles: any[]) =>
@@ -181,6 +183,34 @@ describe('VentaService · vender a costo', () => {
     await expect(aplicar([linea()])).rejects.toMatchObject({
       response: { code: 'SIN_COSTO_PARA_VENDER_A_COSTO' },
     });
+  });
+
+  it('🔴 el lote elegido ya no está: 409 LOTE_NO_DISPONIBLE, nunca se recotiza en silencio', async () => {
+    // El servidor recotizó y el plan lo encabeza OTRO lote: el elegido se
+    // agotó (o se dio de baja) entre cotizar y cobrar. Caer a FEFO y cobrar
+    // un número que el cajero no vio es justo lo que este modo no puede hacer.
+    buildService(
+      new Map([[
+        CostoVentaService.claveDeLinea('prod-1', null, 'lote-ceti'),
+        { ...COSTOS, loteId: 'lote-ceti', sinCubrir: 0, tramos: [{ loteId: 'lote-deltron', cantidad: 10 }] },
+      ]]),
+    );
+
+    await expect(aplicar([linea({ loteId: 'lote-ceti' })])).rejects.toMatchObject({
+      response: { code: 'LOTE_NO_DISPONIBLE', loteId: 'lote-ceti' },
+    });
+  });
+
+  it('el lote elegido encabeza el plan: pasa y cobra el costo de ESA línea', async () => {
+    buildService(
+      new Map([[
+        CostoVentaService.claveDeLinea('prod-1', null, 'lote-ceti'),
+        { ...COSTOS, loteId: 'lote-ceti', costoLote: 56.17, sinCubrir: 0, tramos: [{ loteId: 'lote-ceti', cantidad: 10 }] },
+      ]]),
+    );
+
+    const [r] = await aplicar([linea({ loteId: 'lote-ceti' })]);
+    expect(r.precioUnitario).toBe(56.17);
   });
 
   it('no admite descuento en la misma línea', async () => {

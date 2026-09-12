@@ -112,6 +112,12 @@ export interface LoteVendible {
 export interface CostosDeItem {
   productoId: string | null;
   varianteId: string | null;
+  /**
+   * El lote elegido a mano para esta línea, o null si va en automático. Forma
+   * parte de la clave: dos líneas del mismo producto con lotes distintos son
+   * dos costos distintos.
+   */
+  loteId: string | null;
   /** Unidades sobre las que se calculó. */
   cantidad: number;
   /** `ProductoStock.precioCosto`: la mezcla de todas las compras. Es el que valora el kardex. */
@@ -187,6 +193,23 @@ export class CostoVentaService {
   }
 
   /**
+   * Clave de una LÍNEA: el producto más el lote elegido.
+   *
+   * 🔴 Dos líneas del mismo producto con lotes distintos son dos costos
+   * distintos y se cotizan aparte. Agruparlas por producto —como se hacía—
+   * las mezclaba en un promedio y les ponía el lote de la primera a las dos:
+   * la compra de CETI y la de DELTRON en el mismo carrito salían al mismo
+   * precio. Las líneas en automático sí comparten la fila FEFO y se suman.
+   */
+  static claveDeLinea(
+    productoId?: string | null,
+    varianteId?: string | null,
+    loteId?: string | null,
+  ): string {
+    return `${CostoVentaService.clave(productoId, varianteId)}@${loteId ?? ''}`;
+  }
+
+  /**
    * Resuelve los tres costos para varios ítems de una, porque el carrito
    * pregunta por todas sus líneas juntas: uno por uno serían N requests al
    * prender el interruptor.
@@ -200,7 +223,9 @@ export class CostoVentaService {
     if (!items.length) return out;
 
     const varianteIds = [
-      ...new Set(items.map((i) => i.varianteId).filter((v): v is string => !!v)),
+      ...new Set(
+        items.map((i) => i.varianteId).filter((v): v is string => !!v),
+      ),
     ];
     // Solo los productos SIN variante: si la línea trae variante, su costo es
     // el de la variante y el del padre no se consulta.
@@ -290,17 +315,34 @@ export class CostoVentaService {
       else lotesPorStock.set(l.productoStockId, [l]);
     }
 
-    // Cuántas unidades pidió cada ítem (varias líneas del mismo producto suman:
-    // el consumo FEFO las va a atender juntas).
-    const cantidadPorClave = new Map<string, number>();
-    // Lote elegido a mano, si lo hay. Gana el primero que lo declare: dos
-    // líneas del mismo producto pidiendo lotes distintos es un caso que la UI
-    // no ofrece y que acá no tiene una respuesta mejor que "el primero".
-    const lotePorClave = new Map<string, string>();
+    // Un GRUPO por (producto, lote elegido). Las líneas en automático del mismo
+    // producto se suman —comparten la fila FEFO—; cada lote elegido a mano va
+    // aparte, porque su costo es el de ESE lote.
+    type Grupo = { clave: string; loteId: string | null; cantidad: number };
+    const grupos = new Map<string, Grupo>();
     for (const i of items) {
-      const k = CostoVentaService.clave(i.productoId, i.varianteId);
-      cantidadPorClave.set(k, (cantidadPorClave.get(k) ?? 0) + Math.max(1, Math.ceil(i.cantidad ?? 1)));
-      if (i.loteId && !lotePorClave.has(k)) lotePorClave.set(k, i.loteId);
+      const loteId = i.loteId ?? null;
+      const k = CostoVentaService.claveDeLinea(
+        i.productoId,
+        i.varianteId,
+        loteId,
+      );
+      const cant = Math.max(1, Math.ceil(i.cantidad ?? 1));
+      const g = grupos.get(k);
+      if (g) g.cantidad += cant;
+      else {
+        grupos.set(k, {
+          clave: CostoVentaService.clave(i.productoId, i.varianteId),
+          loteId,
+          cantidad: cant,
+        });
+      }
+    }
+    const gruposPorClave = new Map<string, Grupo[]>();
+    for (const g of grupos.values()) {
+      const arr = gruposPorClave.get(g.clave);
+      if (arr) arr.push(g);
+      else gruposPorClave.set(g.clave, [g]);
     }
 
     type LoteVivo = (typeof lotes)[number];
@@ -333,31 +375,13 @@ export class CostoVentaService {
 
     for (const s of stocks) {
       const clave = CostoVentaService.clave(s.productoId, s.varianteId);
-      const costoPromedio = s.precioCosto != null ? Number(s.precioCosto) : null;
-      const cantidad = cantidadPorClave.get(clave) ?? 1;
+      const costoPromedio =
+        s.precioCosto != null ? Number(s.precioCosto) : null;
       const suyos = lotesPorStock.get(s.id) ?? [];
 
-      // MISMO planificador que el consumo real: lo que se muestra acá es lo
-      // que después va a salir del stock.
-      const { plan, sinCubrir } = planificarFefo(
-        suyos,
-        cantidad,
-        lotePorClave.get(clave),
-      );
-
-      const tramos: TramoCosto[] = plan.map(({ lote, cantidad: qty }) => ({
-        loteId: lote.id,
-        loteCodigo: lote.codigo,
-        cantidad: qty,
-        costoUnitario: Number(lote.precioCosto),
-        fechaVencimiento: lote.fechaVencimiento,
-        costoUnitarioSinFlete: netoDe(lote),
-        proveedorNombre: lote.nombreProveedor,
-        documentoProveedor: docDe(lote),
-      }));
-
       // TODOS los que hay, no solo los que este pedido consume: el selector
-      // ofrece justamente los que FEFO no habría elegido.
+      // ofrece justamente los que FEFO no habría elegido. Es el mismo listado
+      // para todas las líneas del producto.
       const lotesDisponibles: LoteVendible[] = [...suyos]
         .sort(ordenFefo)
         .map((lote) => ({
@@ -375,63 +399,105 @@ export class CostoVentaService {
           cantidadBonificada: lote.detallesCompra[0]?.cantidadBonificada ?? 0,
         }));
 
-      // Promedio PONDERADO de lo que sale: × cantidad devuelve exactamente lo
-      // que esas unidades costaron. Se pondera solo sobre lo cubierto — las
-      // unidades sin lote no tienen costo que promediar y se informan aparte.
-      const cubiertas = tramos.reduce((a, t) => a + t.cantidad, 0);
-      const costoLote = cubiertas
-        ? tramos.reduce((a, t) => a + t.costoUnitario * t.cantidad, 0) / cubiertas
-        : null;
-      const costoLoteSinFlete = cubiertas
-        ? tramos.reduce((a, t) => a + (t.costoUnitarioSinFlete ?? t.costoUnitario) * t.cantidad, 0) /
-          cubiertas
-        : null;
+      // 🔑 Lo elegido a mano se sirve PRIMERO y lo automático toma lo que
+      // queda; la venta consume en ese mismo orden. Cada grupo descuenta de
+      // una copia lo que se lleva, para que el siguiente cotice sobre lo que
+      // de verdad va a quedar — como si ya se hubiera cobrado el anterior.
+      const ordenados = [...(gruposPorClave.get(clave) ?? [])].sort(
+        (a, b) => Number(!a.loteId) - Number(!b.loteId),
+      );
+      const restantes = suyos.map((l) => ({ ...l }));
 
-      // El lote que ENCABEZA el consumo: es el que la línea nombra cuando no
-      // se despliega el desglose.
-      const primero = plan[0]?.lote ?? null;
-      const detallePrimero = primero?.detallesCompra[0] ?? null;
-      const tcPrimero = primero ? tcDe(primero) : 1;
+      for (const g of ordenados) {
+        const cantidad = g.cantidad;
 
-      out.set(clave, {
-        productoId: s.productoId,
-        varianteId: s.varianteId,
-        cantidad,
-        costoPromedio,
-        costoLote,
-        costoLoteSinFlete,
-        tramos,
-        sinCubrir,
-        lotesDisponibles,
-        origen: primero
-          ? {
-              loteId: primero.id,
-              loteCodigo: primero.codigo,
-              fechaIngreso: primero.fechaIngreso,
-              proveedorNombre: primero.nombreProveedor,
-              compraId: primero.compra?.id ?? null,
-              compraCodigo: primero.compra?.codigo ?? null,
-              documentoProveedor: primero.compra
-                ? [
-                    primero.compra.serieDocumentoProveedor,
-                    primero.compra.numeroDocumentoProveedor,
-                  ]
-                    .filter(Boolean)
-                    .join('-') || null
-                : null,
-              monedaCompra: primero.compra?.moneda ?? null,
-              tipoCambio: primero.compra?.tipoCambio
-                ? Number(primero.compra.tipoCambio)
-                : null,
-              fleteUnitario:
-                detallePrimero && detallePrimero.cantidad > 0
-                  ? (Number(detallePrimero.gastoProrrateado) / detallePrimero.cantidad) *
-                    tcPrimero
-                  : null,
-              cantidadBonificada: detallePrimero?.cantidadBonificada ?? 0,
-            }
-          : null,
-      });
+        // MISMO planificador que el consumo real: lo que se muestra acá es lo
+        // que después va a salir del stock.
+        const { plan, sinCubrir } = planificarFefo(
+          restantes,
+          cantidad,
+          g.loteId,
+        );
+        for (const { lote, cantidad: qty } of plan) lote.cantidadActual -= qty;
+
+        const tramos: TramoCosto[] = plan.map(({ lote, cantidad: qty }) => ({
+          loteId: lote.id,
+          loteCodigo: lote.codigo,
+          cantidad: qty,
+          costoUnitario: Number(lote.precioCosto),
+          fechaVencimiento: lote.fechaVencimiento,
+          costoUnitarioSinFlete: netoDe(lote),
+          proveedorNombre: lote.nombreProveedor,
+          documentoProveedor: docDe(lote),
+        }));
+
+        // Promedio PONDERADO de lo que sale: × cantidad devuelve exactamente lo
+        // que esas unidades costaron. Se pondera solo sobre lo cubierto — las
+        // unidades sin lote no tienen costo que promediar y se informan aparte.
+        const cubiertas = tramos.reduce((a, t) => a + t.cantidad, 0);
+        const costoLote = cubiertas
+          ? tramos.reduce((a, t) => a + t.costoUnitario * t.cantidad, 0) /
+            cubiertas
+          : null;
+        const costoLoteSinFlete = cubiertas
+          ? tramos.reduce(
+              (a, t) =>
+                a + (t.costoUnitarioSinFlete ?? t.costoUnitario) * t.cantidad,
+              0,
+            ) / cubiertas
+          : null;
+
+        // El lote que ENCABEZA el consumo: es el que la línea nombra cuando no
+        // se despliega el desglose.
+        const primero = plan[0]?.lote ?? null;
+        const detallePrimero = primero?.detallesCompra[0] ?? null;
+        const tcPrimero = primero ? tcDe(primero) : 1;
+
+        out.set(
+          CostoVentaService.claveDeLinea(s.productoId, s.varianteId, g.loteId),
+          {
+            productoId: s.productoId,
+            varianteId: s.varianteId,
+            loteId: g.loteId,
+            cantidad,
+            costoPromedio,
+            costoLote,
+            costoLoteSinFlete,
+            tramos,
+            sinCubrir,
+            lotesDisponibles,
+            origen: primero
+              ? {
+                  loteId: primero.id,
+                  loteCodigo: primero.codigo,
+                  fechaIngreso: primero.fechaIngreso,
+                  proveedorNombre: primero.nombreProveedor,
+                  compraId: primero.compra?.id ?? null,
+                  compraCodigo: primero.compra?.codigo ?? null,
+                  documentoProveedor: primero.compra
+                    ? [
+                        primero.compra.serieDocumentoProveedor,
+                        primero.compra.numeroDocumentoProveedor,
+                      ]
+                        .filter(Boolean)
+                        .join('-') || null
+                    : null,
+                  monedaCompra: primero.compra?.moneda ?? null,
+                  tipoCambio: primero.compra?.tipoCambio
+                    ? Number(primero.compra.tipoCambio)
+                    : null,
+                  fleteUnitario:
+                    detallePrimero && detallePrimero.cantidad > 0
+                      ? (Number(detallePrimero.gastoProrrateado) /
+                          detallePrimero.cantidad) *
+                        tcPrimero
+                      : null,
+                  cantidadBonificada: detallePrimero?.cantidadBonificada ?? 0,
+                }
+              : null,
+          },
+        );
+      }
     }
 
     return out;
