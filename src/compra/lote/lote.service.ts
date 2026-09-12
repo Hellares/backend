@@ -43,6 +43,24 @@ export class LoteService {
         { codigo: { startsWith: filtros.search, mode: 'insensitive' } },
         { numeroLote: { contains: filtros.search, mode: 'insensitive' } },
         { nombreProveedor: { contains: filtros.search, mode: 'insensitive' } },
+        // 🔑 Por NOMBRE del producto, que es como la gente busca: nadie se
+        // acuerda del código de un lote. Van los dos nombres porque en un
+        // producto con variantes el que identifica la fila es el de la
+        // variante — `ProductoStock` es XOR, cada lote cuelga de uno solo.
+        {
+          productoStock: {
+            producto: {
+              nombre: { contains: filtros.search, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          productoStock: {
+            variante: {
+              nombre: { contains: filtros.search, mode: 'insensitive' },
+            },
+          },
+        },
       ];
     }
 
