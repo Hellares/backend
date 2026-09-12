@@ -111,4 +111,17 @@ export class UpdateVentaDto {
   @IsOptional()
   @IsString()
   ventaBajoCostoAutorizadaPorId?: string;
+  @ApiPropertyOptional({
+    description:
+      'ID del usuario GERENTE/ADMIN que autorizó vender un producto pasado de ' +
+      'su fecha de CONSUMO PREFERENTE. Campo APARTE de ' +
+      '`ventaBajoCostoAutorizadaPorId` a propósito: son dos decisiones ' +
+      'distintas, y reusar uno haría que autorizar un precio bajo autorizara ' +
+      'además vender mercadería pasada de fecha. No sirve para CADUCIDAD: ' +
+      'eso no se autoriza, se bloquea.',
+  })
+  @IsOptional()
+  @IsString()
+  ventaVencidaAutorizadaPorId?: string;
+
 }

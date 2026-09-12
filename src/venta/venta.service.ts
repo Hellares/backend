@@ -1744,7 +1744,7 @@ export class VentaService {
         tx,
         detallesCalculados,
         dto.sedeId,
-        dto.ventaBajoCostoAutorizadaPorId ?? null,
+        dto.ventaVencidaAutorizadaPorId ?? null,
         empresaId,
       );
 
@@ -1998,7 +1998,7 @@ export class VentaService {
           tx,
           detallesCalculados,
           dto.sedeId,
-          dto.ventaBajoCostoAutorizadaPorId ?? null,
+          dto.ventaVencidaAutorizadaPorId ?? null,
           empresaId,
         );
 
@@ -3424,7 +3424,7 @@ export class VentaService {
         tx,
         lineasParaGuard,
         cotizacion.sedeId,
-        dto.ventaBajoCostoAutorizadaPorId ?? null,
+        dto.ventaVencidaAutorizadaPorId ?? null,
         empresaId,
       );
 
@@ -4554,7 +4554,7 @@ export class VentaService {
           // La sede sale de la venta cargada: este flujo edita un borrador y
           // el DTO de update no la trae.
           venta.sedeId,
-          dto.ventaBajoCostoAutorizadaPorId ?? null,
+          dto.ventaVencidaAutorizadaPorId ?? null,
           empresaId,
         );
 
