@@ -14,6 +14,8 @@ import {
   Res,
   UseInterceptors,
   UploadedFile,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -63,6 +65,8 @@ import { CreatePrecioNivelDto } from './dto/create-precio-nivel.dto';
 import { UpdatePrecioNivelDto } from './dto/update-precio-nivel.dto';
 import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
 import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
+import { CostoVentaService } from './costo-venta.service';
+import { CostosVentaQueryDto } from './dto/costos-venta.dto';
 @ApiTags('Productos')
 @Controller('productos')
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
@@ -77,6 +81,7 @@ export class ProductoController {
     private readonly precioHistorialService: ProductoPrecioHistorialService,
     private readonly bulkUploadService: ProductoBulkUploadService,
     private readonly trazabilidadService: ProductoTrazabilidadService,
+    private readonly costoVentaService: CostoVentaService,
   ) {}
 
   @Post()
@@ -400,6 +405,40 @@ export class ProductoController {
       limit ? Number(limit) : 50,
       search,
     );
+  }
+
+  // =========================================
+  // VENDER A COSTO (ANTES DE :id)
+  // =========================================
+
+  @Post('costos-venta')
+  @HttpCode(HttpStatus.OK)
+  @RequiresPermission(Permission.EDITAR_PRECIO_VENTA)
+  @ApiOperation({
+    summary: 'Los tres costos con los que se puede vender "a lo que me costó"',
+    description:
+      'Para el interruptor de "vender a costo" del POS. Devuelve, por línea ' +
+      'del carrito: costo de la última compra (con y sin el flete ' +
+      'prorrateado), costo promedio del inventario, y de qué compra salió ' +
+      'cada número (proveedor, fecha, documento). Los tres son CON IGV, igual ' +
+      'que el precio de venta. Es POST y no GET porque pregunta por el ' +
+      'carrito COMPLETO de una: uno por uno serían N requests.',
+  })
+  @ApiResponse({ status: 200, description: 'Costos por ítem' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async costosVenta(
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: CostosVentaQueryDto,
+  ) {
+    const mapa = await this.costoVentaService.costosDeItems(
+      dto.items,
+      dto.sedeId,
+      empresaId,
+    );
+    // Se responde como LISTA y no como objeto indexado: la clave interna
+    // ("v:xxx" / "p:xxx") es un detalle de implementación del servidor, y el
+    // cliente ya sabe casar por productoId/varianteId.
+    return { sedeId: dto.sedeId, items: [...mapa.values()] };
   }
 
   // =========================================

@@ -1,5 +1,6 @@
-import { IsString, IsNumber, IsInt, IsOptional, IsArray, IsBoolean, Min, Max, ArrayNotEmpty } from 'class-validator';
+import { IsString, IsNumber, IsInt, IsOptional, IsArray, IsBoolean, IsIn, Min, Max, ArrayNotEmpty } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PRECIO_MODOS_COSTO } from '../../producto/costo-venta.service';
 
 export class ConfiguracionEmpresaDto {
   @ApiPropertyOptional({
@@ -152,6 +153,17 @@ export class ConfiguracionEmpresaDto {
   @IsOptional()
   @IsString()
   qrPlinUrl?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Con qué costo arranca el interruptor de "vender a costo" del POS. Es ' +
+      'solo el valor inicial: el cajero puede cambiarlo por carrito o por línea.',
+    enum: PRECIO_MODOS_COSTO,
+    example: 'COSTO_LOTE',
+  })
+  @IsOptional()
+  @IsIn(PRECIO_MODOS_COSTO as unknown as string[])
+  precioModoCostoDefault?: string;
 }
 
 export class ConfiguracionEmpresaResponseDto {
@@ -205,6 +217,9 @@ export class ConfiguracionEmpresaResponseDto {
 
   @ApiPropertyOptional()
   qrPlinUrl?: string;
+
+  @ApiProperty({ enum: PRECIO_MODOS_COSTO, default: 'COSTO_LOTE' })
+  precioModoCostoDefault: string;
 
   @ApiProperty()
   creadoEn: Date;

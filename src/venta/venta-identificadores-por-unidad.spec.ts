@@ -40,6 +40,7 @@ describe('VentaService.sellarIdentificadores', () => {
       prisma, null as any, null as any, null as any, null as any,
       null as any, null as any, null as any, null as any,
       null as any, logger as any, null as any,
+      null as any, null as any,
     );
   });
 

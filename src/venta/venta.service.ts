@@ -12,6 +12,13 @@ import {
   PrecioNivelService,
   VipPrecioContexto,
 } from '../producto/precio-nivel.service';
+import {
+  CostoVentaService,
+  ETIQUETA_MODO_COSTO,
+  type CostosDeItem,
+  type PrecioModoCosto,
+} from '../producto/costo-venta.service';
+import { PermissionsService } from '../auth/services/permissions.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
@@ -71,6 +78,13 @@ type DetalleConSnapshot = CreateVentaDetalleDto & {
   precioCostoSnapshot: number;
   motivoLiquidacionSnapshot: MotivoLiquidacion | null;
   nivelAplicadoSnapshot: string | null;
+  /**
+   * La línea se cobró A COSTO (el cajero prendió el modo y el servidor puso
+   * el número). NO se persiste —`nivelAplicadoSnapshot` ya lo deja escrito en
+   * la fila—: viaja solo para que el guard de venta bajo costo sepa que ese
+   * margen en cero (o levemente negativo) es a propósito.
+   */
+  ventaACosto?: boolean;
   /** ID de la política VIP que fijó el precio de esta línea (null si no aplicó). */
   vipPoliticaId?: string | null;
   /** Precio base antes del precio especial VIP (para el historial de uso). */
@@ -119,6 +133,8 @@ export class VentaService {
     private readonly integracionYape: IntegracionYapeService,
     loggerService: AppLoggerService,
     private readonly caracteristicaEmpresa: CaracteristicaEmpresaService,
+    private readonly costoVentaService: CostoVentaService,
+    private readonly permissionsService: PermissionsService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(VentaService.name);
@@ -221,8 +237,29 @@ export class VentaService {
     detalles: CreateVentaDetalleDto[],
     sedeId: string,
     vipResolver?: ResolverVip | null,
+    opts?: { empresaId?: string; usuarioId?: string | null },
   ): Promise<DetalleConSnapshot[]> {
     const result: DetalleConSnapshot[] = [];
+
+    /// VENDER A COSTO: las líneas que el cajero marcó a costo. El precio de
+    /// estas NO sale de los niveles —sale del costo— y por eso se resuelven
+    /// antes del loop, en una sola tanda para todo el carrito.
+    const lineasACosto = detalles.filter((d) => !!d.precioModo);
+    let costos: Map<string, CostosDeItem> = new Map();
+    if (lineasACosto.length) {
+      await this.assertPuedeVenderACosto(
+        opts?.usuarioId ?? null,
+        opts?.empresaId ?? null,
+      );
+      costos = await this.costoVentaService.costosDeItems(
+        lineasACosto.map((d) => ({
+          productoId: d.productoId ?? null,
+          varianteId: d.varianteId ?? null,
+        })),
+        sedeId,
+        opts!.empresaId!,
+      );
+    }
 
     /// Divergencias entre el precio que el cliente envió y el que el backend
     /// calcula. Si después del loop hay alguna, abortamos la venta con 409
@@ -260,6 +297,17 @@ export class VentaService {
 
     for (const d of detalles) {
       const productoIdParaNivel = d.productoId ?? d.comboId ?? null;
+
+      // ===== VENDER A COSTO =====
+      // Cortocircuito ANTES de los niveles y ANTES del guard de divergencia:
+      // el precio lo pone el servidor desde el costo, así que compararlo con
+      // el que mandó el cliente no tiene sentido — y si se comparara, la
+      // venta rebotaría con 409 y el modo entero sería inusable.
+      if (d.precioModo) {
+        result.push(this.resolverLineaACosto(d, d.precioModo, costos));
+        continue;
+      }
+
       if (!productoIdParaNivel && !d.varianteId) {
         // Servicio puro o item sin producto — no aplica niveles ni snapshot.
         result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
@@ -359,6 +407,130 @@ export class VentaService {
     }
 
     return this.sellarIdentificadores(result);
+  }
+
+  /**
+   * Exige el granular `venta.editar-precio` (`canEditarPrecioVenta`) para
+   * cobrar una línea a costo. Vender a costo ES cambiar el precio al cobrar,
+   * así que revive el permiso que ya estaba en el catálogo en vez de sumar
+   * uno nuevo: los administradores lo tienen por definición y a un cajero hay
+   * que dárselo a mano —⚠️ dárselo le muestra el costo de TODO el catálogo—.
+   *
+   * 🔴 No alcanza con el guard del endpoint: `MANAGE_VENTAS` lo tiene
+   * cualquier cajero, y `precioModo` viaja por línea dentro del mismo body.
+   */
+  private async assertPuedeVenderACosto(
+    usuarioId: string | null,
+    empresaId: string | null,
+  ): Promise<void> {
+    if (!usuarioId || !empresaId) {
+      // Flujos sin usuario en mano (edición de un borrador). No es un "no
+      // tenés permiso": es que ese camino no sabe quién está pidiendo.
+      throw new BadRequestException(
+        'Vender a costo solo está disponible al cobrar desde Venta Rápida.',
+      );
+    }
+
+    const [empresaRoles, sedeRoles] = await Promise.all([
+      this.prisma.empresaUsuarioRol.findMany({
+        where: { usuarioId, empresaId, isActive: true, deletedAt: null },
+        select: { rol: true },
+      }),
+      this.prisma.usuarioSedeRol.findMany({
+        where: { usuarioId, sede: { empresaId }, isActive: true, deletedAt: null },
+        select: { permisos: true },
+      }),
+    ]);
+
+    const permisos = this.permissionsService.calculatePermissions(
+      empresaRoles.map((r) => r.rol),
+      { permisos: [...new Set(sedeRoles.flatMap((s) => s.permisos))] },
+    );
+
+    if (!permisos.canEditarPrecioVenta) {
+      throw new BadRequestException({
+        code: 'SIN_PERMISO_VENDER_A_COSTO',
+        message:
+          'No tenés permiso para vender a costo. Pedile a un administrador ' +
+          'el permiso "Cambiar precio al cobrar".',
+      });
+    }
+  }
+
+  /**
+   * Resuelve el precio de una línea marcada "a costo".
+   *
+   * 🔑 `precioCostoSnapshot` sigue siendo el costo PROMEDIO del inventario, no
+   * el que se cobró. Es a propósito: el kardex valora toda salida con ese
+   * número, y pisarlo con el costo del lote haría que el margen reportado y
+   * el COGS dejaran de cuadrar entre sí. La consecuencia es que vender al
+   * costo de un lote más barato que el promedio deja `margenSnapshot`
+   * levemente NEGATIVO — verdadero, y por eso la línea queda exenta del guard
+   * de venta bajo costo en vez de maquillarse el margen.
+   */
+  private resolverLineaACosto(
+    d: CreateVentaDetalleDto,
+    modo: PrecioModoCosto,
+    costos: Map<string, CostosDeItem>,
+  ): DetalleConSnapshot {
+    if (d.ordenServicioId || d.servicioId) {
+      throw new BadRequestException(
+        `"${d.descripcion}" es un servicio: no tiene costo de inventario que cobrar.`,
+      );
+    }
+    if (d.comboId || d.origenComboId) {
+      throw new BadRequestException(
+        `"${d.descripcion}" es un combo: su precio ya es su propio deal y no ` +
+          `se puede vender a costo.`,
+      );
+    }
+    if (!d.productoId && !d.varianteId) {
+      throw new BadRequestException(
+        `"${d.descripcion}" no es un producto del catálogo: no tiene costo.`,
+      );
+    }
+    // Un centavo de descuento sobre una línea a costo la manda a pérdida y
+    // dispara la autorización gerencial en mitad del cobro. Se corta acá, con
+    // el motivo a la vista, en vez de dejar que reviente después.
+    if ((d.descuento ?? 0) > 0) {
+      throw new BadRequestException(
+        `"${d.descripcion}" ya se está vendiendo a costo: no admite además un ` +
+          `descuento.`,
+      );
+    }
+
+    const clave = CostoVentaService.clave(d.productoId, d.varianteId);
+    const costosItem = costos.get(clave);
+    const precio = CostoVentaService.precioDelModo(costosItem, modo);
+
+    // 🔴 NUNCA caer al precio de lista en silencio: cobrarle lista a un
+    // cliente al que se le prometió costo es el peor final posible.
+    if (precio == null) {
+      throw new BadRequestException({
+        code: 'SIN_COSTO_PARA_VENDER_A_COSTO',
+        message:
+          modo === 'COSTO_PROMEDIO'
+            ? `"${d.descripcion}" no tiene costo cargado en esta sede.`
+            : `"${d.descripcion}" no tiene compras registradas en esta sede, ` +
+              `así que no hay costo de factura que cobrar. Usá el costo ` +
+              `promedio o cargá la compra.`,
+        descripcion: d.descripcion,
+        productoId: d.productoId ?? null,
+        varianteId: d.varianteId ?? null,
+        precioModo: modo,
+      });
+    }
+
+    return {
+      ...d,
+      precioUnitario: round6(precio),
+      // El costo del INVENTARIO (promedio), que es con el que se valora la
+      // salida de stock. Puede diferir del precio cobrado y eso es correcto.
+      precioCostoSnapshot: costosItem?.costoPromedio ?? 0,
+      motivoLiquidacionSnapshot: null,
+      nivelAplicadoSnapshot: ETIQUETA_MODO_COSTO[modo],
+      ventaACosto: true,
+    };
   }
 
   /**
@@ -1523,6 +1695,8 @@ export class VentaService {
       const detallesEnforced = await this.aplicarPreciosBackendNivel(
         dto.detalles,
         dto.sedeId,
+        null,
+        { empresaId, usuarioId: cajeroId ?? null },
       );
       const detallesCalculados = detallesEnforced.map((d, index) =>
         this.calcularDetalle(d, index),
@@ -1759,6 +1933,7 @@ export class VentaService {
           dto.detalles,
           dto.sedeId,
           vipResolver,
+          { empresaId, usuarioId: cajeroId },
         );
         const detallesCalculados = detallesEnforced.map((d, index) =>
           this.calcularDetalle(d, index),
@@ -5740,11 +5915,18 @@ export class VentaService {
       precioCostoSnapshot: number;
       margenSnapshot: number;
       motivoLiquidacionSnapshot: MotivoLiquidacion | null;
+      ventaACosto?: boolean;
     }>,
     autorizadoPorId: string | null,
   ): Promise<number | null> {
     const lineasBajoCosto = detalles.filter(
-      (d) => d.precioCostoSnapshot > 0 && d.margenSnapshot < 0,
+      // 🔴 Las líneas "a costo" quedan EXENTAS. El precio no lo eligió nadie:
+      // lo puso el servidor desde el costo de la compra, y el margen se mide
+      // contra el costo PROMEDIO del inventario. Vender al costo de un lote
+      // más barato que el promedio da margen negativo por definición, y sin
+      // esta exención el cobro se frenaría pidiendo autorización gerencial
+      // justo cuando el vendedor hace lo que quiso hacer.
+      (d) => d.precioCostoSnapshot > 0 && d.margenSnapshot < 0 && !d.ventaACosto,
     );
     if (lineasBajoCosto.length === 0) return null;
 
@@ -5888,6 +6070,9 @@ export class VentaService {
       'motivoLiquidacionSnapshot' in dto ? dto.motivoLiquidacionSnapshot : null;
     const nivelAplicadoSnapshot =
       'nivelAplicadoSnapshot' in dto ? dto.nivelAplicadoSnapshot : null;
+    // No se persiste (VentaDetalle no tiene la columna): viaja hasta el guard
+    // de venta bajo costo, que es el único que necesita saberlo.
+    const ventaACosto = 'ventaACosto' in dto ? dto.ventaACosto === true : false;
     const vipPoliticaId = 'vipPoliticaId' in dto ? dto.vipPoliticaId ?? null : null;
     const precioBaseVip = 'precioBaseVip' in dto ? dto.precioBaseVip ?? null : null;
     const descuentoUnitario = cantidad > 0 ? descuento / cantidad : 0;
@@ -5927,6 +6112,7 @@ export class VentaService {
       margenSnapshot: round6(margenSnapshot),
       motivoLiquidacionSnapshot,
       nivelAplicadoSnapshot,
+      ventaACosto,
       // Passthrough VIP para el historial de uso (no se persiste en VentaDetalle).
       vipPoliticaId,
       precioBaseVip,

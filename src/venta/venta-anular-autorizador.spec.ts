@@ -39,6 +39,7 @@ describe('VentaService.anular — validación del autorizador', () => {
       prisma, null as any, null as any, null as any, null as any,
       null as any, null as any, null as any, null as any,
       null as any, logger as any, null as any,
+      null as any, null as any,
     );
   };
 

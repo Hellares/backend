@@ -665,6 +665,15 @@ model ConfiguracionEmpresa {
   qrYapeUrl String?
   qrPlinUrl String?
 
+  // Vender a costo: con qué costo arranca el interruptor del POS.
+  // COSTO_LOTE (default) = lo que costó la unidad en la última compra, con el
+  // flete prorrateado adentro; en una compra sin flete es exactamente el costo
+  // de la factura del proveedor. COSTO_LOTE_SIN_FLETE = ese mismo neto sin el
+  // flete. COSTO_PROMEDIO = la mezcla de todas las compras (el del kardex).
+  // Es solo el valor con el que abre el interruptor: el cajero puede cambiarlo
+  // en el momento, por carrito o por línea.
+  precioModoCostoDefault String @default("COSTO_LOTE")
+
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
   empresa       Empresa  @relation(fields: [empresaId], references: [id])

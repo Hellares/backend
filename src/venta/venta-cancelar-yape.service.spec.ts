@@ -53,6 +53,7 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
       prisma, null as any, null as any, null as any, null as any,
       null as any, null as any, null as any, realtimeInvalidation,
       integracionYape, logger as any, null as any,
+      null as any, null as any,
     );
     jest.spyOn(service as any, 'invalidateProductCache').mockResolvedValue(undefined);
   });

@@ -60,6 +60,7 @@ describe('VentaService._emitirComprobante', () => {
       null as any, null as any, null as any, null as any, null as any,
       null as any, null as any, null as any, null as any, null as any,
       logger as any, null as any,
+      null as any, null as any,
     );
     tx = {
       $queryRaw: jest.fn().mockResolvedValue([

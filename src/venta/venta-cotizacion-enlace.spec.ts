@@ -35,6 +35,7 @@ describe('enlace cotización ↔ venta', () => {
       null as any, null as any, { revertirCobroPorVentaAnulada: jest.fn() } as any,
       null as any, { notifyStockCambiado: jest.fn() } as any,
       null as any, logger as any, null as any,
+      null as any, null as any,
     );
     jest.spyOn(service as any, 'invalidateProductCache').mockResolvedValue(undefined);
     jest.spyOn(service as any, 'getInclude').mockReturnValue({});

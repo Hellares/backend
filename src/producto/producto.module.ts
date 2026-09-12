@@ -26,6 +26,7 @@ import { CompatibilidadService } from './compatibilidad.service';
 import { CompatibilidadController } from './compatibilidad.controller';
 import { ProductoBulkUploadService } from './producto-bulk-upload.service';
 import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
+import { CostoVentaService } from './costo-venta.service';
 import { TextoBusquedaService } from './texto-busqueda.service';
 
 @Module({
@@ -65,6 +66,9 @@ import { TextoBusquedaService } from './texto-busqueda.service';
     // Trazabilidad / Ficha 360
     ProductoTrazabilidadService,
 
+    // Vender a costo: los tres costos y de qué compra salió cada uno
+    CostoVentaService,
+
     // Índice de búsqueda unificada
     TextoBusquedaService,
 
@@ -90,6 +94,8 @@ import { TextoBusquedaService } from './texto-busqueda.service';
     PrecioNivelService,
     ConfiguracionPrecioService,
     CompatibilidadService,
+    // Lo consume VentaService para resolver el precio de una línea a costo.
+    CostoVentaService,
 
     // Lo usa CatalogosModule al renombrar una marca o categoría.
     TextoBusquedaService,

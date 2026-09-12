@@ -4,11 +4,16 @@ import {
   IsString,
   IsOptional,
   IsNumber,
+  IsIn,
   Min,
   IsNotEmpty,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  PRECIO_MODOS_COSTO,
+  type PrecioModoCosto,
+} from '../../producto/costo-venta.service';
 
 export class CreateVentaDetalleDto {
   @ApiPropertyOptional({ description: 'ID del producto' })
@@ -127,6 +132,26 @@ export class CreateVentaDetalleDto {
   @Min(0)
   @Type(() => Number)
   precioUnitario: number;
+
+  @ApiPropertyOptional({
+    description:
+      'VENDER A COSTO. Si viene, el servidor IGNORA `precioUnitario` y cobra ' +
+      'el costo de esta línea: COSTO_LOTE = lo que costó la unidad en la ' +
+      'última compra, flete prorrateado adentro (es el costo de la factura ' +
+      'del proveedor cuando esa compra no trajo flete); COSTO_LOTE_SIN_FLETE ' +
+      '= el neto de esa factura sin el flete; COSTO_PROMEDIO = la mezcla de ' +
+      'todas las compras, el mismo número con el que se valora el kardex.\n\n' +
+      '🔴 El precio NO puede mandarlo el cliente: `aplicarPreciosBackendNivel` ' +
+      'recalcula cada línea y rebota la venta con 409 si difiere. Por eso ' +
+      'viaja el MODO y el número lo pone el servidor.\n\n' +
+      'Exige el granular `venta.editar-precio` (`canEditarPrecioVenta`). No ' +
+      'admite descuento manual en la misma línea, ni combos, ni componentes ' +
+      'de combo, ni líneas de orden de servicio.',
+    enum: PRECIO_MODOS_COSTO,
+  })
+  @IsOptional()
+  @IsIn(PRECIO_MODOS_COSTO as unknown as string[])
+  precioModo?: PrecioModoCosto;
 
   @ApiPropertyOptional({ description: 'Descuento por linea', example: 0 })
   @IsOptional()

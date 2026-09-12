@@ -1646,6 +1646,7 @@ export class EmpresaService {
         ...(data.diasGraciaMora !== undefined && { diasGraciaMora: data.diasGraciaMora }),
         ...(data.qrYapeUrl !== undefined && { qrYapeUrl: data.qrYapeUrl || null }),
         ...(data.qrPlinUrl !== undefined && { qrPlinUrl: data.qrPlinUrl || null }),
+        ...(data.precioModoCostoDefault !== undefined && { precioModoCostoDefault: data.precioModoCostoDefault }),
       },
       create: {
         empresaId,
@@ -1656,6 +1657,7 @@ export class EmpresaService {
         monedasPermitidas: data.monedasPermitidas ?? ['PEN', 'USD'],
         diasVigenciaCotizacion: data.diasVigenciaCotizacion ?? 30,
         condicionesDefault: data.condicionesDefault ?? null,
+        ...(data.precioModoCostoDefault !== undefined && { precioModoCostoDefault: data.precioModoCostoDefault }),
       },
     });
 
