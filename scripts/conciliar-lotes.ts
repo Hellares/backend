@@ -20,7 +20,7 @@ config();
  *
  * Deja valer, para cada `ProductoStock`, la invariante:
  *
- *     Σ cantidadActual de sus lotes ACTIVO  =  stockActual
+ *     Σ cantidadActual de sus lotes PRESENTES (ACTIVO + VENCIDO) = stockActual
  *
  * - **Lotes de MÁS** → descuenta el excedente en orden FEFO (lo que vence
  *   antes primero; entre los eternos, el más viejo). Son las ventas pasadas
@@ -71,7 +71,7 @@ async function main() {
     // producto en cero y sin lotes ya cumple la invariante.
     const stocks = await prisma.productoStock.findMany({
       where: {
-        OR: [{ stockActual: { gt: 0 } }, { lotes: { some: { estado: 'ACTIVO' } } }],
+        OR: [{ stockActual: { gt: 0 } }, { lotes: { some: { estado: { in: ['ACTIVO', 'VENCIDO'] } } } }],
       },
       select: {
         id: true,
@@ -85,7 +85,7 @@ async function main() {
         producto: { select: { nombre: true } },
         variante: { select: { nombre: true } },
         lotes: {
-          where: { estado: 'ACTIVO' },
+          where: { estado: { in: ['ACTIVO', 'VENCIDO'] } },
           select: {
             id: true,
             codigo: true,

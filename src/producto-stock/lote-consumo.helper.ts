@@ -23,12 +23,29 @@ import { Prisma } from '@prisma/client';
  *
  * ## La invariante que sostiene todo
  *
- * Para cada `ProductoStock`: **Σ `cantidadActual` de sus lotes ACTIVO =
- * `stockActual`**. Todo lo de acá existe para mantenerla. Cuando una entrada
+ * Para cada `ProductoStock`: **Σ `cantidadActual` de sus lotes PRESENTES
+ * (ACTIVO + VENCIDO) = `stockActual`**. Todo lo de acá existe para mantenerla. Cuando una entrada
  * no tiene lote al que volver, se crea uno; si no, la suma se despegaría del
  * stock y el motor empezaría a leer lotes fantasma — que es exactamente el
  * estado del que venimos.
  */
+
+/**
+ * Estados en los que el lote está FÍSICAMENTE PRESENTE: la mercadería sigue en
+ * el depósito y cuenta para `stockActual`.
+ *
+ * 🔴 `VENCIDO` entra acá a propósito. Un cron lo marca cuando pasa la fecha
+ * (`marcarLotesVencidos`), pero la caja no desaparece del estante: si el
+ * consumo lo excluyera, ese stock quedaría sin lote que lo respalde y la
+ * invariante `Σ lotes = stockActual` se rompería sola el día que se carguen
+ * vencimientos.
+ *
+ * Que se PUEDA vender lo decide la política del producto
+ * (`Producto.tipoVencimiento`) en el guard de la venta, no el estado del lote.
+ * Para sacarlo del inventario hay que darlo de baja por merma, que es una
+ * decisión de una persona.
+ */
+export const ESTADOS_LOTE_PRESENTE = ['ACTIVO', 'VENCIDO'] as const;
 
 /** Lo mínimo que se necesita de un lote para decidir el orden de consumo. */
 export type LoteConsumible = {
@@ -107,7 +124,11 @@ export async function consumirLotesFefo(
   if (cantidad <= 0) return { asignaciones: [], sinCubrir: 0 };
 
   const lotes = await tx.lote.findMany({
-    where: { productoStockId, estado: 'ACTIVO', cantidadActual: { gt: 0 } },
+    where: {
+      productoStockId,
+      estado: { in: [...ESTADOS_LOTE_PRESENTE] },
+      cantidadActual: { gt: 0 },
+    },
     select: {
       id: true,
       cantidadActual: true,
@@ -202,15 +223,21 @@ export async function devolverALotesDeOrigen(
     if (disponible <= 0) continue;
     const repone = Math.min(disponible, restante);
 
-    await tx.lote.update({
-      where: { id: c.loteId },
-      data: {
-        cantidadActual: { increment: repone },
-        // Vuelve a ACTIVO: se había agotado y ahora tiene mercadería otra vez.
-        // Un lote VENCIDO o BLOQUEADO NO se reactiva — que la unidad vuelva no
-        // la hace vendible.
-        estado: 'ACTIVO',
-      },
+    // 🔴 Solo se reactiva lo que estaba AGOTADO. Un lote VENCIDO o BLOQUEADO
+    // NO vuelve a ACTIVO porque le devuelvan una unidad: que la mercadería
+    // regrese no la hace vendible, y resucitarlo la pondría a la venta sin que
+    // nadie lo decida.
+    //
+    // Dos `updateMany` EXCLUYENTES entre sí por estado (y no un `update` con
+    // ternario) porque `update` exige que el `where` sea único: el estado no
+    // se puede condicionar ahí.
+    await tx.lote.updateMany({
+      where: { id: c.loteId, estado: 'AGOTADO' },
+      data: { cantidadActual: { increment: repone }, estado: 'ACTIVO' },
+    });
+    await tx.lote.updateMany({
+      where: { id: c.loteId, estado: { in: [...ESTADOS_LOTE_PRESENTE] } },
+      data: { cantidadActual: { increment: repone } },
     });
 
     asignaciones.push({

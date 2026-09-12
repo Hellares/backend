@@ -20,7 +20,7 @@ describe('Consumo de lotes (FEFO)', () => {
   const dec = (n: number) => new Prisma.Decimal(n);
   const dia = (d: string) => new Date(`2026-${d}T00:00:00Z`);
 
-  let updates: Array<{ id: string; data: any }>;
+  let updates: Array<{ id: string; exige?: any; data: any }>;
   let tx: any;
 
   /** @param lotes en el orden en que los devolvería el `orderBy` por antigüedad. */
@@ -32,6 +32,13 @@ describe('Consumo de lotes (FEFO)', () => {
         update: jest.fn(({ where, data }: any) => {
           updates.push({ id: where.id, data });
           return Promise.resolve({});
+        }),
+        // La devolución usa `updateMany` porque condiciona por ESTADO, y
+        // `update` exige que el where sea único. Se registra el estado pedido
+        // para poder afirmar que un lote VENCIDO no se resucita.
+        updateMany: jest.fn(({ where, data }: any) => {
+          updates.push({ id: where.id, exige: where.estado, data });
+          return Promise.resolve({ count: 1 });
         }),
       },
       movimientoStockLote: {
@@ -150,9 +157,15 @@ describe('Consumo de lotes (FEFO)', () => {
         { loteId: 'a', cantidad: -2, costoUnitario: dec(11.8) },
       ]);
       expect(sinCubrir).toBe(0);
+      // 🔴 Dos updates por lote, EXCLUYENTES por estado: solo el que estaba
+      // AGOTADO vuelve a ACTIVO. Un lote VENCIDO cae en el segundo, que suma
+      // la unidad sin resucitarlo — que la mercadería regrese no la hace
+      // vendible.
       expect(updates).toEqual([
-        { id: 'b', data: { cantidadActual: { increment: 2 }, estado: 'ACTIVO' } },
-        { id: 'a', data: { cantidadActual: { increment: 2 }, estado: 'ACTIVO' } },
+        { id: 'b', exige: 'AGOTADO', data: { cantidadActual: { increment: 2 }, estado: 'ACTIVO' } },
+        { id: 'b', exige: { in: ['ACTIVO', 'VENCIDO'] }, data: { cantidadActual: { increment: 2 } } },
+        { id: 'a', exige: 'AGOTADO', data: { cantidadActual: { increment: 2 }, estado: 'ACTIVO' } },
+        { id: 'a', exige: { in: ['ACTIVO', 'VENCIDO'] }, data: { cantidadActual: { increment: 2 } } },
       ]);
     });
 

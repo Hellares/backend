@@ -19,6 +19,10 @@ import {
   type PrecioModoCosto,
 } from '../producto/costo-venta.service';
 import { PermissionsService } from '../auth/services/permissions.service';
+import {
+  ESTADOS_LOTE_PRESENTE,
+  planificarFefo,
+} from '../producto-stock/lote-consumo.helper';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
@@ -1734,6 +1738,16 @@ export class VentaService {
 
       // Guard: validar venta bajo costo. Lanza 422 si hay líneas sin
       // liquidación + sin autorización GERENTE/ADMIN.
+      // Guard de VENCIMIENTOS: mira los lotes que FEFO va a consumir de verdad.
+      // CADUCIDAD frena seco; consumo preferente pide autorización gerencial.
+      await this.validarVencimientos(
+        tx,
+        detallesCalculados,
+        dto.sedeId,
+        dto.ventaBajoCostoAutorizadaPorId ?? null,
+        empresaId,
+      );
+
       const perdidaTotal = await this.validarVentaBajoCosto(
         empresaId,
         detallesCalculados,
@@ -1978,6 +1992,16 @@ export class VentaService {
           );
 
         // 2b. Guard: validar venta bajo costo (margen negativo).
+        // Guard de VENCIMIENTOS: mira los lotes que FEFO va a consumir de verdad.
+        // CADUCIDAD frena seco; consumo preferente pide autorización gerencial.
+        await this.validarVencimientos(
+          tx,
+          detallesCalculados,
+          dto.sedeId,
+          dto.ventaBajoCostoAutorizadaPorId ?? null,
+          empresaId,
+        );
+
         const perdidaTotal = await this.validarVentaBajoCosto(
           empresaId,
           detallesCalculados,
@@ -3393,6 +3417,17 @@ export class VentaService {
           motivoLiquidacionSnapshot: d._motivoLiq,
         })),
       ];
+      // Guard de VENCIMIENTOS también acá: convertir una cotización SACA
+      // stock igual que cualquier venta, y una cotización vieja es
+      // justamente el caso donde la mercadería pudo vencerse en el medio.
+      await this.validarVencimientos(
+        tx,
+        lineasParaGuard,
+        cotizacion.sedeId,
+        dto.ventaBajoCostoAutorizadaPorId ?? null,
+        empresaId,
+      );
+
       const perdidaTotalCot = await this.validarVentaBajoCosto(
         empresaId,
         lineasParaGuard,
@@ -4511,6 +4546,18 @@ export class VentaService {
         // Guard venta bajo costo (mismo que create/crearYCobrar). Si la
         // edicion del borrador trae lineas con margen<0 sin liquidacion
         // ni autorizacion, rebota con 400 VENTA_BAJO_COSTO_NO_AUTORIZADA.
+        // Guard de VENCIMIENTOS: mira los lotes que FEFO va a consumir de verdad.
+        // CADUCIDAD frena seco; consumo preferente pide autorización gerencial.
+        await this.validarVencimientos(
+          tx,
+          detallesCalculados,
+          // La sede sale de la venta cargada: este flujo edita un borrador y
+          // el DTO de update no la trae.
+          venta.sedeId,
+          dto.ventaBajoCostoAutorizadaPorId ?? null,
+          empresaId,
+        );
+
         const perdidaTotal = await this.validarVentaBajoCosto(
           empresaId,
           detallesCalculados,
@@ -5922,6 +5969,194 @@ export class VentaService {
       }
     }
     return result;
+  }
+
+  /**
+   * Frena la venta de mercadería VENCIDA, según lo que el vencimiento
+   * signifique para ese producto.
+   *
+   * 🔴 El corte NO es "perecedero sí/no": es la distinción de DIGESA/INDECOPI
+   * entre una fecha de CADUCIDAD y una de consumo preferente.
+   *
+   * - `CADUCIDAD` ("no consumir después de"): **bloqueo duro, sin autorización
+   *   posible**. Vender leche vencida no es una decisión comercial que un
+   *   gerente pueda tomar — es responsabilidad sanitaria y legal. Dejar la
+   *   puerta abierta "por si acaso" garantiza que se use. La salida es dar de
+   *   baja el lote por merma, o CORREGIR su fecha si se cargó mal, que es otro
+   *   permiso y deja rastro.
+   * - `CONSUMO_PREFERENTE` ("mejor antes de"): pierde calidad, no daña. Se
+   *   vende con **autorización gerencial**, igual que la venta bajo costo.
+   * - `NINGUNO`: no se mira nada.
+   *
+   * 🔑 Se resuelve con el MISMO `planificarFefo` que va a consumir los lotes,
+   * así que mira exactamente las unidades que van a salir — no "si el producto
+   * tiene algún lote vencido por ahí". Vender 3 de un lote sano mientras
+   * duerme uno vencido detrás no se frena; FEFO igual sacaría el vencido
+   * primero, y por eso la simulación es la única forma honesta de saberlo.
+   */
+  private async validarVencimientos(
+    // 🔑 Lee con `tx` y no con `this.prisma`: corre DENTRO de la transacción de
+    // la venta, así que tiene que ver el mismo snapshot que el resto del cobro.
+    // Leer por fuera abriría una ventana entre lo que el guard aprueba y lo
+    // que el consumo FEFO termina sacando.
+    tx: Prisma.TransactionClient,
+    detalles: Array<{
+      descripcion: string;
+      productoId?: string | null;
+      varianteId?: string | null;
+      cantidad: number;
+    }>,
+    sedeId: string,
+    autorizadoPorId: string | null,
+    empresaId: string,
+  ): Promise<void> {
+    const conProducto = detalles.filter((d) => d.productoId || d.varianteId);
+    if (!conProducto.length) return;
+
+    const productoIds = [
+      ...new Set(conProducto.map((d) => d.productoId).filter((x): x is string => !!x)),
+    ];
+    const varianteIds = [
+      ...new Set(conProducto.map((d) => d.varianteId).filter((x): x is string => !!x)),
+    ];
+
+    // Solo los productos que CONTROLAN vencimiento. Si ninguno lo hace —el caso
+    // de casi todo el catálogo— se sale acá sin pagar una query más.
+    const politicas = await tx.producto.findMany({
+      where: {
+        empresaId,
+        tipoVencimiento: { not: 'NINGUNO' },
+        OR: [
+          ...(productoIds.length ? [{ id: { in: productoIds } }] : []),
+          ...(varianteIds.length
+            ? [{ variantes: { some: { id: { in: varianteIds } } } }]
+            : []),
+        ],
+      },
+      select: {
+        id: true,
+        nombre: true,
+        tipoVencimiento: true,
+        variantes: { select: { id: true } },
+      },
+    });
+    if (!politicas.length) return;
+
+    const politicaPorProducto = new Map(politicas.map((p) => [p.id, p]));
+    const politicaPorVariante = new Map(
+      politicas.flatMap((p) => p.variantes.map((v) => [v.id, p] as const)),
+    );
+
+    const stocks = await tx.productoStock.findMany({
+      where: {
+        empresaId,
+        sedeId,
+        OR: [
+          ...(varianteIds.length ? [{ varianteId: { in: varianteIds } }] : []),
+          ...(productoIds.length
+            ? [{ productoId: { in: productoIds }, varianteId: null }]
+            : []),
+        ],
+      },
+      select: {
+        id: true,
+        productoId: true,
+        varianteId: true,
+        lotes: {
+          where: {
+            estado: { in: [...ESTADOS_LOTE_PRESENTE] },
+            cantidadActual: { gt: 0 },
+          },
+          select: {
+            id: true,
+            codigo: true,
+            cantidadActual: true,
+            precioCosto: true,
+            fechaVencimiento: true,
+          },
+          orderBy: [{ fechaIngreso: 'asc' }, { creadoEn: 'asc' }],
+        },
+      },
+    });
+    const stockPorClave = new Map(
+      stocks.map((s) => [CostoVentaService.clave(s.productoId, s.varianteId), s]),
+    );
+
+    const hoy = new Date();
+    const caducados: Array<{ descripcion: string; lote: string; vencio: Date; unidades: number }> = [];
+    const preferentes: Array<{ descripcion: string; lote: string; vencio: Date; unidades: number }> = [];
+
+    for (const d of conProducto) {
+      const politica = d.varianteId
+        ? politicaPorVariante.get(d.varianteId)
+        : politicaPorProducto.get(d.productoId!);
+      if (!politica) continue;
+
+      const stock = stockPorClave.get(
+        CostoVentaService.clave(d.productoId ?? null, d.varianteId ?? null),
+      );
+      if (!stock) continue;
+
+      const { plan } = planificarFefo(stock.lotes, Math.ceil(d.cantidad));
+      for (const { lote, cantidad } of plan) {
+        if (!lote.fechaVencimiento || lote.fechaVencimiento >= hoy) continue;
+        const fila = {
+          descripcion: d.descripcion,
+          lote: lote.codigo,
+          vencio: lote.fechaVencimiento,
+          unidades: cantidad,
+        };
+        if (politica.tipoVencimiento === 'CADUCIDAD') caducados.push(fila);
+        else preferentes.push(fila);
+      }
+    }
+
+    if (caducados.length) {
+      throw new BadRequestException({
+        code: 'VENTA_PRODUCTO_VENCIDO',
+        message:
+          caducados.length === 1
+            ? `"${caducados[0].descripcion}" está VENCIDO (lote ${caducados[0].lote}, ` +
+              `venció el ${caducados[0].vencio.toLocaleDateString('es-PE')}). No se ` +
+              `puede vender: dá de baja el lote por merma, o corregí su fecha si se ` +
+              `cargó mal.`
+            : `${caducados.length} productos están VENCIDOS y no se pueden vender.`,
+        // Sin campo de autorización a propósito: esto NO se autoriza.
+        lineas: caducados.map((c) => ({
+          descripcion: c.descripcion,
+          lote: c.lote,
+          vencio: c.vencio,
+          unidades: c.unidades,
+        })),
+      });
+    }
+
+    if (preferentes.length && !autorizadoPorId) {
+      throw new BadRequestException({
+        code: 'VENTA_VENCIDO_NO_AUTORIZADA',
+        message:
+          preferentes.length === 1
+            ? `"${preferentes[0].descripcion}" pasó su fecha de consumo preferente ` +
+              `(lote ${preferentes[0].lote}, ${preferentes[0].vencio.toLocaleDateString('es-PE')}). ` +
+              `Se requiere autorización gerencial.`
+            : `${preferentes.length} productos pasaron su fecha de consumo preferente. ` +
+              `Se requiere autorización gerencial.`,
+        lineas: preferentes.map((p) => ({
+          descripcion: p.descripcion,
+          lote: p.lote,
+          vencio: p.vencio,
+          unidades: p.unidades,
+        })),
+      });
+    }
+
+    if (preferentes.length) {
+      await this.assertAutorizadorGerencial(
+        autorizadoPorId!,
+        empresaId,
+        'la venta de un producto pasado de fecha',
+      );
+    }
   }
 
   private async validarVentaBajoCosto(

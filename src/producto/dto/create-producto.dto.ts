@@ -9,6 +9,8 @@ import {
   IsArray,
   MaxLength,
   IsEnum,
+  IsIn,
+  IsInt,
   Matches,
   ValidateNested,
 } from 'class-validator';
@@ -296,6 +298,50 @@ export class CreateProductoDto {
   @IsOptional()
   @IsBoolean()
   requiereIdentificador?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Qué significa el vencimiento de este producto, que es lo que decide si ' +
+      'se puede vender vencido y con qué permiso.\n\n' +
+      '🔑 La FECHA no va acá: va en el LOTE. Un producto no vence, vence cada ' +
+      'lote — dos compras de la misma leche vencen distinto. Se captura en la ' +
+      'línea de compra (`CompraDetalle.fechaVencimiento`).\n\n' +
+      '· NINGUNO (default): no se controla.\n' +
+      '· CONSUMO_PREFERENTE ("mejor antes de"): se vende vencido con ' +
+      'autorización gerencial.\n' +
+      '· CADUCIDAD ("no consumir después de"): BLOQUEO DURO, sin autorización ' +
+      'posible. La salida es dar de baja el lote por merma o corregir su fecha.',
+    enum: ['NINGUNO', 'CONSUMO_PREFERENTE', 'CADUCIDAD'],
+    default: 'NINGUNO',
+  })
+  @IsOptional()
+  @IsIn(['NINGUNO', 'CONSUMO_PREFERENTE', 'CADUCIDAD'])
+  tipoVencimiento?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Vida útil en días desde la recepción. Solo SUGIERE la fecha al cargar ' +
+      'la línea de compra (recepción + N); la que manda es la que se tipea, ' +
+      'porque la impresa en el envase es la única que vale.',
+    example: 180,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  diasVidaUtil?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Cuántos días antes del vencimiento empieza a avisar. Null = el default ' +
+      'de la empresa.',
+    example: 30,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  diasAlertaVencimiento?: number;
 
   @ApiPropertyOptional({
     description:

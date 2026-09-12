@@ -156,6 +156,7 @@ export class CompraService {
               descripcion: d.descripcion,
               cantidad: d.cantidad,
               cantidadBonificada: d.cantidadBonificada,
+              fechaVencimiento: d.fechaVencimiento,
               precioUnitario: d.precioUnitario,
               descuento: d.descuento,
               porcentajeIGV: d.porcentajeIGV,
@@ -698,6 +699,10 @@ export class CompraService {
             // convertido y es lo que alimenta el costo del producto. Rotularlo
             // USD diría que el lote vale dólares y el número son soles.
             moneda: 'PEN',
+            // La fecha impresa en el envase de ESTA entrega. Es lo que le
+            // permite a FEFO sacar primero lo que caduca antes, y lo que el
+            // guard de la venta mira para bloquear o pedir autorización.
+            fechaVencimiento: detalle.fechaVencimiento,
             cantidadInicial: detalle.cantidad,
             cantidadActual: detalle.cantidad,
             proveedorId: compra.proveedorId,
@@ -1573,6 +1578,7 @@ export class CompraService {
             descripcion: d.descripcion,
             cantidad: d.cantidad,
             cantidadBonificada: d.cantidadBonificada,
+            fechaVencimiento: d.fechaVencimiento,
             precioUnitario: d.precioUnitario,
             descuento: d.descuento,
             porcentajeIGV: d.porcentajeIGV,
@@ -2391,6 +2397,11 @@ export class CompraService {
       descripcion: dto.descripcion,
       cantidad,
       cantidadBonificada,
+      // La fecha impresa en el envase de ESTA entrega: al confirmar viaja
+      // al Lote y es lo que le permite a FEFO priorizar lo que caduca antes.
+      fechaVencimiento: dto.fechaVencimiento
+        ? new Date(dto.fechaVencimiento)
+        : null,
       precioUnitario,
       descuento,
       porcentajeIGV,

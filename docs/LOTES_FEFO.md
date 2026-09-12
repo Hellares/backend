@@ -1,6 +1,6 @@
-# Lotes que se consumen de verdad (FEFO) — Fase 1
+# Lotes que se consumen de verdad (FEFO) + vencimientos
 
-> Motor de consumo de lotes. Base para el control de VENCIMIENTOS (Fase 2).
+> Fase 1: el motor de consumo. Fase 2: el control de vencimientos.
 > Escrito 2026-09-12.
 
 ## El problema que arregla
@@ -61,8 +61,8 @@ lote, el COGS histórico deja de poder sumarse con el nuevo.
 
 ### La invariante
 
-Para cada `ProductoStock`: **Σ `cantidadActual` de sus lotes ACTIVO =
-`stockActual`**. Todo el diseño existe para sostenerla — por eso una entrada
+Para cada `ProductoStock`: **Σ `cantidadActual` de sus lotes PRESENTES
+(ACTIVO + VENCIDO) = `stockActual`**. Todo el diseño existe para sostenerla — por eso una entrada
 sin lote al que volver **crea** uno (código `AJU-<movimientoId>`).
 
 ---
@@ -118,14 +118,54 @@ alguien lo reporta como bug, no lo es.
 prender conviene correr la conciliación otra vez, porque las ventas hechas con
 el motor apagado no descontaron lotes.
 
-## Lo que falta (Fase 2)
+## Fase 2 — vencimientos (hecha)
 
-- `Producto.tipoVencimiento`: `NINGUNO` | `CONSUMO_PREFERENTE` | `CADUCIDAD`
-- `Producto.diasVidaUtil`, `Producto.diasAlertaVencimiento`
-- Capturar `Lote.fechaVencimiento` en la línea de compra
-- **CADUCIDAD → bloqueo duro, sin autorización** (decisión del 12-09: vender
-  vencido no es una decisión comercial que un gerente pueda tomar; la única
-  salida es corregir la fecha del lote, que es otro permiso y deja rastro)
-- **CONSUMO_PREFERENTE → autorización gerencial**, como la venta bajo costo
-- Fase 3: cron que marque `MotivoLiquidacion.PROXIMO_A_VENCER` — el enum y la
-  exención del guard de bajo costo **ya existen**
+| pieza | dónde |
+|---|---|
+| `TipoVencimiento` + campos de política | `Producto` |
+| La FECHA, por entrega | `CompraDetalle.fechaVencimiento` → `Lote` al confirmar |
+| Guard de la venta | `venta.service.validarVencimientos` |
+| Tests | `venta-vencimientos.spec.ts` |
+
+🔑 **La fecha NO vive en `Producto`**: vive en el LOTE. Un producto no vence,
+vence cada lote — dos compras de la misma leche vencen distinto. En `Producto`
+va solo la política: `tipoVencimiento`, `diasVidaUtil` (sugiere la fecha al
+recibir) y `diasAlertaVencimiento`.
+
+🔴 **El corte no es "perecedero sí/no"**, es la distinción de DIGESA/INDECOPI:
+
+- **CADUCIDAD** ("no consumir después de"): **bloqueo duro, SIN autorización**.
+  No es una decisión comercial que un gerente pueda tomar, y una puerta abierta
+  "por si acaso" se usa un viernes a la noche. La salida es dar de baja por
+  merma o corregir la fecha del lote.
+- **CONSUMO_PREFERENTE** ("mejor antes de"): **autorización gerencial**, igual
+  que la venta bajo costo.
+
+El guard corre en los **cuatro** flujos de venta (create, crearYCobrar,
+cotización→venta y edición de borrador) y usa el mismo `planificarFefo` que
+consume: mira las unidades que VAN A SALIR, no "si el producto tiene algún
+lote vencido por ahí".
+
+### 🔴 VENCIDO cuenta para la invariante
+
+Ya existía un cron que marca lotes `VENCIDO` (`marcarLotesVencidos`). Si el
+consumo excluyera ese estado, el stock vencido quedaría sin lote que lo
+respalde y `Σ lotes = stockActual` se rompería sola el día que se carguen
+fechas. Por eso el pool de consumo es **ACTIVO + VENCIDO**
+(`ESTADOS_LOTE_PRESENTE`): la mercadería sigue en el estante, y si se vende o
+no lo decide la política, no el estado del lote.
+
+Corolario: una devolución **no resucita** un lote VENCIDO a ACTIVO. Solo lo
+AGOTADO vuelve.
+
+## Lo que falta (Fase 3)
+
+Cron que marque `MotivoLiquidacion.PROXIMO_A_VENCER` a `diasAlertaVencimiento`
+días. 🔑 Casi todo ya existe: el motivo está en el enum y las líneas en
+liquidación **ya están exentas** del guard de venta bajo costo.
+
+⚠️ Tensión conocida: `enLiquidacion`/`precioLiquidacion` viven en
+`ProductoStock` (producto + sede), **no en el lote**. Con dos lotes y uno por
+vencer, se rebajan los dos. Se decidió convivir con eso — con FEFO el que vence
+sale primero igual; moverlo a `Lote.precioLiquidacion` obligaría a tocar
+`calcularPrecioSegunCantidad`, que es donde vive el 409.

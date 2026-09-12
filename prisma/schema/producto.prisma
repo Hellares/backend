@@ -82,6 +82,24 @@ model Producto {
   requiereIdentificador Boolean @default(false)
   etiquetaIdentificador String? @db.VarChar(30)
 
+  // ─── Vencimiento ──────────────────────────────────────────────
+  // 🔑 La FECHA no vive acá: vive en `Lote.fechaVencimiento`. Un producto no
+  // vence, vence cada lote — dos compras de la misma leche vencen distinto, y
+  // poner la fecha en el producto haría que la segunda compra pisara a la
+  // primera. Acá va solo la POLÍTICA.
+  //
+  // El orden de consumo ya la respeta: FEFO saca primero lo que vence antes.
+  tipoVencimiento TipoVencimiento @default(NINGUNO)
+
+  // Vida útil en días desde la recepción. Solo SUGIERE la fecha al cargar la
+  // línea de compra (hoy + N); la que manda es la que se tipea, porque la
+  // impresa en el envase es la única que vale.
+  diasVidaUtil Int?
+
+  // Cuántos días antes del vencimiento empieza a avisar. Null = el default de
+  // la empresa.
+  diasAlertaVencimiento Int?
+
   // Sistema de Combos
   esCombo         Boolean          @default(false)
   tipoPrecioCombo TipoPrecioCombo?
@@ -804,6 +822,32 @@ enum EntidadTipo {
   SORTEO_PREMIO // Foto del ticket de envío de agencia del premio de sorteo
   SORTEO // Imagen promocional del sorteo
   SORTEO_PREMIO_CATALOGO // Imagen del premio del catálogo de la rifa
+}
+
+/// Qué significa el vencimiento de este producto, que es lo que decide si se
+/// puede vender vencido y con qué permiso.
+///
+/// 🔴 El corte NO es "perecedero sí/no": es la distinción que hacen DIGESA e
+/// INDECOPI entre una fecha de CADUCIDAD y una de consumo preferente. Son dos
+/// cosas que no se parecen y no admiten la misma política.
+enum TipoVencimiento {
+  /// No se controla. Es el caso de casi todo el catálogo.
+  NINGUNO
+
+  /// "Consumir preferentemente antes de": galletas, conservas, cosmética.
+  /// Pasada la fecha pierde CALIDAD, no es peligroso. Se puede vender con
+  /// AUTORIZACIÓN gerencial, igual que la venta bajo costo.
+  CONSUMO_PREFERENTE
+
+  /// "No consumir después de": lácteos, carnes, medicamentos. Venderlo vencido
+  /// es ilegal y peligroso.
+  ///
+  /// 🔴 BLOQUEO DURO, sin autorización posible. No es una decisión comercial
+  /// que un gerente pueda tomar, así que el sistema no ofrece la puerta —
+  /// dejarla abierta "por si acaso" garantiza que se use un viernes a la
+  /// noche. La única salida es CORREGIR la fecha del lote si se cargó mal,
+  /// que es otro permiso y deja rastro.
+  CADUCIDAD
 }
 
 enum TipoPrecioCombo {

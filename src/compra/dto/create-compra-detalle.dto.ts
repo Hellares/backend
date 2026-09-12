@@ -7,6 +7,7 @@ import {
   IsNotEmpty,
   IsBoolean,
   IsPositive,
+  IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -70,6 +71,21 @@ export class CreateCompraDetalleDto {
   @Min(0)
   @Type(() => Number)
   cantidadBonificada?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Fecha de vencimiento impresa en el envase de ESTA entrega (ISO). Al ' +
+      'CONFIRMAR la compra viaja al Lote que se crea, y es lo que le permite ' +
+      'al consumo FEFO sacar primero lo que caduca antes. ' +
+      '🔑 Va en la LÍNEA y no en el producto porque cada entrega vence ' +
+      'distinto: dos compras de la misma leche tienen fechas diferentes. ' +
+      '`Producto.diasVidaUtil` solo la SUGIERE en la UI (recepción + N días); ' +
+      'la que vale es la que se tipea, porque la del envase es la única real.',
+    example: '2026-12-31',
+  })
+  @IsOptional()
+  @IsDateString()
+  fechaVencimiento?: string;
 
   @ApiPropertyOptional({ description: 'Porcentaje de IGV', example: 18 })
   @IsOptional()

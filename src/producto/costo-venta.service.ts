@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
-import { planificarFefo } from '../producto-stock/lote-consumo.helper';
+import {
+  ESTADOS_LOTE_PRESENTE,
+  planificarFefo,
+} from '../producto-stock/lote-consumo.helper';
 
 /**
  * Modos de "vender a costo".
@@ -202,7 +205,10 @@ export class CostoVentaService {
       where: {
         empresaId,
         productoStockId: { in: stockIds },
-        estado: 'ACTIVO',
+        // PRESENTES, no solo ACTIVO: un lote VENCIDO sigue siendo mercadería
+        // en el estante y el consumo FEFO lo va a tomar. Excluirlo acá haría
+        // que la previsualización mostrara un costo distinto al que se cobra.
+        estado: { in: [...ESTADOS_LOTE_PRESENTE] },
         cantidadActual: { gt: 0 },
       },
       select: {

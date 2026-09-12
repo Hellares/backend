@@ -296,6 +296,18 @@ model CompraDetalle {
   // paga. Los dos pueden convivir en la misma línea.
   cantidadBonificada Int @default(0)
 
+  // ─── Vencimiento del lote que va a entrar ─────────────────────
+  // La que está impresa en el envase de ESTA entrega. Se pide al cargar la
+  // línea cuando el producto tiene `tipoVencimiento` distinto de NINGUNO, y al
+  // CONFIRMAR viaja al `Lote` que se crea.
+  //
+  // 🔑 Va en el detalle y no en el producto porque cada entrega vence distinto:
+  // es el dato que hace que FEFO pueda sacar primero lo que caduca antes.
+  //
+  // `Producto.diasVidaUtil` solo la SUGIERE en la UI (recepción + N días); la
+  // que vale es la que se tipea.
+  fechaVencimiento DateTime?
+
   // ─── Snapshot Unidad de Compra ────────────────────────────────
   // Trazabilidad de cómo se ingresó originalmente la línea cuando se
   // usó la unidad de compra del producto. Cero impacto en cálculos:
@@ -471,6 +483,8 @@ model Lote {
   @@index([productoStockId, estado])
   @@index([productoStockId, fechaIngreso])
   @@index([empresaId, fechaVencimiento])
+  // El consumo FEFO ordena por vencimiento dentro de un ProductoStock.
+  @@index([productoStockId, fechaVencimiento])
   @@index([empresaId, estado])
   @@index([empresaId, sedeId, estado])
   @@index([empresaId, estado, creadoEn(sort: Desc)])
