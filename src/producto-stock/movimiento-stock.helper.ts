@@ -52,6 +52,14 @@ export interface CrearMovimientoStockData {
    * frágil e invisible desde donde importa.
    */
   lotesGestionadosPorElLlamador?: boolean;
+  /**
+   * Consumir de ESTE lote primero, en vez del que elegiría FEFO.
+   *
+   * 🔑 Para la mercadería comprada POR ENCARGO: se le compró a un proveedor
+   * puntual para un cliente puntual, así que esa caja tiene dueño y su costo
+   * es otro. Sin esto se descontaría la del otro cliente.
+   */
+  loteIdPreferido?: string | null;
 }
 
 /**
@@ -89,6 +97,7 @@ export async function crearMovimientoStockConValoracion(
   const {
     precioCostoUnitario: _ignored,
     lotesGestionadosPorElLlamador,
+    loteIdPreferido,
     ...rest
   } = data;
   const movimiento = await tx.movimientoStock.create({
@@ -100,7 +109,7 @@ export async function crearMovimientoStockConValoracion(
   });
 
   if (!lotesGestionadosPorElLlamador) {
-    await sincronizarLotes(tx, movimiento, costoUnit);
+    await sincronizarLotes(tx, movimiento, costoUnit, loteIdPreferido);
   }
 
   return movimiento;
@@ -152,6 +161,7 @@ async function sincronizarLotes(
     usuarioId: string;
   },
   costoUnit: Prisma.Decimal | null,
+  loteIdPreferido?: string | null,
 ): Promise<void> {
   if (!lotesActivos()) return;
   // cantidad 0 = registro de auditoría (ej. migración a variantes), no mueve
@@ -163,6 +173,7 @@ async function sincronizarLotes(
       tx,
       movimiento.productoStockId,
       Math.abs(movimiento.cantidad),
+      loteIdPreferido,
     );
     await registrarAsignaciones(tx, movimiento.id, asignaciones);
     if (sinCubrir > 0) {

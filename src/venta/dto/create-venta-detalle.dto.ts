@@ -153,6 +153,21 @@ export class CreateVentaDetalleDto {
   @IsIn(PRECIO_MODOS_COSTO as unknown as string[])
   precioModo?: PrecioModoCosto;
 
+  @ApiPropertyOptional({
+    description:
+      'Vender de ESTE lote, en vez del que elegiría el consumo FEFO. ' +
+      'Para mercadería comprada POR ENCARGO: se le compró a un proveedor ' +
+      'puntual para un cliente puntual, así que esa caja tiene dueño y su ' +
+      'costo es otro. Sin esto se le cobraría el costo del lote más viejo y ' +
+      'se descontaría la mercadería del otro cliente. ' +
+      'Si la cantidad supera lo que queda en el lote, el resto sale por FEFO ' +
+      'y los tramos lo muestran. No saltea el guard de vencimientos: ese mira ' +
+      'los lotes que efectivamente se consumen.',
+  })
+  @IsOptional()
+  @IsString()
+  loteId?: string;
+
   @ApiPropertyOptional({ description: 'Descuento por linea', example: 0 })
   @IsOptional()
   @IsNumber()

@@ -2554,7 +2554,19 @@ export class CompraService {
               unidadMedida: { select: CompraService.SELECT_UNIDAD },
             },
           },
-          lote: { select: { id: true, codigo: true, precioCosto: true } },
+          // `cantidadActual` y el vencimiento: con ellos, "vender esta
+          // compra" puede armar el carrito con lo que QUEDA del lote, no
+          // con lo que se compró — parte ya puede estar vendida.
+          lote: {
+            select: {
+              id: true,
+              codigo: true,
+              precioCosto: true,
+              cantidadActual: true,
+              estado: true,
+              fechaVencimiento: true,
+            },
+          },
           ordenCompraDetalle: {
             select: { id: true, descripcion: true, cantidad: true },
           },

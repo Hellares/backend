@@ -75,9 +75,29 @@ export interface AsignacionLote {
 export function planificarFefo<T extends LoteConsumible>(
   lotes: T[],
   cantidad: number,
+  /**
+   * Lote ELEGIDO a mano: se sirve de él primero, y solo el resto sigue el
+   * orden FEFO.
+   *
+   * 🔑 Existe para la mercadería comprada POR ENCARGO. FEFO parte de que una
+   * unidad es intercambiable con otra; cuando se le compró a un proveedor
+   * puntual para un cliente puntual, esa caja tiene dueño y su costo es otro.
+   * Sin esto, al cliente de la compra cara se le cobraría el costo de la
+   * barata y se descontaría la mercadería del otro.
+   *
+   * No es un permiso para saltear vencimientos: quien elige asume el cambio,
+   * y la UI avisa cuando deja atrás algo que caduca antes.
+   */
+  lotePreferidoId?: string | null,
 ): { plan: Array<{ lote: T; cantidad: number }>; sinCubrir: number } {
   if (cantidad <= 0) return { plan: [], sinCubrir: 0 };
-  const orden = [...lotes].sort(ordenFefo);
+  const preferido = lotePreferidoId
+    ? lotes.find((l) => l.id === lotePreferidoId)
+    : undefined;
+  const orden = [
+    ...(preferido ? [preferido] : []),
+    ...[...lotes].sort(ordenFefo).filter((l) => l.id !== preferido?.id),
+  ];
   const plan: Array<{ lote: T; cantidad: number }> = [];
   let restante = cantidad;
   for (const lote of orden) {
@@ -120,6 +140,8 @@ export async function consumirLotesFefo(
   tx: Prisma.TransactionClient,
   productoStockId: string,
   cantidad: number,
+  /** Lote elegido a mano; el resto sigue FEFO. Ver `planificarFefo`. */
+  lotePreferidoId?: string | null,
 ): Promise<{ asignaciones: AsignacionLote[]; sinCubrir: number }> {
   if (cantidad <= 0) return { asignaciones: [], sinCubrir: 0 };
 
@@ -142,7 +164,7 @@ export async function consumirLotesFefo(
 
   // 🔑 El MISMO planificador que usa la previsualización del POS: lo que el
   // cajero vio al cobrar es lo que efectivamente sale de acá.
-  const { plan, sinCubrir } = planificarFefo(lotes, cantidad);
+  const { plan, sinCubrir } = planificarFefo(lotes, cantidad, lotePreferidoId);
 
   const asignaciones: AsignacionLote[] = [];
 

@@ -45,6 +45,11 @@ export interface ItemCostoRef {
    * Sin cantidad se asume 1 — el comportamiento útil para una consulta suelta.
    */
   cantidad?: number;
+  /**
+   * Vender de ESTE lote en vez del que elegiría FEFO. Ver
+   * `planificarFefo`: la mercadería comprada por encargo tiene dueño.
+   */
+  loteId?: string | null;
 }
 
 /** Una porción del pedido que sale de un lote concreto. */
@@ -255,9 +260,14 @@ export class CostoVentaService {
     // Cuántas unidades pidió cada ítem (varias líneas del mismo producto suman:
     // el consumo FEFO las va a atender juntas).
     const cantidadPorClave = new Map<string, number>();
+    // Lote elegido a mano, si lo hay. Gana el primero que lo declare: dos
+    // líneas del mismo producto pidiendo lotes distintos es un caso que la UI
+    // no ofrece y que acá no tiene una respuesta mejor que "el primero".
+    const lotePorClave = new Map<string, string>();
     for (const i of items) {
       const k = CostoVentaService.clave(i.productoId, i.varianteId);
       cantidadPorClave.set(k, (cantidadPorClave.get(k) ?? 0) + Math.max(1, Math.ceil(i.cantidad ?? 1)));
+      if (i.loteId && !lotePorClave.has(k)) lotePorClave.set(k, i.loteId);
     }
 
     for (const s of stocks) {
@@ -268,7 +278,11 @@ export class CostoVentaService {
 
       // MISMO planificador que el consumo real: lo que se muestra acá es lo
       // que después va a salir del stock.
-      const { plan, sinCubrir } = planificarFefo(suyos, cantidad);
+      const { plan, sinCubrir } = planificarFefo(
+        suyos,
+        cantidad,
+        lotePorClave.get(clave),
+      );
 
       const tramos: TramoCosto[] = plan.map(({ lote, cantidad: qty }) => {
         // El tipo de cambio de la compra está CONGELADO: el costo se fijó en

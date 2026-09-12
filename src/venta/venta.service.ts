@@ -264,6 +264,8 @@ export class VentaService {
           // costo del primer lote para todas las unidades, incluidas las que
           // salen de uno más caro.
           cantidad: d.cantidad,
+          // Lote elegido a mano (compra por encargo): manda sobre FEFO.
+          loteId: d.loteId ?? null,
         })),
         sedeId,
         opts!.empresaId!,
@@ -2343,6 +2345,11 @@ export class VentaService {
               cantidad: number;
               descripcion: string;
               precioCostoSnapshot: number;
+              /**
+               * Lote elegido a mano en la línea. Sin esto el consumo tomaría
+               * el de FEFO y descontaría la mercadería de otro cliente.
+               */
+              loteId?: string | null;
             };
             const pendingUpdates: PendingUpdate[] = [];
 
@@ -2390,6 +2397,7 @@ export class VentaService {
                 cantidad,
                 descripcion: detalle.descripcion,
                 precioCostoSnapshot: detalle.precioCostoSnapshot ?? 0,
+                loteId: detalle.loteId ?? null,
               });
             }
 
@@ -2434,6 +2442,8 @@ export class VentaService {
                 ventaId: venta.id,
                 usuarioId: cajeroId,
                 precioCostoUnitario: u.precioCostoSnapshot,
+                // El consumo descuenta de ESTE lote, no del de FEFO.
+                loteIdPreferido: u.loteId,
               });
             }
           }
@@ -6018,6 +6028,8 @@ export class VentaService {
       productoId?: string | null;
       varianteId?: string | null;
       cantidad: number;
+      /** Lote elegido a mano: el guard juzga ESE, no el que FEFO tomaría. */
+      loteId?: string | null;
     }>,
     sedeId: string,
     autorizadoPorId: string | null,
@@ -6110,7 +6122,13 @@ export class VentaService {
       );
       if (!stock) continue;
 
-      const { plan } = planificarFefo(stock.lotes, Math.ceil(d.cantidad));
+      // Con lote elegido a mano el guard mira ESE, no el que FEFO tomaría:
+      // tiene que juzgar lo que efectivamente va a salir.
+      const { plan } = planificarFefo(
+        stock.lotes,
+        Math.ceil(d.cantidad),
+        d.loteId ?? null,
+      );
       for (const { lote, cantidad } of plan) {
         if (!lote.fechaVencimiento || lote.fechaVencimiento >= hoy) continue;
         const fila = {
@@ -6370,6 +6388,9 @@ export class VentaService {
       orden: index,
       origenComboId: dto.origenComboId || null,
       origenComboNombre: dto.origenComboNombre || null,
+      // NO se persiste (VentaDetalle no tiene la columna): viaja hasta el
+      // movimiento de stock, que es quien decide de qué lote descuenta.
+      loteId: dto.loteId || null,
       // Snapshot de margen para reportería de liquidaciones / pérdidas.
       // round6, NO round2: los dos son valores POR UNIDAD DE VENTA, no montos.
       // Un granel guardado en gramos cuesta 0.009933/g y con round2 quedaba en

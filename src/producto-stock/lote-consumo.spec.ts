@@ -249,4 +249,69 @@ describe('Consumo de lotes (FEFO)', () => {
       expect(sinCubrir).toBe(3);
     });
   });
+  describe('lote ELEGIDO a mano (compra por encargo)', () => {
+    it('🔑 sirve del lote elegido, aunque FEFO habría tomado otro', () => {
+      // El caso real: dos compras del mismo producto a proveedores distintos.
+      // El cliente pidió el de CETI y su caja cuesta más.
+      const deltron = lote('deltron', 6, null, 12.92);
+      const ceti = lote('ceti', 10, null, 20.06);
+
+      const { plan } = planificarFefo([deltron, ceti], 10, 'ceti');
+
+      expect(plan).toEqual([{ lote: ceti, cantidad: 10 }]);
+    });
+
+    it('sin elegir nada, FEFO manda como siempre', () => {
+      const deltron = lote('deltron', 6, null, 12.92);
+      const ceti = lote('ceti', 10, null, 20.06);
+
+      const { plan } = planificarFefo([deltron, ceti], 4);
+
+      expect(plan[0].lote.id).toBe('deltron');
+    });
+
+    it('si el elegido no alcanza, el resto sale por FEFO', () => {
+      const deltron = lote('deltron', 6, null, 12.92);
+      const ceti = lote('ceti', 4, null, 20.06);
+
+      const { plan, sinCubrir } = planificarFefo([deltron, ceti], 7, 'ceti');
+
+      expect(plan).toEqual([
+        { lote: ceti, cantidad: 4 },
+        { lote: deltron, cantidad: 3 },
+      ]);
+      expect(sinCubrir).toBe(0);
+    });
+
+    it('🔴 elegir un lote que no existe NO rompe: cae en FEFO', () => {
+      const a = lote('a', 5, null);
+
+      const { plan } = planificarFefo([a], 2, 'lote-borrado');
+
+      expect(plan).toEqual([{ lote: a, cantidad: 2 }]);
+    });
+
+    it('🔑 el elegido pasa ADELANTE de uno que vence antes — y se ve', () => {
+      // Es el precio de saltear FEFO: la UI tiene que avisarlo, pero el
+      // motor obedece. Comprar por encargo es legítimo.
+      const vence = lote('vence-pronto', 5, '03-01');
+      const encargo = lote('encargo', 5, null);
+
+      const { plan } = planificarFefo([vence, encargo], 3, 'encargo');
+
+      expect(plan[0].lote.id).toBe('encargo');
+    });
+
+    it('el consumo real respeta el lote elegido', async () => {
+      const deltron = lote('deltron', 6, null, 12.92);
+      const ceti = lote('ceti', 10, null, 20.06);
+      conLotes([deltron, ceti]);
+
+      const { asignaciones } = await consumirLotesFefo(tx, 'ps-1', 10, 'ceti');
+
+      expect(asignaciones).toEqual([
+        { loteId: 'ceti', cantidad: 10, costoUnitario: dec(20.06) },
+      ]);
+    });
+  });
 });
