@@ -35,6 +35,18 @@ export class ItemCostoVentaDto {
   @Min(0.01)
   @Type(() => Number)
   cantidad?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Cotizar contra ESTE lote en vez del que elegiría FEFO. Es lo que el ' +
+      'cajero elige en el selector de lote, y tiene que viajar también acá: ' +
+      'sin él la vista previa mostraría el costo del lote de FEFO y la venta ' +
+      'cobraría el del lote elegido. Si la cantidad supera lo que queda en el ' +
+      'lote, el resto se cotiza por FEFO y los tramos lo muestran.',
+  })
+  @IsOptional()
+  @IsString()
+  loteId?: string;
 }
 
 export class CostosVentaQueryDto {

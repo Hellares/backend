@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import {
   ESTADOS_LOTE_PRESENTE,
+  ordenFefo,
   planificarFefo,
 } from '../producto-stock/lote-consumo.helper';
 
@@ -84,6 +85,30 @@ export interface OrigenCostoLote {
   cantidadBonificada: number;
 }
 
+/**
+ * Un lote del que se PUEDE vender esta línea, para que el cajero elija.
+ *
+ * Vienen en el orden en que FEFO los tomaría: el primero es el que sale si
+ * nadie elige nada. Se mandan todos los presentes (ACTIVO y VENCIDO) porque un
+ * lote vencido sigue siendo mercadería del estante, y esconderlo acá dejaría
+ * al cajero sin entender por qué la venta le pide autorización.
+ */
+export interface LoteVendible {
+  loteId: string;
+  codigo: string;
+  /** Lo que QUEDA: el tope de lo que ese lote puede cubrir. */
+  cantidadActual: number;
+  costoUnitario: number;
+  costoUnitarioSinFlete: number | null;
+  fechaIngreso: Date;
+  fechaVencimiento: Date | null;
+  proveedorNombre: string | null;
+  compraId: string | null;
+  compraCodigo: string | null;
+  documentoProveedor: string | null;
+  cantidadBonificada: number;
+}
+
 export interface CostosDeItem {
   productoId: string | null;
   varianteId: string | null;
@@ -112,6 +137,14 @@ export interface CostosDeItem {
   sinCubrir: number;
   /** El lote que ENCABEZA el consumo (el primer tramo). */
   origen: OrigenCostoLote | null;
+  /**
+   * Todos los lotes de los que se puede sacar esta línea, en orden FEFO.
+   *
+   * Es lo que alimenta el selector de lote del POS. Viaja con el costo y no en
+   * un endpoint aparte porque elegir un lote ES elegir un costo: pedirlos por
+   * separado los dejaría desincronizados justo cuando importa.
+   */
+  lotesDisponibles: LoteVendible[];
 }
 
 /**
@@ -270,6 +303,34 @@ export class CostoVentaService {
       if (i.loteId && !lotePorClave.has(k)) lotePorClave.set(k, i.loteId);
     }
 
+    type LoteVivo = (typeof lotes)[number];
+    // El tipo de cambio de la compra está CONGELADO: el costo se fijó en soles
+    // el día que entró y no se mueve (lo que se mueve es la deuda).
+    const tcDe = (lote: LoteVivo): number =>
+      lote.compra && lote.compra.moneda !== 'PEN' && lote.compra.tipoCambio
+        ? Number(lote.compra.tipoCambio)
+        : 1;
+    // El neto de la factura por unidad NO es `precioUnitario`: ese es el de
+    // LISTA. `total` ya trae el descuento y se divide por la cantidad COMPLETA
+    // (bonificadas incluidas), igual que el costo del lote pero sin el flete.
+    // Sin compra detrás (lote de apertura o de ajuste) no hay flete que sacar:
+    // el neto ES el costo del lote.
+    const netoDe = (lote: LoteVivo): number => {
+      const d = lote.detallesCompra[0] ?? null;
+      return d && d.cantidad > 0
+        ? (Number(d.total) / d.cantidad) * tcDe(lote)
+        : Number(lote.precioCosto);
+    };
+    const docDe = (lote: LoteVivo): string | null =>
+      lote.compra
+        ? [
+            lote.compra.serieDocumentoProveedor,
+            lote.compra.numeroDocumentoProveedor,
+          ]
+            .filter(Boolean)
+            .join('-') || null
+        : null;
+
     for (const s of stocks) {
       const clave = CostoVentaService.clave(s.productoId, s.varianteId);
       const costoPromedio = s.precioCosto != null ? Number(s.precioCosto) : null;
@@ -284,39 +345,35 @@ export class CostoVentaService {
         lotePorClave.get(clave),
       );
 
-      const tramos: TramoCosto[] = plan.map(({ lote, cantidad: qty }) => {
-        // El tipo de cambio de la compra está CONGELADO: el costo se fijó en
-        // soles el día que entró y no se mueve (lo que se mueve es la deuda).
-        const tc =
-          lote.compra && lote.compra.moneda !== 'PEN' && lote.compra.tipoCambio
-            ? Number(lote.compra.tipoCambio)
-            : 1;
-        const detalle = lote.detallesCompra[0] ?? null;
-        // 🔴 El neto de la factura NO es `precioUnitario`: ese es el de LISTA.
-        // `total` ya trae el descuento y se divide por la cantidad COMPLETA
-        // (bonificadas incluidas), igual que el costo del lote pero sin flete.
-        // Sin compra detrás (lote de apertura o de ajuste) no hay flete que
-        // sacar: el neto ES el costo del lote.
-        const sinFlete =
-          detalle && detalle.cantidad > 0
-            ? (Number(detalle.total) / detalle.cantidad) * tc
-            : Number(lote.precioCosto);
-        const doc = lote.compra
-          ? [lote.compra.serieDocumentoProveedor, lote.compra.numeroDocumentoProveedor]
-              .filter(Boolean)
-              .join('-') || null
-          : null;
-        return {
+      const tramos: TramoCosto[] = plan.map(({ lote, cantidad: qty }) => ({
+        loteId: lote.id,
+        loteCodigo: lote.codigo,
+        cantidad: qty,
+        costoUnitario: Number(lote.precioCosto),
+        fechaVencimiento: lote.fechaVencimiento,
+        costoUnitarioSinFlete: netoDe(lote),
+        proveedorNombre: lote.nombreProveedor,
+        documentoProveedor: docDe(lote),
+      }));
+
+      // TODOS los que hay, no solo los que este pedido consume: el selector
+      // ofrece justamente los que FEFO no habría elegido.
+      const lotesDisponibles: LoteVendible[] = [...suyos]
+        .sort(ordenFefo)
+        .map((lote) => ({
           loteId: lote.id,
-          loteCodigo: lote.codigo,
-          cantidad: qty,
+          codigo: lote.codigo,
+          cantidadActual: lote.cantidadActual,
           costoUnitario: Number(lote.precioCosto),
+          costoUnitarioSinFlete: netoDe(lote),
+          fechaIngreso: lote.fechaIngreso,
           fechaVencimiento: lote.fechaVencimiento,
-          costoUnitarioSinFlete: sinFlete,
           proveedorNombre: lote.nombreProveedor,
-          documentoProveedor: doc,
-        };
-      });
+          compraId: lote.compra?.id ?? null,
+          compraCodigo: lote.compra?.codigo ?? null,
+          documentoProveedor: docDe(lote),
+          cantidadBonificada: lote.detallesCompra[0]?.cantidadBonificada ?? 0,
+        }));
 
       // Promedio PONDERADO de lo que sale: × cantidad devuelve exactamente lo
       // que esas unidades costaron. Se pondera solo sobre lo cubierto — las
@@ -334,10 +391,7 @@ export class CostoVentaService {
       // se despliega el desglose.
       const primero = plan[0]?.lote ?? null;
       const detallePrimero = primero?.detallesCompra[0] ?? null;
-      const tcPrimero =
-        primero?.compra && primero.compra.moneda !== 'PEN' && primero.compra.tipoCambio
-          ? Number(primero.compra.tipoCambio)
-          : 1;
+      const tcPrimero = primero ? tcDe(primero) : 1;
 
       out.set(clave, {
         productoId: s.productoId,
@@ -348,6 +402,7 @@ export class CostoVentaService {
         costoLoteSinFlete,
         tramos,
         sinCubrir,
+        lotesDisponibles,
         origen: primero
           ? {
               loteId: primero.id,

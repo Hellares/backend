@@ -118,7 +118,7 @@ export function planificarFefo<T extends LoteConsumible>(
  * lote que caduca en 3 días tiene que salir antes que uno eterno que llegó
  * hace un año: la mercadería que se puede perder se mueve primero.
  */
-function ordenFefo(a: LoteConsumible, b: LoteConsumible): number {
+export function ordenFefo(a: LoteConsumible, b: LoteConsumible): number {
   const va = a.fechaVencimiento;
   const vb = b.fechaVencimiento;
   if (va && vb) return va.getTime() - vb.getTime();
