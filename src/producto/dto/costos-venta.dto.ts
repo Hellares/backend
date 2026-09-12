@@ -3,8 +3,10 @@ import {
   ArrayNotEmpty,
   IsArray,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -20,6 +22,19 @@ export class ItemCostoVentaDto {
   @IsOptional()
   @IsString()
   varianteId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Unidades que se van a vender. MANDA: de ella depende de qué lotes sale ' +
+      'la mercadería y, por lo tanto, cuánto costó. Vender 3 puede salir todo ' +
+      'del lote barato; vender 5 arrastra 2 del caro. Omitida = 1.',
+    example: 5,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.01)
+  @Type(() => Number)
+  cantidad?: number;
 }
 
 export class CostosVentaQueryDto {

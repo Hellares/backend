@@ -255,6 +255,11 @@ export class VentaService {
         lineasACosto.map((d) => ({
           productoId: d.productoId ?? null,
           varianteId: d.varianteId ?? null,
+          // 🔑 La cantidad MANDA: de ella depende de qué lotes sale la
+          // mercadería y por lo tanto cuánto costó. Sin esto se cobraría el
+          // costo del primer lote para todas las unidades, incluidas las que
+          // salen de uno más caro.
+          cantidad: d.cantidad,
         })),
         sedeId,
         opts!.empresaId!,
@@ -501,6 +506,22 @@ export class VentaService {
 
     const clave = CostoVentaService.clave(d.productoId, d.varianteId);
     const costosItem = costos.get(clave);
+
+    // 🔴 Unidades que ningún lote respalda. Con la invariante sana esto es 0;
+    // si no, se estaría cobrando "a costo" un costo que no existe. Se corta
+    // acá y no en silencio.
+    if (costosItem && costosItem.sinCubrir > 0 && modo !== 'COSTO_PROMEDIO') {
+      throw new BadRequestException({
+        code: 'STOCK_SIN_LOTE_PARA_VENDER_A_COSTO',
+        message:
+          `"${d.descripcion}": ${costosItem.sinCubrir} de las ${d.cantidad} ` +
+          `unidades no tienen lote con costo. Usá el costo promedio o revisá ` +
+          `el inventario.`,
+        descripcion: d.descripcion,
+        sinCubrir: costosItem.sinCubrir,
+      });
+    }
+
     const precio = CostoVentaService.precioDelModo(costosItem, modo);
 
     // 🔴 NUNCA caer al precio de lista en silencio: cobrarle lista a un

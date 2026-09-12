@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
+import { planificarFefo } from '../producto-stock/lote-consumo.helper';
 
 /**
  * Modos de "vender a costo".
@@ -33,6 +34,27 @@ export const ETIQUETA_MODO_COSTO: Record<PrecioModoCosto, string> = {
 export interface ItemCostoRef {
   productoId?: string | null;
   varianteId?: string | null;
+  /**
+   * Cuántas unidades se van a vender. Manda: de ella depende DE QUÉ LOTES sale
+   * la mercadería y, por lo tanto, cuánto costó de verdad. Vender 3 puede
+   * salir todo del lote barato; vender 5 arrastra 2 del caro.
+   *
+   * Sin cantidad se asume 1 — el comportamiento útil para una consulta suelta.
+   */
+  cantidad?: number;
+}
+
+/** Una porción del pedido que sale de un lote concreto. */
+export interface TramoCosto {
+  loteId: string;
+  loteCodigo: string;
+  cantidad: number;
+  costoUnitario: number;
+  fechaVencimiento: Date | null;
+  /** El neto de la factura de ESE lote, sin su flete prorrateado. */
+  costoUnitarioSinFlete: number | null;
+  proveedorNombre: string | null;
+  documentoProveedor: string | null;
 }
 
 /** De qué compra salió el costo del lote. Es lo que la UI muestra al cajero. */
@@ -57,12 +79,30 @@ export interface OrigenCostoLote {
 export interface CostosDeItem {
   productoId: string | null;
   varianteId: string | null;
+  /** Unidades sobre las que se calculó. */
+  cantidad: number;
   /** `ProductoStock.precioCosto`: la mezcla de todas las compras. Es el que valora el kardex. */
   costoPromedio: number | null;
-  /** `Lote.precioCosto` de la última compra: lo que costó esa unidad, flete adentro. */
+  /**
+   * Lo que costaron LAS UNIDADES QUE VAN A SALIR, por unidad, flete adentro.
+   *
+   * 🔑 Es el promedio ponderado de los lotes que el consumo FEFO va a tomar,
+   * no "el costo de la última compra". Vendiendo 5 cuando el lote nuevo tiene
+   * 3 a S/ 11.80 y el viejo 2 a S/ 24.36, esto da 16.824 — que multiplicado
+   * por 5 devuelve exactamente lo que esas cinco unidades costaron.
+   */
   costoLote: number | null;
-  /** El neto de la factura de esa misma compra, sin el flete prorrateado. */
+  /** Lo mismo, descontando el flete prorrateado de cada lote. */
   costoLoteSinFlete: number | null;
+  /** De qué lotes sale, en orden de consumo. Es lo que la UI muestra desglosado. */
+  tramos: TramoCosto[];
+  /**
+   * Unidades pedidas que NINGÚN lote cubre. Con la invariante sana esto es 0;
+   * si no lo es, hay stock sin respaldo de lote y la UI tiene que decirlo en
+   * vez de cobrar un costo inventado.
+   */
+  sinCubrir: number;
+  /** El lote que ENCABEZA el consumo (el primer tramo). */
   origen: OrigenCostoLote | null;
 }
 
@@ -74,11 +114,15 @@ export interface CostosDeItem {
  * factura, vender a costo es neutro (el crédito fiscal tapa el débito); si el
  * proveedor no dio factura, ese IGV sale del bolsillo del vendedor.
  *
- * 🔴 El lote es "la última compra", NO el FIFO. `consumirLotesFIFO` existe pero
- * no la llama nadie, así que `Lote.cantidadActual` nunca baja por una venta y
- * "el lote más antiguo con stock" es una ficción que nunca avanza. La última
- * compra es el único dato que es un hecho — y para un revendedor, "a costo"
- * significa lo que costó ESTA vez, no hace ocho meses.
+ * 🔑 "El costo del lote" es el de LAS UNIDADES QUE VAN A SALIR, resuelto con
+ * el mismo planificador FEFO que usa el consumo real (`planificarFefo`). No es
+ * "el costo de la última compra": si se venden más unidades de las que trajo
+ * esa compra, las de más costaron otra cosa y el precio lo refleja.
+ *
+ * Antes SÍ era "la última compra", porque los lotes no se consumían y no había
+ * forma de saber de cuál salía cada unidad. Con el motor FEFO encendido el dato
+ * es exacto, y esta es la diferencia entre cobrar un promedio plausible y
+ * cobrar lo que costó.
  */
 @Injectable()
 export class CostoVentaService {
@@ -149,117 +193,169 @@ export class CostoVentaService {
     });
     if (!stocks.length) return out;
 
-    // Última compra por ítem. Dos pasos a propósito: el primero trae filas
-    // flacas (los lotes de un producto que se compra seguido son muchos,
-    // porque ninguno se consume al vender) y el segundo hidrata solo los que
-    // ganaron.
+    // TODOS los lotes vivos de los ítems del carrito, no solo el último: para
+    // saber qué costó la mercadería hay que saber de qué lotes sale, y eso
+    // depende de cuántas unidades se llevan. Va en una sola consulta, acotada
+    // a los productos que están en el carrito.
     const stockIds = stocks.map((s) => s.id);
-    const ultimos = await this.prisma.lote.findMany({
-      where: { empresaId, productoStockId: { in: stockIds }, estado: 'ACTIVO' },
-      select: { id: true, productoStockId: true },
-      orderBy: [{ fechaIngreso: 'desc' }, { creadoEn: 'desc' }],
-      distinct: ['productoStockId'],
-    });
-
-    const lotes = ultimos.length
-      ? await this.prisma.lote.findMany({
-          where: { id: { in: ultimos.map((l) => l.id) } },
+    const lotes = await this.prisma.lote.findMany({
+      where: {
+        empresaId,
+        productoStockId: { in: stockIds },
+        estado: 'ACTIVO',
+        cantidadActual: { gt: 0 },
+      },
+      select: {
+        id: true,
+        productoStockId: true,
+        codigo: true,
+        precioCosto: true,
+        cantidadActual: true,
+        fechaIngreso: true,
+        fechaVencimiento: true,
+        nombreProveedor: true,
+        compra: {
           select: {
             id: true,
-            productoStockId: true,
             codigo: true,
-            precioCosto: true,
-            fechaIngreso: true,
-            nombreProveedor: true,
-            compra: {
-              select: {
-                id: true,
-                codigo: true,
-                moneda: true,
-                tipoCambio: true,
-                tipoDocumentoProveedor: true,
-                serieDocumentoProveedor: true,
-                numeroDocumentoProveedor: true,
-              },
-            },
-            detallesCompra: {
-              select: {
-                cantidad: true,
-                total: true,
-                gastoProrrateado: true,
-                cantidadBonificada: true,
-              },
-            },
+            moneda: true,
+            tipoCambio: true,
+            tipoDocumentoProveedor: true,
+            serieDocumentoProveedor: true,
+            numeroDocumentoProveedor: true,
           },
-        })
-      : [];
-    const lotePorStock = new Map(lotes.map((l) => [l.productoStockId, l]));
+        },
+        detallesCompra: {
+          select: {
+            cantidad: true,
+            total: true,
+            gastoProrrateado: true,
+            cantidadBonificada: true,
+          },
+        },
+      },
+      // El desempate de los "sin vencimiento"; `planificarFefo` adelanta a los
+      // que sí vencen.
+      orderBy: [{ fechaIngreso: 'asc' }, { creadoEn: 'asc' }],
+    });
+
+    const lotesPorStock = new Map<string, typeof lotes>();
+    for (const l of lotes) {
+      const arr = lotesPorStock.get(l.productoStockId);
+      if (arr) arr.push(l);
+      else lotesPorStock.set(l.productoStockId, [l]);
+    }
+
+    // Cuántas unidades pidió cada ítem (varias líneas del mismo producto suman:
+    // el consumo FEFO las va a atender juntas).
+    const cantidadPorClave = new Map<string, number>();
+    for (const i of items) {
+      const k = CostoVentaService.clave(i.productoId, i.varianteId);
+      cantidadPorClave.set(k, (cantidadPorClave.get(k) ?? 0) + Math.max(1, Math.ceil(i.cantidad ?? 1)));
+    }
 
     for (const s of stocks) {
       const clave = CostoVentaService.clave(s.productoId, s.varianteId);
-      const lote = lotePorStock.get(s.id);
       const costoPromedio = s.precioCosto != null ? Number(s.precioCosto) : null;
+      const cantidad = cantidadPorClave.get(clave) ?? 1;
+      const suyos = lotesPorStock.get(s.id) ?? [];
 
-      if (!lote) {
-        out.set(clave, {
-          productoId: s.productoId,
-          varianteId: s.varianteId,
-          costoPromedio,
-          costoLote: null,
-          costoLoteSinFlete: null,
-          origen: null,
-        });
-        continue;
-      }
+      // MISMO planificador que el consumo real: lo que se muestra acá es lo
+      // que después va a salir del stock.
+      const { plan, sinCubrir } = planificarFefo(suyos, cantidad);
 
-      // El tipo de cambio de la compra está CONGELADO: el costo del inventario
-      // se fijó en soles el día que entró y no se mueve más (lo que se mueve
-      // es la deuda). Por eso el neto sin flete se reconstruye con ESE tipo de
-      // cambio y no con el de hoy.
-      const tc =
-        lote.compra && lote.compra.moneda !== 'PEN' && lote.compra.tipoCambio
-          ? Number(lote.compra.tipoCambio)
-          : 1;
-      const detalle = lote.detallesCompra[0] ?? null;
-      const costoLote = Number(lote.precioCosto);
-      // 🔴 El neto de la factura NO es `precioUnitario`: ese es el de LISTA.
-      // `total` ya viene con el descuento aplicado y se divide por la cantidad
-      // COMPLETA (las bonificadas incluidas), que es exactamente como se
-      // calculó el costo del lote — solo que sin el flete.
-      const costoLoteSinFlete =
-        detalle && detalle.cantidad > 0
-          ? (Number(detalle.total) / detalle.cantidad) * tc
+      const tramos: TramoCosto[] = plan.map(({ lote, cantidad: qty }) => {
+        // El tipo de cambio de la compra está CONGELADO: el costo se fijó en
+        // soles el día que entró y no se mueve (lo que se mueve es la deuda).
+        const tc =
+          lote.compra && lote.compra.moneda !== 'PEN' && lote.compra.tipoCambio
+            ? Number(lote.compra.tipoCambio)
+            : 1;
+        const detalle = lote.detallesCompra[0] ?? null;
+        // 🔴 El neto de la factura NO es `precioUnitario`: ese es el de LISTA.
+        // `total` ya trae el descuento y se divide por la cantidad COMPLETA
+        // (bonificadas incluidas), igual que el costo del lote pero sin flete.
+        // Sin compra detrás (lote de apertura o de ajuste) no hay flete que
+        // sacar: el neto ES el costo del lote.
+        const sinFlete =
+          detalle && detalle.cantidad > 0
+            ? (Number(detalle.total) / detalle.cantidad) * tc
+            : Number(lote.precioCosto);
+        const doc = lote.compra
+          ? [lote.compra.serieDocumentoProveedor, lote.compra.numeroDocumentoProveedor]
+              .filter(Boolean)
+              .join('-') || null
           : null;
-      const fleteUnitario =
-        detalle && detalle.cantidad > 0 && detalle.gastoProrrateado != null
-          ? (Number(detalle.gastoProrrateado) / detalle.cantidad) * tc
-          : null;
+        return {
+          loteId: lote.id,
+          loteCodigo: lote.codigo,
+          cantidad: qty,
+          costoUnitario: Number(lote.precioCosto),
+          fechaVencimiento: lote.fechaVencimiento,
+          costoUnitarioSinFlete: sinFlete,
+          proveedorNombre: lote.nombreProveedor,
+          documentoProveedor: doc,
+        };
+      });
 
-      const doc = lote.compra
-        ? [lote.compra.serieDocumentoProveedor, lote.compra.numeroDocumentoProveedor]
-            .filter(Boolean)
-            .join('-') || null
+      // Promedio PONDERADO de lo que sale: × cantidad devuelve exactamente lo
+      // que esas unidades costaron. Se pondera solo sobre lo cubierto — las
+      // unidades sin lote no tienen costo que promediar y se informan aparte.
+      const cubiertas = tramos.reduce((a, t) => a + t.cantidad, 0);
+      const costoLote = cubiertas
+        ? tramos.reduce((a, t) => a + t.costoUnitario * t.cantidad, 0) / cubiertas
         : null;
+      const costoLoteSinFlete = cubiertas
+        ? tramos.reduce((a, t) => a + (t.costoUnitarioSinFlete ?? t.costoUnitario) * t.cantidad, 0) /
+          cubiertas
+        : null;
+
+      // El lote que ENCABEZA el consumo: es el que la línea nombra cuando no
+      // se despliega el desglose.
+      const primero = plan[0]?.lote ?? null;
+      const detallePrimero = primero?.detallesCompra[0] ?? null;
+      const tcPrimero =
+        primero?.compra && primero.compra.moneda !== 'PEN' && primero.compra.tipoCambio
+          ? Number(primero.compra.tipoCambio)
+          : 1;
 
       out.set(clave, {
         productoId: s.productoId,
         varianteId: s.varianteId,
+        cantidad,
         costoPromedio,
         costoLote,
         costoLoteSinFlete,
-        origen: {
-          loteId: lote.id,
-          loteCodigo: lote.codigo,
-          fechaIngreso: lote.fechaIngreso,
-          proveedorNombre: lote.nombreProveedor,
-          compraId: lote.compra?.id ?? null,
-          compraCodigo: lote.compra?.codigo ?? null,
-          documentoProveedor: doc,
-          monedaCompra: lote.compra?.moneda ?? null,
-          tipoCambio: lote.compra?.tipoCambio ? Number(lote.compra.tipoCambio) : null,
-          fleteUnitario,
-          cantidadBonificada: detalle?.cantidadBonificada ?? 0,
-        },
+        tramos,
+        sinCubrir,
+        origen: primero
+          ? {
+              loteId: primero.id,
+              loteCodigo: primero.codigo,
+              fechaIngreso: primero.fechaIngreso,
+              proveedorNombre: primero.nombreProveedor,
+              compraId: primero.compra?.id ?? null,
+              compraCodigo: primero.compra?.codigo ?? null,
+              documentoProveedor: primero.compra
+                ? [
+                    primero.compra.serieDocumentoProveedor,
+                    primero.compra.numeroDocumentoProveedor,
+                  ]
+                    .filter(Boolean)
+                    .join('-') || null
+                : null,
+              monedaCompra: primero.compra?.moneda ?? null,
+              tipoCambio: primero.compra?.tipoCambio
+                ? Number(primero.compra.tipoCambio)
+                : null,
+              fleteUnitario:
+                detallePrimero && detallePrimero.cantidad > 0
+                  ? (Number(detallePrimero.gastoProrrateado) / detallePrimero.cantidad) *
+                    tcPrimero
+                  : null,
+              cantidadBonificada: detallePrimero?.cantidadBonificada ?? 0,
+            }
+          : null,
       });
     }
 

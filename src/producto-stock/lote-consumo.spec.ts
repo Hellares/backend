@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import {
   consumirLotesFefo,
   devolverALotesDeOrigen,
+  planificarFefo,
 } from './lote-consumo.helper';
 
 /**
@@ -185,6 +186,54 @@ describe('Consumo de lotes (FEFO)', () => {
 
       expect(asignaciones).toEqual([]);
       expect(sinCubrir).toBe(5);
+    });
+  });
+  describe('planificarFefo (la previsualización del POS)', () => {
+    it('🔑 devuelve el MISMO reparto que el consumo real', async () => {
+      const lotes = [lote('a', 3, '03-01', 11.8), lote('b', 10, '06-01', 27.5)];
+
+      // La simulación...
+      const { plan, sinCubrir } = planificarFefo(lotes, 5);
+      expect(plan.map((p) => [p.lote.id, p.cantidad])).toEqual([
+        ['a', 3],
+        ['b', 2],
+      ]);
+      expect(sinCubrir).toBe(0);
+
+      // ...y el consumo de verdad, sobre los mismos lotes.
+      conLotes(lotes.map((l) => ({ ...l })));
+      const real = await consumirLotesFefo(tx, 'ps-1', 5);
+      expect(real.asignaciones.map((a) => [a.loteId, a.cantidad])).toEqual([
+        ['a', 3],
+        ['b', 2],
+      ]);
+    });
+
+    it('🔑 el precio ponderado es lo que esas unidades costaron DE VERDAD', () => {
+      // El caso que motivó todo: 3 unidades a 11.80 y 2 a 24.36.
+      const { plan } = planificarFefo(
+        [lote('nuevo', 3, null, 11.8), lote('viejo', 10, null, 24.36)],
+        5,
+      );
+      // `nuevo` primero solo si es más viejo; acá lo fuerzo por el orden de
+      // entrada, que es lo que hace el orderBy de la query.
+      const cubiertas = plan.reduce((a, p) => a + p.cantidad, 0);
+      const ponderado =
+        plan.reduce((a, p) => a + Number(p.lote.precioCosto) * p.cantidad, 0) /
+        cubiertas;
+
+      expect(cubiertas).toBe(5);
+      // 3×11.80 + 2×24.36 = 84.12 → 84.12 / 5
+      expect(ponderado).toBeCloseTo(16.824, 6);
+      // Y el total cobrado devuelve exactamente lo que costó.
+      expect(ponderado * 5).toBeCloseTo(84.12, 6);
+    });
+
+    it('informa lo que ningún lote cubre, en vez de inventar un costo', () => {
+      const { plan, sinCubrir } = planificarFefo([lote('a', 2, null)], 5);
+
+      expect(plan).toHaveLength(1);
+      expect(sinCubrir).toBe(3);
     });
   });
 });

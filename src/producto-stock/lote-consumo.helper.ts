@@ -31,7 +31,7 @@ import { Prisma } from '@prisma/client';
  */
 
 /** Lo mínimo que se necesita de un lote para decidir el orden de consumo. */
-type LoteConsumible = {
+export type LoteConsumible = {
   id: string;
   cantidadActual: number;
   precioCosto: Prisma.Decimal;
@@ -43,6 +43,34 @@ export interface AsignacionLote {
   loteId: string;
   cantidad: number;
   costoUnitario: Prisma.Decimal | null;
+}
+
+/**
+ * Reparte [cantidad] entre los lotes en orden FEFO, SIN escribir nada.
+ *
+ * 🔑 Es la misma función que usa el consumo real: el "vender a costo" del POS
+ * previsualiza con ESTE reparto, así que lo que el cajero ve es lo que
+ * después va a salir. Si fueran dos implementaciones, se despegarían.
+ *
+ * Recibe los lotes ya cargados para poder reusarse desde una lectura pura (el
+ * endpoint de costos) sin volver a consultarlos.
+ */
+export function planificarFefo<T extends LoteConsumible>(
+  lotes: T[],
+  cantidad: number,
+): { plan: Array<{ lote: T; cantidad: number }>; sinCubrir: number } {
+  if (cantidad <= 0) return { plan: [], sinCubrir: 0 };
+  const orden = [...lotes].sort(ordenFefo);
+  const plan: Array<{ lote: T; cantidad: number }> = [];
+  let restante = cantidad;
+  for (const lote of orden) {
+    if (restante <= 0) break;
+    const toma = Math.min(lote.cantidadActual, restante);
+    if (toma <= 0) continue;
+    plan.push({ lote, cantidad: toma });
+    restante -= toma;
+  }
+  return { plan, sinCubrir: restante };
 }
 
 /**
@@ -90,16 +118,14 @@ export async function consumirLotesFefo(
     // adelanta a los que sí vencen.
     orderBy: [{ fechaIngreso: 'asc' }, { creadoEn: 'asc' }],
   });
-  lotes.sort(ordenFefo);
+
+  // 🔑 El MISMO planificador que usa la previsualización del POS: lo que el
+  // cajero vio al cobrar es lo que efectivamente sale de acá.
+  const { plan, sinCubrir } = planificarFefo(lotes, cantidad);
 
   const asignaciones: AsignacionLote[] = [];
-  let restante = cantidad;
 
-  for (const lote of lotes) {
-    if (restante <= 0) break;
-    const toma = Math.min(lote.cantidadActual, restante);
-    if (toma <= 0) continue;
-
+  for (const { lote, cantidad: toma } of plan) {
     const queda = lote.cantidadActual - toma;
     await tx.lote.update({
       where: { id: lote.id },
@@ -117,10 +143,9 @@ export async function consumirLotesFefo(
       cantidad: toma,
       costoUnitario: lote.precioCosto,
     });
-    restante -= toma;
   }
 
-  return { asignaciones, sinCubrir: restante };
+  return { asignaciones, sinCubrir };
 }
 
 /**
