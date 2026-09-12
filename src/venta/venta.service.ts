@@ -1837,6 +1837,11 @@ export class VentaService {
             perdidaTotal != null ? dto.ventaBajoCostoAutorizadaPorId ?? null : null,
           ventaBajoCostoAutorizadaEn:
             perdidaTotal != null && dto.ventaBajoCostoAutorizadaPorId ? new Date() : null,
+          // Quién dejó pasar mercadería fuera de fecha, y cuándo. Se guarda
+          // aunque haya sido el propio administrador: ahí no se le piden
+          // credenciales, pero la decisión igual lleva nombre y hora.
+          ventaVencidaAutorizadaPorId: dto.ventaVencidaAutorizadaPorId ?? null,
+          ventaVencidaAutorizadaEn: dto.ventaVencidaAutorizadaPorId ? new Date() : null,
           detalles: {
             create: detallesCalculados.map((d) => ({
               productoId: d.productoId,
@@ -2168,6 +2173,9 @@ export class VentaService {
               perdidaTotal != null ? dto.ventaBajoCostoAutorizadaPorId ?? null : null,
             ventaBajoCostoAutorizadaEn:
               perdidaTotal != null && dto.ventaBajoCostoAutorizadaPorId ? new Date() : null,
+            // Ver el comentario del otro flujo: queda con nombre y hora.
+            ventaVencidaAutorizadaPorId: dto.ventaVencidaAutorizadaPorId ?? null,
+            ventaVencidaAutorizadaEn: dto.ventaVencidaAutorizadaPorId ? new Date() : null,
             estado: estaPagada
               ? EstadoVenta.PAGADA_COMPLETA
               : EstadoVenta.CONFIRMADA,
@@ -3576,6 +3584,11 @@ export class VentaService {
             perdidaTotalCot != null && dto.ventaBajoCostoAutorizadaPorId
               ? new Date()
               : null,
+          // Ver el comentario del flujo POS: queda con nombre y hora.
+          ventaVencidaAutorizadaPorId: dto.ventaVencidaAutorizadaPorId ?? null,
+          ventaVencidaAutorizadaEn: dto.ventaVencidaAutorizadaPorId
+            ? new Date()
+            : null,
           // Venta POS: CONFIRMADA (con stock descontado) o PAGADA_COMPLETA
           estado: estaPagada ? EstadoVenta.PAGADA_COMPLETA : EstadoVenta.CONFIRMADA,
           detalles: {

@@ -84,6 +84,21 @@ model Venta {
   ventaBajoCostoAutorizadaEn    DateTime?
   perdidaTotalLineas            Decimal?  @db.Decimal(10, 2) // Suma de márgenes negativos (snapshot)
 
+  // Autorización para vender mercadería pasada de su fecha de CONSUMO
+  // PREFERENTE. Columna APARTE de la de bajo costo a propósito: son dos
+  // decisiones distintas y confundirlas haría que autorizar un precio bajo
+  // pareciera autorizar además vender algo pasado de fecha.
+  //
+  // 🔑 Se guarda aunque quien vendió fuera el propio administrador —ahí no se
+  // le piden credenciales, pero la decisión igual queda con nombre y hora—.
+  // Sin esto, "vendimos esto vencido y alguien lo aprobó" no se puede
+  // reconstruir, que es justo lo que hay que poder mostrar si algún día lo
+  // reclaman.
+  //
+  // NUNCA se llena por CADUCIDAD: eso no se autoriza, se bloquea.
+  ventaVencidaAutorizadaPorId String?
+  ventaVencidaAutorizadaEn    DateTime?
+
   // Pago
   estado        EstadoVenta      @default(BORRADOR)
   metodoPago    MetodoPagoVenta?
