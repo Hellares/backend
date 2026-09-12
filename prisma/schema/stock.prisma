@@ -161,6 +161,7 @@ model MovimientoStock {
   venta                  Venta?                  @relation(fields: [ventaId], references: [id])
   itemsReporteIncidencia ReporteIncidenciaItem[] @relation("ItemIncidenciaMovimiento")
   itemsInventario        InventarioItem[]        @relation("InventarioAjuste")
+  lotes                  MovimientoStockLote[]
 
   @@index([sedeId])
   @@index([empresaId])
@@ -174,6 +175,43 @@ model MovimientoStock {
   @@index([productoStockId, creadoEn]) // Historial de movimientos ordenado
   @@index([sedeId, tipo]) // Filtrar movimientos por sede y tipo
   @@index([empresaId, tipo, creadoEn(sort: Desc)]) // Lista global de producción (lotes fabricados)
+}
+
+/// De QUÉ lotes salió (o a cuáles volvió) cada movimiento de stock.
+///
+/// 🔴 Es una tabla PUENTE y no un `loteId` en `MovimientoStock` porque una
+/// sola salida puede comer de VARIOS lotes: se venden 5, el lote nuevo tiene
+/// 3 y las otras 2 salen del anterior. Con una columna suelta habría que
+/// partir el movimiento o mentir sobre el origen de la mitad.
+///
+/// Es también lo que permite REVERTIR con exactitud: una devolución o la
+/// anulación de una venta devuelve las unidades a los lotes de los que
+/// realmente salieron —con su vencimiento y su costo—, en vez de inventar un
+/// lote nuevo y perder la trazabilidad.
+model MovimientoStockLote {
+  id                String @id @default(cuid())
+  movimientoStockId String
+  loteId            String
+
+  /// Unidades que este movimiento tomó del lote (POSITIVO) o le devolvió
+  /// (NEGATIVO). El signo espeja el de `MovimientoStock.cantidad` invertido:
+  /// una salida de −5 consume +5 del lote.
+  cantidad Int
+
+  /// Costo unitario del lote al momento del movimiento (snapshot).
+  ///
+  /// ⚠️ Es informativo/trazabilidad: la VALORACIÓN del kardex sigue saliendo
+  /// del costo promedio del `ProductoStock`. Consumir lotes mueve cantidades,
+  /// NO cambia el método de costeo — mezclarlos desarmaría el COGS histórico.
+  costoUnitario Decimal? @db.Decimal(14, 6)
+
+  creadoEn DateTime @default(now())
+
+  movimiento MovimientoStock @relation(fields: [movimientoStockId], references: [id], onDelete: Cascade)
+  lote       Lote            @relation(fields: [loteId], references: [id])
+
+  @@index([movimientoStockId])
+  @@index([loteId])
 }
 
 /// Transferencias de stock entre sedes

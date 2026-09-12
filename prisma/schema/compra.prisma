@@ -465,6 +465,7 @@ model Lote {
   compra         Compra?           @relation(fields: [compraId], references: [id])
   proveedor      Proveedor?        @relation(fields: [proveedorId], references: [id])
   detallesCompra CompraDetalle[]
+  movimientos    MovimientoStockLote[]
 
   @@unique([empresaId, codigo])
   @@index([productoStockId, estado])

@@ -972,6 +972,10 @@ export class CompraService {
           compraId: compra.id,
           usuarioId,
           precioCostoUnitario: precioCompra,
+          // Más abajo se pone EL lote de esta compra en AGOTADO. Dejar que el
+          // helper consuma FEFO además descontaría dos veces —y de lotes que
+          // ni siquiera son los de esta compra.
+          lotesGestionadosPorElLlamador: true,
         });
 
         // BUG 2 FIX: Registrar historial de precio de costo por sede en anulación
@@ -1254,6 +1258,8 @@ export class CompraService {
             (dto.observaciones ? ` | ${dto.observaciones}` : ''),
           compraId: compra.id,
           usuarioId,
+          // El lote de origen se descuenta a mano acá abajo.
+          lotesGestionadosPorElLlamador: true,
           precioCostoUnitario: precioCostoLote,
         });
 
@@ -1318,6 +1324,9 @@ export class CompraService {
             compraId: compra.id,
             usuarioId,
             precioCostoUnitario: precioCostoLote,
+            // El lote de la sede destino se crea a mano acá abajo, con el
+            // costo y el proveedor del lote original.
+            lotesGestionadosPorElLlamador: true,
           });
 
           // Crear lote en sede destino

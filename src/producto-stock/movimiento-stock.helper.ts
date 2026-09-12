@@ -1,4 +1,11 @@
 import { Prisma } from '@prisma/client';
+import {
+  consumirLotesFefo,
+  crearLoteDeEntrada,
+  devolverALotesDeOrigen,
+  registrarAsignaciones,
+  type AsignacionLote,
+} from './lote-consumo.helper';
 
 /**
  * Datos para crear un MovimientoStock con valoración monetaria.
@@ -30,6 +37,21 @@ export interface CrearMovimientoStockData {
   precioCostoUnitario?: number | Prisma.Decimal | null;
   // Mano de obra del lote (solo se setea en PRODUCCION_ENTRADA de fabricaciones).
   costoManoObra?: number | Prisma.Decimal | null;
+  /**
+   * 🔴 El llamador YA administra los lotes de este movimiento: el helper no
+   * los toca.
+   *
+   * Sin esto habría DOBLE movimiento de lote. Los casos reales, todos en
+   * `compra.service`: anular una compra (pone SU lote en cero) y las dos patas
+   * de la distribución a otra sede (descuenta el lote de origen y crea el de
+   * destino). Si además corriera el consumo FEFO, se descontaría dos veces y
+   * la suma de lotes se despegaría del `stockActual`.
+   *
+   * Se declara en el call site a propósito: quien sabe que administra lotes es
+   * el que los administra, y adivinarlo acá por tipo de movimiento sería
+   * frágil e invisible desde donde importa.
+   */
+  lotesGestionadosPorElLlamador?: boolean;
 }
 
 /**
@@ -64,12 +86,149 @@ export async function crearMovimientoStockConValoracion(
       ? new Prisma.Decimal(Math.abs(data.cantidad)).mul(costoUnit)
       : null;
 
-  const { precioCostoUnitario: _ignored, ...rest } = data;
-  return tx.movimientoStock.create({
+  const {
+    precioCostoUnitario: _ignored,
+    lotesGestionadosPorElLlamador,
+    ...rest
+  } = data;
+  const movimiento = await tx.movimientoStock.create({
     data: {
       ...rest,
       precioCostoUnitario: costoUnit,
       valorMovimiento: valorMov,
     },
   });
+
+  if (!lotesGestionadosPorElLlamador) {
+    await sincronizarLotes(tx, movimiento, costoUnit);
+  }
+
+  return movimiento;
+}
+
+/**
+ * ¿Está encendido el consumo de lotes?
+ *
+ * 🔴 Apagado por defecto A PROPÓSITO. El orden de encendido no es negociable:
+ * primero se despliega el código, después se corre la conciliación
+ * (`scripts/conciliar-lotes.ts`) y RECIÉN AHÍ se prende. Al revés, el motor
+ * consumiría de los lotes históricos —cuyo `cantidadActual` está inflado
+ * porque nunca bajaron al vender— y repartiría mercadería que no existe.
+ *
+ * Es también el freno de mano: esto cuelga del camino del cobro, y poder
+ * apagarlo con una variable de entorno vale más que un rollback de imagen.
+ */
+function lotesActivos(): boolean {
+  return process.env.LOTES_FEFO_ENABLED === 'true';
+}
+
+/**
+ * Mantiene los lotes en línea con el movimiento recién creado.
+ *
+ * La invariante que sostiene: para cada `ProductoStock`, la suma de
+ * `cantidadActual` de sus lotes ACTIVO es igual a `stockActual`.
+ *
+ * - **Salida** (cantidad < 0) → consume en orden FEFO.
+ * - **Entrada por COMPRA** → no hace nada: `compra.service` crea el lote con
+ *   su costo real, su proveedor y su vencimiento. Duplicarlo acá inflaría el
+ *   stock por lotes al doble.
+ * - **Entrada que revierte una salida** (anulación de venta, devolución) →
+ *   devuelve a los lotes de los que salió, con su vencimiento y su costo.
+ * - **Cualquier otra entrada** (ajuste, producción, transferencia recibida) →
+ *   crea un lote, porque si no queda stock sin respaldo y el FEFO se
+ *   quedaría corto después.
+ */
+async function sincronizarLotes(
+  tx: Prisma.TransactionClient,
+  movimiento: {
+    id: string;
+    productoStockId: string;
+    empresaId: string;
+    sedeId: string;
+    tipo: string;
+    cantidad: number;
+    ventaId: string | null;
+    motivo: string | null;
+    usuarioId: string;
+  },
+  costoUnit: Prisma.Decimal | null,
+): Promise<void> {
+  if (!lotesActivos()) return;
+  // cantidad 0 = registro de auditoría (ej. migración a variantes), no mueve
+  // mercadería y por lo tanto no toca ningún lote.
+  if (movimiento.cantidad === 0) return;
+
+  if (movimiento.cantidad < 0) {
+    const { asignaciones, sinCubrir } = await consumirLotesFefo(
+      tx,
+      movimiento.productoStockId,
+      Math.abs(movimiento.cantidad),
+    );
+    await registrarAsignaciones(tx, movimiento.id, asignaciones);
+    if (sinCubrir > 0) {
+      // No se aborta: el stock ya lo validó quien vende, y frenar el cobro por
+      // una inconsistencia de lotes que el cajero no puede resolver en el
+      // mostrador sería peor. Queda el rastro para conciliar.
+      console.warn(
+        `[lotes] ${movimiento.tipo} ${movimiento.id}: faltaron ${sinCubrir} ` +
+          `unidades sin lote en productoStock ${movimiento.productoStockId}`,
+      );
+    }
+    return;
+  }
+
+  // ── Entradas ──
+  if (movimiento.tipo === 'ENTRADA_COMPRA') return;
+
+  let repuesto = 0;
+  const asignaciones: AsignacionLote[] = [];
+
+  // ¿Revierte una salida conocida? Solo se busca por venta: es el único
+  // documento que tiene una salida previa identificable contra el MISMO
+  // productoStock (una transferencia recibida sacó de OTRA sede, así que sus
+  // lotes no son estos).
+  if (movimiento.ventaId) {
+    const origen = await tx.movimientoStock.findMany({
+      where: {
+        ventaId: movimiento.ventaId,
+        productoStockId: movimiento.productoStockId,
+        cantidad: { lt: 0 },
+      },
+      select: { id: true },
+    });
+    if (origen.length) {
+      const r = await devolverALotesDeOrigen(
+        tx,
+        origen.map((o) => o.id),
+        movimiento.cantidad,
+      );
+      asignaciones.push(...r.asignaciones);
+      repuesto = movimiento.cantidad - r.sinCubrir;
+    }
+  }
+
+  const faltante = movimiento.cantidad - repuesto;
+  if (faltante > 0) {
+    const stock = await tx.productoStock.findUnique({
+      where: { id: movimiento.productoStockId },
+      select: { productoId: true, varianteId: true },
+    });
+    const nuevo = await crearLoteDeEntrada(tx, {
+      productoStockId: movimiento.productoStockId,
+      empresaId: movimiento.empresaId,
+      sedeId: movimiento.sedeId,
+      productoId: stock?.productoId ?? null,
+      varianteId: stock?.varianteId ?? null,
+      cantidad: faltante,
+      costoUnitario: costoUnit,
+      // Único por construcción (el id del movimiento lo es) y se lee de un
+      // vistazo: un lote AJU- no salió de una factura de proveedor.
+      codigo: `AJU-${movimiento.id}`,
+      motivo: movimiento.motivo ?? movimiento.tipo,
+      usuarioId: movimiento.usuarioId,
+    });
+    if (nuevo) asignaciones.push(nuevo);
+  }
+
+  await registrarAsignaciones(tx, movimiento.id, asignaciones);
 }
