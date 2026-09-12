@@ -96,9 +96,15 @@ model Producto {
   // impresa en el envase es la única que vale.
   diasVidaUtil Int?
 
-  // Cuántos días antes del vencimiento empieza a avisar. Null = el default de
-  // la empresa.
+  // Cuántos días antes del vencimiento empieza a avisar. Null = 30
+  // (`DIAS_ALERTA_VENCIMIENTO_DEFAULT`).
   diasAlertaVencimiento Int?
+
+  // Liquidación AUTOMÁTICA por vencimiento: cuando un lote entra en la ventana
+  // de alerta, el cron pone el stock de esa sede en liquidación con este % de
+  // descuento sobre el precio de venta, y la saca sola cuando el lote se
+  // vendió, se dio de baja o se corrigió la fecha. Null o 0 = solo avisa.
+  descuentoVencimientoPct Int?
 
   // Sistema de Combos
   esCombo         Boolean          @default(false)

@@ -11,10 +11,13 @@ import {
   UseGuards,
   Headers,
   BadRequestException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { ProductoStockService } from './producto-stock.service';
+import { VencimientoTasksService } from './vencimiento-tasks.service';
 import {
   CrearStockDto,
   AjustarStockDto,
@@ -40,7 +43,26 @@ export class ProductoStockController {
   constructor(
     private readonly stockService: ProductoStockService,
     private readonly comboService: ProductoComboService,
+    private readonly vencimientoTasks: VencimientoTasksService,
   ) {}
+
+  @Post('vencimientos/procesar')
+  @HttpCode(HttpStatus.OK)
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Correr AHORA el proceso diario de vencimientos de esta empresa',
+    description:
+      'Lo mismo que hace el cron a las 00:10: marca VENCIDO lo que ya pasó ' +
+      'su día, activa la liquidación automática de los productos que tienen ' +
+      '`descuentoVencimientoPct` y cuyo lote entró en la ventana de alerta, ' +
+      'cierra las automáticas que ya no califican, y avisa a los ' +
+      'administradores. Es para probar sin esperar a la medianoche; correrlo ' +
+      'dos veces no hace nada dos veces.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async procesarVencimientos(@Headers('x-tenant-id') empresaId: string) {
+    return this.vencimientoTasks.procesarEmpresa(empresaId);
+  }
 
   @Get('reportes/mermas')
   @RequiresPermission(Permission.VIEW_PRODUCTS)

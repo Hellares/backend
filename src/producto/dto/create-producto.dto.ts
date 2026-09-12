@@ -7,6 +7,7 @@ import {
   IsBoolean,
   Min,
   IsArray,
+  Max,
   MaxLength,
   IsEnum,
   IsIn,
@@ -333,8 +334,7 @@ export class CreateProductoDto {
 
   @ApiPropertyOptional({
     description:
-      'Cuántos días antes del vencimiento empieza a avisar. Null = el default ' +
-      'de la empresa.',
+      'Cuántos días antes del vencimiento empieza a avisar. Null = 30.',
     example: 30,
   })
   @IsOptional()
@@ -342,6 +342,22 @@ export class CreateProductoDto {
   @Min(0)
   @Type(() => Number)
   diasAlertaVencimiento?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Liquidación AUTOMÁTICA por vencimiento: cuando un lote entra en la ' +
+      'ventana de alerta, el cron diario pone el stock de esa sede en ' +
+      'liquidación con este % de descuento sobre el precio de venta (motivo ' +
+      'PROXIMO_A_VENCER), y la saca solo cuando el lote se vendió, se dio de ' +
+      'baja o se corrigió la fecha. Null o 0 = solo avisa, no toca precios.',
+    example: 30,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(90)
+  @Type(() => Number)
+  descuentoVencimientoPct?: number;
 
   @ApiPropertyOptional({
     description:

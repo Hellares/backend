@@ -1,0 +1,11 @@
+-- Liquidación AUTOMÁTICA por vencimiento (Fase 3 de lotes).
+--
+-- Cuando un lote entra en la ventana de alerta del producto
+-- (`diasAlertaVencimiento`, 30 por defecto), el cron diario pone el stock de
+-- esa sede en liquidación con este % de descuento sobre el precio de venta
+-- (motivo PROXIMO_A_VENCER, sin autorizador = automática), y la saca sola
+-- cuando el lote se vendió, se dio de baja o se corrigió la fecha.
+-- Null o 0 = el cron solo avisa, no toca precios.
+--
+-- Aditiva: columna nullable, nada cambia para los productos existentes.
+ALTER TABLE "Producto" ADD COLUMN "descuentoVencimientoPct" INTEGER;

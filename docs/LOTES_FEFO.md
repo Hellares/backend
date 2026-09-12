@@ -187,11 +187,34 @@ FEFO en silencio: ni en el precio (`resolverLineaACosto`, si el lote no
 encabeza el plan) ni en el consumo (si el lote no existe o no tiene unidades,
 también a precio de lista). La web devuelve la línea a automático y recotiza.
 
-## Lo que falta (Fase 3)
+## Fase 3 — lo que pasa solo cada día (hecha)
 
-Cron que marque `MotivoLiquidacion.PROXIMO_A_VENCER` a `diasAlertaVencimiento`
-días. 🔑 Casi todo ya existe: el motivo está en el enum y las líneas en
-liquidación **ya están exentas** del guard de venta bajo costo.
+`VencimientoTasksService` (`producto-stock/vencimiento-tasks.service.ts`),
+cron a las **05:10 UTC = 00:10 Lima**, solo con `LOTES_FEFO_ENABLED=true` y
+solo para las empresas con algún producto que controle vencimiento:
+
+1. **Marca VENCIDO** el lote ACTIVO cuyo día ya pasó (por calendario en
+   Perú). Sigue contando para el stock; sacarlo es dar de baja.
+2. **Liquidación automática**: si el producto tiene
+   `descuentoVencimientoPct` (nuevo, migración
+   `20260912120000_producto_descuento_vencimiento`) y el primer lote de la
+   fila entra en la ventana de alerta (`diasAlertaVencimiento`, 30 por
+   defecto), el stock de esa sede pasa a liquidación con ese % sobre el
+   precio de venta, motivo `PROXIMO_A_VENCER` y **sin autorizador** — eso la
+   distingue de una manual con el mismo motivo, que nunca se toca. Se cierra
+   sola cuando ya no queda lote en la ventana (se vendió, se dio de baja, se
+   corrigió la fecha). No pisa una liquidación que ya está. Sin % solo avisa.
+   ⚠️ No escribe `ProductoPrecioHistorialSede` (exige usuario); el rastro va
+   en `observacionesLiquidacion`.
+3. **Avisa** a EMPRESA_ADMIN / SEDE_ADMIN (notificación SISTEMA), una vez por
+   día y solo si hubo algo.
+
+Para probar sin esperar a la medianoche: `POST /producto-stock/vencimientos/procesar`
+(MANAGE_PRODUCTS) corre lo mismo para la empresa del tenant y devuelve el
+resumen. Es idempotente.
+
+El % se configura en la ficha del producto (web y app), al lado de "Avisar
+(días antes)".
 
 ⚠️ Tensión conocida: `enLiquidacion`/`precioLiquidacion` viven en
 `ProductoStock` (producto + sede), **no en el lote**. Con dos lotes y uno por
