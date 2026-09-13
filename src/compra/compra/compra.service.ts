@@ -1425,11 +1425,34 @@ export class CompraService {
       if (filtros.fechaHasta) where.creadoEn.lte = new Date(filtros.fechaHasta);
     }
 
-    if (filtros?.search) {
-      where.OR = [
-        { codigo: { startsWith: filtros.search, mode: 'insensitive' } },
-        { nombreProveedor: { contains: filtros.search, mode: 'insensitive' } },
+    const busqueda = filtros?.search?.trim();
+    if (busqueda) {
+      const o: Prisma.CompraWhereInput[] = [
+        { codigo: { startsWith: busqueda, mode: 'insensitive' } },
+        { nombreProveedor: { contains: busqueda, mode: 'insensitive' } },
+        // Por el comprobante del proveedor: es el número por el que pregunta
+        // el contador, y el que se tiene a mano es el papel, no el código
+        // interno de la recepción.
+        { serieDocumentoProveedor: { contains: busqueda, mode: 'insensitive' } },
+        { numeroDocumentoProveedor: { contains: busqueda, mode: 'insensitive' } },
       ];
+
+      // 🔴 "F010-4825" es UN dato para quien lo lee, pero son DOS columnas: sin
+      // esto, copiar lo que muestra la lista no encontraba nada. Se parte por
+      // el primer guion y se exigen las dos mitades.
+      const guion = busqueda.indexOf('-');
+      const serie = guion > 0 ? busqueda.slice(0, guion).trim() : '';
+      const numero = guion > 0 ? busqueda.slice(guion + 1).trim() : '';
+      if (serie && numero) {
+        o.push({
+          AND: [
+            { serieDocumentoProveedor: { contains: serie, mode: 'insensitive' } },
+            { numeroDocumentoProveedor: { contains: numero, mode: 'insensitive' } },
+          ],
+        });
+      }
+
+      where.OR = o;
     }
 
     const limit = filtros?.limit ?? 10;
