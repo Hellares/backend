@@ -310,13 +310,31 @@ export class VentaService {
     for (const d of detalles) {
       const productoIdParaNivel = d.productoId ?? d.comboId ?? null;
 
+      // Precio especial VIP: solo para líneas de producto/variante reales
+      // (no combos ni componentes de combo, que tienen su propio deal). Puede
+      // haber VARIAS políticas aplicables; el cálculo elige el menor precio.
+      //
+      // Se resuelve ANTES del cortocircuito a costo porque el tope del precio
+      // público también lo necesita: si el cliente tiene un precio especial,
+      // ese es el que pagaría sin el interruptor.
+      const vipCtxs =
+        vipResolver && !d.origenComboId && !d.comboId
+          ? vipResolver.resolver(d.productoId ?? null, d.varianteId ?? null)
+          : [];
+
       // ===== VENDER A COSTO =====
       // Cortocircuito ANTES de los niveles y ANTES del guard de divergencia:
       // el precio lo pone el servidor desde el costo, así que compararlo con
       // el que mandó el cliente no tiene sentido — y si se comparara, la
       // venta rebotaría con 409 y el modo entero sería inusable.
       if (d.precioModo) {
-        result.push(this.resolverLineaACosto(d, d.precioModo, costos));
+        const aCosto = this.resolverLineaACosto(d, d.precioModo, costos);
+        result.push(
+          await this.toparConPrecioPublico(aCosto, d, sedeId, {
+            vips: vipCtxs,
+            cantidadesGrupo,
+          }),
+        );
         continue;
       }
 
@@ -325,13 +343,6 @@ export class VentaService {
         result.push({ ...d, precioCostoSnapshot: 0, motivoLiquidacionSnapshot: null, nivelAplicadoSnapshot: null });
         continue;
       }
-      // Precio especial VIP: solo para líneas de producto/variante reales
-      // (no combos ni componentes de combo, que tienen su propio deal). Puede
-      // haber VARIAS políticas aplicables; el cálculo elige el menor precio.
-      const vipCtxs =
-        vipResolver && !d.origenComboId && !d.comboId
-          ? vipResolver.resolver(d.productoId ?? null, d.varianteId ?? null)
-          : [];
       try {
         const calc = await this.precioNivelService.calcularPrecioSegunCantidad(
           productoIdParaNivel,
@@ -582,6 +593,72 @@ export class VentaService {
       motivoLiquidacionSnapshot: null,
       nivelAplicadoSnapshot: ETIQUETA_MODO_COSTO[modo],
       ventaACosto: true,
+    };
+  }
+
+  /**
+   * Techo de una línea a costo: NUNCA por encima de lo que ese cliente
+   * pagaría sin el interruptor.
+   *
+   * 🔴 El caso que lo motivó (ventas 912 y 913 de beta): un producto de lista
+   * 500, costo 300 y liquidación vigente a 250. Vendido normal salía 250;
+   * el mismo producto "a costo" salía 300 — el cajero prendía el modo
+   * creyendo que le hacía un favor al cliente y le cobraba S/ 50 MÁS caro.
+   * `resolverLineaACosto` es un cortocircuito que ni mira la liquidación, así
+   * que el número del costo pasaba derecho.
+   *
+   * Cuando el precio público gana, la línea deja de ser "a costo" a todos los
+   * efectos: se sella el nivel que REALMENTE se aplicó (con su motivo de
+   * liquidación, que la línea a costo borraba) y pierde la exención del guard
+   * de venta bajo costo. Queda idéntica a la venta que se habría hecho sin
+   * tocar el interruptor — que es justamente lo que se cobró.
+   *
+   * Lo que NO cambia es de qué lote sale: el `loteId` elegido sigue mandando
+   * el consumo. El cliente se lleva SU mercadería, al precio de la vidriera.
+   */
+  private async toparConPrecioPublico(
+    linea: DetalleConSnapshot,
+    d: CreateVentaDetalleDto,
+    sedeId: string,
+    opts: { vips: VipPrecioContexto[]; cantidadesGrupo: Map<string, number> },
+  ): Promise<DetalleConSnapshot> {
+    if (!d.productoId && !d.varianteId) return linea;
+
+    let calc: Awaited<
+      ReturnType<PrecioNivelService['calcularPrecioSegunCantidad']>
+    >;
+    try {
+      calc = await this.precioNivelService.calcularPrecioSegunCantidad(
+        d.productoId ?? null,
+        d.varianteId ?? null,
+        sedeId,
+        d.cantidad,
+        { vips: opts.vips, cantidadesGrupo: opts.cantidadesGrupo },
+      );
+    } catch {
+      // Sin precio configurado en la sede no hay techo contra el cual
+      // comparar. El costo ya resuelto es lo único que hay, y frenar acá una
+      // venta que hoy pasa sería peor que dejarla seguir.
+      return linea;
+    }
+
+    // Medio centavo de tolerancia: el costo sale de una división por unidades
+    // y empatar no es "cobrar de más".
+    if (calc.precioUnitario >= linea.precioUnitario - 0.005) return linea;
+
+    return {
+      ...linea,
+      precioUnitario: round6(calc.precioUnitario),
+      precioCostoSnapshot: calc.precioCosto ?? linea.precioCostoSnapshot,
+      motivoLiquidacionSnapshot:
+        (calc.motivoLiquidacion as MotivoLiquidacion | null) ?? null,
+      nivelAplicadoSnapshot:
+        calc.nivelAplicado && calc.nivelAplicado !== 'Precio base'
+          ? calc.nivelAplicado
+          : null,
+      vipPoliticaId: calc.vipAplicado ? calc.vipPoliticaId ?? null : null,
+      precioBaseVip: calc.vipAplicado ? calc.precioBase : null,
+      ventaACosto: false,
     };
   }
 

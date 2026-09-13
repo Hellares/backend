@@ -9,7 +9,7 @@ import { CostoVentaService } from '../producto/costo-venta.service';
  * guard de divergencia — el precio lo pone el servidor desde el costo de la
  * compra.
  *
- * Tres cosas que no pueden romperse:
+ * Cuatro cosas que no pueden romperse:
  *
  *  1. El precio sale del COSTO y el que mandó el cliente se ignora, sin 409.
  *     Si esto se rompiera comparando contra `precioUnitario`, el modo entero
@@ -19,6 +19,9 @@ import { CostoVentaService } from '../producto/costo-venta.service';
  *     pisarlo desalinearía el margen reportado del COGS.
  *  3. Sin costo NO se cae al precio de lista: revienta con un error explícito.
  *     Cobrarle lista a un cliente al que se le prometió costo es el peor final.
+ *  4. El costo NUNCA queda por encima del precio público vigente. Con el
+ *     producto en liquidación por debajo del costo, prender el interruptor le
+ *     SUBÍA el precio al cliente (ventas 912/913 de beta).
  */
 describe('VentaService · vender a costo', () => {
   let service: VentaService;
@@ -45,7 +48,28 @@ describe('VentaService · vender a costo', () => {
     origen: null,
   };
 
-  const buildService = (costos: Map<string, any>, puedeEditarPrecio = true) => {
+  /**
+   * Lo que el cliente pagaría SIN el interruptor. Por defecto muy por encima
+   * del costo —el caso normal— así que el techo no toca nada; los tests que
+   * lo necesitan bajan `precioUnitario` a mano.
+   */
+  const PRECIO_PUBLICO = {
+    precioUnitario: 189,
+    precioBase: 189,
+    precioPublico: 189,
+    precioCosto: 141.8,
+    nivelAplicado: 'Precio base',
+    motivoLiquidacion: null,
+    descuentoAplicado: 0,
+    vipAplicado: false,
+    vipPoliticaId: null,
+  };
+
+  const buildService = (
+    costos: Map<string, any>,
+    puedeEditarPrecio = true,
+    precioPublico: any = PRECIO_PUBLICO,
+  ) => {
     prisma = {
       producto: { findMany: jest.fn().mockResolvedValue([]) },
       productoVariante: { findMany: jest.fn().mockResolvedValue([]) },
@@ -62,7 +86,12 @@ describe('VentaService · vender a costo', () => {
     // antes del loop y también cuando ninguna línea usa niveles.
     const precioNivel = {
       calcularCantidadesGrupoMayoreo: jest.fn().mockResolvedValue(new Map()),
-      calcularPrecioSegunCantidad: jest.fn(),
+      // 🔑 La línea a costo TAMBIÉN lo consulta ahora: es el techo contra el
+      // que se compara. Lo que sigue sin hacer es entrar al guard de
+      // divergencia, que es lo que la rebotaría con 409.
+      calcularPrecioSegunCantidad: precioPublico?.__rechaza
+        ? jest.fn().mockRejectedValue(new Error('sin precio en la sede'))
+        : jest.fn().mockResolvedValue(precioPublico),
     };
     service = new VentaService(
       prisma, null as any, null as any, null as any, null as any,
@@ -128,6 +157,75 @@ describe('VentaService · vender a costo', () => {
     // Cobra 132.50 (el lote) pero valora contra 141.80 (el promedio): así el
     // margen reportado y el COGS del kardex siguen hablando del mismo número.
     expect(out.precioCostoSnapshot).toBe(141.8);
+  });
+
+  describe('techo del precio público', () => {
+    /**
+     * El caso real: ventas 912 y 913 de beta sobre el mismo producto, con 17
+     * segundos de diferencia. Lista 500, costo 300, liquidación vigente 250.
+     * La 912 (normal) cobró 250 y la 913 (a costo) cobró 300.
+     */
+    const EN_LIQUIDACION = {
+      ...PRECIO_PUBLICO,
+      precioUnitario: 250,
+      precioBase: 500,
+      precioPublico: 250,
+      precioCosto: 300,
+      nivelAplicado: 'Liquidación',
+      motivoLiquidacion: 'FUERA_DE_CAMPANA',
+    };
+
+    const costoDe = (monto: number) =>
+      new Map([[
+        CostoVentaService.claveDeLinea('prod-1', null, null),
+        { ...COSTOS, costoPromedio: monto, costoLote: monto, costoLoteSinFlete: monto },
+      ]]);
+
+    it('🔴 en liquidación por debajo del costo, cobra la LIQUIDACIÓN y no el costo', async () => {
+      buildService(costoDe(300), true, EN_LIQUIDACION);
+
+      const [out] = await aplicar([linea({ cantidad: 1, precioUnitario: 250 })]);
+
+      // Cobraba 300: S/ 50 MÁS que sin tocar el interruptor.
+      expect(out.precioUnitario).toBe(250);
+      // Se sella lo que REALMENTE se aplicó, con su motivo —que la línea a
+      // costo borraba, dejando la venta fuera del reporte de liquidaciones.
+      expect(out.nivelAplicadoSnapshot).toBe('Liquidación');
+      expect(out.motivoLiquidacionSnapshot).toBe('FUERA_DE_CAMPANA');
+      // Y deja de ser "a costo": el precio ya no lo puso el costo, así que no
+      // se lleva la exención del guard de venta bajo costo.
+      expect(out.ventaACosto).toBe(false);
+    });
+
+    it('el costo por debajo del público NO se toca', async () => {
+      buildService(conCosto()); // público 189 contra un lote de 132.50
+
+      const [out] = await aplicar([linea()]);
+
+      expect(out.precioUnitario).toBe(132.5);
+      expect(out.nivelAplicadoSnapshot).toBe('Costo lote');
+      expect(out.ventaACosto).toBe(true);
+    });
+
+    it('empatar no es cobrar de más: la línea sigue siendo a costo', async () => {
+      buildService(conCosto(), true, { ...PRECIO_PUBLICO, precioUnitario: 132.5 });
+
+      const [out] = await aplicar([linea()]);
+
+      expect(out.precioUnitario).toBe(132.5);
+      expect(out.nivelAplicadoSnapshot).toBe('Costo lote');
+      expect(out.ventaACosto).toBe(true);
+    });
+
+    it('sin precio en la sede no hay techo contra el cual comparar: manda el costo', async () => {
+      // Frenar acá una venta que hoy pasa sería peor que dejarla seguir.
+      buildService(conCosto(), true, { __rechaza: true });
+
+      const [out] = await aplicar([linea()]);
+
+      expect(out.precioUnitario).toBe(132.5);
+      expect(out.ventaACosto).toBe(true);
+    });
   });
 
   it('🔴 una línea a costo con margen negativo NO pide autorización gerencial', async () => {
