@@ -11,6 +11,7 @@ import { AppLoggerService } from '../common/logger/logger.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { CreateDevolucionVentaDto } from './dto/create-devolucion-venta.dto';
+import { validarCantidadesDevolucion } from './cantidades-devolucion.util';
 import { QueryDevolucionVentaDto } from './dto/query-devolucion-venta.dto';
 import {
   EstadoDevolucion,
@@ -127,11 +128,35 @@ export class DevolucionVentaService {
             `Producto ${item.productoId} no encontrado en la venta`,
           );
         }
-        if (item.cantidad > Number(detalle.cantidad)) {
-          throw new BadRequestException(
-            `Cantidad a devolver (${item.cantidad}) excede la vendida (${detalle.cantidad})`,
-          );
-        }
+      }
+
+      // 🔴 Contra lo vendido MENOS lo que ya se devolvió. Antes solo contra lo
+      // vendido: la misma unidad se podía devolver dos veces, y la caja
+      // reembolsaba dos veces. Cuentan las devoluciones en curso (pendientes
+      // y aprobadas), no solo las procesadas: si no, dos pendientes de la
+      // misma venta pasarían las dos.
+      const previas = await tx.devolucionItem.findMany({
+        where: {
+          devolucion: {
+            ventaId: dto.ventaId,
+            estado: {
+              notIn: [EstadoDevolucion.CANCELADA, EstadoDevolucion.RECHAZADA],
+            },
+          },
+        },
+        select: { productoId: true, varianteId: true, cantidad: true },
+      });
+      const errorCantidades = validarCantidadesDevolucion(
+        venta.detalles,
+        previas,
+        dto.items.map((i) => ({
+          productoId: i.productoId ?? null,
+          varianteId: i.varianteId ?? null,
+          cantidad: i.cantidad,
+        })),
+      );
+      if (errorCantidades) {
+        throw new BadRequestException(errorCantidades);
       }
 
       const codigo = await this.generateCodigo(empresaId);
@@ -315,6 +340,48 @@ export class DevolucionVentaService {
         throw new BadRequestException(
           `Solo se pueden procesar devoluciones APROBADAS. Estado: ${devolucion.estado}`,
         );
+      }
+
+      // 🔴 Las cantidades, otra vez y ANTES de tocar stock o caja: dos
+      // devoluciones de la misma venta pueden estar pendientes a la vez y
+      // haber pasado las dos la validación al crearse (y las creadas antes de
+      // este arreglo nunca la tuvieron). Acá cuenta solo lo ya PROCESADO.
+      //
+      // La fila de la venta se bloquea para que dos procesamientos simultáneos
+      // de la misma venta no lean los dos "todavía no se devolvió nada".
+      if (devolucion.ventaId) {
+        await tx.$queryRaw`SELECT id FROM "Venta" WHERE id = ${devolucion.ventaId} FOR UPDATE`;
+        const venta = await tx.venta.findUnique({
+          where: { id: devolucion.ventaId },
+          select: {
+            detalles: {
+              select: {
+                productoId: true,
+                varianteId: true,
+                cantidad: true,
+                descripcion: true,
+              },
+            },
+          },
+        });
+        const procesadas = await tx.devolucionItem.findMany({
+          where: {
+            devolucion: {
+              ventaId: devolucion.ventaId,
+              estado: EstadoDevolucion.PROCESADA,
+              id: { not: devolucion.id },
+            },
+          },
+          select: { productoId: true, varianteId: true, cantidad: true },
+        });
+        const errorCantidades = validarCantidadesDevolucion(
+          venta?.detalles ?? [],
+          procesadas,
+          devolucion.items,
+        );
+        if (errorCantidades) {
+          throw new BadRequestException(errorCantidades);
+        }
       }
 
       // Guard de coherencia: rechazar combinaciones imposibles antes
