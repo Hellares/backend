@@ -38,7 +38,13 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
         findFirst: jest.fn().mockResolvedValue({ id: 'ps-1' }),
         update: jest.fn().mockResolvedValue({}),
       },
-      movimientoStock: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      movimientoStock: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'mov-1' }]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      // Sin asignaciones por defecto = motor de lotes apagado (prod hoy).
+      movimientoStockLote: { findMany: jest.fn().mockResolvedValue([]) },
+      lote: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       descuentoUsoHistorial: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       ventaDetalle: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
@@ -75,6 +81,28 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
       expect(tx.ventaDetalle.deleteMany).toHaveBeenCalledWith({ where: { ventaId: 'venta-1' } });
       expect(tx.venta.delete).toHaveBeenCalledWith({ where: { id: 'venta-1' } });
       expect(realtimeInvalidation.notifyStockCambiado).toHaveBeenCalled();
+    });
+
+    it('🔴 con el motor de lotes prendido, devuelve las unidades a SUS lotes ANTES de borrar los movimientos', async () => {
+      prisma.venta.findFirst.mockResolvedValue(ventaDiferida());
+      // La venta sacó 2 del lote-1: es la asignación que la cascada va a borrar.
+      tx.movimientoStockLote.findMany.mockResolvedValue([{ loteId: 'lote-1', cantidad: 2 }]);
+
+      const r = await service.eliminarVentaYapeDiferidaPendiente('venta-1', 'emp-1');
+
+      expect(r.eliminada).toBe(true);
+      expect(tx.movimientoStockLote.findMany).toHaveBeenCalledWith({
+        where: { movimientoStockId: { in: ['mov-1'] }, cantidad: { gt: 0 } },
+        select: { loteId: true, cantidad: true },
+      });
+      expect(tx.lote.updateMany).toHaveBeenCalledWith({
+        where: { id: 'lote-1', estado: { in: ['ACTIVO', 'VENCIDO'] } },
+        data: { cantidadActual: { increment: 2 } },
+      });
+      // Antes del borrado: después ya no queda de dónde leer los lotes.
+      expect(tx.lote.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        tx.movimientoStock.deleteMany.mock.invocationCallOrder[0],
+      );
     });
 
     it('pago llegó justo antes (pagos>0): NO borra, devuelve yaPagada', async () => {

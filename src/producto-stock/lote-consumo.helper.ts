@@ -221,20 +221,49 @@ export async function devolverALotesDeOrigen(
   });
   if (!consumos.length) return { asignaciones: [], sinCubrir: cantidad };
 
-  // Lo ya devuelto por reversas anteriores, para no reponer dos veces la
-  // misma unidad si se devuelve en tandas.
-  const yaDevuelto = await tx.movimientoStockLote.groupBy({
-    by: ['loteId'],
-    where: {
-      loteId: { in: consumos.map((c) => c.loteId) },
-      cantidad: { lt: 0 },
-      movimiento: { id: { notIn: movimientosOrigenIds } },
-    },
-    _sum: { cantidad: true },
+  // Lo ya devuelto por reversas ANTERIORES DEL MISMO DOCUMENTO, para no
+  // reponer dos veces la misma unidad si se devuelve en tandas.
+  //
+  // 🔴 Acotado a la misma venta (o transferencia). Antes sumaba TODA
+  // asignación negativa del lote, y la CREACIÓN de un lote `AJU-` se registra
+  // en negativo: anular una venta que salió de un AJU- de 7 veía "ya se
+  // devolvieron 7" y mandaba la unidad a un lote nuevo (ventas 917 y 918 de
+  // beta, 13-09). Por lo mismo contaba las devoluciones de OTRAS ventas.
+  const origenes = await tx.movimientoStock.findMany({
+    where: { id: { in: movimientosOrigenIds } },
+    select: { ventaId: true, transferenciaId: true },
   });
-  const devueltoPorLote = new Map(
-    yaDevuelto.map((r) => [r.loteId, Math.abs(r._sum.cantidad ?? 0)]),
-  );
+  const ventaIds = [
+    ...new Set(origenes.map((o) => o.ventaId).filter((x): x is string => !!x)),
+  ];
+  const transferenciaIds = [
+    ...new Set(
+      origenes.map((o) => o.transferenciaId).filter((x): x is string => !!x),
+    ),
+  ];
+  const mismoDocumento: Prisma.MovimientoStockWhereInput[] = [
+    ...(ventaIds.length ? [{ ventaId: { in: ventaIds } }] : []),
+    ...(transferenciaIds.length
+      ? [{ transferenciaId: { in: transferenciaIds } }]
+      : []),
+  ];
+
+  // Sin documento no hay tandas anteriores que se puedan reconocer.
+  const devueltoPorLote = new Map<string, number>();
+  if (mismoDocumento.length) {
+    const yaDevuelto = await tx.movimientoStockLote.groupBy({
+      by: ['loteId'],
+      where: {
+        loteId: { in: consumos.map((c) => c.loteId) },
+        cantidad: { lt: 0 },
+        movimiento: { id: { notIn: movimientosOrigenIds }, OR: mismoDocumento },
+      },
+      _sum: { cantidad: true },
+    });
+    for (const r of yaDevuelto) {
+      devueltoPorLote.set(r.loteId, Math.abs(r._sum.cantidad ?? 0));
+    }
+  }
 
   const asignaciones: AsignacionLote[] = [];
   let restante = cantidad;
@@ -245,22 +274,10 @@ export async function devolverALotesDeOrigen(
     if (disponible <= 0) continue;
     const repone = Math.min(disponible, restante);
 
-    // 🔴 Solo se reactiva lo que estaba AGOTADO. Un lote VENCIDO o BLOQUEADO
-    // NO vuelve a ACTIVO porque le devuelvan una unidad: que la mercadería
-    // regrese no la hace vendible, y resucitarlo la pondría a la venta sin que
-    // nadie lo decida.
-    //
-    // Dos `updateMany` EXCLUYENTES entre sí por estado (y no un `update` con
-    // ternario) porque `update` exige que el `where` sea único: el estado no
-    // se puede condicionar ahí.
-    await tx.lote.updateMany({
-      where: { id: c.loteId, estado: 'AGOTADO' },
-      data: { cantidadActual: { increment: repone }, estado: 'ACTIVO' },
-    });
-    await tx.lote.updateMany({
-      where: { id: c.loteId, estado: { in: [...ESTADOS_LOTE_PRESENTE] } },
-      data: { cantidadActual: { increment: repone } },
-    });
+    // Un lote al que no se pudo reponer no cuenta como devuelto: esas unidades
+    // quedan en `sinCubrir` y quien llama les crea un lote, en vez de registrar
+    // una asignación que no pasó.
+    if (!(await reponerEnLote(tx, c.loteId, repone))) continue;
 
     asignaciones.push({
       loteId: c.loteId,
@@ -272,6 +289,79 @@ export async function devolverALotesDeOrigen(
   }
 
   return { asignaciones, sinCubrir: restante };
+}
+
+/**
+ * Deshace EXACTAMENTE lo que ciertos movimientos consumieron de sus lotes, para
+ * cuando esos movimientos se BORRAN en vez de revertirse con otro.
+ *
+ * 🔑 El caso: la venta Yape diferida que se cancela o vence sin pagar. No se
+ * anula —nunca existió fiscalmente—, se borra con sus movimientos, y la cascada
+ * se lleva las asignaciones: sin esto el stock volvía y los lotes quedaban
+ * descontados para siempre (Σ lotes < stockActual).
+ *
+ * No usa `devolverALotesDeOrigen` a propósito: esa descuenta "lo ya devuelto"
+ * mirando las OTRAS asignaciones negativas del lote, y la creación de un lote
+ * `AJU-` se registra en negativo, así que nunca repondría a uno de esos. Acá no
+ * hay devolución parcial que proteger: vuelve todo lo que salió.
+ *
+ * Llamar ANTES de borrar los movimientos. Devuelve las unidades que no se
+ * pudieron reponer (0 con la invariante sana).
+ */
+export async function revertirConsumoDeLotes(
+  tx: Prisma.TransactionClient,
+  movimientoIds: string[],
+): Promise<number> {
+  if (!movimientoIds.length) return 0;
+
+  const consumos = await tx.movimientoStockLote.findMany({
+    where: { movimientoStockId: { in: movimientoIds }, cantidad: { gt: 0 } },
+    select: { loteId: true, cantidad: true },
+  });
+
+  const porLote = new Map<string, number>();
+  for (const c of consumos) {
+    porLote.set(c.loteId, (porLote.get(c.loteId) ?? 0) + c.cantidad);
+  }
+
+  let sinReponer = 0;
+  for (const [loteId, cantidad] of porLote) {
+    if (!(await reponerEnLote(tx, loteId, cantidad))) sinReponer += cantidad;
+  }
+  return sinReponer;
+}
+
+/**
+ * Le suma [cantidad] a un lote que vuelve a tener mercadería. Devuelve si lo
+ * encontró en un estado al que se le puede reponer.
+ *
+ * 🔴 Dos `updateMany` EXCLUYENTES, y el ORDEN importa: primero el lote que ya
+ * está presente, recién después el AGOTADO. Al revés —como estaba— el primero
+ * pasaba el AGOTADO a ACTIVO y el segundo, que filtra por ACTIVO, lo volvía a
+ * encontrar y sumaba OTRA VEZ: anular la venta que agotó un lote de 3 lo
+ * dejaba en 6.
+ *
+ * Solo se reactiva lo que estaba AGOTADO. Un lote VENCIDO suma sin volver a
+ * ACTIVO: que la mercadería regrese no la hace vendible, y resucitarlo la
+ * pondría a la venta sin que nadie lo decida. No es un `update` porque exige un
+ * `where` único y el estado no se puede condicionar ahí.
+ */
+async function reponerEnLote(
+  tx: Prisma.TransactionClient,
+  loteId: string,
+  cantidad: number,
+): Promise<boolean> {
+  const presente = await tx.lote.updateMany({
+    where: { id: loteId, estado: { in: [...ESTADOS_LOTE_PRESENTE] } },
+    data: { cantidadActual: { increment: cantidad } },
+  });
+  if (presente.count > 0) return true;
+
+  const agotado = await tx.lote.updateMany({
+    where: { id: loteId, estado: 'AGOTADO' },
+    data: { cantidadActual: { increment: cantidad }, estado: 'ACTIVO' },
+  });
+  return agotado.count > 0;
 }
 
 /**

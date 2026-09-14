@@ -4,6 +4,7 @@ import {
   devolverALotesDeOrigen,
   heredarLotesDeTransferencia,
   planificarFefo,
+  revertirConsumoDeLotes,
 } from './lote-consumo.helper';
 
 /**
@@ -46,6 +47,11 @@ describe('Consumo de lotes (FEFO)', () => {
         findMany: jest.fn().mockResolvedValue([]),
         groupBy: jest.fn().mockResolvedValue([]),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      // El documento de los movimientos de origen: acota "lo ya devuelto" a
+      // las reversas de ESA venta.
+      movimientoStock: {
+        findMany: jest.fn().mockResolvedValue([{ ventaId: 'venta-1', transferenciaId: null }]),
       },
     };
   };
@@ -158,14 +164,11 @@ describe('Consumo de lotes (FEFO)', () => {
         { loteId: 'a', cantidad: -2, costoUnitario: dec(11.8) },
       ]);
       expect(sinCubrir).toBe(0);
-      // 🔴 Dos updates por lote, EXCLUYENTES por estado: solo el que estaba
-      // AGOTADO vuelve a ACTIVO. Un lote VENCIDO cae en el segundo, que suma
-      // la unidad sin resucitarlo — que la mercadería regrese no la hace
-      // vendible.
+      // Un solo update por lote: este mock responde que el lote ya estaba
+      // presente, así que no hace falta el de AGOTADO. Qué pasa con un lote
+      // agotado o vencido se prueba abajo, con una base que guarda el estado.
       expect(updates).toEqual([
-        { id: 'b', exige: 'AGOTADO', data: { cantidadActual: { increment: 2 }, estado: 'ACTIVO' } },
         { id: 'b', exige: { in: ['ACTIVO', 'VENCIDO'] }, data: { cantidadActual: { increment: 2 } } },
-        { id: 'a', exige: 'AGOTADO', data: { cantidadActual: { increment: 2 }, estado: 'ACTIVO' } },
         { id: 'a', exige: { in: ['ACTIVO', 'VENCIDO'] }, data: { cantidadActual: { increment: 2 } } },
       ]);
     });
@@ -201,7 +204,187 @@ describe('Consumo de lotes (FEFO)', () => {
       expect(asignaciones).toEqual([]);
       expect(sinCubrir).toBe(5);
     });
+
+    it('🔴 "lo ya devuelto" se cuenta SOLO de la misma venta: la creación de un lote AJU- no cuenta', async () => {
+      // Ventas 917 y 918 de beta (13-09): salieron de un AJU- de 7 y al
+      // anularlas la unidad fue a un lote NUEVO, porque la asignación −7 que
+      // CREÓ el lote se tomaba como una devolución anterior.
+      conLotes([]);
+      tx.movimientoStockLote.findMany.mockResolvedValue([
+        { loteId: 'aju', cantidad: 1, costoUnitario: dec(10) },
+      ]);
+
+      const { asignaciones, sinCubrir } = await devolverALotesDeOrigen(tx, ['mov-venta'], 1);
+
+      expect(tx.movimientoStock.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['mov-venta'] } },
+        select: { ventaId: true, transferenciaId: true },
+      });
+      expect(tx.movimientoStockLote.groupBy).toHaveBeenCalledWith({
+        by: ['loteId'],
+        where: {
+          loteId: { in: ['aju'] },
+          cantidad: { lt: 0 },
+          movimiento: { id: { notIn: ['mov-venta'] }, OR: [{ ventaId: { in: ['venta-1'] } }] },
+        },
+        _sum: { cantidad: true },
+      });
+      // Vuelve a SU lote.
+      expect(asignaciones).toEqual([{ loteId: 'aju', cantidad: -1, costoUnitario: dec(10) }]);
+      expect(sinCubrir).toBe(0);
+    });
+
+    it('en una transferencia rechazada que vuelve, se acota a ESA transferencia', async () => {
+      conLotes([]);
+      tx.movimientoStock.findMany.mockResolvedValue([{ ventaId: null, transferenciaId: 'tr-1' }]);
+      tx.movimientoStockLote.findMany.mockResolvedValue([
+        { loteId: 'a', cantidad: 2, costoUnitario: dec(10) },
+      ]);
+
+      await devolverALotesDeOrigen(tx, ['mov-salida'], 2);
+
+      expect(tx.movimientoStockLote.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            movimiento: {
+              id: { notIn: ['mov-salida'] },
+              OR: [{ transferenciaId: { in: ['tr-1'] } }],
+            },
+          }),
+        }),
+      );
+    });
+
+    it('si el origen no tiene documento no hay tandas que reconocer: repone todo', async () => {
+      conLotes([]);
+      tx.movimientoStock.findMany.mockResolvedValue([{ ventaId: null, transferenciaId: null }]);
+      tx.movimientoStockLote.findMany.mockResolvedValue([
+        { loteId: 'a', cantidad: 2, costoUnitario: dec(10) },
+      ]);
+
+      const { sinCubrir } = await devolverALotesDeOrigen(tx, ['mov-1'], 2);
+
+      expect(tx.movimientoStockLote.groupBy).not.toHaveBeenCalled();
+      expect(sinCubrir).toBe(0);
+    });
   });
+
+  describe('🔴 reponer a un lote: una sola vez, y sin resucitar vencidos', () => {
+    /**
+     * Una tabla de lotes que aplica el `where` de `updateMany` como la base.
+     * El mock de `conLotes` responde `count: 1` a todo y por eso nunca vio que
+     * el AGOTADO pasaba a ACTIVO y el segundo update lo volvía a sumar.
+     */
+    const conBase = (
+      filas: Array<{ id: string; estado: string; cantidadActual: number }>,
+    ) => {
+      const base = new Map(filas.map((f) => [f.id, { ...f }]));
+      conLotes([]);
+      tx.lote.updateMany = jest.fn(({ where, data }: any) => {
+        const fila = base.get(where.id);
+        const e = where.estado;
+        const cumple =
+          fila != null && (typeof e === 'string' ? fila.estado === e : e.in.includes(fila.estado));
+        if (!cumple) return Promise.resolve({ count: 0 });
+        fila.cantidadActual += data.cantidadActual.increment;
+        if (data.estado) fila.estado = data.estado;
+        return Promise.resolve({ count: 1 });
+      });
+      return base;
+    };
+
+    it('anular la venta que AGOTÓ un lote lo repone UNA vez (antes quedaba al doble)', async () => {
+      const base = conBase([{ id: 'a', estado: 'AGOTADO', cantidadActual: 0 }]);
+      tx.movimientoStockLote.findMany.mockResolvedValue([
+        { loteId: 'a', cantidad: 3, costoUnitario: dec(10) },
+      ]);
+
+      const { sinCubrir } = await devolverALotesDeOrigen(tx, ['mov-1'], 3);
+
+      expect(base.get('a')).toEqual({ id: 'a', estado: 'ACTIVO', cantidadActual: 3 });
+      expect(sinCubrir).toBe(0);
+    });
+
+    it('a un VENCIDO le vuelve la unidad pero sigue VENCIDO', async () => {
+      const base = conBase([{ id: 'v', estado: 'VENCIDO', cantidadActual: 1 }]);
+      tx.movimientoStockLote.findMany.mockResolvedValue([
+        { loteId: 'v', cantidad: 2, costoUnitario: dec(10) },
+      ]);
+
+      await devolverALotesDeOrigen(tx, ['mov-1'], 2);
+
+      expect(base.get('v')).toEqual({ id: 'v', estado: 'VENCIDO', cantidadActual: 3 });
+    });
+
+    it('un lote al que no se puede reponer no se da por devuelto: queda sin cubrir', async () => {
+      conBase([]); // el lote ya no existe
+      tx.movimientoStockLote.findMany.mockResolvedValue([
+        { loteId: 'fantasma', cantidad: 2, costoUnitario: dec(10) },
+      ]);
+
+      const { asignaciones, sinCubrir } = await devolverALotesDeOrigen(tx, ['mov-1'], 2);
+
+      expect(asignaciones).toEqual([]);
+      expect(sinCubrir).toBe(2);
+    });
+
+    describe('revertirConsumoDeLotes (borrar la venta Yape diferida)', () => {
+      it('🔑 devuelve EXACTAMENTE lo que salió, sumado por lote', async () => {
+        const base = conBase([
+          { id: 'a', estado: 'AGOTADO', cantidadActual: 0 },
+          { id: 'b', estado: 'ACTIVO', cantidadActual: 4 },
+        ]);
+        // Dos líneas de la venta tomaron del lote a; otra, del b.
+        tx.movimientoStockLote.findMany.mockResolvedValue([
+          { loteId: 'a', cantidad: 2 },
+          { loteId: 'a', cantidad: 1 },
+          { loteId: 'b', cantidad: 5 },
+        ]);
+
+        const sinReponer = await revertirConsumoDeLotes(tx, ['mov-1', 'mov-2']);
+
+        expect(sinReponer).toBe(0);
+        expect(base.get('a')).toEqual({ id: 'a', estado: 'ACTIVO', cantidadActual: 3 });
+        expect(base.get('b')).toEqual({ id: 'b', estado: 'ACTIVO', cantidadActual: 9 });
+        // Solo el CONSUMO (cantidad > 0): una entrada se guarda en negativo.
+        expect(tx.movimientoStockLote.findMany).toHaveBeenCalledWith({
+          where: { movimientoStockId: { in: ['mov-1', 'mov-2'] }, cantidad: { gt: 0 } },
+          select: { loteId: true, cantidad: true },
+        });
+      });
+
+      it('🔴 repone también a un lote AJU-: no descuenta "lo ya devuelto" de otros movimientos', async () => {
+        // La creación de un lote AJU- queda como asignación NEGATIVA de su
+        // movimiento de entrada; `devolverALotesDeOrigen` la toma como una
+        // devolución anterior y no repondría ahí.
+        const base = conBase([{ id: 'aju', estado: 'AGOTADO', cantidadActual: 0 }]);
+        tx.movimientoStockLote.groupBy.mockResolvedValue([
+          { loteId: 'aju', _sum: { cantidad: -7 } },
+        ]);
+        tx.movimientoStockLote.findMany.mockResolvedValue([{ loteId: 'aju', cantidad: 2 }]);
+
+        await revertirConsumoDeLotes(tx, ['mov-1']);
+
+        expect(base.get('aju')).toEqual({ id: 'aju', estado: 'ACTIVO', cantidadActual: 2 });
+        expect(tx.movimientoStockLote.groupBy).not.toHaveBeenCalled();
+      });
+
+      it('informa lo que no pudo reponer', async () => {
+        conBase([]);
+        tx.movimientoStockLote.findMany.mockResolvedValue([{ loteId: 'fantasma', cantidad: 2 }]);
+
+        expect(await revertirConsumoDeLotes(tx, ['mov-1'])).toBe(2);
+      });
+
+      it('sin movimientos no consulta nada (venta con el motor apagado)', async () => {
+        conLotes([]);
+
+        expect(await revertirConsumoDeLotes(tx, [])).toBe(0);
+        expect(tx.movimientoStockLote.findMany).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   describe('transferencia recibida', () => {
     // El lote que salió de la sede de origen.
     const ORIGEN = {

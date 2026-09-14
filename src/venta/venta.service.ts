@@ -22,6 +22,7 @@ import { PermissionsService } from '../auth/services/permissions.service';
 import {
   ESTADOS_LOTE_PRESENTE,
   planificarFefo,
+  revertirConsumoDeLotes,
 } from '../producto-stock/lote-consumo.helper';
 import { estaVencido } from '../common/utils/date-utils';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
@@ -5599,6 +5600,25 @@ export class VentaService {
         data: { stockActual: { increment: Number(d.cantidad) } },
       });
     }
+    // 🔴 Los LOTES, antes de borrar los movimientos. La venta descontó de sus
+    // lotes y el borrado en cascada se lleva las asignaciones —la única forma
+    // de saber de cuál salió—: sin esto el stock volvía y los lotes quedaban
+    // descontados para siempre. En JAYLI 137 de 209 ventas del mes son
+    // diferidas.
+    const movimientos = await tx.movimientoStock.findMany({
+      where: { ventaId: venta.id },
+      select: { id: true },
+    });
+    const sinReponer = await revertirConsumoDeLotes(
+      tx,
+      movimientos.map((m: { id: string }) => m.id),
+    );
+    if (sinReponer > 0) {
+      this.logger.warn(
+        `[lotes] venta diferida ${venta.id}: ${sinReponer} unidades no volvieron a su lote`,
+      );
+    }
+
     // Borrar hijos (no hay onDelete cascade) y luego la venta. Una diferida sin
     // pagar no tiene pagos/comprobante/caja/cuotas.
     await tx.movimientoStock.deleteMany({ where: { ventaId: venta.id } });
