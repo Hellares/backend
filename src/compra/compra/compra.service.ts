@@ -678,6 +678,11 @@ export class CompraService {
           // unidad entre a un costo y salga a otro, y el kardex valorizado
           // deja de poder sumarse.
           precioCostoUnitario: precioCompra,
+          // 🔴 El lote de esta entrada lo crea el paso (e), con su costo real,
+          // su proveedor y su vencimiento. Antes el helper lo adivinaba por
+          // TIPO y salteaba todo `ENTRADA_COMPRA`, así que un ajuste manual con
+          // ese tipo —el que el app traía elegido— entraba stock SIN lote.
+          lotesGestionadosPorElLlamador: true,
         });
 
         // e. Crear Lote

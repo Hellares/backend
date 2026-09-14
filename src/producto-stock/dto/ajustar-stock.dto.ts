@@ -4,9 +4,10 @@ import { TipoMovimientoStock } from '@prisma/client';
 
 export class AjustarStockDto {
   @ApiProperty({
-    description: 'Tipo de movimiento',
+    description:
+      'Tipo de movimiento. Solo los de ajuste (ver `tipos-ajuste-manual.ts`): el resto tiene su propio flujo y se rechaza con 400',
     enum: TipoMovimientoStock,
-    example: TipoMovimientoStock.ENTRADA_AJUSTE,
+    example: TipoMovimientoStock.AJUSTE_ENTRADA,
   })
   @IsEnum(TipoMovimientoStock)
   tipo: TipoMovimientoStock;

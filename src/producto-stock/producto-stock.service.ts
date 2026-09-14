@@ -22,6 +22,7 @@ import {
 } from './dto/verificar-precios.dto';
 import { Prisma, TipoCambioPrecio, TipoPrecioNivel } from '@prisma/client';
 import { crearMovimientoStockConValoracion } from './movimiento-stock.helper';
+import { validarAjusteManual } from './tipos-ajuste-manual';
 import { PromocionService } from '../promocion/promocion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import * as ExcelJS from 'exceljs';
@@ -303,6 +304,14 @@ export class ProductoStockService {
     dto: AjustarStockDto,
     usuarioId: string,
   ) {
+    // Solo los tipos que de verdad son un ajuste, y con su signo: el resto tiene
+    // su propio flujo y por acá quedaba mal registrado (y el app ofrecía los 30,
+    // con "Entrada por compra" elegido). Ver `tipos-ajuste-manual.ts`.
+    const errorTipo = validarAjusteManual(dto.tipo, dto.cantidad);
+    if (errorTipo) {
+      throw new BadRequestException(errorTipo);
+    }
+
     const result = await this.prisma.$transaction(async (tx) => {
       // Bloquear la fila con FOR UPDATE para prevenir lecturas concurrentes
       const [stockLocked] = await tx.$queryRaw<

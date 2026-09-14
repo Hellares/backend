@@ -42,11 +42,13 @@ export interface CrearMovimientoStockData {
    * 🔴 El llamador YA administra los lotes de este movimiento: el helper no
    * los toca.
    *
-   * Sin esto habría DOBLE movimiento de lote. Los casos reales, todos en
-   * `compra.service`: anular una compra (pone SU lote en cero) y las dos patas
+   * Sin esto habría DOBLE movimiento de lote. Los casos reales: en
+   * `compra.service`, la entrada de la compra (crea SU lote con costo,
+   * proveedor y vencimiento), anularla (pone ese lote en cero) y las dos patas
    * de la distribución a otra sede (descuenta el lote de origen y crea el de
-   * destino). Si además corriera el consumo FEFO, se descontaría dos veces y
-   * la suma de lotes se despegaría del `stockActual`.
+   * destino); en `lote.service`, dar de baja un lote. Si además corriera el
+   * motor, el lote se movería dos veces y la suma de lotes se despegaría del
+   * `stockActual`.
    *
    * Se declara en el call site a propósito: quien sabe que administra lotes es
    * el que los administra, y adivinarlo acá por tipo de movimiento sería
@@ -139,9 +141,11 @@ function lotesActivos(): boolean {
  * `cantidadActual` de sus lotes ACTIVO es igual a `stockActual`.
  *
  * - **Salida** (cantidad < 0) → consume en orden FEFO.
- * - **Entrada por COMPRA** → no hace nada: `compra.service` crea el lote con
- *   su costo real, su proveedor y su vencimiento. Duplicarlo acá inflaría el
- *   stock por lotes al doble.
+ * - **Entrada por COMPRA** → no llega acá: `compra.service` crea el lote con
+ *   su costo real, su proveedor y su vencimiento, y lo declara con
+ *   `lotesGestionadosPorElLlamador`. 🔴 NO se decide por el tipo: un ajuste
+ *   manual también puede llegar como `ENTRADA_COMPRA` —el app lo traía
+ *   elegido— y sin compra detrás nadie más le crea el lote.
  * - **Entrada que revierte una salida** (anulación de venta, devolución) →
  *   devuelve a los lotes de los que salió, con su vencimiento y su costo.
  * - **Cualquier otra entrada** (ajuste, producción, transferencia recibida) →
@@ -191,8 +195,6 @@ async function sincronizarLotes(
   }
 
   // ── Entradas ──
-  if (movimiento.tipo === 'ENTRADA_COMPRA') return;
-
   let repuesto = 0;
   const asignaciones: AsignacionLote[] = [];
 
