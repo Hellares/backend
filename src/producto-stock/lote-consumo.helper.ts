@@ -339,6 +339,81 @@ export async function revertirConsumoDeLotes(
 }
 
 /**
+ * Para las SALIDAS que se van a BORRAR (la venta Yape diferida que se cancela
+ * o vence): repone a sus lotes lo que consumieron y, con el motor prendido,
+ * cubre con un lote de ajuste lo que ningún lote respaldó.
+ *
+ * 🔴 El caso: una venta diferida creada ANTES de prender el motor y cancelada
+ * DESPUÉS. Descontó stock cuando no había lotes, así que no tiene
+ * asignaciones: el stock vuelve igual y, sin lote al que volver, quedaría
+ * stock sin respaldo (Σ lotes < stockActual). Lo mismo si al venderse los
+ * lotes no alcanzaron.
+ *
+ * `motorActivo` lo pasa quien llama: este archivo no puede importar el helper
+ * de movimientos sin armar una dependencia circular.
+ *
+ * Llamar ANTES de borrar los movimientos.
+ */
+export async function reponerLotesDeSalidasBorradas(
+  tx: Prisma.TransactionClient,
+  movimientos: Array<{
+    id: string;
+    productoStockId: string;
+    empresaId: string;
+    sedeId: string;
+    cantidad: number;
+    precioCostoUnitario: Prisma.Decimal | null;
+    usuarioId: string;
+  }>,
+  motorActivo: boolean,
+): Promise<{ sinReponer: number; enLoteNuevo: number }> {
+  const salidas = movimientos.filter((m) => m.cantidad < 0);
+  if (!salidas.length) return { sinReponer: 0, enLoteNuevo: 0 };
+  const ids = salidas.map((m) => m.id);
+
+  // Lo que cada salida tomó de lotes, leído ANTES de reponerlo.
+  const tomado = await tx.movimientoStockLote.groupBy({
+    by: ['movimientoStockId'],
+    where: { movimientoStockId: { in: ids }, cantidad: { gt: 0 } },
+    _sum: { cantidad: true },
+  });
+  const tomadoPorSalida = new Map<string, number>();
+  for (const t of tomado) {
+    tomadoPorSalida.set(t.movimientoStockId, t._sum.cantidad ?? 0);
+  }
+
+  const sinReponer = await revertirConsumoDeLotes(tx, ids);
+
+  let enLoteNuevo = 0;
+  if (motorActivo) {
+    for (const s of salidas) {
+      const faltante = Math.abs(s.cantidad) - (tomadoPorSalida.get(s.id) ?? 0);
+      if (faltante <= 0) continue;
+      const stock = await tx.productoStock.findUnique({
+        where: { id: s.productoStockId },
+        select: { productoId: true, varianteId: true },
+      });
+      const nuevo = await crearLoteDeEntrada(tx, {
+        productoStockId: s.productoStockId,
+        empresaId: s.empresaId,
+        sedeId: s.sedeId,
+        productoId: stock?.productoId ?? null,
+        varianteId: stock?.varianteId ?? null,
+        cantidad: faltante,
+        costoUnitario: s.precioCostoUnitario,
+        // Único: el id de la salida lo es (y la salida se borra enseguida).
+        codigo: `AJU-${s.id}`,
+        motivo:
+          'Cancelación de un cobro diferido: unidades que no habían salido de ningún lote',
+        usuarioId: s.usuarioId,
+      });
+      if (nuevo) enLoteNuevo += faltante;
+    }
+  }
+  return { sinReponer, enLoteNuevo };
+}
+
+/**
  * Le suma [cantidad] a un lote que vuelve a tener mercadería. Devuelve si lo
  * encontró en un estado al que se le puede reponer.
  *

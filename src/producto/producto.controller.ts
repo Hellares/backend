@@ -997,8 +997,14 @@ export class ProductoController {
     @Param('productoId') productoId: string,
     @Headers('x-tenant-id') empresaId: string,
     @Body() dto: GenerateVarianteCombinationsDto,
+    @CurrentUser() user: JwtPayload,
   ): Promise<ProductoVarianteResponseDto[]> {
-    return await this.varianteService.generarCombinaciones(productoId, empresaId, dto);
+    return await this.varianteService.generarCombinaciones(
+      productoId,
+      empresaId,
+      dto,
+      user.sub,
+    );
   }
 
   @Get(':productoId/variantes/rotacion')

@@ -7,6 +7,7 @@ import { CacheService } from '../redis/cache.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { simboloUnidad } from '../common/utils/unidad-presentacion.util';
 import { construirNombreVariante } from './utils/nombre-variante.util';
+import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
 import { CreateProductoVarianteDto } from './dto/create-producto-variante.dto';
 import { UpdateProductoVarianteDto } from './dto/update-producto-variante.dto';
 import { ProductoVarianteResponseDto } from './dto/producto-variante-response.dto';
@@ -944,6 +945,8 @@ export class ProductoVarianteService {
     productoId: string,
     empresaId: string,
     dto: GenerateVarianteCombinationsDto,
+    // Quien genera: firma el movimiento del stock inicial.
+    usuarioId: string,
   ): Promise<ProductoVarianteResponseDto[]> {
     this.logger.info('Generating variant combinations', { productoId, empresaId, atributos: dto.atributos.length });
 
@@ -1221,9 +1224,38 @@ export class ProductoVarianteService {
           precioConfigurado: dto.precioBase != null,
         })),
       );
-      await this.prisma.productoStock.createMany({
-        data: todosStocks,
-        skipDuplicates: true,
+      // 🔴 El stock inicial entra con su MOVIMIENTO. Antes el `createMany`
+      // dejaba el stock sin kardex, y con el motor de lotes prendido también
+      // sin lote: el FEFO se quedaba corto al vender esas variantes.
+      await this.prisma.$transaction(async (tx) => {
+        await tx.productoStock.createMany({
+          data: todosStocks,
+          skipDuplicates: true,
+        });
+
+        // Las variantes son nuevas (se crearon arriba), así que ninguna fila
+        // pudo existir antes: todo stock > 0 acá es el inicial.
+        const conStock = await tx.productoStock.findMany({
+          where: {
+            varianteId: { in: varianteIds },
+            sedeId: { in: sedeIds },
+            stockActual: { gt: 0 },
+          },
+          select: { id: true, sedeId: true, stockActual: true },
+        });
+        for (const s of conStock) {
+          await crearMovimientoStockConValoracion(tx, {
+            productoStockId: s.id,
+            empresaId,
+            sedeId: s.sedeId,
+            tipo: 'AJUSTE_ENTRADA',
+            cantidadAnterior: 0,
+            cantidad: s.stockActual,
+            cantidadNueva: s.stockActual,
+            motivo: 'Stock inicial al generar las variantes',
+            usuarioId,
+          });
+        }
       });
     }
 

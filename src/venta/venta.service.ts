@@ -22,7 +22,7 @@ import { PermissionsService } from '../auth/services/permissions.service';
 import {
   ESTADOS_LOTE_PRESENTE,
   planificarFefo,
-  revertirConsumoDeLotes,
+  reponerLotesDeSalidasBorradas,
 } from '../producto-stock/lote-consumo.helper';
 import { estaVencido } from '../common/utils/date-utils';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
@@ -31,7 +31,10 @@ import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracter
 import { CaracteristicaPremium } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { crearMovimientoStockConValoracion } from '../producto-stock/movimiento-stock.helper';
+import {
+  crearMovimientoStockConValoracion,
+  lotesActivos,
+} from '../producto-stock/movimiento-stock.helper';
 import { CacheService } from '../redis/cache.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
@@ -5605,17 +5608,35 @@ export class VentaService {
     // de saber de cuál salió—: sin esto el stock volvía y los lotes quedaban
     // descontados para siempre. En JAYLI 137 de 209 ventas del mes son
     // diferidas.
+    //
+    // Si la venta se hizo ANTES de prender el motor (no tiene asignaciones),
+    // lo que vuelve entra en un lote de ajuste: sin eso quedaría stock sin
+    // lote.
     const movimientos = await tx.movimientoStock.findMany({
       where: { ventaId: venta.id },
-      select: { id: true },
+      select: {
+        id: true,
+        productoStockId: true,
+        empresaId: true,
+        sedeId: true,
+        cantidad: true,
+        precioCostoUnitario: true,
+        usuarioId: true,
+      },
     });
-    const sinReponer = await revertirConsumoDeLotes(
+    const { sinReponer, enLoteNuevo } = await reponerLotesDeSalidasBorradas(
       tx,
-      movimientos.map((m: { id: string }) => m.id),
+      movimientos,
+      lotesActivos(),
     );
     if (sinReponer > 0) {
       this.logger.warn(
         `[lotes] venta diferida ${venta.id}: ${sinReponer} unidades no volvieron a su lote`,
+      );
+    }
+    if (enLoteNuevo > 0) {
+      this.logger.info(
+        `[lotes] venta diferida ${venta.id}: ${enLoteNuevo} unidades sin lote de origen volvieron en un lote de ajuste`,
       );
     }
 

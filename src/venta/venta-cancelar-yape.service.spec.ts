@@ -39,12 +39,28 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
         update: jest.fn().mockResolvedValue({}),
       },
       movimientoStock: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'mov-1' }]),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'mov-1',
+            productoStockId: 'ps-1',
+            empresaId: 'emp-1',
+            sedeId: 'sede-1',
+            cantidad: -2,
+            precioCostoUnitario: null,
+            usuarioId: 'usr-1',
+          },
+        ]),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      // Sin asignaciones por defecto = motor de lotes apagado (prod hoy).
-      movimientoStockLote: { findMany: jest.fn().mockResolvedValue([]) },
-      lote: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      // Sin asignaciones por defecto = la venta se hizo con el motor apagado.
+      movimientoStockLote: {
+        findMany: jest.fn().mockResolvedValue([]),
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
+      lote: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        create: jest.fn().mockResolvedValue({ id: 'lote-aju' }),
+      },
       descuentoUsoHistorial: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       ventaDetalle: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
@@ -103,6 +119,33 @@ describe('VentaService — cancelar/eliminar venta Yape diferida', () => {
       expect(tx.lote.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
         tx.movimientoStock.deleteMany.mock.invocationCallOrder[0],
       );
+    });
+
+    it('🔴 diferida ANTERIOR a prender el motor, cancelada con el motor prendido: lo que vuelve entra en un lote de ajuste', async () => {
+      // Descontó stock cuando no había lotes (sin asignaciones). Sin el lote
+      // de ajuste, el stock volvía y los lotes no: Σ lotes < stockActual.
+      process.env.LOTES_FEFO_ENABLED = 'true';
+      try {
+        prisma.venta.findFirst.mockResolvedValue(ventaDiferida());
+        tx.productoStock.findUnique = jest
+          .fn()
+          .mockResolvedValue({ productoId: 'prod-1', varianteId: null });
+
+        const r = await service.eliminarVentaYapeDiferidaPendiente('venta-1', 'emp-1');
+
+        expect(r.eliminada).toBe(true);
+        expect(tx.lote.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              productoStockId: 'ps-1',
+              codigo: 'AJU-mov-1',
+              cantidadInicial: 2,
+            }),
+          }),
+        );
+      } finally {
+        delete process.env.LOTES_FEFO_ENABLED;
+      }
     });
 
     it('pago llegó justo antes (pagos>0): NO borra, devuelve yaPagada', async () => {

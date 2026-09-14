@@ -4,6 +4,7 @@ import {
   devolverALotesDeOrigen,
   heredarLotesDeTransferencia,
   planificarFefo,
+  reponerLotesDeSalidasBorradas,
   revertirConsumoDeLotes,
 } from './lote-consumo.helper';
 
@@ -388,6 +389,82 @@ describe('Consumo de lotes (FEFO)', () => {
 
         expect(await revertirConsumoDeLotes(tx, [])).toBe(0);
         expect(tx.movimientoStockLote.findMany).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('reponerLotesDeSalidasBorradas (cancelar un Yape diferido)', () => {
+      const salida = (extra: Record<string, unknown> = {}) => ({
+        id: 'mov-1',
+        productoStockId: 'ps-1',
+        empresaId: 'emp-1',
+        sedeId: 'sede-1',
+        cantidad: -3,
+        precioCostoUnitario: dec(12),
+        usuarioId: 'usr-1',
+        ...extra,
+      });
+      /** Lo que hace falta para que `crearLoteDeEntrada` pueda crear el lote. */
+      const conCreacion = () => {
+        tx.productoStock = {
+          findUnique: jest.fn().mockResolvedValue({ productoId: 'p1', varianteId: null }),
+        };
+        tx.lote.create = jest.fn(({ data }: any) => Promise.resolve({ id: 'lote-aju', data }));
+      };
+
+      it('🔴 una venta hecha ANTES de prender el motor no tiene lotes: con el motor prendido, lo que vuelve entra en un lote de ajuste', async () => {
+        conBase([]);
+        conCreacion();
+        // Sin asignaciones: el stock salió cuando todavía no había lotes.
+        tx.movimientoStockLote.groupBy.mockResolvedValue([]);
+
+        const r = await reponerLotesDeSalidasBorradas(tx, [salida()], true);
+
+        expect(r).toEqual({ sinReponer: 0, enLoteNuevo: 3 });
+        expect(tx.lote.create.mock.calls[0][0].data).toMatchObject({
+          productoStockId: 'ps-1',
+          codigo: 'AJU-mov-1',
+          cantidadInicial: 3,
+          cantidadActual: 3,
+          precioCosto: dec(12),
+        });
+      });
+
+      it('si salió entera de sus lotes, vuelve a ellos y no crea nada', async () => {
+        const base = conBase([{ id: 'a', estado: 'ACTIVO', cantidadActual: 1 }]);
+        conCreacion();
+        tx.movimientoStockLote.groupBy.mockResolvedValue([
+          { movimientoStockId: 'mov-1', _sum: { cantidad: 3 } },
+        ]);
+        tx.movimientoStockLote.findMany.mockResolvedValue([{ loteId: 'a', cantidad: 3 }]);
+
+        const r = await reponerLotesDeSalidasBorradas(tx, [salida()], true);
+
+        expect(r).toEqual({ sinReponer: 0, enLoteNuevo: 0 });
+        expect(base.get('a')).toEqual({ id: 'a', estado: 'ACTIVO', cantidadActual: 4 });
+        expect(tx.lote.create).not.toHaveBeenCalled();
+      });
+
+      it('si los lotes cubrieron solo una parte, el lote de ajuste es por el resto', async () => {
+        conBase([{ id: 'a', estado: 'AGOTADO', cantidadActual: 0 }]);
+        conCreacion();
+        tx.movimientoStockLote.groupBy.mockResolvedValue([
+          { movimientoStockId: 'mov-1', _sum: { cantidad: 2 } },
+        ]);
+        tx.movimientoStockLote.findMany.mockResolvedValue([{ loteId: 'a', cantidad: 2 }]);
+
+        const r = await reponerLotesDeSalidasBorradas(tx, [salida()], true);
+
+        expect(r.enLoteNuevo).toBe(1);
+      });
+
+      it('con el motor apagado no crea lotes', async () => {
+        conBase([]);
+        conCreacion();
+
+        const r = await reponerLotesDeSalidasBorradas(tx, [salida()], false);
+
+        expect(r.enLoteNuevo).toBe(0);
+        expect(tx.lote.create).not.toHaveBeenCalled();
       });
     });
   });
