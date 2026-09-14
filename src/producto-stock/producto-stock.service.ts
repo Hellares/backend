@@ -21,8 +21,15 @@ import {
   VerificarPreciosDto,
 } from './dto/verificar-precios.dto';
 import { Prisma, TipoCambioPrecio, TipoPrecioNivel } from '@prisma/client';
-import { crearMovimientoStockConValoracion } from './movimiento-stock.helper';
-import { validarAjusteManual } from './tipos-ajuste-manual';
+import {
+  crearMovimientoStockConValoracion,
+  lotesActivos,
+} from './movimiento-stock.helper';
+import { ESTADOS_LOTE_PRESENTE, ordenFefo } from './lote-consumo.helper';
+import {
+  validarAjusteManual,
+  validarLoteDeSalida,
+} from './tipos-ajuste-manual';
 import { PromocionService } from '../promocion/promocion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import * as ExcelJS from 'exceljs';
@@ -358,6 +365,31 @@ export class ProductoStockService {
         );
       }
 
+      // 🔑 Salida de un lote ELEGIDO: sale entera de ese lote o no sale (ver
+      // `validarLoteDeSalida`). Con el motor apagado se rechaza en vez de
+      // ignorarlo: el helper no tocaría ningún lote y el usuario creería que
+      // descontó del que eligió.
+      if (dto.loteId) {
+        if (!lotesActivos()) {
+          throw new BadRequestException(
+            'El control por lotes no está activo: no se puede elegir el lote.',
+          );
+        }
+        const lote = await tx.lote.findFirst({
+          where: { id: dto.loteId, empresaId },
+          select: {
+            productoStockId: true,
+            codigo: true,
+            estado: true,
+            cantidadActual: true,
+          },
+        });
+        const errorLote = validarLoteDeSalida(lote, productoStockId, dto.cantidad);
+        if (errorLote) {
+          throw new BadRequestException(errorLote);
+        }
+      }
+
       // Actualizar stock
       const stockActualizado = await tx.productoStock.update({
         where: { id: productoStockId },
@@ -383,6 +415,7 @@ export class ProductoStockService {
         motivo: dto.motivo,
         observaciones: dto.observaciones,
         usuarioId,
+        loteIdPreferido: dto.loteId || null,
       });
 
       this.logger.log(
@@ -405,6 +438,62 @@ export class ProductoStockService {
     });
 
     return result;
+  }
+
+  /**
+   * Los lotes de los que puede SALIR un ajuste manual, en el orden en que los
+   * tomaría el motor (FEFO): el primero es el que "sale primero".
+   *
+   * 🔴 Con el motor apagado devuelve la lista VACÍA a propósito: sin conciliar,
+   * `cantidadActual` está inflado (nunca bajó al vender), el cliente mostraría
+   * mercadería que no existe y elegir un lote no descontaría nada.
+   */
+  async getLotesSalida(productoStockId: string, empresaId: string) {
+    if (!lotesActivos()) {
+      return { motorActivo: false, lotes: [] };
+    }
+
+    const stock = await this.prisma.productoStock.findFirst({
+      where: { id: productoStockId, empresaId },
+      select: { id: true },
+    });
+    if (!stock) {
+      throw new NotFoundException('Stock no encontrado');
+    }
+
+    const lotes = await this.prisma.lote.findMany({
+      where: {
+        productoStockId,
+        estado: { in: [...ESTADOS_LOTE_PRESENTE] },
+        cantidadActual: { gt: 0 },
+      },
+      select: {
+        id: true,
+        codigo: true,
+        cantidadActual: true,
+        cantidadInicial: true,
+        precioCosto: true,
+        fechaIngreso: true,
+        fechaVencimiento: true,
+        estado: true,
+        nombreProveedor: true,
+        compra: { select: { codigo: true } },
+      },
+      // El mismo orden que `consumirLotesFefo`: el desempate de los sin
+      // vencimiento sale de acá y `ordenFefo` adelanta a los que vencen.
+      orderBy: [{ fechaIngreso: 'asc' }, { creadoEn: 'asc' }],
+    });
+
+    return {
+      motorActivo: true,
+      lotes: [...lotes]
+        .sort(ordenFefo)
+        .map(({ compra, precioCosto, ...lote }) => ({
+          ...lote,
+          precioCosto: Number(precioCosto),
+          compraCodigo: compra?.codigo ?? null,
+        })),
+    };
   }
 
   /**

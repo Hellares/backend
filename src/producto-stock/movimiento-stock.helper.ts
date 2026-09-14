@@ -129,8 +129,12 @@ export async function crearMovimientoStockConValoracion(
  *
  * Es también el freno de mano: esto cuelga del camino del cobro, y poder
  * apagarlo con una variable de entorno vale más que un rollback de imagen.
+ *
+ * Exportada para que el ajuste manual sepa si puede ofrecer elegir el lote:
+ * con el motor apagado los lotes están inflados y elegir uno no significaría
+ * nada.
  */
-function lotesActivos(): boolean {
+export function lotesActivos(): boolean {
   return process.env.LOTES_FEFO_ENABLED === 'true';
 }
 

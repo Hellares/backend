@@ -1,4 +1,5 @@
 import { TipoMovimientoStock } from '@prisma/client';
+import { ESTADOS_LOTE_PRESENTE } from './lote-consumo.helper';
 
 /**
  * Qué se puede registrar a mano con `PUT producto-stock/:id/ajustar`, y con
@@ -61,6 +62,49 @@ export function validarAjusteManual(
   }
   if (sentido === 'SALIDA' && cantidad > 0) {
     return 'Un movimiento de salida no puede sumar stock.';
+  }
+  return null;
+}
+
+/** Lo mínimo del lote elegido para validar una salida. */
+export interface LoteElegidoParaSalida {
+  productoStockId: string;
+  codigo: string;
+  estado: string;
+  cantidadActual: number;
+}
+
+/**
+ * Una salida manual de un lote ELEGIDO: el motivo del rechazo, o `null`.
+ *
+ * 🔑 Sale TODO de ese lote o no sale. En la venta, lo que el lote elegido no
+ * cubre sigue por FEFO; en una merma o una baja el lote ES el dato (la caja
+ * rota es esa), y repartir el resto en silencio descontaría mercadería de
+ * otro lote que sigue sana en el estante.
+ */
+export function validarLoteDeSalida(
+  lote: LoteElegidoParaSalida | null,
+  productoStockId: string,
+  cantidad: number,
+): string | null {
+  if (cantidad >= 0) {
+    return 'El lote solo se elige en una salida: una entrada crea su propio lote.';
+  }
+  if (!lote || lote.productoStockId !== productoStockId) {
+    return 'El lote elegido no es de este producto en esta sede.';
+  }
+  const presente = (ESTADOS_LOTE_PRESENTE as readonly string[]).includes(
+    lote.estado,
+  );
+  if (!presente || lote.cantidadActual <= 0) {
+    return `El lote ${lote.codigo} ya no tiene mercadería.`;
+  }
+  const salen = Math.abs(cantidad);
+  if (lote.cantidadActual < salen) {
+    return (
+      `El lote ${lote.codigo} tiene ${lote.cantidadActual} ` +
+      `${lote.cantidadActual === 1 ? 'unidad' : 'unidades'}: no alcanza para ${salen}.`
+    );
   }
   return null;
 }

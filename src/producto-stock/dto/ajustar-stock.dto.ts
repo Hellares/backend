@@ -50,4 +50,15 @@ export class AjustarStockDto {
   @IsOptional()
   @IsString()
   numeroDocumento?: string;
+
+  // 🔴 Declarado acá o el `whitelist` del ValidationPipe lo descarta en
+  // silencio y la salida se reparte por FEFO como si no se hubiera elegido.
+  @ApiPropertyOptional({
+    description:
+      'Lote del que sale (solo en una salida, con el motor de lotes prendido). Sale TODO de ese lote: si no alcanza, 400',
+    example: 'cmtw4og80000y01ogk8uqe2rl',
+  })
+  @IsOptional()
+  @IsString()
+  loteId?: string;
 }

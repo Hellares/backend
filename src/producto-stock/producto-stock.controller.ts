@@ -325,6 +325,21 @@ export class ProductoStockController {
     return await this.stockService.ajustarStock(id, empresaId, dto, user.sub);
   }
 
+  @Get(':id/lotes-salida')
+  @RequiresPermission(Permission.VIEW_PRODUCTS)
+  @ApiOperation({
+    summary: 'Lotes de los que puede salir un ajuste manual, en orden FEFO',
+    description:
+      'Con el motor de lotes apagado devuelve { motorActivo: false, lotes: [] } y el cliente no ofrece elegir',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async getLotesSalida(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return this.stockService.getLotesSalida(id, empresaId);
+  }
+
   @Get(':id/movimientos/export')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Exportar Kardex a Excel' })

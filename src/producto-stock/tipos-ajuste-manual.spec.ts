@@ -1,5 +1,9 @@
 import { TipoMovimientoStock } from '@prisma/client';
-import { validarAjusteManual } from './tipos-ajuste-manual';
+import {
+  validarAjusteManual,
+  validarLoteDeSalida,
+  type LoteElegidoParaSalida,
+} from './tipos-ajuste-manual';
 
 /**
  * Candado del ajuste manual de stock: qué tipos entran y con qué signo.
@@ -61,5 +65,46 @@ describe('Ajuste manual de stock', () => {
     expect(validarAjusteManual('AJUSTE_MERMA', 3)).toMatch(/salida/);
     expect(validarAjusteManual('AJUSTE_ENTRADA', -3)).toMatch(/entrada/);
     expect(validarAjusteManual('AJUSTE_ENTRADA', 0)).toMatch(/no puede ser 0/);
+  });
+
+  describe('salida de un lote ELEGIDO', () => {
+    const lote = (extra: Partial<LoteElegidoParaSalida> = {}) => ({
+      productoStockId: 'ps-1',
+      codigo: 'APERTURA-1',
+      estado: 'ACTIVO',
+      cantidadActual: 3,
+      ...extra,
+    });
+
+    it('sale del lote si alcanza, incluso uno VENCIDO (la merma de lo vencido es el caso típico)', () => {
+      expect(validarLoteDeSalida(lote(), 'ps-1', -3)).toBeNull();
+      expect(validarLoteDeSalida(lote({ estado: 'VENCIDO' }), 'ps-1', -1)).toBeNull();
+    });
+
+    it('🔴 si el lote no alcanza se rechaza: NO se reparte el resto a otro lote', () => {
+      // La prueba del 13-09 en beta: una salida de 5 tomó 3 de APERTURA y 2
+      // de otro lote. Si el usuario eligió el lote, el resto no puede salir
+      // de uno que no eligió.
+      expect(validarLoteDeSalida(lote(), 'ps-1', -5)).toMatch(
+        /APERTURA-1 tiene 3 unidades: no alcanza para 5/,
+      );
+    });
+
+    it('el lote tiene que ser de ESE stock (otro producto u otra sede no)', () => {
+      expect(validarLoteDeSalida(lote({ productoStockId: 'ps-2' }), 'ps-1', -1)).toMatch(
+        /no es de este producto/,
+      );
+      expect(validarLoteDeSalida(null, 'ps-1', -1)).toMatch(/no es de este producto/);
+    });
+
+    it('un lote AGOTADO o sin mercadería no se puede elegir', () => {
+      expect(validarLoteDeSalida(lote({ estado: 'AGOTADO', cantidadActual: 0 }), 'ps-1', -1)).toMatch(
+        /ya no tiene mercadería/,
+      );
+    });
+
+    it('en una entrada no se elige lote: la entrada crea el suyo', () => {
+      expect(validarLoteDeSalida(lote(), 'ps-1', 2)).toMatch(/solo se elige en una salida/);
+    });
   });
 });
