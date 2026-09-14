@@ -242,7 +242,14 @@ export async function devolverALotesDeOrigen(
     ),
   ];
   const mismoDocumento: Prisma.MovimientoStockWhereInput[] = [
-    ...(ventaIds.length ? [{ ventaId: { in: ventaIds } }] : []),
+    // La venta Y sus devoluciones: el movimiento de una devolución lleva
+    // `devolucionId`, no `ventaId`, y también es una reversa de esa salida.
+    ...(ventaIds.length
+      ? [
+          { ventaId: { in: ventaIds } },
+          { devolucion: { ventaId: { in: ventaIds } } },
+        ]
+      : []),
     ...(transferenciaIds.length
       ? [{ transferenciaId: { in: transferenciaIds } }]
       : []),

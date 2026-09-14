@@ -1583,6 +1583,10 @@ export class TransferenciaStockService {
                   .join('; ') || 'Daños en recepción',
             transferenciaId: transferencia.id,
             usuarioId,
+            // 🔴 Solo marca cuáles de los recibidos llegaron dañados: la
+            // entrada física ya se registró arriba (buenos + dañados) y heredó
+            // sus lotes. Moverlos otra vez los duplicaba.
+            noMueveStockActual: true,
           });
         }
 
@@ -1980,6 +1984,8 @@ export class TransferenciaStockService {
             motivo: `Enviado a reparación por incidencia en transferencia ${incidencia.transferencia.codigo}`,
             observaciones: dto.observaciones,
             usuarioId,
+            // Pasa de dañado a garantía: `stockActual` no cambia.
+            noMueveStockActual: true,
           });
           break;
 
@@ -2010,6 +2016,9 @@ export class TransferenciaStockService {
             motivo: `Productos dañados aceptados con descuento - Incidencia ${incidencia.transferencia.codigo}`,
             observaciones: dto.observaciones,
             usuarioId,
+            // Sale del dañado y vuelve a lo vendible: `stockActual` no cambia.
+            // Sin el flag, el −N consumía lotes con el stock intacto.
+            noMueveStockActual: true,
           });
           break;
 
@@ -2276,6 +2285,8 @@ export class TransferenciaStockService {
               observaciones: dto.observaciones,
               transferenciaId,
               usuarioId,
+              // Pasa al dañado: sigue en `stockActual` y en su lote.
+              noMueveStockActual: true,
             });
           }
         }

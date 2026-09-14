@@ -1459,6 +1459,9 @@ export class ProductoComboService {
             cantidadAnterior: locked.stockActual,
             cantidadNueva: locked.stockActual,
             motivo: `Reserva de combo ${comboId}: ${cantidad} unidades`,
+            // Reservar no saca nada del estante: solo aparta. Sin esto reservar
+            // creaba un lote de ajuste y liberar consumía lotes.
+            noMueveStockActual: true,
           });
         }
 

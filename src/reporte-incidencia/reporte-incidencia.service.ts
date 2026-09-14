@@ -722,6 +722,8 @@ export class ReporteIncidenciaService {
       motivo: `Incidencia: ${item.tipo} - ${item.descripcion}`,
       observaciones,
       usuarioId,
+      // Pasa al dañado: sigue en el estante, en `stockActual` y en su lote.
+      noMueveStockActual: true,
     });
 
     return movimiento.id;
@@ -798,6 +800,8 @@ export class ReporteIncidenciaService {
       motivo: `Envío a garantía: ${item.tipo} - ${item.descripcion}`,
       observaciones,
       usuarioId,
+      // Pasa a garantía: sigue contando en `stockActual` y en su lote.
+      noMueveStockActual: true,
     });
 
     return movimiento.id;

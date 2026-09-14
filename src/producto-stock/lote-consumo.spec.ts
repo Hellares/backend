@@ -225,7 +225,14 @@ describe('Consumo de lotes (FEFO)', () => {
         where: {
           loteId: { in: ['aju'] },
           cantidad: { lt: 0 },
-          movimiento: { id: { notIn: ['mov-venta'] }, OR: [{ ventaId: { in: ['venta-1'] } }] },
+          // La venta y sus devoluciones (llevan `devolucionId`, no `ventaId`).
+          movimiento: {
+            id: { notIn: ['mov-venta'] },
+            OR: [
+              { ventaId: { in: ['venta-1'] } },
+              { devolucion: { ventaId: { in: ['venta-1'] } } },
+            ],
+          },
         },
         _sum: { cantidad: true },
       });

@@ -346,7 +346,11 @@ export class DevolucionVentaService {
         const stockAnterior = productoStock.stockActual;
         const cantidad = item.cantidad;
 
-        const createMov = (tipo: TipoMovimientoStock, motivo: string) =>
+        const createMov = (
+          tipo: TipoMovimientoStock,
+          motivo: string,
+          opts: { noMueveStockActual?: boolean } = {},
+        ) =>
           crearMovimientoStockConValoracion(tx, {
             sedeId: devolucion.sedeId,
             empresaId,
@@ -360,35 +364,53 @@ export class DevolucionVentaService {
             motivo: `Devolucion ${devolucion.codigo} - ${motivo}`,
             devolucionId: devolucion.id,
             usuarioId: userId,
+            ...opts,
           });
+
+        // 🔑 "Interpretación A": `stockActual` incluye lo dañado y lo que está
+        // en garantía; la venta resta esos contadores para saber qué se puede
+        // vender. La unidad devuelta vuelve FÍSICAMENTE al local aunque vuelva
+        // rota, así que entra al stock Y a su contador. Antes solo subía el
+        // contador: lo vendible BAJABA una unidad por cada devolución dañada, y
+        // con el motor de lotes el movimiento creaba un lote sin stock detrás.
+        const reingresar = async (
+          contador: 'stockDanado' | 'stockEnGarantia' | null,
+        ) => {
+          await tx.productoStock.update({
+            where: { id: productoStock.id },
+            data: {
+              stockActual: { increment: cantidad },
+              ...(contador === 'stockDanado'
+                ? { stockDanado: { increment: cantidad } }
+                : {}),
+              ...(contador === 'stockEnGarantia'
+                ? { stockEnGarantia: { increment: cantidad } }
+                : {}),
+            },
+          });
+        };
 
         switch (item.accion) {
           case 'REINGRESAR_STOCK':
-            await tx.productoStock.update({
-              where: { id: productoStock.id },
-              data: { stockActual: { increment: cantidad } },
-            });
+            await reingresar(null);
             await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Reingreso a stock');
             break;
           case 'MARCAR_DANADO':
-            await tx.productoStock.update({
-              where: { id: productoStock.id },
-              data: { stockDanado: { increment: cantidad } },
-            });
+            await reingresar('stockDanado');
             await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Marcado como danado');
             break;
           case 'ENVIAR_REPARACION':
-            await tx.productoStock.update({
-              where: { id: productoStock.id },
-              data: { stockEnGarantia: { increment: cantidad } },
-            });
+            await reingresar('stockEnGarantia');
             await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, 'Enviado a reparacion');
             break;
           case 'DAR_DE_BAJA':
             // El item ya estaba descontado por la venta original. Acá
             // solo documentamos la baja sin tocar stock — el producto
-            // físico se descarta y no vuelve al inventario.
-            await createMov(TipoMovimientoStock.SALIDA_BAJA, 'Dado de baja');
+            // físico se descarta y no vuelve al inventario. Sin el flag, el
+            // motor le creaba un lote a algo que no está.
+            await createMov(TipoMovimientoStock.SALIDA_BAJA, 'Dado de baja', {
+              noMueveStockActual: true,
+            });
             break;
           case 'DEVOLVER_PROVEEDOR':
             // El producto vuelve físicamente al local pero NO se
@@ -396,10 +418,7 @@ export class DevolucionVentaService {
             // gestione el envío al proveedor (otro flujo separado).
             // Si en el futuro se necesita un campo dedicado
             // (stockParaProveedor), se puede migrar sin romper UI.
-            await tx.productoStock.update({
-              where: { id: productoStock.id },
-              data: { stockDanado: { increment: cantidad } },
-            });
+            await reingresar('stockDanado');
             await createMov(
               TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
               'Pendiente devolución a proveedor',
@@ -411,10 +430,7 @@ export class DevolucionVentaService {
             //    REPARABLE / INCOMPLETO → stock en garantía (puede recuperarse)
             //    DANADO / VENCIDO → stock dañado
             if (item.estadoProducto === 'BUENO') {
-              await tx.productoStock.update({
-                where: { id: productoStock.id },
-                data: { stockActual: { increment: cantidad } },
-              });
+              await reingresar(null);
               await createMov(
                 TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
                 'Reingreso por cambio de producto',
@@ -423,19 +439,13 @@ export class DevolucionVentaService {
               item.estadoProducto === 'REPARABLE' ||
               item.estadoProducto === 'INCOMPLETO'
             ) {
-              await tx.productoStock.update({
-                where: { id: productoStock.id },
-                data: { stockEnGarantia: { increment: cantidad } },
-              });
+              await reingresar('stockEnGarantia');
               await createMov(
                 TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
                 `Cambio de producto - a garantía (${item.estadoProducto.toLowerCase()})`,
               );
             } else {
-              await tx.productoStock.update({
-                where: { id: productoStock.id },
-                data: { stockDanado: { increment: cantidad } },
-              });
+              await reingresar('stockDanado');
               await createMov(
                 TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE,
                 `Cambio de producto - marcado dañado (${item.estadoProducto.toLowerCase()})`,
@@ -466,7 +476,10 @@ export class DevolucionVentaService {
                   tipoDocumento: 'DEVOLUCION',
                   numeroDocumento: devolucion.codigo,
                   cantidadAnterior: stockAnteriorReemplazo,
-                  cantidad,
+                  // 🔴 NEGATIVA: es una salida. Iba positiva y el motor la
+                  // tomaba como entrada: creaba un lote mientras el stock
+                  // bajaba, un descuadre del doble.
+                  cantidad: -cantidad,
                   cantidadNueva: stockAnteriorReemplazo - cantidad,
                   motivo: `Devolucion ${devolucion.codigo} - Entrega producto reemplazo`,
                   devolucionId: devolucion.id,
@@ -477,7 +490,11 @@ export class DevolucionVentaService {
             break;
           }
           default:
-            await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, item.accion);
+            // Acción sin efecto conocido sobre el stock: queda documentada,
+            // pero no mueve ni el stock ni los lotes.
+            await createMov(TipoMovimientoStock.ENTRADA_DEVOLUCION_CLIENTE, item.accion, {
+              noMueveStockActual: true,
+            });
             break;
         }
       }

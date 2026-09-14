@@ -56,6 +56,21 @@ export interface CrearMovimientoStockData {
    */
   lotesGestionadosPorElLlamador?: boolean;
   /**
+   * 🔴 Este movimiento NO cambia `stockActual`: documenta un pase entre
+   * contadores (dañado, garantía, reserva de combo) o algo que no toca el
+   * inventario. Ningún lote se mueve.
+   *
+   * "Interpretación A": `stockActual` incluye lo dañado y lo que está en
+   * garantía. Marcar dañada una caja no la saca del estante ni de su lote. Sin
+   * esto, un +3 al dañado creaba un lote de ajuste de 3 sin que el stock
+   * subiera, y liberar una reserva de combo consumía lotes: la suma de lotes
+   * se despegaba del stock.
+   *
+   * Se declara en el call site por la misma razón que el flag de arriba: el
+   * tipo solo no alcanza (`AJUSTE_MERMA` en un ajuste manual SÍ saca stock).
+   */
+  noMueveStockActual?: boolean;
+  /**
    * Consumir de ESTE lote primero, en vez del que elegiría FEFO.
    *
    * 🔑 Para la mercadería comprada POR ENCARGO: se le compró a un proveedor
@@ -100,6 +115,7 @@ export async function crearMovimientoStockConValoracion(
   const {
     precioCostoUnitario: _ignored,
     lotesGestionadosPorElLlamador,
+    noMueveStockActual,
     loteIdPreferido,
     ...rest
   } = data;
@@ -111,7 +127,7 @@ export async function crearMovimientoStockConValoracion(
     },
   });
 
-  if (!lotesGestionadosPorElLlamador) {
+  if (!lotesGestionadosPorElLlamador && !noMueveStockActual) {
     await sincronizarLotes(tx, movimiento, costoUnit, loteIdPreferido);
   }
 
@@ -155,6 +171,8 @@ export function lotesActivos(): boolean {
  * - **Cualquier otra entrada** (ajuste, producción, transferencia recibida) →
  *   crea un lote, porque si no queda stock sin respaldo y el FEFO se
  *   quedaría corto después.
+ * - **Movimiento que no cambia `stockActual`** (dañado, garantía, reserva) →
+ *   no llega acá: lo declara el llamador con `noMueveStockActual`.
  */
 async function sincronizarLotes(
   tx: Prisma.TransactionClient,
@@ -167,6 +185,7 @@ async function sincronizarLotes(
     cantidad: number;
     ventaId: string | null;
     transferenciaId: string | null;
+    devolucionId: string | null;
     motivo: string | null;
     usuarioId: string;
   },
@@ -202,14 +221,27 @@ async function sincronizarLotes(
   let repuesto = 0;
   const asignaciones: AsignacionLote[] = [];
 
-  // ¿Revierte una salida conocida? Solo se busca por venta: es el único
-  // documento que tiene una salida previa identificable contra el MISMO
-  // productoStock (una transferencia recibida sacó de OTRA sede, así que sus
-  // lotes no son estos).
-  if (movimiento.ventaId) {
+  // ¿Revierte una salida conocida? Se busca por VENTA: es el único documento
+  // que tiene una salida previa identificable contra el MISMO productoStock
+  // (una transferencia recibida sacó de OTRA sede, así que sus lotes no son
+  // estos).
+  //
+  // 🔑 El movimiento de una devolución de cliente no lleva `ventaId` —el
+  // kardex mostraría el código de la venta en vez del de la devolución—, así
+  // que la venta se lee de la devolución. Sin esto lo devuelto entraba siempre
+  // a un lote de ajuste nuevo y perdía su vencimiento.
+  let ventaOrigenId = movimiento.ventaId;
+  if (!ventaOrigenId && movimiento.devolucionId) {
+    const devolucion = await tx.devolucion.findUnique({
+      where: { id: movimiento.devolucionId },
+      select: { ventaId: true },
+    });
+    ventaOrigenId = devolucion?.ventaId ?? null;
+  }
+  if (ventaOrigenId) {
     const origen = await tx.movimientoStock.findMany({
       where: {
-        ventaId: movimiento.ventaId,
+        ventaId: ventaOrigenId,
         productoStockId: movimiento.productoStockId,
         cantidad: { lt: 0 },
       },
