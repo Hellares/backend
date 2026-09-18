@@ -4841,13 +4841,17 @@ export class VentaService {
           continue; // Servicios no afectan stock
         }
 
-        // Buscar ProductoStock
+        // Buscar ProductoStock — 🔴 el de una VARIANTE vive con productoId=NULL,
+        // así que se consulta SOLO por varianteId: con el AND no matcheaba esa
+        // fila y confirmar una venta de variante moría con "No existe stock".
         const productoStock = await tx.productoStock.findFirst({
-          where: {
-            sedeId: venta.sedeId,
-            productoId: detalle.productoId ?? null,
-            varianteId: detalle.varianteId ?? null,
-          },
+          where: detalle.varianteId
+            ? { sedeId: venta.sedeId, varianteId: detalle.varianteId }
+            : {
+                sedeId: venta.sedeId,
+                productoId: detalle.productoId,
+                varianteId: null,
+              },
         });
 
         if (!productoStock) {
@@ -5728,12 +5732,20 @@ export class VentaService {
           continue;
         }
 
+        // 🔴 El stock de una VARIANTE vive con productoId=NULL → se consulta
+        // SOLO por varianteId. Un AND productoId+varianteId no matchea esa fila
+        // y la anulación se salteaba la línea EN SILENCIO (el `continue` de
+        // abajo): la mercadería quedaba fuera del inventario y el lote, agotado.
+        // Pasó en prod con VTA-SED-00000814 (16-09-2026, 1 edredón de variante).
+        // Mismo branch que `crearYCobrar` y `_eliminarVentaDiferidaPendiente`.
         const productoStock = await tx.productoStock.findFirst({
-          where: {
-            sedeId: venta.sedeId,
-            productoId: detalle.productoId ?? null,
-            varianteId: detalle.varianteId ?? null,
-          },
+          where: detalle.varianteId
+            ? { sedeId: venta.sedeId, varianteId: detalle.varianteId }
+            : {
+                sedeId: venta.sedeId,
+                productoId: detalle.productoId,
+                varianteId: null,
+              },
         });
 
         if (!productoStock) continue;

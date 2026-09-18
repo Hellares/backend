@@ -401,12 +401,18 @@ export class DevolucionVentaService {
       for (const item of devolucion.items) {
         if (!item.productoId && !item.varianteId) continue;
 
+        // 🔴 El stock de una VARIANTE vive con productoId=NULL → SOLO por
+        // varianteId. Con el AND productoId+varianteId no encontraba la fila y
+        // el `continue` se comía el ítem en silencio: la devolución de una
+        // variante no reponía nada ni tocaba sus lotes.
         const productoStock = await tx.productoStock.findFirst({
-          where: {
-            sedeId: devolucion.sedeId,
-            productoId: item.productoId ?? null,
-            varianteId: item.varianteId ?? null,
-          },
+          where: item.varianteId
+            ? { sedeId: devolucion.sedeId, varianteId: item.varianteId }
+            : {
+                sedeId: devolucion.sedeId,
+                productoId: item.productoId,
+                varianteId: null,
+              },
         });
         if (!productoStock) continue;
 
@@ -936,12 +942,17 @@ export class DevolucionVentaService {
         // 2. Stock back: ENTRADA_DEVOLUCION_CLIENTE en sede ORIGINAL de la venta.
         for (const item of dev.items) {
           if (!item.productoId && !item.varianteId) continue;
+          // 🔴 SOLO por varianteId cuando la hay: el stock de una variante
+          // tiene productoId=NULL y con el AND la reversión total se saltaba
+          // el ítem (el warn de abajo) sin devolver la mercadería.
           const stock = await tx.productoStock.findFirst({
-            where: {
-              sedeId: venta.sedeId,
-              productoId: item.productoId ?? null,
-              varianteId: item.varianteId ?? null,
-            },
+            where: item.varianteId
+              ? { sedeId: venta.sedeId, varianteId: item.varianteId }
+              : {
+                  sedeId: venta.sedeId,
+                  productoId: item.productoId,
+                  varianteId: null,
+                },
           });
           if (!stock) {
             this.logger.warn(
