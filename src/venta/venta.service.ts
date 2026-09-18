@@ -73,6 +73,42 @@ import {
 } from '../common/utils/unidad-presentacion.util';
 
 /**
+ * Aviso de VENTA REPETIDA: ventana en la que otra venta igual de la misma
+ * cajera se considera "la misma, rehecha". Los 13 pares vistos en JAYLI
+ * (180 días) estaban todos a menos de 3 min; la 814/815, a 18 s.
+ */
+const VENTANA_VENTA_REPETIDA_MS = 3 * 60_000;
+
+/**
+ * Huella de las líneas de una venta: QUÉ y CUÁNTO, sin importar el orden.
+ * Sirve igual para el DTO que llega y para las líneas guardadas.
+ */
+function firmaDeLineas(
+  lineas: Array<{
+    productoId?: string | null;
+    varianteId?: string | null;
+    servicioId?: string | null;
+    comboId?: string | null;
+    ordenServicioId?: string | null;
+    cantidad: unknown;
+  }>,
+): string {
+  return lineas
+    .map((l) =>
+      [
+        l.productoId ?? '',
+        l.varianteId ?? '',
+        l.servicioId ?? '',
+        l.comboId ?? '',
+        l.ordenServicioId ?? '',
+        Number(l.cantidad),
+      ].join(':'),
+    )
+    .sort()
+    .join('|');
+}
+
+/**
  * DTO interno enriquecido por `aplicarPreciosBackendNivel` con el snapshot
  * de costo y motivo de liquidación. Persiste a VentaDetalle como
  * precioCostoSnapshot/margenSnapshot/motivoLiquidacionSnapshot.
@@ -2165,6 +2201,81 @@ export class VentaService {
   }
 
   /**
+   * Aviso de VENTA REPETIDA (09-16, VTA-814/815): la cajera cobró una venta y,
+   * para agregarle cliente y envío, la REHIZO entera en vez de editarla (el
+   * envío se agrega sobre la venta ya cobrada) — el stock salió dos veces y
+   * quedó una venta de más para anular. Pasa 1-2 veces por mes.
+   *
+   * Si la MISMA cajera cobró en la MISMA sede, hace menos de 3 min, una venta
+   * no anulada con EXACTAMENTE los mismos productos y cantidades → 409
+   * VENTA_REPETIDA con esa venta, y el app pregunta. NO bloquea: con
+   * `ventaRepetidaConfirmada` pasa (dos clientes pueden llevar lo mismo).
+   * Solo si el cliente lo pide (`avisarVentaRepetida`): la web y los APKs
+   * viejos no conocen este 409 y se les trabaría la venta.
+   */
+  private async avisarSiVentaRepetida(
+    empresaId: string,
+    dto: CrearYCobrarVentaDto,
+    cajeroId: string,
+  ): Promise<void> {
+    if (!dto.avisarVentaRepetida || dto.ventaRepetidaConfirmada) return;
+    const firma = firmaDeLineas(dto.detalles ?? []);
+    if (!firma) return;
+
+    const recientes = await this.prisma.venta.findMany({
+      where: {
+        empresaId,
+        sedeId: dto.sedeId,
+        cajeroId,
+        canalVenta: { in: ['POS', 'COTIZACION'] },
+        estado: { not: EstadoVenta.ANULADA },
+        creadoEn: { gte: new Date(Date.now() - VENTANA_VENTA_REPETIDA_MS) },
+      },
+      orderBy: { creadoEn: 'desc' },
+      take: 10,
+      select: {
+        id: true,
+        codigo: true,
+        total: true,
+        nombreCliente: true,
+        estado: true,
+        creadoEn: true,
+        detalles: {
+          select: {
+            productoId: true,
+            varianteId: true,
+            servicioId: true,
+            comboId: true,
+            ordenServicioId: true,
+            cantidad: true,
+          },
+        },
+      },
+    });
+    const previa = recientes.find((v) => firmaDeLineas(v.detalles) === firma);
+    if (!previa) return;
+
+    const segundos = Math.max(
+      1,
+      Math.round((Date.now() - previa.creadoEn.getTime()) / 1000),
+    );
+    throw new ConflictException({
+      code: 'VENTA_REPETIDA',
+      message:
+        `Hace ${segundos} s cobraste una venta con los mismos productos ` +
+        `(${previa.codigo}). ¿Es otra venta?`,
+      venta: {
+        id: previa.id,
+        codigo: previa.codigo,
+        nombreCliente: previa.nombreCliente,
+        total: Number(previa.total),
+        estado: previa.estado,
+        segundos,
+      },
+    });
+  }
+
+  /**
    * Crear y cobrar venta en un solo paso (POS directo)
    * Crea la venta, descuenta stock, registra pago(s), genera comprobante y registra movimiento en caja.
    */
@@ -2189,6 +2300,8 @@ export class VentaService {
         );
       }
     }
+
+    await this.avisarSiVentaRepetida(empresaId, dto, cajeroId);
 
     // Defensa multi-tenant: validar que TODOS los IDs del DTO pertenezcan
     // a la empresa del header `x-tenant-id`. El cliente comprometido podría

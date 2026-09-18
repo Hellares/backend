@@ -155,6 +155,22 @@ export class CrearYCobrarVentaDto {
 
   @ApiPropertyOptional({
     description:
+      'El cliente sabe mostrar el aviso de VENTA REPETIDA (409 VENTA_REPETIDA): solo con esto se controla. Los clientes viejos no lo mandan y no se les rechaza nada.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  avisarVentaRepetida?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'La cajera vio el aviso de venta repetida y confirmó que es OTRA venta.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  ventaRepetidaConfirmada?: boolean;
+
+  @ApiPropertyOptional({
+    description:
       'Venta CON ENVÍO (pedido por teléfono/WhatsApp que se despacha por agencia)',
   })
   @IsOptional()
