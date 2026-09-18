@@ -19,7 +19,10 @@ describe('VentaService.cobroYape (pendiente / mixto)', () => {
       venta: { findFirst: jest.fn().mockResolvedValue(venta) },
       configuracionEmpresa: { findUnique: jest.fn().mockResolvedValue(qr) },
     },
-    integracionYape: { crearCobro: jest.fn().mockResolvedValue(cobro) },
+    integracionYape: {
+      crearCobro: jest.fn().mockResolvedValue(cobro),
+      cancelarCobro: jest.fn().mockResolvedValue(0),
+    },
     caracteristicaEmpresa: { estaHabilitada: jest.fn().mockResolvedValue(yapeHabilitado) },
   });
 
@@ -86,6 +89,35 @@ describe('VentaService.cobroYape (pendiente / mixto)', () => {
     expect(ctx.integracionYape.crearCobro).toHaveBeenCalledWith(
       expect.objectContaining({ monto: 500 }), // el tramo, no 1500
     );
+  });
+
+  it('cancela el cobro ABIERTO de la venta antes de crear el nuevo (un solo cobro por venta)', async () => {
+    // 09-18, VTA-967: "pagar con otro medio" por Yape/Plin abría otro QR y el
+    // anterior quedaba reservando su monto 15 min.
+    const ctx = armarThis(
+      { id: 'v1', total: 50, sedeId: 's1', estado: 'CONFIRMADA', pagos: [] },
+      { payAmount: 50, chargeId: 'c2' },
+    );
+    await cobroYape.call(ctx, 'emp-1', 'v1');
+
+    expect(ctx.integracionYape.cancelarCobro).toHaveBeenCalledWith({
+      empresaId: 'emp-1',
+      ventaId: 'v1',
+    });
+    expect(ctx.integracionYape.cancelarCobro.mock.invocationCallOrder[0]).toBeLessThan(
+      ctx.integracionYape.crearCobro.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('sin saldo pendiente no toca los cobros (ni cancela ni crea)', async () => {
+    const ctx = armarThis(
+      { id: 'v1', total: 50, sedeId: 's1', estado: 'CONFIRMADA', pagos: [{ monto: 50 }] },
+      null,
+    );
+    await cobroYape.call(ctx, 'emp-1', 'v1');
+
+    expect(ctx.integracionYape.cancelarCobro).not.toHaveBeenCalled();
+    expect(ctx.integracionYape.crearCobro).not.toHaveBeenCalled();
   });
 
   it('GATE PREMIUM: empresa SIN YAPE_QR habilitado → habilitado:false, SIN QR, no llama api-yape', async () => {

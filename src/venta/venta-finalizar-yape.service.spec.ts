@@ -238,4 +238,57 @@ describe('VentaService.procesarPago — comprobante diferido (Yape)', () => {
     // Post-commit: notifica al cliente (servicio finalizado).
     expect(ordenServicioService.procesarPostCobroOrdenes).toHaveBeenCalled();
   });
+
+  // ── El cobro Yape abierto se libera con cualquier pago manual en caja ──
+  // 09-18, VTA-967: "pagar con otro medio" en efectivo dejaba el cobro Yape
+  // del tramo abierto 15 min, reservando su monto; un Yape de otro cliente
+  // por ese monto exacto se emparejaba con esta venta ya pagada y se perdía.
+  describe('liberar el cobro Yape abierto', () => {
+    const dtoEfectivo = { metodoPago: 'EFECTIVO', monto: 50 } as any;
+
+    it('pago manual en EFECTIVO de una venta de caja ("otro medio") → libera el cobro', async () => {
+      tx.venta.findFirst.mockResolvedValue(ventaDiferida({ canalVenta: 'POS' }));
+
+      await service.procesarPago('venta-1', 'emp-1', dtoEfectivo, 'caj-1');
+
+      expect(integracionYape.cancelarCobro).toHaveBeenCalledWith({
+        empresaId: 'emp-1',
+        ventaId: 'venta-1',
+      });
+    });
+
+    it('también en una venta que vino de COTIZACION', async () => {
+      tx.venta.findFirst.mockResolvedValue(ventaDiferida({ canalVenta: 'COTIZACION' }));
+
+      await service.procesarPago('venta-1', 'emp-1', dtoEfectivo, 'caj-1');
+
+      expect(integracionYape.cancelarCobro).toHaveBeenCalled();
+    });
+
+    it('pago manual en efectivo de una venta ONLINE (sin hoja de cobro) → no toca api-yape', async () => {
+      tx.venta.findFirst.mockResolvedValue(ventaDiferida({ canalVenta: 'ONLINE' }));
+
+      await service.procesarPago('venta-1', 'emp-1', dtoEfectivo, 'caj-1');
+
+      expect(integracionYape.cancelarCobro).not.toHaveBeenCalled();
+    });
+
+    it('pago manual YAPE en cualquier canal → libera el cobro (como siempre)', async () => {
+      tx.venta.findFirst.mockResolvedValue(ventaDiferida({ canalVenta: 'ONLINE' }));
+
+      await service.procesarPago('venta-1', 'emp-1', dtoYape, 'caj-1');
+
+      expect(integracionYape.cancelarCobro).toHaveBeenCalled();
+    });
+
+    it('el WEBHOOK no cancela: ahí el cobro ya quedó emparejado', async () => {
+      tx.venta.findFirst.mockResolvedValue(ventaDiferida({ canalVenta: 'POS' }));
+
+      await service.procesarPago('venta-1', 'emp-1', dtoYape, 'caj-1', {
+        skipCajaValidacion: true,
+      });
+
+      expect(integracionYape.cancelarCobro).not.toHaveBeenCalled();
+    });
+  });
 });

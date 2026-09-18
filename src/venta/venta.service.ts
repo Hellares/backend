@@ -246,6 +246,14 @@ export class VentaService {
     const montoCobro =
       monto && monto > 0 ? Math.min(round2(monto), pendiente) : pendiente;
 
+    // Cancelar y crear (como el marketplace y las cotizaciones): UN cobro
+    // abierto por venta. Cuando la hoja abre otro QR —"pagar con otro medio"
+    // por Yape/Plin, o se reabre— el anterior no queda reservando su monto ni
+    // se empareja con un pago que no es suyo (09-18, VTA-967). Un tramo ya
+    // pagado quedó `matched` y no se toca. Best-effort: si api-yape no
+    // responde devuelve 0 y el cobro se crea igual.
+    await this.integracionYape.cancelarCobro({ empresaId, ventaId });
+
     const cobro = await this.integracionYape.crearCobro({
       empresaId,
       ventaId,
@@ -5254,12 +5262,17 @@ export class VentaService {
     // Órdenes de servicio marcadas FINALIZADAS en el pago diferido (para los
     // efectos post-commit: push al cliente + aviso de mantenimiento).
     let ordenesDiferidasParaPost: any[] = [];
+    // Canal de la venta: decide, tras el commit, si se libera el cobro Yape.
+    // (Aserción y no anotación: se asigna dentro de la transacción y TS no
+    // lo ve; anotado, lo estrecharía a `null` y la comparación no compilaría.)
+    let canalDeLaVenta = null as string | null;
 
     const ventaPagada = await this.prisma.$transaction(async (tx) => {
       const venta = await tx.venta.findFirst({
         where: { id, empresaId },
         include: { pagos: true, detalles: true },
       });
+      canalDeLaVenta = venta?.canalVenta ?? null;
 
       // Idempotente: si la venta YA está pagada completa, no agregamos otro pago
       // (evita sobre-pago). Caso real: el webhook Yape ya cerró la venta pero la
@@ -5640,10 +5653,20 @@ export class VentaService {
     // cobro ya quedó `matched`). Fire-and-forget: nunca bloquea ni rompe el pago.
     // Solo el path MANUAL libera el cobro (skipCajaValidacion=false). En el
     // webhook el cobro ya quedó `matched` en api-yape → cancelar sería no-op.
+    //
+    // También con OTRO medio en una venta de caja (09-18, VTA-967): en la hoja
+    // de cobro, "pagar con otro medio" en efectivo/tarjeta dejaba el cobro
+    // Yape del tramo abierto 15 min. Reservaba ese monto (otras ventas salían
+    // con céntimos) y un Yape de OTRO cliente por ese monto exacto se
+    // emparejaba con esta venta ya pagada: el webhook lo ignoraba y quedaba
+    // sin rastro. La hoja crea un cobro nuevo para lo que falta.
     if (
       usuarioId &&
       !opts?.skipCajaValidacion &&
-      (dto.metodoPago === 'YAPE' || dto.metodoPago === 'PLIN')
+      (dto.metodoPago === 'YAPE' ||
+        dto.metodoPago === 'PLIN' ||
+        canalDeLaVenta === 'POS' ||
+        canalDeLaVenta === 'COTIZACION')
     ) {
       this.integracionYape
         .cancelarCobro({ empresaId, ventaId: id })
