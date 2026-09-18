@@ -11,7 +11,10 @@ import { CotizacionService } from '../cotizacion/cotizacion.service';
 import { SorteosService } from '../sorteos/sorteos.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { NotificacionService } from '../notificacion/notificacion.service';
-import { nombresCoinciden } from '../sorteos/nombre-match.util';
+import {
+  nombreCalzaParaDesempate,
+  nombresCoinciden,
+} from '../sorteos/nombre-match.util';
 
 /**
  * Payload estándar de Syncrofact (documentacion/webhooks.md).
@@ -129,6 +132,15 @@ const TOLERANCIA_RELOJ_MS = 2 * 60_000;
  */
 const esReferenciaDeRelleno = (ref: string | null | undefined) =>
   !ref || /^0*$/.test(ref.trim());
+
+/**
+ * api-yape reserva un monto ÚNICO por cuenta bajando céntimos ante colisión
+ * (`payAmount = base − d`, d ∈ 0..0.99): el Yape puede llegar hasta S/ 0.99
+ * por debajo del cobro, que se registra con el monto LIMPIO.
+ */
+const MAX_CENTIMOS_RUTEO = 0.99;
+
+const mismoMonto = (a: number, b: number) => Math.abs(a - b) < 0.005;
 
 @Injectable()
 export class WebhooksService {
@@ -603,10 +615,18 @@ export class WebhooksService {
    * Aquí se VINCULA: el cobro manual (con referencia de relleno `00000` o
    * vacía) recibe la referencia real del Yape. NO mueve plata —el cobro ya lo
    * registró la cajera—; lo deja trazable y CONSUMIDO (sorteos y el agente
-   * dejan de ofrecerlo). Estricto: mismo monto y método, venta de caja
-   * (POS/COTIZACION), cobro de los últimos 10 min, pago posterior al cobro y
-   * UN solo candidato. Un pago ANTERIOR a la venta nunca vincula por acá: ese
-   * lo elige la cajera en la hoja de cobro.
+   * dejan de ofrecerlo). Candidatos: venta de caja (POS/COTIZACION), mismo
+   * método, cobro de los últimos 10 min, pago posterior al cobro, y MONTO:
+   * el mismo, o exactamente el `payAmount` con céntimos que api-yape le
+   * asignó a ESA venta. Un pago ANTERIOR a la venta nunca vincula por acá:
+   * ese lo elige la cajera en la hoja de cobro.
+   *
+   * Varios candidatos (dos ventas del mismo monto a la vez): desempata el
+   * NOMBRE (`nombreCalzaParaDesempate`, el nombre no es obligatorio: la
+   * mayoría es CLIENTES VARIOS y en tienda paga cualquiera); si no decide
+   * (CLIENTES VARIOS, homónimos "Oscar Gut*"), los CÉNTIMOS (el Yape de
+   * 49.99 es de la venta a la que api-yape le dio 49.99). Nada decide → no
+   * vincula y queda la alerta.
    *
    * Best-effort: cualquier error cae a la alerta de siempre.
    */
@@ -620,7 +640,7 @@ export class WebhooksService {
       provider?: string | null;
       receivedAt?: string | null;
     },
-  ): Promise<{ accion: string; ventaId?: string }> {
+  ): Promise<{ accion: string; ventaId?: string; criterio?: string }> {
     try {
       const monto = Number(pago?.amount ?? 0);
       const referencia = pago?.operationCode || pago?.id || undefined;
@@ -650,7 +670,12 @@ export class WebhooksService {
         where: {
           anulado: false,
           metodoPago: { in: metodos },
-          monto,
+          // El cobro va con el monto LIMPIO; el Yape pudo llegar con los
+          // céntimos de ruteo de api-yape (hasta 0.99 menos).
+          monto: {
+            gte: monto,
+            lte: Math.round((monto + MAX_CENTIMOS_RUTEO) * 100) / 100,
+          },
           creadoEn: {
             gte: new Date(Date.now() - VENTANA_VINCULO_COBRO_MANUAL_MS),
           },
@@ -662,22 +687,64 @@ export class WebhooksService {
         },
         select: {
           id: true,
+          monto: true,
           referencia: true,
           creadoEn: true,
-          venta: { select: { id: true, codigo: true } },
+          venta: { select: { id: true, codigo: true, nombreCliente: true } },
         },
       });
-      const candidatos = cobros.filter(
+      const abiertos = cobros.filter(
         (c) =>
           esReferenciaDeRelleno(c.referencia) &&
           // El pago es POSTERIOR al cobro manual (caso: aprobó antes de que
           // llegara la notificación). Uno anterior no es de este cobro.
           recibidoEn >= c.creadoEn.getTime() - TOLERANCIA_RELOJ_MS,
       );
-      if (candidatos.length === 0) return { accion: 'cobro-manual-sin-match' };
-      if (candidatos.length > 1) return { accion: 'cobro-manual-ambiguo' };
+      if (abiertos.length === 0) return { accion: 'cobro-manual-sin-match' };
 
-      const cobro = candidatos[0];
+      // Los montos únicos de api-yape solo hacen falta si hay céntimos de
+      // por medio o hay que desempatar.
+      const necesitaCobrosYape =
+        abiertos.length > 1 ||
+        abiertos.some((c) => !mismoMonto(Number(c.monto), monto));
+      const cobrosYape = necesitaCobrosYape
+        ? await this.integracionYape.listarCobrosRecientes(empresaId)
+        : [];
+      // ¿api-yape le asignó a ESTA venta exactamente el monto del Yape?
+      const centimosDeLaVenta = (ventaId: string) =>
+        cobrosYape.some(
+          (ch) => ch.reference === ventaId && mismoMonto(ch.payAmount, monto),
+        );
+
+      const candidatos = abiertos.filter(
+        (c) =>
+          mismoMonto(Number(c.monto), monto) || centimosDeLaVenta(c.venta.id),
+      );
+      if (candidatos.length === 0) return { accion: 'cobro-manual-sin-match' };
+
+      let cobro = candidatos.length === 1 ? candidatos[0] : undefined;
+      let criterio = 'unico';
+      if (!cobro) {
+        const porNombre = candidatos.filter((c) =>
+          nombreCalzaParaDesempate(pago.senderName, c.venta.nombreCliente),
+        );
+        if (porNombre.length === 1) {
+          cobro = porNombre[0];
+          criterio = 'nombre';
+        } else {
+          // El nombre no decide (ninguno calza, o homónimos) → los céntimos,
+          // entre TODOS: calzar por nombre con dos no descarta a una venta
+          // CLIENTES VARIOS, cuyo pagador no conocemos.
+          const porCentimos = candidatos.filter((c) =>
+            centimosDeLaVenta(c.venta.id),
+          );
+          if (porCentimos.length === 1) {
+            cobro = porCentimos[0];
+            criterio = 'centimos';
+          }
+        }
+      }
+      if (!cobro) return { accion: 'cobro-manual-ambiguo' };
       // Atómico: si otro webhook lo vinculó en paralelo, este no lo pisa.
       const r = await this.prisma.pagoVenta.updateMany({
         where: { id: cobro.id, referencia: cobro.referencia },
@@ -687,9 +754,13 @@ export class WebhooksService {
 
       this.logger.log(
         `💸 Yape ${referencia} (S/ ${monto.toFixed(2)} de "${pago.senderName ?? '?'}") ` +
-          `VINCULADO al cobro manual de ${cobro.venta.codigo}`,
+          `VINCULADO al cobro manual de ${cobro.venta.codigo} (criterio: ${criterio})`,
       );
-      return { accion: 'cobro-manual-vinculado', ventaId: cobro.venta.id };
+      return {
+        accion: 'cobro-manual-vinculado',
+        ventaId: cobro.venta.id,
+        criterio,
+      };
     } catch (e) {
       this.logger.warn(
         `vincularACobroManualEnCaja falló (empresa ${empresaId}): ${(e as Error).message}`,

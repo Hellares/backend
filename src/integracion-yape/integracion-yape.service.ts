@@ -174,6 +174,44 @@ export class IntegracionYapeService {
   }
 
   /**
+   * Cobros (charges) recientes de la cuenta, en CUALQUIER estado — también
+   * los cancelados por un cobro manual. Sirve para saber qué monto único
+   * (`payAmount`, con los céntimos de ruteo) le tocó a cada venta
+   * (`reference` = ventaId). Resiliente: [] si la integración no aplica o
+   * api-yape no responde.
+   */
+  async listarCobrosRecientes(
+    empresaId: string,
+  ): Promise<{ reference: string | null; payAmount: number; status: string }[]> {
+    const cfg = await this.prisma.integracionYape.findUnique({
+      where: { empresaId },
+    });
+    if (!cfg || !cfg.habilitado) return [];
+    try {
+      const res = await fetch(`${cfg.apiBaseUrl}/api/charges`, {
+        headers: { 'x-api-key': cfg.accountApiKey },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        this.logger.warn(`api-yape /charges (listar) respondió ${res.status}`);
+        return [];
+      }
+      const data: any = await res.json();
+      return ((data?.charges ?? []) as any[]).map((c) => ({
+        reference: c.reference ?? null,
+        // Decimal de Prisma viaja como string ("49.99").
+        payAmount: Number(c.payAmount ?? 0),
+        status: String(c.status ?? ''),
+      }));
+    } catch (e) {
+      this.logger.warn(
+        `api-yape no disponible al listar cobros: ${(e as Error).message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
    * Verifica la firma HMAC del webhook entrante con el secret de la empresa
    * dueña de la cuenta api-yape (resuelta por payload.account.id). Devuelve la
    * empresa + el payload, o null si la cuenta no está mapeada. Lanza

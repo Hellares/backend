@@ -47,7 +47,11 @@ describe('WebhooksService.procesarPagoYape', () => {
   });
 
   beforeEach(() => {
-    integracionYape = { verificarWebhook: jest.fn() };
+    integracionYape = {
+      verificarWebhook: jest.fn(),
+      // Montos únicos (con céntimos) que api-yape asignó a cada venta.
+      listarCobrosRecientes: jest.fn().mockResolvedValue([]),
+    };
     prisma = {
       venta: {
         findFirst: jest.fn(),
@@ -571,9 +575,14 @@ describe('WebhooksService.procesarPagoYape', () => {
 
     const cobroManual = (over: any = {}) => ({
       id: 'pv-1',
+      monto: 83, // el cobro se registra con el monto LIMPIO
       referencia: '00000',
       creadoEn: haceMin(1),
-      venta: { id: 'venta-815', codigo: 'VTA-SED-00000815' },
+      venta: {
+        id: 'venta-815',
+        codigo: 'VTA-SED-00000815',
+        nombreCliente: 'CLIENTES VARIOS',
+      },
       ...over,
     });
 
@@ -594,7 +603,8 @@ describe('WebhooksService.procesarPagoYape', () => {
           where: expect.objectContaining({
             anulado: false,
             metodoPago: { in: [MetodoPagoVenta.YAPE] },
-            monto: 83,
+            // Hasta 0.99 por encima: el Yape puede traer los céntimos de ruteo.
+            monto: { gte: 83, lte: 83.99 },
             venta: expect.objectContaining({
               empresaId: 'emp-1',
               canalVenta: { in: ['POS', 'COTIZACION'] },
@@ -665,7 +675,10 @@ describe('WebhooksService.procesarPagoYape', () => {
       yapeRecibido();
       prisma.pagoVenta.findMany.mockResolvedValue([
         cobroManual(),
-        cobroManual({ id: 'pv-2', venta: { id: 'v-2', codigo: 'VTA-2' } }),
+        cobroManual({
+          id: 'pv-2',
+          venta: { id: 'v-2', codigo: 'VTA-2', nombreCliente: 'CLIENTES VARIOS' },
+        }),
       ]);
 
       const r = await service.procesarPagoYape(RAW, FIRMA);
@@ -764,6 +777,186 @@ describe('WebhooksService.procesarPagoYape', () => {
 
       expect(r).toMatchObject({ ok: true, accion: 'venta-sin-match' });
       expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
+    });
+
+    // ── Céntimos de ruteo y desempate (dos ventas del mismo monto a la vez) ──
+    // api-yape no deja dos cobros pendientes iguales: A = 83.00, B = 82.99.
+    // El cobro manual se registra con el monto LIMPIO (83) en ambas.
+    const ventaA = { id: 'venta-A', codigo: 'VTA-A', nombreCliente: 'CLIENTES VARIOS' };
+    const ventaB = { id: 'venta-B', codigo: 'VTA-B', nombreCliente: 'CLIENTES VARIOS' };
+    const cobrosYapeAyB = [
+      { reference: 'venta-A', payAmount: 83, status: 'canceled' },
+      { reference: 'venta-B', payAmount: 82.99, status: 'canceled' },
+    ];
+
+    it('Yape con CÉNTIMOS (82.99) del único cobro de 83 cuyo monto único era 82.99 → vincula', async () => {
+      yapeRecibido({ amount: 82.99 });
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual({ venta: ventaB })]);
+      integracionYape.listarCobrosRecientes.mockResolvedValue(cobrosYapeAyB);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({
+        accion: 'cobro-manual-vinculado',
+        ventaId: 'venta-B',
+        criterio: 'unico',
+      });
+    });
+
+    it('Yape con céntimos que api-yape NO le asignó a esa venta → no vincula', async () => {
+      yapeRecibido({ amount: 82.99 });
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual({ venta: ventaA })]);
+      integracionYape.listarCobrosRecientes.mockResolvedValue(cobrosYapeAyB);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'venta-sin-match' });
+      expect(prisma.pagoVenta.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('monto exacto y un solo candidato → ni consulta a api-yape', async () => {
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual()]);
+
+      await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(integracionYape.listarCobrosRecientes).not.toHaveBeenCalled();
+    });
+
+    it('dos ventas de 83 a CLIENTES VARIOS: el Yape de 83.00 → la que tenía 83.00 (céntimos)', async () => {
+      yapeRecibido({ amount: 83 });
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({ id: 'pv-A', venta: ventaA }),
+        cobroManual({ id: 'pv-B', venta: ventaB }),
+      ]);
+      integracionYape.listarCobrosRecientes.mockResolvedValue(cobrosYapeAyB);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ ventaId: 'venta-A', criterio: 'centimos' });
+      expect(prisma.pagoVenta.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'pv-A', referencia: '00000' } }),
+      );
+    });
+
+    it('dos ventas de 83 a CLIENTES VARIOS: el Yape de 82.99 → la que tenía 82.99', async () => {
+      yapeRecibido({ amount: 82.99 });
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({ id: 'pv-A', venta: ventaA }),
+        cobroManual({ id: 'pv-B', venta: ventaB }),
+      ]);
+      integracionYape.listarCobrosRecientes.mockResolvedValue(cobrosYapeAyB);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      // A queda afuera por monto (83 ≠ 82.99 y su único era 83.00).
+      expect(r).toMatchObject({ ventaId: 'venta-B', criterio: 'unico' });
+    });
+
+    it('dos ventas del mismo monto: desempata el NOMBRE (caso real JHONATAN/JHONATHAN)', async () => {
+      yapeRecibido({ senderName: 'AQUINO ARENAS JHONATAN', amount: 83 });
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({
+          id: 'pv-A',
+          venta: { ...ventaA, nombreCliente: 'JHONATHAN AQUINO ARENAS' },
+        }),
+        cobroManual({ id: 'pv-B', venta: ventaB }),
+      ]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ ventaId: 'venta-A', criterio: 'nombre' });
+    });
+
+    it('el NOMBRE manda sobre los céntimos (el cliente pudo ignorar los céntimos)', async () => {
+      // Pagó 83.00 (el monto único de A) pero es el cliente de B.
+      yapeRecibido({ senderName: 'Oscar Gut*', amount: 83 });
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({ id: 'pv-A', venta: ventaA }),
+        cobroManual({
+          id: 'pv-B',
+          venta: { ...ventaB, nombreCliente: 'OSCAR GUTIERREZ ROJAS' },
+        }),
+      ]);
+      integracionYape.listarCobrosRecientes.mockResolvedValue(cobrosYapeAyB);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ ventaId: 'venta-B', criterio: 'nombre' });
+    });
+
+    it('homónimos ("Oscar Gut*" calza con los dos) → desempatan los céntimos', async () => {
+      yapeRecibido({ senderName: 'Oscar Gut*', amount: 82.99 });
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({
+          id: 'pv-A',
+          venta: { ...ventaA, nombreCliente: 'OSCAR GUTIERREZ ROJAS' },
+        }),
+        cobroManual({
+          id: 'pv-B',
+          venta: { ...ventaB, nombreCliente: 'OSCAR GUTARRA LEON' },
+        }),
+      ]);
+      integracionYape.listarCobrosRecientes.mockResolvedValue([
+        { reference: 'venta-A', payAmount: 82.99, status: 'canceled' },
+        { reference: 'venta-B', payAmount: 83, status: 'canceled' },
+      ]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      // Solo A tenía 82.99 → B ni siquiera es candidato por monto.
+      expect(r).toMatchObject({ ventaId: 'venta-A' });
+    });
+
+    it('homónimos con el mismo monto y sin datos de céntimos → no adivina', async () => {
+      yapeRecibido({ senderName: 'Oscar Gut*', amount: 83 });
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({
+          id: 'pv-A',
+          venta: { ...ventaA, nombreCliente: 'OSCAR GUTIERREZ ROJAS' },
+        }),
+        cobroManual({
+          id: 'pv-B',
+          venta: { ...ventaB, nombreCliente: 'OSCAR GUTARRA LEON' },
+        }),
+      ]);
+      // api-yape caído / sin cobros → los céntimos no deciden.
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'venta-sin-match' });
+      expect(prisma.pagoVenta.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('homónimos + una CLIENTES VARIOS: los céntimos deciden entre TODOS', async () => {
+      // Tres ventas de 83: dos "Oscar Gut…" y una CLIENTES VARIOS con 83.00.
+      yapeRecibido({ senderName: 'Oscar Gut*', amount: 83 });
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({
+          id: 'pv-A',
+          venta: { ...ventaA, nombreCliente: 'OSCAR GUTIERREZ ROJAS' },
+        }),
+        cobroManual({
+          id: 'pv-B',
+          venta: { ...ventaB, nombreCliente: 'OSCAR GUTARRA LEON' },
+        }),
+        cobroManual({
+          id: 'pv-C',
+          venta: { id: 'venta-C', codigo: 'VTA-C', nombreCliente: 'CLIENTES VARIOS' },
+        }),
+      ]);
+      integracionYape.listarCobrosRecientes.mockResolvedValue([
+        { reference: 'venta-A', payAmount: 82.99, status: 'canceled' },
+        { reference: 'venta-B', payAmount: 82.98, status: 'canceled' },
+        { reference: 'venta-C', payAmount: 83, status: 'canceled' },
+      ]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      // Por nombre: A y B (homónimos) → no decide. Por céntimos, entre
+      // todos: solo C tenía 83.00 (a A y B les tocó 82.99 y 82.98). Que un
+      // "Oscar" pague la venta sin cliente no contradice nada.
+      expect(r).toMatchObject({ ventaId: 'venta-C', criterio: 'centimos' });
     });
   });
 });

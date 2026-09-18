@@ -88,6 +88,58 @@ export function nombresCoinciden(
 }
 
 /**
+ * Regla MÁS FLEXIBLE, solo para DESEMPATAR a qué cobro va un pago (nunca
+ * para validar plata sola): calza si `nombresCoinciden`, o si TODAS las
+ * palabras del remitente (mínimo 2, iniciales sueltas fuera) calzan con
+ * palabras DISTINTAS del registrado, sin importar el orden, con la truncada
+ * "GUT*" como prefijo e ignorando la H muda. Cubre dos casos reales que la
+ * estricta pierde:
+ *   - la ortografía del banco ≠ RENIEC: "AQUINO ARENAS JHONATAN" (Yape) vs
+ *     "JHONATHAN AQUINO ARENAS" (venta 815, 09-16);
+ *   - "Oscar Gut*" (el formato mayoritario: nombre + 3 letras del apellido)
+ *     contra un cliente guardado con los apellidos primero.
+ * Exigir TODAS las palabras deja afuera a un familiar con los mismos
+ * apellidos ("ROSA AQUINO ARENAS" no tiene JHONATAN).
+ */
+export function nombreCalzaParaDesempate(
+  sender: string | null | undefined,
+  registrado: string | null | undefined,
+): boolean {
+  if (nombresCoinciden(sender, registrado)) return true;
+  if (!sender || !registrado) return false;
+  const norm = (s: string) =>
+    s
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toUpperCase()
+      .replace(/[^A-ZÑ* ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const sinH = (w: string) => w.replace(/H/g, '');
+  const st = norm(sender)
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => ({
+      texto: sinH(w.replace(/\*/g, '')),
+      truncado: w.includes('*'),
+    }))
+    .filter((t) => t.texto.length >= 2); // iniciales sueltas NO cuentan
+  if (st.length < 2) return false;
+  const libres = norm(registrado)
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => sinH(w.replace(/\*/g, '')));
+  for (const t of st) {
+    const i = libres.findIndex((w) =>
+      t.truncado ? w.startsWith(t.texto) : w === t.texto,
+    );
+    if (i === -1) return false;
+    libres.splice(i, 1); // cada palabra registrada se usa UNA vez
+  }
+  return true;
+}
+
+/**
  * TERCER formato visto en producción: el nombre COMPLETO con los apellidos
  * PRIMERO — "SALAS FLORES RAYZA NADIEJDA" vs registro RENIEC "RAYZA NADIEJDA
  * SALAS FLORES" (caso real 07-19: la participante pagó 3 min después de

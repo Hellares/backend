@@ -5,7 +5,11 @@
  * aceptaba palabra exacta o inicial de 1 letra → venta-sin-match, el cliente
  * pagó S/3 y su venta murió por TTL.
  */
-import { nombreCoincideYape, nombresCoinciden } from './nombre-match.util';
+import {
+  nombreCalzaParaDesempate,
+  nombreCoincideYape,
+  nombresCoinciden,
+} from './nombre-match.util';
 
 describe('nombreCoincideYape', () => {
   describe('formato TRUNCADO con asterisco (el bug de la venta 721)', () => {
@@ -128,5 +132,69 @@ describe('nombresCoinciden (bidireccional)', () => {
         nombresCoinciden('SALAS F. R. N.', 'RAYZA NADIEJDA SALAS FLORES'),
       ).toBe(false);
     });
+  });
+});
+
+// Solo para DESEMPATAR a qué cobro va un pago (nunca valida plata sola).
+// Remitentes tomados del buzón real de prod (09-18): 13/15 llegan como
+// "Nombre Ape*" y el resto completos con los apellidos primero.
+describe('nombreCalzaParaDesempate', () => {
+  it('todo lo que calza con la estricta, calza acá', () => {
+    expect(nombreCalzaParaDesempate('Oscar Gut*', 'OSCAR GUTIERREZ ROJAS')).toBe(
+      true,
+    );
+    expect(
+      nombreCalzaParaDesempate(
+        'LLAURE EUSTAQUIO MILAGROS ROXANA',
+        'MILAGROS ROXANA LLAURE EUSTAQUIO',
+      ),
+    ).toBe(true);
+  });
+
+  it('caso REAL 815: la ortografía del banco (JHONATAN) ≠ RENIEC (JHONATHAN)', () => {
+    expect(
+      nombresCoinciden('AQUINO ARENAS JHONATAN', 'JHONATHAN AQUINO ARENAS'),
+    ).toBe(false); // la estricta lo pierde
+    expect(
+      nombreCalzaParaDesempate('AQUINO ARENAS JHONATAN', 'JHONATHAN AQUINO ARENAS'),
+    ).toBe(true);
+  });
+
+  it('"Nombre Ape*" contra un cliente guardado con los apellidos primero', () => {
+    expect(nombresCoinciden('Oscar Gut*', 'GUTIERREZ ROJAS OSCAR')).toBe(false);
+    expect(nombreCalzaParaDesempate('Oscar Gut*', 'GUTIERREZ ROJAS OSCAR')).toBe(
+      true,
+    );
+  });
+
+  it('un familiar con los MISMOS apellidos no calza (faltaría el nombre)', () => {
+    expect(
+      nombreCalzaParaDesempate('AQUINO ARENAS JHONATAN', 'ROSA AQUINO ARENAS'),
+    ).toBe(false);
+  });
+
+  it('otro con el mismo nombre de pila, o el mismo apellido, no calza', () => {
+    expect(nombreCalzaParaDesempate('Oscar Gut*', 'OSCAR PEREZ LEON')).toBe(false);
+    expect(nombreCalzaParaDesempate('Oscar Gut*', 'MARIA GUTIERREZ ROJAS')).toBe(
+      false,
+    );
+  });
+
+  it('CLIENTES VARIOS nunca calza', () => {
+    expect(nombreCalzaParaDesempate('Oscar Gut*', 'CLIENTES VARIOS')).toBe(false);
+  });
+
+  it('solo iniciales no alcanza', () => {
+    expect(nombreCalzaParaDesempate('O. G.', 'OSCAR GUTIERREZ ROJAS')).toBe(false);
+  });
+
+  it('homónimo con el mismo inicio de apellido: calza (lo desempata el monto)', () => {
+    // Yape manda 3 letras del apellido: indistinguibles por nombre.
+    expect(nombreCalzaParaDesempate('Oscar Gut*', 'OSCAR GUTARRA LEON')).toBe(true);
+  });
+
+  it('vacíos → false', () => {
+    expect(nombreCalzaParaDesempate(null, 'OSCAR GUTIERREZ')).toBe(false);
+    expect(nombreCalzaParaDesempate('Oscar Gut*', null)).toBe(false);
   });
 });
