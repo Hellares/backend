@@ -53,7 +53,12 @@ describe('WebhooksService.procesarPagoYape', () => {
         findFirst: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      pagoVenta: { findFirst: jest.fn().mockResolvedValue(null) },
+      pagoVenta: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        // Sin cobros manuales de caja por defecto → nada que vincular.
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       conversacionWhatsapp: {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({}),
@@ -539,5 +544,226 @@ describe('WebhooksService.procesarPagoYape', () => {
     const r = await service.procesarPagoYape(RAW, FIRMA);
     expect(r).toMatchObject({ accion: 'venta-no-encontrada' });
     expect(ventaService.procesarPago).not.toHaveBeenCalled();
+  });
+
+  // ── Caso 2 (09-18): la cajera aprobó a mano ANTES de que llegara el Yape ──
+  // El cobro manual cancela el charge → la notificación llega sin charge y
+  // debe VINCULARSE al cobro (sin mover plata), no quedar suelta con alerta.
+  describe('vínculo con un cobro manual de caja', () => {
+    const haceMin = (min: number) => new Date(Date.now() - min * 60_000);
+
+    const yapeRecibido = (over: any = {}) =>
+      conPayload(
+        payloadPago({
+          event: 'payment.received',
+          charge: null,
+          payment: {
+            provider: 'yape',
+            senderName: 'Aquino Arenas Jhonatan',
+            amount: 83,
+            operationCode: 'OP-83',
+            id: 'pay-83',
+            receivedAt: new Date().toISOString(),
+            ...over,
+          },
+        }),
+      );
+
+    const cobroManual = (over: any = {}) => ({
+      id: 'pv-1',
+      referencia: '00000',
+      creadoEn: haceMin(1),
+      venta: { id: 'venta-815', codigo: 'VTA-SED-00000815' },
+      ...over,
+    });
+
+    it('un solo cobro 00000 del mismo monto → le pone la referencia real y NO alerta', async () => {
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual()]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+      await new Promise((res) => setImmediate(res));
+
+      expect(r).toMatchObject({
+        ok: true,
+        accion: 'cobro-manual-vinculado',
+        ventaId: 'venta-815',
+      });
+      expect(prisma.pagoVenta.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            anulado: false,
+            metodoPago: { in: [MetodoPagoVenta.YAPE] },
+            monto: 83,
+            venta: expect.objectContaining({
+              empresaId: 'emp-1',
+              canalVenta: { in: ['POS', 'COTIZACION'] },
+            }),
+          }),
+        }),
+      );
+      // Atómico: solo pisa si la referencia sigue siendo la de relleno.
+      expect(prisma.pagoVenta.updateMany).toHaveBeenCalledWith({
+        where: { id: 'pv-1', referencia: '00000' },
+        data: { referencia: 'OP-83' },
+      });
+      // No mueve plata: el cobro ya lo registró la cajera.
+      expect(ventaService.procesarPago).not.toHaveBeenCalled();
+      expect(notificaciones.enviarAUsuarios).not.toHaveBeenCalled();
+    });
+
+    it('cobro sin referencia (null) también se vincula', async () => {
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({ referencia: null }),
+      ]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'cobro-manual-vinculado' });
+      expect(prisma.pagoVenta.updateMany).toHaveBeenCalledWith({
+        where: { id: 'pv-1', referencia: null },
+        data: { referencia: 'OP-83' },
+      });
+    });
+
+    it('notificación SIN nombre del remitente → igual vincula (el nombre no hace falta)', async () => {
+      yapeRecibido({ senderName: null });
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual()]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'cobro-manual-vinculado' });
+    });
+
+    it('sin operationCode → usa el id del pago como referencia (igual que el webhook)', async () => {
+      yapeRecibido({ operationCode: null });
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual()]);
+
+      await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(prisma.pagoVenta.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { referencia: 'pay-83' } }),
+      );
+    });
+
+    it('provider plin → busca cobros PLIN', async () => {
+      yapeRecibido({ provider: 'plin' });
+
+      await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(prisma.pagoVenta.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            metodoPago: { in: [MetodoPagoVenta.PLIN] },
+          }),
+        }),
+      );
+    });
+
+    it('DOS cobros manuales del mismo monto → no adivina: alerta como siempre', async () => {
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual(),
+        cobroManual({ id: 'pv-2', venta: { id: 'v-2', codigo: 'VTA-2' } }),
+      ]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+      await new Promise((res) => setImmediate(res));
+
+      expect(r).toMatchObject({ accion: 'venta-sin-match' });
+      expect(prisma.pagoVenta.updateMany).not.toHaveBeenCalled();
+      expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
+    });
+
+    it('Yape ANTERIOR al cobro (caso 1: pagó antes de la venta) → NO vincula', async () => {
+      // AQUINO: yapeó 21 min antes; la cajera cobró recién después.
+      yapeRecibido({ receivedAt: haceMin(21).toISOString() });
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual()]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'venta-sin-match' });
+      expect(prisma.pagoVenta.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('desfase de reloj del lector dentro de la tolerancia → vincula', async () => {
+      // El celular marca el pago 1 min "antes" del cobro manual.
+      yapeRecibido({ receivedAt: haceMin(2).toISOString() });
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual({ creadoEn: haceMin(1) })]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'cobro-manual-vinculado' });
+    });
+
+    it('cobro con N° de operación REAL tipeado → no se toca', async () => {
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockResolvedValue([
+        cobroManual({ referencia: '12345678' }),
+      ]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'venta-sin-match' });
+      expect(prisma.pagoVenta.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('carrera: otro webhook lo vinculó primero (count 0) → alerta, no pisa', async () => {
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual()]);
+      prisma.pagoVenta.updateMany.mockResolvedValue({ count: 0 });
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+      await new Promise((res) => setImmediate(res));
+
+      expect(r).toMatchObject({ accion: 'venta-sin-match' });
+      expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
+    });
+
+    it('si el SORTEO ya atendió el pago → ni intenta vincular', async () => {
+      sorteosService.autoValidarPorPagoYape.mockResolvedValue({
+        accion: 'participante-auto-validado',
+      });
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockResolvedValue([cobroManual()]);
+
+      await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(prisma.pagoVenta.findMany).not.toHaveBeenCalled();
+      expect(prisma.pagoVenta.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('si la VENTA del agente lo tomó → ni intenta vincular', async () => {
+      yapeRecibido({ senderName: 'James Johel Torres Ledezma', amount: 2.5 });
+      prisma.venta.findMany.mockResolvedValue([
+        {
+          id: 'venta-7',
+          codigo: 'VTA-1',
+          total: 2.5,
+          nombreCliente: 'JAMES JOHEL TORRES LEDEZMA',
+          canalVenta: 'WHATSAPP_IA',
+          telefonoCliente: '51982002969',
+          cajeroId: 'caj-1',
+          pagos: [],
+        },
+      ]);
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+
+      expect(r).toMatchObject({ accion: 'venta-auto-validada' });
+      expect(prisma.pagoVenta.findMany).not.toHaveBeenCalled();
+    });
+
+    it('si la base falla → cae a la alerta de siempre (el webhook no revienta)', async () => {
+      yapeRecibido();
+      prisma.pagoVenta.findMany.mockRejectedValue(new Error('db caída'));
+
+      const r = await service.procesarPagoYape(RAW, FIRMA);
+      await new Promise((res) => setImmediate(res));
+
+      expect(r).toMatchObject({ ok: true, accion: 'venta-sin-match' });
+      expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
+    });
   });
 });

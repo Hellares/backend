@@ -111,6 +111,25 @@ const ACCIONES_SORTEO_ATENDIDO = new Set([
   'pago-ya-usado',
 ]);
 
+/**
+ * Vínculo del Yape con un cobro que la cajera YA aprobó a mano en caja: el
+ * pago tiene que llegar dentro de esta ventana desde que se registró el cobro.
+ */
+const VENTANA_VINCULO_COBRO_MANUAL_MS = 10 * 60_000;
+
+/**
+ * `receivedAt` lo pone el celular lector: tolerancia por desfase de relojes
+ * al exigir que el pago sea POSTERIOR al cobro manual.
+ */
+const TOLERANCIA_RELOJ_MS = 2 * 60_000;
+
+/**
+ * Referencia de relleno de un cobro manual: vacía o solo ceros — el app
+ * precarga `00000` en la hoja Yape y `000` en "otros pagos".
+ */
+const esReferenciaDeRelleno = (ref: string | null | undefined) =>
+  !ref || /^0*$/.test(ref.trim());
+
 @Injectable()
 export class WebhooksService {
   private readonly logger: AppLoggerService;
@@ -159,6 +178,25 @@ export class WebhooksService {
         empresaId,
         payload?.payment ?? {},
       );
+      // Ni sorteo ni venta del agente: ¿es el Yape de un cobro que la cajera
+      // ya aprobó a mano en caja, antes de que llegara la notificación? Se
+      // vincula (sin mover plata) y no se alerta.
+      if (
+        !ACCIONES_SORTEO_ATENDIDO.has(res.accion) &&
+        (resVenta.accion === 'venta-sin-match' ||
+          resVenta.accion === 'venta-pago-sin-datos')
+      ) {
+        const resCaja = await this.vincularACobroManualEnCaja(
+          empresaId,
+          payload?.payment ?? {},
+        );
+        if (resCaja.accion === 'cobro-manual-vinculado') {
+          this.logger.log(
+            `Webhook payment.received → sorteo:${res.accion} venta:${resVenta.accion} caja:${resCaja.accion}`,
+          );
+          return { ok: true, ...resCaja };
+        }
+      }
       this.logger.log(
         `Webhook payment.received → sorteo:${res.accion} venta:${resVenta.accion}`,
       );
@@ -553,6 +591,111 @@ export class WebhooksService {
       accion: completa ? 'venta-auto-validada' : 'venta-pago-parcial',
       ventaId: venta.id,
     };
+  }
+
+  /**
+   * El Yape llegó DESPUÉS de que la cajera aprobó el cobro a mano (vio el
+   * comprobante en el celular del cliente y tocó "Aprobar" antes de que
+   * entrara la notificación). Ese cobro manual CANCELA el charge en api-yape,
+   * así que la notificación ya no emparejaba con nada: quedaba suelta en el
+   * buzón y disparaba la alerta de "sin conciliar".
+   *
+   * Aquí se VINCULA: el cobro manual (con referencia de relleno `00000` o
+   * vacía) recibe la referencia real del Yape. NO mueve plata —el cobro ya lo
+   * registró la cajera—; lo deja trazable y CONSUMIDO (sorteos y el agente
+   * dejan de ofrecerlo). Estricto: mismo monto y método, venta de caja
+   * (POS/COTIZACION), cobro de los últimos 10 min, pago posterior al cobro y
+   * UN solo candidato. Un pago ANTERIOR a la venta nunca vincula por acá: ese
+   * lo elige la cajera en la hoja de cobro.
+   *
+   * Best-effort: cualquier error cae a la alerta de siempre.
+   */
+  private async vincularACobroManualEnCaja(
+    empresaId: string,
+    pago: {
+      id?: string | null;
+      senderName?: string | null;
+      amount?: number | null;
+      operationCode?: string | null;
+      provider?: string | null;
+      receivedAt?: string | null;
+    },
+  ): Promise<{ accion: string; ventaId?: string }> {
+    try {
+      const monto = Number(pago?.amount ?? 0);
+      const referencia = pago?.operationCode || pago?.id || undefined;
+      if (!referencia || !(monto > 0)) {
+        return { accion: 'cobro-manual-sin-datos' };
+      }
+
+      // Reintento del webhook: ya vinculado (o usado por otra venta).
+      const usado = await this.prisma.pagoVenta.findFirst({
+        where: { referencia, venta: { empresaId } },
+        select: { id: true },
+      });
+      if (usado) return { accion: 'cobro-manual-pago-ya-usado' };
+
+      const metodos =
+        pago.provider === 'plin'
+          ? [MetodoPagoVenta.PLIN]
+          : pago.provider === 'yape'
+            ? [MetodoPagoVenta.YAPE]
+            : [MetodoPagoVenta.YAPE, MetodoPagoVenta.PLIN];
+      const recibido = pago.receivedAt
+        ? new Date(pago.receivedAt).getTime()
+        : Date.now();
+      const recibidoEn = Number.isFinite(recibido) ? recibido : Date.now();
+
+      const cobros = await this.prisma.pagoVenta.findMany({
+        where: {
+          anulado: false,
+          metodoPago: { in: metodos },
+          monto,
+          creadoEn: {
+            gte: new Date(Date.now() - VENTANA_VINCULO_COBRO_MANUAL_MS),
+          },
+          venta: {
+            empresaId,
+            canalVenta: { in: ['POS', 'COTIZACION'] },
+            estado: { not: EstadoVenta.ANULADA },
+          },
+        },
+        select: {
+          id: true,
+          referencia: true,
+          creadoEn: true,
+          venta: { select: { id: true, codigo: true } },
+        },
+      });
+      const candidatos = cobros.filter(
+        (c) =>
+          esReferenciaDeRelleno(c.referencia) &&
+          // El pago es POSTERIOR al cobro manual (caso: aprobó antes de que
+          // llegara la notificación). Uno anterior no es de este cobro.
+          recibidoEn >= c.creadoEn.getTime() - TOLERANCIA_RELOJ_MS,
+      );
+      if (candidatos.length === 0) return { accion: 'cobro-manual-sin-match' };
+      if (candidatos.length > 1) return { accion: 'cobro-manual-ambiguo' };
+
+      const cobro = candidatos[0];
+      // Atómico: si otro webhook lo vinculó en paralelo, este no lo pisa.
+      const r = await this.prisma.pagoVenta.updateMany({
+        where: { id: cobro.id, referencia: cobro.referencia },
+        data: { referencia },
+      });
+      if (r.count === 0) return { accion: 'cobro-manual-sin-match' };
+
+      this.logger.log(
+        `💸 Yape ${referencia} (S/ ${monto.toFixed(2)} de "${pago.senderName ?? '?'}") ` +
+          `VINCULADO al cobro manual de ${cobro.venta.codigo}`,
+      );
+      return { accion: 'cobro-manual-vinculado', ventaId: cobro.venta.id };
+    } catch (e) {
+      this.logger.warn(
+        `vincularACobroManualEnCaja falló (empresa ${empresaId}): ${(e as Error).message}`,
+      );
+      return { accion: 'cobro-manual-error' };
+    }
   }
 
   /**
