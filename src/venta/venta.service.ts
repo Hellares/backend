@@ -27,6 +27,7 @@ import {
 import { estaVencido } from '../common/utils/date-utils';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { IntegracionYapeService } from '../integracion-yape/integracion-yape.service';
+import { nombreCalzaParaDesempate } from '../sorteos/nombre-match.util';
 import { CaracteristicaEmpresaService } from '../caracteristica-empresa/caracteristica-empresa.service';
 import { CaracteristicaPremium } from '@prisma/client';
 import { randomUUID } from 'crypto';
@@ -223,6 +224,137 @@ export class VentaService {
       chargeId: cobro.chargeId,
       ...qr,
     };
+  }
+
+  /**
+   * Yapes que YA entraron al buzón por el monto de este cobro y siguen sin
+   * usar: el cliente yapeó ANTES de que existiera la venta (09-16: yapeó 21
+   * min antes y la cajera tuvo que tipear 00000), así que el cobro automático
+   * no los empareja nunca — api-yape solo empareja al LLEGAR el pago. La hoja
+   * de cobro los ofrece y la cajera elige uno con un toque (lo confirma con
+   * el comprobante en el celular del cliente). NUNCA se aplican solos: un
+   * pago anterior que calza por monto puede ser de otra persona. Primero los
+   * que calzan por nombre, después los más recientes. [] sin integración.
+   */
+  async pagosYapePrevios(empresaId: string, ventaId: string, monto?: number) {
+    const venta = await this.prisma.venta.findFirst({
+      where: { id: ventaId, empresaId },
+      select: {
+        total: true,
+        nombreCliente: true,
+        pagos: { where: { anulado: false }, select: { monto: true } },
+      },
+    });
+    if (!venta) throw new NotFoundException('Venta no encontrada');
+    const pagado = venta.pagos.reduce((s, p) => s + Number(p.monto), 0);
+    // El tramo que está cobrando la hoja; sin él, el pendiente.
+    const objetivo =
+      monto && monto > 0 ? round2(monto) : round2(Number(venta.total) - pagado);
+    if (!(objetivo > 0)) return { pagos: [] };
+
+    // Una hora: el pago previo es de minutos antes (el cliente yapea mientras
+    // se arma la venta); una ventana mayor llenaría la lista de homónimos
+    // de monto.
+    const recientes = await this.integracionYape.listarPagosRecientes(
+      empresaId,
+      { horas: 1 },
+    );
+    if (recientes.length === 0) return { pagos: [] };
+    const usados = await this.yapesConsumidos(empresaId);
+
+    const pagos = recientes
+      .filter(
+        (p) =>
+          !usados.has(p.id) &&
+          !(p.operationCode && usados.has(p.operationCode)) &&
+          Math.abs(p.amount - objetivo) < 0.005,
+      )
+      .map((p) => ({
+        id: p.id,
+        senderName: p.senderName,
+        amount: p.amount,
+        provider: p.provider,
+        receivedAt: p.receivedAt,
+        calzaNombre: nombreCalzaParaDesempate(p.senderName, venta.nombreCliente),
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.calzaNombre) - Number(a.calzaNombre) ||
+          new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
+      )
+      .slice(0, 10);
+    return { pagos };
+  }
+
+  /**
+   * Yapes del buzón ya CONSUMIDOS → quién los usó (para el mensaje): una
+   * participación de sorteo o el cobro de una venta (referencia =
+   * operationCode || id, como la guardan el webhook y la hoja; 48 h, la
+   * ventana de api-yape es 24). A diferencia de sorteos, el cobro ANULADO o
+   * de una venta ANULADA no consume: si la cajera anuló y rehízo la venta
+   * (814 → 815), ese Yape tiene que poder aplicarse a la nueva.
+   */
+  private async yapesConsumidos(empresaId: string): Promise<Map<string, string>> {
+    const [participaciones, cobros] = await Promise.all([
+      this.prisma.sorteoParticipante.findMany({
+        where: { empresaId, yapePaymentId: { not: null } },
+        select: { yapePaymentId: true },
+      }),
+      this.prisma.pagoVenta.findMany({
+        where: {
+          anulado: false,
+          referencia: { not: null },
+          creadoEn: { gte: new Date(Date.now() - 48 * 3600 * 1000) },
+          venta: { empresaId, estado: { not: EstadoVenta.ANULADA } },
+        },
+        select: { referencia: true, venta: { select: { codigo: true } } },
+      }),
+    ]);
+    const usados = new Map<string, string>();
+    for (const p of participaciones) {
+      if (p.yapePaymentId) usados.set(p.yapePaymentId, 'una participación de sorteo');
+    }
+    for (const c of cobros) {
+      if (c.referencia) usados.set(c.referencia, `la venta ${c.venta.codigo}`);
+    }
+    return usados;
+  }
+
+  /**
+   * La cajera eligió en la hoja un Yape del buzón (el cliente pagó ANTES de
+   * la venta): se verifica contra el buzón —existe, es del monto del cobro y
+   * nadie lo usó— y se devuelve la referencia REAL a guardar. Si no se puede
+   * verificar, se rechaza: la cajera puede aprobar sin elegir (N° a mano).
+   */
+  private async resolverYapeElegido(
+    empresaId: string,
+    dto: ProcesarPagoDto,
+  ): Promise<string> {
+    if (dto.metodoPago !== 'YAPE' && dto.metodoPago !== 'PLIN') {
+      throw new BadRequestException(
+        'Solo un cobro Yape/Plin puede usar un pago del buzón',
+      );
+    }
+    const recientes = await this.integracionYape.listarPagosRecientes(empresaId);
+    const pago = recientes.find((p) => p.id === dto.yapePagoId);
+    if (!pago) {
+      throw new BadRequestException(
+        'No se pudo verificar ese Yape (ya no está en el buzón o no hay conexión con el lector). Actualizá la lista o aprobá sin elegir.',
+      );
+    }
+    if (Math.abs(pago.amount - dto.monto) >= 0.005) {
+      throw new BadRequestException(
+        `Ese Yape es de S/ ${pago.amount.toFixed(2)}, no de S/ ${dto.monto.toFixed(2)}.`,
+      );
+    }
+    const usados = await this.yapesConsumidos(empresaId);
+    const consumidor =
+      usados.get(pago.id) ??
+      (pago.operationCode ? usados.get(pago.operationCode) : undefined);
+    if (consumidor) {
+      throw new ConflictException(`Ese Yape ya se aplicó a ${consumidor}.`);
+    }
+    return pago.operationCode || pago.id;
   }
 
   /**
@@ -4996,6 +5128,12 @@ export class VentaService {
     opts?: { skipCajaValidacion?: boolean },
   ) {
     this.logger.info('Procesando pago', { id, empresaId });
+
+    // El cliente yapeó ANTES de la venta y la cajera eligió ese Yape en la
+    // hoja de cobro: se verifica contra el buzón y se guarda su referencia REAL.
+    if (dto.yapePagoId) {
+      dto.referencia = await this.resolverYapeElegido(empresaId, dto);
+    }
 
     // Comprobante diferido (flujo Yape): si esta venta emite su comprobante al
     // pagar, capturamos el id para disparar el envío a Nubefact tras el commit.

@@ -191,6 +191,26 @@ export class VentaController {
     return this.ventaService.cobroYape(empresaId, id, body?.monto);
   }
 
+  @Get(':id/cobro-yape/pagos-previos')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({
+    summary:
+      'Yapes que ya entraron al buzón por el monto del cobro y siguen sin usar (el cliente pagó antes de la venta) — la cajera elige uno',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async pagosYapePrevios(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @Query('monto') monto?: string,
+  ) {
+    const m = Number(monto);
+    return this.ventaService.pagosYapePrevios(
+      empresaId,
+      id,
+      Number.isFinite(m) && m > 0 ? m : undefined,
+    );
+  }
+
   @Post(':id/cancelar-cobro-yape')
   @HttpCode(200)
   @RequiresPermission(Permission.MANAGE_VENTAS)

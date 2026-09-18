@@ -46,4 +46,12 @@ export class ProcesarPagoDto {
   @IsOptional()
   @IsBoolean()
   aceptaRiesgoBancarizacion?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Id del pago Yape/Plin del buzón (api-yape) que la cajera eligió en la hoja de cobro — el cliente yapeó ANTES de la venta. El backend verifica que exista, calce el monto y no esté usado, y guarda su referencia real.',
+  })
+  @IsOptional()
+  @IsString()
+  yapePagoId?: string;
 }
