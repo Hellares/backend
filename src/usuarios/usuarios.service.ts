@@ -455,15 +455,7 @@ export class UsuariosService {
         await this.validarSedesEmpresa(sedeIds, empresaId, prisma);
       }
 
-      // Crear EmpresaPersona (relación persona-empresa como empleado)
-      await prisma.empresaPersona.create({
-        data: {
-          personaId,
-          empresaId,
-          rol: 'EMPLEADO',
-          isActive: true,
-        },
-      });
+      await this.vincularPersonaComoEmpleado(prisma, personaId, empresaId);
 
       // Crear relación EmpresaUsuarioRol
       await prisma.empresaUsuarioRol.create({
@@ -562,15 +554,7 @@ export class UsuariosService {
         },
       });
 
-      // Crear EmpresaPersona
-      await prisma.empresaPersona.create({
-        data: {
-          personaId,
-          empresaId,
-          rol: 'EMPLEADO',
-          isActive: true,
-        },
-      });
+      await this.vincularPersonaComoEmpleado(prisma, personaId, empresaId);
 
       // Crear relación EmpresaUsuarioRol
       await prisma.empresaUsuarioRol.create({
@@ -722,6 +706,27 @@ export class UsuariosService {
       }
 
       return usuario;
+    });
+  }
+
+  /**
+   * Vincula una persona YA existente a la empresa como EMPLEADO (CASO 2 y 3).
+   *
+   * Upsert porque la persona puede estar ya en la empresa como CLIENTE sin
+   * cuenta de usuario (cliente registrado solo con su DNI): no tiene
+   * EmpresaUsuarioRol, asi que no entra a la promocion del CASO 1, y un create
+   * reventaba con el unique (personaId, empresaId). Queda como EMPLEADO, igual
+   * que en la promocion del CASO 1; si estaba dado de baja, se reactiva.
+   */
+  private async vincularPersonaComoEmpleado(
+    prisma: Prisma.TransactionClient,
+    personaId: string,
+    empresaId: string,
+  ): Promise<void> {
+    await prisma.empresaPersona.upsert({
+      where: { personaId_empresaId: { personaId, empresaId } },
+      create: { personaId, empresaId, rol: 'EMPLEADO', isActive: true },
+      update: { rol: 'EMPLEADO', isActive: true, deletedAt: null },
     });
   }
 
