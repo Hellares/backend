@@ -149,6 +149,14 @@ export class PermissionsService {
       canManageClients:
         isAnyAdmin || isVendedor || isCajero || isOperador,
 
+      // Solo dar de alta uno nuevo (y buscarlo por DNI/RUC). Lo tiene todo el
+      // que puede gestionar clientes; el técnico lo recibe con
+      // `cotizacion.crear` porque el cliente al que le cotiza no siempre está
+      // registrado. Editar y eliminar siguen pidiendo `canManageClients`.
+      canCrearClientes:
+        isAnyAdmin || isVendedor || isCajero || isOperador ||
+        tieneCotizacionCrear,
+
       // ==================== SEDES ====================
       canManageSedes: isAdmin,
 
@@ -394,6 +402,7 @@ export class PermissionsService {
       'canManageServices',
       'canViewClients',
       'canManageClients',
+      'canCrearClientes',
       'canManageSedes',
       'canViewReports',
       'canManageInvoices',

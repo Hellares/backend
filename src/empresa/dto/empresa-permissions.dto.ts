@@ -106,6 +106,15 @@ export class EmpresaPermissionsDto {
   canManageClients: boolean;
 
   @ApiProperty({
+    description:
+      'Puede REGISTRAR un cliente nuevo (y buscarlo por DNI/RUC), sin poder ' +
+      'editar ni eliminar los que ya existen. Lo tiene todo el que puede ' +
+      'gestionar clientes, y ademas quien cotiza con `cotizacion.crear`.',
+    example: true,
+  })
+  canCrearClientes: boolean;
+
+  @ApiProperty({
     description: 'Puede ver la lista de cotizaciones',
     example: true,
   })

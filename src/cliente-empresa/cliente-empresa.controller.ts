@@ -35,7 +35,7 @@ export class ClienteEmpresaController {
   ) {}
 
   @Post()
-  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @RequiresPermission(Permission.CREAR_CLIENTES)
   async create(
     @Param('empresaId') empresaId: string,
     @Body() dto: CreateClienteEmpresaDto,
@@ -101,7 +101,7 @@ export class ClienteEmpresaController {
   // ─── Contactos ───
 
   @Post(':id/contactos')
-  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @RequiresPermission(Permission.CREAR_CLIENTES)
   async addContacto(
     @Param('empresaId') empresaId: string,
     @Param('id') id: string,

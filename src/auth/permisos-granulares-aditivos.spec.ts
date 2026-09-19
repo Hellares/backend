@@ -129,6 +129,8 @@ describe('Permisos granulares aditivos', () => {
       expect(p.canManageOrders).toBe(true);
       expect(p.canViewServices).toBe(true);
       expect(p.canViewClients).toBe(true);
+      // Sin el permiso tampoco registra clientes.
+      expect(p.canCrearClientes).toBe(false);
     });
 
     it('con el permiso, el técnico cotiza y ve el catálogo para cotizar', () => {
@@ -138,18 +140,36 @@ describe('Permisos granulares aditivos', () => {
       expect(p.canViewProducts).toBe(true);
     });
 
-    it('🔴 cotizar NO le abre ventas, ni administrar productos, ni clientes', () => {
+    it('🔴 registra al cliente que no existe, pero no toca los que ya están', () => {
+      const p = permisos([Rol.TECNICO], [COT]);
+      expect(p.canCrearClientes).toBe(true);
+      // Editar y eliminar siguen pidiendo canManageClients.
+      expect(p.canManageClients).toBe(false);
+    });
+
+    it('🔴 cotizar NO le abre ventas ni administrar productos', () => {
       const p = permisos([Rol.TECNICO], [COT]);
       expect(p.canManageVentas).toBe(false);
       expect(p.canViewVentas).toBe(false);
       expect(p.canManageProducts).toBe(false);
       expect(p.canEditarCostoProducto).toBe(false);
-      expect(p.canManageClients).toBe(false);
     });
 
-    it('el vendedor y el cajero siguen viendo productos sin el permiso', () => {
-      expect(permisos([Rol.VENDEDOR]).canViewProducts).toBe(true);
-      expect(permisos([Rol.CAJERO]).canViewProducts).toBe(true);
+    it('el vendedor y el cajero siguen igual sin el permiso', () => {
+      for (const rol of [Rol.VENDEDOR, Rol.CAJERO]) {
+        const p = permisos([rol]);
+        expect(p.canViewProducts).toBe(true);
+        // Quien gestiona clientes, los registra.
+        expect(p.canCrearClientes).toBe(true);
+      }
+    });
+
+    it('🔴 todo el que gestiona clientes puede registrarlos', () => {
+      const roles = Object.values(Rol).filter((r) => r !== Rol.CLIENTE);
+      for (const rol of roles) {
+        const p = permisos([rol]);
+        if (p.canManageClients) expect(p.canCrearClientes).toBe(true);
+      }
     });
   });
 

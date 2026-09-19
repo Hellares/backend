@@ -21,6 +21,7 @@ export enum Permission {
   // Clientes
   VIEW_CLIENTS = 'canViewClients',        // Ver lista de clientes
   MANAGE_CLIENTS = 'canManageClients',    // Crear, editar, eliminar clientes
+  CREAR_CLIENTES = 'canCrearClientes',    // Solo registrar uno nuevo (y buscar por DNI/RUC)
 
   // Descuentos
   VIEW_DISCOUNTS = 'canViewDiscounts',           // Ver políticas de descuento

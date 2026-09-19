@@ -41,7 +41,7 @@ export class ClientesController {
   constructor(private readonly clientesService: ClientesService) {}
 
   @Post()
-  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @RequiresPermission(Permission.CREAR_CLIENTES)
   @ApiOperation({
     summary: 'Registrar un nuevo cliente o asociar uno existente',
     description:
@@ -148,7 +148,7 @@ export class ClientesController {
   }
 
   @Get('por-dni/:dni')
-  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @RequiresPermission(Permission.CREAR_CLIENTES)
   @ApiOperation({
     summary: 'Buscar (o crear) cliente por DNI (8, RENIEC) o CE (9, Migraciones)',
     description:
@@ -172,7 +172,7 @@ export class ClientesController {
   }
 
   @Get('por-ruc/:ruc')
-  @RequiresPermission(Permission.MANAGE_CLIENTS)
+  @RequiresPermission(Permission.CREAR_CLIENTES)
   @ApiOperation({
     summary: 'Buscar (o crear) cliente empresa por RUC usando SUNAT/cache',
     description:
