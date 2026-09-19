@@ -1,5 +1,9 @@
 import { UsuariosService } from './usuarios.service';
 
+// El CASO 3 hashea el DNI con costo 12: con la suite en paralelo pasaba el
+// timeout de jest. Acá no se prueba el hash.
+jest.mock('bcryptjs', () => ({ hash: jest.fn().mockResolvedValue('hash') }));
+
 /**
  * Dar de alta como trabajador a alguien que YA es cliente de la empresa pero
  * sin cuenta de usuario (se registro solo con su DNI).
