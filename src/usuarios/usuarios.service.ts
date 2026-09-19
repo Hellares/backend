@@ -1502,6 +1502,11 @@ export class UsuariosService {
     };
   }
 
+  /** Ver `PermissionsService.permisosPorRol`. */
+  obtenerPermisosPorRol() {
+    return this.permissionsService.permisosPorRol();
+  }
+
   /**
    * Reporte de "qué puede hacer y qué ve" un usuario.
    *

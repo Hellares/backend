@@ -104,6 +104,27 @@ export class UsuariosController {
   }
 
   /**
+   * GET /usuarios/permisos-por-rol
+   * Qué permite cada rol y qué suma cada permiso especial, para que la ficha
+   * de usuario muestre solo lo que ese usuario va a poder ver.
+   *
+   * Va ANTES de las rutas `:id`: si no, `permisos-por-rol` se toma como id.
+   */
+  @Get('permisos-por-rol')
+  @RequiresPermission(Permission.MANAGE_USERS)
+  @ApiOperation({
+    summary: 'Permisos que da cada rol y cada permiso especial',
+    description:
+      'roles: los permisos de cada rol por si solo. granulares: los permisos ' +
+      'que enciende cada permiso especial por si solo. Los efectivos de un ' +
+      'usuario son el OR de su rol y de cada uno de sus permisos especiales.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  obtenerPermisosPorRol() {
+    return this.usuariosService.obtenerPermisosPorRol();
+  }
+
+  /**
    * GET /usuarios/:id/permisos
    * Qué puede hacer este usuario, y de dónde le viene cada permiso.
    */

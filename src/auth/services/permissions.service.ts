@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { Rol } from '@prisma/client';
 import { EmpresaPermissionsDto } from '../../empresa/dto';
-import { GranularPermissionId } from './granular-permissions.catalog';
+import {
+  GRANULAR_PERMISSIONS_CATALOG,
+  GranularPermissionId,
+} from './granular-permissions.catalog';
 
 /**
  * Servicio centralizado para el cálculo de permisos
@@ -329,6 +332,40 @@ export class PermissionsService {
     // flags legacy de caja se quitó junto con su lectura en
     // `calculatePermissions` — hoy el catálogo es la única fuente.
     return permisos.includes(permId);
+  }
+
+  /**
+   * Qué permite cada rol por sí solo, y qué SUMA cada permiso especial por sí
+   * solo. Lo usa la ficha de usuario para mostrar únicamente los accesos
+   * rápidos y opciones de menú que ese usuario va a poder ver: antes listaba
+   * los 21 accesos para cualquier rol, y a un técnico se le podía marcar
+   * "Venta Rápida" —que nunca iba a ver— y desmarcar "Órdenes de Servicio"
+   * sin que nada avisara.
+   *
+   * El app arma los permisos efectivos como `roles[rol]` OR cada granular.
+   * Eso es exacto porque toda regla de `calculatePermissions` es una
+   * disyunción y los granulares solo entran como términos sueltos del OR. Si
+   * algún día una regla combina dos granulares con AND, el test de esta
+   * función falla: la composición dejaría de ser exacta.
+   */
+  permisosPorRol(): {
+    roles: Record<string, EmpresaPermissionsDto>;
+    granulares: Record<string, string[]>;
+  } {
+    const roles: Record<string, EmpresaPermissionsDto> = {};
+    for (const rol of Object.values(Rol)) {
+      if (rol === Rol.CLIENTE) continue;
+      roles[rol] = this.calculatePermissions([rol]);
+    }
+
+    // Sin rol: lo que queda en true lo puso el granular.
+    const granulares: Record<string, string[]> = {};
+    for (const { id } of GRANULAR_PERMISSIONS_CATALOG) {
+      const permisos = this.calculatePermissions([], { permisos: [id] });
+      granulares[id] = Object.keys(permisos).filter((k) => permisos[k] === true);
+    }
+
+    return { roles, granulares };
   }
 
   /**
