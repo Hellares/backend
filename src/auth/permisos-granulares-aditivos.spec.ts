@@ -117,21 +117,63 @@ describe('Permisos granulares aditivos', () => {
     });
   });
 
+  describe('cotizacion.crear', () => {
+    const COT = GranularPermissionId.COTIZACION_CREAR;
+
+    it('🔴 el TECNICO ya no ve productos por su rol', () => {
+      const p = permisos([Rol.TECNICO]);
+      expect(p.canViewProducts).toBe(false);
+      expect(p.canViewCotizaciones).toBe(false);
+      expect(p.canManageCotizaciones).toBe(false);
+      // Lo suyo sigue igual.
+      expect(p.canManageOrders).toBe(true);
+      expect(p.canViewServices).toBe(true);
+      expect(p.canViewClients).toBe(true);
+    });
+
+    it('con el permiso, el técnico cotiza y ve el catálogo para cotizar', () => {
+      const p = permisos([Rol.TECNICO], [COT]);
+      expect(p.canViewCotizaciones).toBe(true);
+      expect(p.canManageCotizaciones).toBe(true);
+      expect(p.canViewProducts).toBe(true);
+    });
+
+    it('🔴 cotizar NO le abre ventas, ni administrar productos, ni clientes', () => {
+      const p = permisos([Rol.TECNICO], [COT]);
+      expect(p.canManageVentas).toBe(false);
+      expect(p.canViewVentas).toBe(false);
+      expect(p.canManageProducts).toBe(false);
+      expect(p.canEditarCostoProducto).toBe(false);
+      expect(p.canManageClients).toBe(false);
+    });
+
+    it('el vendedor y el cajero siguen viendo productos sin el permiso', () => {
+      expect(permisos([Rol.VENDEDOR]).canViewProducts).toBe(true);
+      expect(permisos([Rol.CAJERO]).canViewProducts).toBe(true);
+    });
+  });
+
   describe('el catálogo no vuelve a llenarse de casillas muertas', () => {
     it('🔴 cada permiso del catálogo mueve algún booleano', () => {
       // Si alguien agrega un permiso al catálogo y se olvida de cablearlo en
       // calculatePermissions, este test lo agarra. Es exactamente el estado en
       // el que estaban 9 de los 11 permisos originales.
       //
-      // `caja.abrir` / `caja.cerrar` se comparan contra un rol que NO sea
-      // cajero: el cajero ya los tiene por su rol.
-      const base = permisos([Rol.VENDEDOR]);
+      // Alcanza con que cambie algo en ALGÚN rol: `caja.abrir` no le suma
+      // nada al cajero y `cotizacion.crear` no le suma nada al vendedor,
+      // porque ya lo tienen por su rol. Una casilla muerta no cambia nada en
+      // ninguno.
+      const roles = Object.values(Rol).filter((r) => r !== Rol.CLIENTE);
       for (const permiso of GRANULAR_PERMISSIONS_CATALOG) {
-        const con = permisos([Rol.VENDEDOR], [permiso.id]);
-        const cambio = Object.keys(con).some(
-          (clave) => con[clave] !== base[clave],
-        );
-        expect(cambio).toBe(true);
+        const cambia = roles.some((rol) => {
+          const base = permisos([rol]);
+          const con = permisos([rol], [permiso.id]);
+          return Object.keys(con).some((clave) => con[clave] !== base[clave]);
+        });
+        expect({ permiso: permiso.id, cambia }).toEqual({
+          permiso: permiso.id,
+          cambia: true,
+        });
       }
     });
 

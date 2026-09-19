@@ -31,6 +31,21 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { RealtimeInvalidationService } from '../notificacion/realtime-invalidation.service';
 import { CajaService } from '../caja/caja.service';
 
+/**
+ * Roles que solo ven las cotizaciones que ellos emitieron (`vendedorId`).
+ * Los administrativos ven todas las del tenant.
+ *
+ * El TECNICO entra acá desde que `cotizacion.crear` le permite cotizar:
+ * sin esto habría visto las cotizaciones de toda la empresa.
+ */
+export function soloVeCotizacionesPropias(userRole?: string): boolean {
+  return (
+    userRole === Rol.VENDEDOR ||
+    userRole === Rol.CAJERO ||
+    userRole === Rol.TECNICO
+  );
+}
+
 @Injectable()
 export class CotizacionService {
   private readonly logger: AppLoggerService;
@@ -590,14 +605,9 @@ export class CotizacionService {
   ) {
     const where: Prisma.CotizacionWhereInput = { empresaId };
 
-    // VENDEDOR y CAJERO solo ven sus propias cotizaciones (las que ellos
-    // emitieron). Roles administrativos (SUPER_ADMIN, EMPRESA_ADMIN, etc.)
-    // ven todas las cotizaciones del tenant.
-    if (
-      filtros?.userId &&
-      (filtros?.userRole === Rol.VENDEDOR ||
-        filtros?.userRole === Rol.CAJERO)
-    ) {
+    // Vendedor, cajero y técnico solo ven las suyas; los administrativos,
+    // todas las del tenant.
+    if (filtros?.userId && soloVeCotizacionesPropias(filtros.userRole)) {
       where.vendedorId = filtros.userId;
     }
 
@@ -1735,8 +1745,8 @@ export class CotizacionService {
     };
     if (sedeId) where.sedeId = sedeId;
 
-    // VENDEDOR y CAJERO solo ven sus propias cotizaciones en la cola POS.
-    if (userId && (userRole === Rol.VENDEDOR || userRole === Rol.CAJERO)) {
+    // Vendedor, cajero y técnico solo ven las suyas en la cola POS.
+    if (userId && soloVeCotizacionesPropias(userRole)) {
       where.vendedorId = userId;
     }
 

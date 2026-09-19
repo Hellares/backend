@@ -117,6 +117,9 @@ export class PermissionsService {
       overrides?.permisos?.includes(
         GranularPermissionId.PRODUCTO_ALTA_RAPIDA_VENTA,
       ) ?? false;
+    const tieneCotizacionCrear =
+      overrides?.permisos?.includes(GranularPermissionId.COTIZACION_CREAR) ??
+      false;
 
     return {
       // ==================== USUARIOS ====================
@@ -125,8 +128,13 @@ export class PermissionsService {
       canManageUsers: isAdmin,
 
       // ==================== PRODUCTOS ====================
+      // 🔴 El TECNICO salió de acá (19-09): su trabajo son las órdenes, y los
+      // repuestos se cargan como monto. Si tiene que cotizar, el permiso
+      // especial `cotizacion.crear` le devuelve el catálogo, que es para lo
+      // que lo necesita.
       canViewProducts:
-        isAnyAdmin || isOperativo || isContador || isViewer,
+        isAnyAdmin || isVendedor || isCajero || isOperador || isContador ||
+        isViewer || tieneCotizacionCrear,
       canManageProducts: isAnyAdmin,
 
       // ==================== SERVICIOS ====================
@@ -199,10 +207,14 @@ export class PermissionsService {
       canAltaRapidaVenta: isAnyAdmin || tieneProductoAltaRapida,
 
       // ==================== COTIZACIONES ====================
+      // `cotizacion.crear` las abre a quien no vende (el técnico). Ve solo
+      // las suyas: el listado filtra por `vendedorId` (ver
+      // `soloVeCotizacionesPropias`).
       canViewCotizaciones:
-        isAnyAdmin || isVendedor || isCajero || isContador || isViewer,
+        isAnyAdmin || isVendedor || isCajero || isContador || isViewer ||
+        tieneCotizacionCrear,
       canManageCotizaciones:
-        isAnyAdmin || isVendedor,
+        isAnyAdmin || isVendedor || tieneCotizacionCrear,
 
       // ==================== VENTAS ====================
       canViewVentas:

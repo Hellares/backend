@@ -91,6 +91,17 @@ export const GRANULAR_PERMISSIONS_CATALOG: readonly GranularPermission[] = [
     category: 'Producto',
   },
 
+  // ── Cotización ──
+  {
+    id: 'cotizacion.crear',
+    label: 'Crear cotizaciones',
+    description:
+      'Crear cotizaciones y ver las propias sin ser vendedor (pensado para ' +
+      'el técnico). Incluye ver el catálogo de productos, que hace falta ' +
+      'para cotizarlos. No habilita convertirlas en venta ni aprobarlas.',
+    category: 'Cotización',
+  },
+
   // ── Devolución ──
   {
     id: 'devolucion.crear',
@@ -115,6 +126,8 @@ export class GranularPermissionId {
 
   static readonly PRODUCTO_EDITAR_COSTO = 'producto.editar-costo';
   static readonly PRODUCTO_ALTA_RAPIDA_VENTA = 'producto.alta-rapida-venta';
+
+  static readonly COTIZACION_CREAR = 'cotizacion.crear';
 
   static readonly DEVOLUCION_CREAR = 'devolucion.crear';
 }
