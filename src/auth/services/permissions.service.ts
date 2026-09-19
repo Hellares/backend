@@ -180,6 +180,20 @@ export class PermissionsService {
       canManageOrders:
         isAnyAdmin || isTecnico,
 
+      // Repartir el trabajo es del admin: el técnico queda asignado a las
+      // órdenes que él mismo recibe (ver `OrdenServicioService.create`) y no
+      // se las pasa a otro ni se toma las ajenas.
+      canAsignarTecnico: isAnyAdmin,
+
+      // La plata de la orden —costo acordado, descuento, adelantos y su
+      // anulación, que devuelve efectivo de caja— también es del admin. El
+      // técnico sigue cargando lo que costó cada repuesto y cada acción: eso
+      // es lo que reparó, no es cobrar.
+      //
+      // 🔴 No alcanza con esconderlo en el app: el dinero entra por crear,
+      // editar, cambiar de estado y por los abonos. Los cuatro lo validan.
+      canGestionarCostosOrden: isAnyAdmin,
+
       // ==================== ESTADÍSTICAS ====================
       canViewStatistics:
         isAnyAdmin || isContador || isViewer,
@@ -407,6 +421,8 @@ export class PermissionsService {
       'canViewReports',
       'canManageInvoices',
       'canManageOrders',
+      'canAsignarTecnico',
+      'canGestionarCostosOrden',
       'canViewStatistics',
       'canManageSettings',
       'canManagePaymentMethods',

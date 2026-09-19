@@ -205,6 +205,23 @@ export class EmpresaPermissionsDto {
   canManageOrders: boolean;
 
   @ApiProperty({
+    description:
+      'Puede asignar o cambiar el técnico de una orden. El técnico queda ' +
+      'asignado a las que él mismo recibe y no reparte trabajo.',
+    example: false,
+  })
+  canAsignarTecnico: boolean;
+
+  @ApiProperty({
+    description:
+      'Puede tocar la plata de la orden: costo acordado, descuento, ' +
+      'adelantos y su anulación. No incluye los costos de cada repuesto o ' +
+      'acción, que carga el técnico.',
+    example: false,
+  })
+  canGestionarCostosOrden: boolean;
+
+  @ApiProperty({
     description: 'Puede ver estadísticas y métricas',
     example: true,
   })

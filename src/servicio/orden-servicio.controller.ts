@@ -25,11 +25,14 @@ import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { TenantAuthGuard } from '../auth/guards/tenant-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { OrdenSedeAccessGuard } from './guards/orden-sede-access.guard';
+import { OrdenTecnicoAsignadoGuard } from './guards/orden-tecnico-asignado.guard';
 import {
   RequiresPermission,
   Permission,
 } from '../auth/decorators/requires-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { CurrentPermissions } from '../common/decorators/current-permissions.decorator';
+import { EmpresaPermissionsDto } from '../empresa/dto';
 import { OrdenServicioService } from './orden-servicio.service';
 import { ServicioComponenteService } from './servicio-componente.service';
 import { AgregarAdelantoDto } from './dto/agregar-adelanto.dto';
@@ -60,10 +63,14 @@ export class OrdenServicioController {
     @Headers('x-tenant-id') empresaId: string,
     @Body() dto: CreateOrdenServicioDto,
     @CurrentUser('sub') usuarioId: string,
+    @CurrentPermissions() permisos: EmpresaPermissionsDto,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     dto.empresaId = empresaId;
-    return this.ordenServicioService.create(dto, usuarioId);
+    return this.ordenServicioService.create(dto, usuarioId, {
+      puedeAsignarTecnico: permisos?.canAsignarTecnico === true,
+      puedeCostos: permisos?.canGestionarCostosOrden === true,
+    });
   }
 
   @Get('mis-ordenes')
@@ -133,7 +140,7 @@ export class OrdenServicioController {
   // ─── Mensajes del técnico/empresa ───
 
   @Get(':id/mensajes/no-leidos')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({
     summary: 'Contar mensajes no leídos del cliente (sin marcarlos leídos)',
@@ -148,7 +155,7 @@ export class OrdenServicioController {
   }
 
   @Get(':id/mensajes')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar mensajes de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -161,7 +168,7 @@ export class OrdenServicioController {
   }
 
   @Post(':id/mensajes')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Enviar mensaje como técnico/empresa' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -183,9 +190,14 @@ export class OrdenServicioController {
   findAll(
     @Headers('x-tenant-id') empresaId: string,
     @Query() query: QueryOrdenServicioDto,
+    @CurrentUser('sub') usuarioId: string,
+    @CurrentUser('tenantRole') rol: string,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
-    return this.ordenServicioService.findAll(empresaId, query);
+    return this.ordenServicioService.findAll(empresaId, query, false, {
+      rol,
+      usuarioId,
+    });
   }
 
   @Get('cobrables')
@@ -206,7 +218,7 @@ export class OrdenServicioController {
   }
 
   @Get(':id')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Obtener una orden de servicio' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -219,7 +231,7 @@ export class OrdenServicioController {
   }
 
   @Put(':id')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Actualizar una orden de servicio' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -228,14 +240,19 @@ export class OrdenServicioController {
     @Param('id') id: string,
     @Body() dto: UpdateOrdenServicioDto,
     @CurrentUser('sub') usuarioId: string,
+    @CurrentPermissions() permisos: EmpresaPermissionsDto,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    OrdenServicioService.validarCostosPermitidos(
+      dto,
+      permisos?.canGestionarCostosOrden === true,
+    );
     return this.ordenServicioService.update(empresaId, id, dto, usuarioId);
   }
 
   @Post(':id/adelantos')
-  @UseGuards(OrdenSedeAccessGuard)
-  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
+  @RequiresPermission(Permission.COSTOS_ORDEN)
   @ApiOperation({
     summary: 'Registrar un NUEVO abono de adelanto (se SUMA al total)',
   })
@@ -251,8 +268,8 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/adelantos/:adelantoId/anular')
-  @UseGuards(OrdenSedeAccessGuard)
-  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
+  @RequiresPermission(Permission.COSTOS_ORDEN)
   @ApiOperation({ summary: 'Anular un abono de adelanto (devuelve a caja)' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   anularAdelanto(
@@ -266,7 +283,7 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/estado')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Cambiar estado de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -275,8 +292,15 @@ export class OrdenServicioController {
     @Param('id') id: string,
     @Body() dto: TransitionEstadoDto,
     @CurrentUser('sub') usuarioId: string,
+    @CurrentPermissions() permisos: EmpresaPermissionsDto,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
+    // El técnico cambia el estado y deja sus notas; el costo, el descuento y
+    // el adelanto viajan en este mismo body y son del admin.
+    OrdenServicioService.validarCostosPermitidos(
+      dto,
+      permisos?.canGestionarCostosOrden === true,
+    );
     return this.ordenServicioService.transitionEstado(
       empresaId,
       id,
@@ -286,7 +310,7 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/entregar')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({
     summary:
@@ -309,7 +333,7 @@ export class OrdenServicioController {
   }
 
   @Get(':id/historial')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Obtener historial de cambios de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -322,8 +346,8 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/tecnico')
-  @UseGuards(OrdenSedeAccessGuard)
-  @RequiresPermission(Permission.MANAGE_ORDERS)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
+  @RequiresPermission(Permission.ASIGNAR_TECNICO)
   @ApiOperation({ summary: 'Asignar técnico a una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
   assignTecnico(
@@ -340,7 +364,7 @@ export class OrdenServicioController {
   }
 
   @Post(':id/componentes')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Agregar componente a una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -354,7 +378,7 @@ export class OrdenServicioController {
   }
 
   @Get(':id/componentes')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar componentes de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -367,7 +391,7 @@ export class OrdenServicioController {
   }
 
   @Patch(':id/componentes/:componenteId')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Actualizar componente de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -381,7 +405,7 @@ export class OrdenServicioController {
   }
 
   @Delete(':id/componentes/:componenteId')
-  @UseGuards(OrdenSedeAccessGuard)
+  @UseGuards(OrdenSedeAccessGuard, OrdenTecnicoAsignadoGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Eliminar componente de una orden' })
   @ApiHeader({ name: 'x-tenant-id', required: true })

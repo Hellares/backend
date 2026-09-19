@@ -71,6 +71,10 @@ export enum Permission {
   VIEW_REPORTS = 'canViewReports',
   MANAGE_INVOICES = 'canManageInvoices',
   MANAGE_ORDERS = 'canManageOrders',
+  // Órdenes de servicio: quién reparte el trabajo y quién toca la plata.
+  // El TECNICO trabaja sus órdenes, pero no hace ninguna de las dos.
+  ASIGNAR_TECNICO = 'canAsignarTecnico',
+  COSTOS_ORDEN = 'canGestionarCostosOrden',
   VIEW_STATISTICS = 'canViewStatistics',
   MANAGE_SETTINGS = 'canManageSettings',
   MANAGE_PAYMENT_METHODS = 'canManagePaymentMethods',

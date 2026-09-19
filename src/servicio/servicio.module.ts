@@ -25,6 +25,7 @@ import { CajaModule } from '../caja/caja.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { OrdenSedeAccessGuard } from './guards/orden-sede-access.guard';
+import { OrdenTecnicoAsignadoGuard } from './guards/orden-tecnico-asignado.guard';
 
 @Module({
   imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule, forwardRef(() => AvisoMantenimientoModule), CajaModule, forwardRef(() => WhatsappModule)],
@@ -51,6 +52,7 @@ import { OrdenSedeAccessGuard } from './guards/orden-sede-access.guard';
     ModeloEquipoService,
     SedeAccessGuard,
     OrdenSedeAccessGuard,
+    OrdenTecnicoAsignadoGuard,
   ],
   exports: [
     ConfiguracionCamposService,

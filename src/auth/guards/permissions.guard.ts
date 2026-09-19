@@ -54,6 +54,12 @@ export class PermissionsGuard implements CanActivate {
 
     // 3. SUPER_ADMIN tiene todos los permisos
     if (user.rolGlobal === Rol.SUPER_ADMIN) {
+      // Igual se dejan calculados: los endpoints que miran
+      // `request._permissions` (ej. la plata de una orden) no pueden quedar
+      // sin respuesta para el super admin.
+      request._permissions = this.permissionsService.calculatePermissions([
+        Rol.SUPER_ADMIN,
+      ]);
       return true;
     }
 
@@ -120,6 +126,11 @@ export class PermissionsGuard implements CanActivate {
       roles,
       overrides,
     );
+
+    // Disponibles para el endpoint: hay decisiones que no son "pasa o no
+    // pasa" sino "qué partes del body puede mandar" (ej. el costo y el
+    // adelanto de una orden, que el técnico no puede tocar).
+    request._permissions = permissions;
 
     // 6. Verificar si tiene el permiso requerido
     if (!permissions[requiredPermission]) {

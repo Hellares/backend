@@ -5,6 +5,7 @@ import {
   forwardRef,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -22,6 +23,7 @@ import {
   CategoriaMovimientoCaja,
   MetodoPagoVenta,
   Prisma,
+  Rol,
   TipoCampoServicio,
 } from '@prisma/client';
 import { CreateOrdenServicioDto } from './dto/create-orden-servicio.dto';
@@ -322,7 +324,67 @@ export class OrdenServicioService {
     );
   }
 
-  async create(dto: CreateOrdenServicioDto, usuarioId?: string) {
+  /**
+   * Rechaza la plata de la orden a quien no la maneja (el técnico).
+   *
+   * 🔴 Falla ruidosa a propósito: si un APK viejo sigue mandando el costo en
+   * el cambio de estado, mejor un 403 que un silencio que deje al admin
+   * creyendo que se lo quitó. Se despliega backend primero, app después.
+   */
+  static validarCostosPermitidos(
+    dto: {
+      costoTotal?: number;
+      adelanto?: number;
+      descuento?: number;
+      metodoPagoAdelanto?: string;
+    },
+    puedeCostos: boolean,
+  ): void {
+    if (puedeCostos) return;
+    const enviados = [
+      dto.costoTotal !== undefined ? 'costoTotal' : null,
+      dto.adelanto !== undefined ? 'adelanto' : null,
+      dto.descuento !== undefined ? 'descuento' : null,
+      dto.metodoPagoAdelanto !== undefined ? 'metodoPagoAdelanto' : null,
+    ].filter(Boolean);
+    if (enviados.length === 0) return;
+    throw new ForbiddenException(
+      `No tienes permiso para definir el costo ni los adelantos de la orden (${enviados.join(', ')}). ` +
+        'Los costos de cada repuesto y acción sí puedes cargarlos.',
+    );
+  }
+
+  /**
+   * Quién queda asignado a una orden recién creada.
+   *
+   * Quien no reparte trabajo queda asignado a lo que recibe: el técnico que
+   * da de alta la orden es el que la va a atender, así no nace sin dueño ni
+   * puede dejársela a otro. El admin sigue eligiendo (y puede dejarla libre,
+   * que es la señal de "esto no lo está viendo nadie").
+   */
+  static tecnicoDeLaOrdenNueva(
+    tecnicoIdPedido: string | undefined,
+    usuarioId: string | undefined,
+    puedeAsignarTecnico: boolean,
+  ): string | undefined {
+    return puedeAsignarTecnico ? tecnicoIdPedido : usuarioId;
+  }
+
+  async create(
+    dto: CreateOrdenServicioDto,
+    usuarioId?: string,
+    quien?: { puedeAsignarTecnico: boolean; puedeCostos: boolean },
+  ) {
+    if (quien) {
+      OrdenServicioService.validarCostosPermitidos(dto, quien.puedeCostos);
+
+      dto.tecnicoId = OrdenServicioService.tecnicoDeLaOrdenNueva(
+        dto.tecnicoId,
+        usuarioId,
+        quien.puedeAsignarTecnico,
+      );
+    }
+
     // Validar XOR: debe tener clienteId O clienteEmpresaId, pero no ambos ni ninguno
     if (!dto.clienteId && !dto.clienteEmpresaId) {
       throw new BadRequestException(
@@ -1022,14 +1084,40 @@ export class OrdenServicioService {
     });
   }
 
+  /**
+   * El técnico ve las SUYAS y las que no tiene nadie.
+   *
+   * Las libres quedan a la vista a propósito: son las órdenes que nadie está
+   * atendiendo y cualquiera del taller puede tomar. Las de otro técnico no:
+   * repartir el trabajo es del admin (`canAsignarTecnico`).
+   */
+  static filtroVisibilidadTecnico(
+    rol?: string,
+    usuarioId?: string,
+  ): { OR: { tecnicoId: string | null }[] } | null {
+    if (rol !== Rol.TECNICO || !usuarioId) return null;
+    return { OR: [{ tecnicoId: usuarioId }, { tecnicoId: null }] };
+  }
+
   async findAll(
     empresaId: string,
     query: QueryOrdenServicioDto,
     esCliente = false,
+    visibilidad?: { rol?: string; usuarioId?: string },
   ) {
     const limit = Math.min(query.limit ?? 10, 100);
 
     const where: any = { empresaId };
+
+    // Va por AND: `where.OR` ya lo usa la búsqueda por texto, y pisarlo
+    // dejaría al técnico viendo todo.
+    const filtroTecnico = OrdenServicioService.filtroVisibilidadTecnico(
+      visibilidad?.rol,
+      visibilidad?.usuarioId,
+    );
+    if (filtroTecnico) {
+      where.AND = [...(where.AND ?? []), filtroTecnico];
+    }
 
     if (query.search) {
       where.OR = [
