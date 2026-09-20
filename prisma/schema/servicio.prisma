@@ -370,6 +370,24 @@ enum TipoCampoServicio {
   LICENCIA_CONDUCIR
   FOTO
   PRODUCTO_CATALOGO
+
+  /// Selección en CASCADA dentro de un mismo campo: Fabricante → Familia →
+  /// Modelo, cada nivel filtrado por el anterior.
+  ///
+  /// El árbol vive en `opciones` (no hay tabla de opciones acá, a diferencia
+  /// de los atributos de producto):
+  ///   { "niveles": ["Fabricante","Familia","Modelo"],
+  ///     "arbol": [ { "valor": "QUALCOMM",
+  ///                  "hijos": [ { "valor": "SNAPDRAGON",
+  ///                               "hijos": [ { "valor": "8 Gen 3" } ] } ] } ] }
+  ///
+  /// El VALOR guardado es la ruta unida por " / ":
+  /// "QUALCOMM / SNAPDRAGON / 8 Gen 3". Separador ASCII a propósito: esto
+  /// sale impreso en tickets térmicos.
+  ///
+  /// 🔴 Va al FINAL: `ALTER TYPE ADD VALUE` agrega al final en Postgres y el
+  /// orden de acá tiene que espejarlo o hay drift contra la base.
+  OPCION_DEPENDIENTE
 }
 
 enum CategoriaCampo {

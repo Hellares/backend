@@ -27,6 +27,11 @@ import {
   TipoCampoServicio,
 } from '@prisma/client';
 import { CreateOrdenServicioDto } from './dto/create-orden-servicio.dto';
+import {
+  leerArbolDependiente,
+  partirRuta,
+  rutaValida,
+} from './utils/opcion-dependiente.util';
 import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
 import { TransitionEstadoDto } from './dto/transition-estado.dto';
 import { QueryOrdenServicioDto } from './dto/query-orden-servicio.dto';
@@ -1674,6 +1679,22 @@ export class OrdenServicioService {
           !ops.includes(valor as string)
         ) {
           fail('una de las opciones configuradas');
+        }
+        break;
+      }
+      case TipoCampoServicio.OPCION_DEPENDIENTE: {
+        // Selección en cascada: el valor es la RUTA "A / B / C" y tiene que
+        // existir en el árbol de `opciones`. Si el campo está mal configurado
+        // (árbol ilegible) no se bloquea la orden: eso se valida al crear el
+        // campo, acá solo se exige texto.
+        if (typeof valor !== 'string') fail('una opción de la cascada');
+        const arbol = leerArbolDependiente(campo.opciones);
+        if (!arbol) break;
+        if (campo.permiteOtro) break; // el texto libre reemplaza la ruta
+        if (!rutaValida(arbol, partirRuta(valor as string))) {
+          fail(
+            `una ruta completa de la cascada (${arbol.niveles.join(' / ')})`,
+          );
         }
         break;
       }

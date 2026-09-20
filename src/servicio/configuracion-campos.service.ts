@@ -9,6 +9,7 @@ import { PlanLimitsService } from '../common/services/plan-limits.service';
 import { CreateConfiguracionCampoDto } from './dto/create-configuracion-campo.dto';
 import { UpdateConfiguracionCampoDto } from './dto/update-configuracion-campo.dto';
 import { QueryConfiguracionCampoDto } from './dto/query-configuracion-campo.dto';
+import { validarArbolDependiente } from './utils/opcion-dependiente.util';
 
 @Injectable()
 export class ConfiguracionCamposService {
@@ -17,7 +18,22 @@ export class ConfiguracionCamposService {
     private planLimitsService: PlanLimitsService,
   ) {}
 
+  /**
+   * Un campo en CASCADA sin árbol usable no lo puede completar nadie: se
+   * rechaza al guardarlo, no cuando el técnico intenta cargar la orden.
+   */
+  private assertCascadaValida(
+    tipoCampo: string | undefined,
+    opciones: unknown,
+  ): void {
+    if (tipoCampo !== 'OPCION_DEPENDIENTE') return;
+    const motivo = validarArbolDependiente(opciones);
+    if (motivo) throw new BadRequestException(motivo);
+  }
+
   async create(empresaId: string, dto: CreateConfiguracionCampoDto) {
+    this.assertCascadaValida(dto.tipoCampo, dto.opciones);
+
     // Verificar límite del plan
     await this.planLimitsService.checkConfiguracionCamposLimit(empresaId);
 
@@ -100,6 +116,13 @@ export class ConfiguracionCamposService {
 
   async update(empresaId: string, id: string, dto: UpdateConfiguracionCampoDto) {
     const current = await this.findOne(empresaId, id);
+
+    // El tipo puede venir en el DTO o quedarse como está, y las opciones
+    // igual: se valida la COMBINACIÓN que va a quedar guardada.
+    this.assertCascadaValida(
+      dto.tipoCampo ?? current.tipoCampo,
+      dto.opciones !== undefined ? dto.opciones : current.opciones,
+    );
 
     // Si cambia el nombre, verificar unicidad dentro del mismo scope (plantillaId)
     if (dto.nombre) {
