@@ -761,6 +761,61 @@ export class ProductoService {
   }
 
   /**
+   * A quién se le compra este producto: el código con el que cada proveedor
+   * lo identifica, cómo lo llama, y a cuánto salió la última vez.
+   *
+   * Sale de `ProveedorProducto`, el mismo diccionario que se aprende solo al
+   * confirmar una compra y que usa el mapeo de guías.
+   *
+   * 🔑 Incluye las filas de las VARIANTES del producto: el proveedor codifica
+   * la variante, no el padre, y desde la ficha del producto se quieren ver
+   * todas juntas.
+   */
+  async proveedoresDelProducto(empresaId: string, productoId: string) {
+    const filas = await this.prisma.proveedorProducto.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        OR: [{ productoId }, { variante: { productoId } }],
+      },
+      select: {
+        id: true,
+        proveedorId: true,
+        varianteId: true,
+        codigoProveedor: true,
+        descripcionProveedor: true,
+        precioCompra: true,
+        ultimoPrecio: true,
+        ultimaMoneda: true,
+        ultimaCompraAt: true,
+        esPreferido: true,
+        proveedor: { select: { nombre: true, nombreComercial: true } },
+        variante: { select: { nombre: true, sku: true } },
+      },
+      // La última compra primero: es lo que se mira. Las que nunca se
+      // compraron (sin fecha) van al final.
+      orderBy: [{ ultimaCompraAt: 'desc' }, { creadoEn: 'desc' }],
+    });
+
+    return filas.map((f) => ({
+      id: f.id,
+      proveedorId: f.proveedorId,
+      proveedorNombre: f.proveedor?.nombreComercial || f.proveedor?.nombre || '',
+      varianteId: f.varianteId,
+      varianteNombre: f.variante?.nombre ?? null,
+      codigoProveedor: f.codigoProveedor,
+      descripcionProveedor: f.descripcionProveedor,
+      // Decimal serializa como string: se manda number para que la web no
+      // tenga que adivinar de qué tipo viene cada campo.
+      precioCompra: f.precioCompra != null ? Number(f.precioCompra) : null,
+      ultimoPrecio: f.ultimoPrecio != null ? Number(f.ultimoPrecio) : null,
+      ultimaMoneda: f.ultimaMoneda,
+      ultimaCompraAt: f.ultimaCompraAt,
+      esPreferido: f.esPreferido,
+    }));
+  }
+
+  /**
    * Obtener un producto por ID
    * Método delegador (Facade) - orquesta llamadas a servicios especializados
    */

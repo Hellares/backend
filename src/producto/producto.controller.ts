@@ -501,6 +501,26 @@ export class ProductoController {
   // ENDPOINTS DINÁMICOS CON :id
   // =========================================
 
+  /**
+   * A quién se le compra este producto, con qué código lo codifica cada uno y
+   * a cuánto salió la última vez.
+   *
+   * 🔴 Pide `VIEW_COMPRAS` y no `VIEW_PRODUCTS` a propósito: acá viajan
+   * precios de COMPRA. Quien vende no tiene por qué ver a cuánto se compró.
+   */
+  @Get(':id/proveedores')
+  @RequiresPermission(Permission.VIEW_COMPRAS)
+  @ApiOperation({
+    summary: 'Proveedores de un producto: su código, su nombre y la última compra',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async proveedoresDelProducto(
+    @Param('id') id: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return this.productoService.proveedoresDelProducto(empresaId, id);
+  }
+
   @Get(':id')
   @RequiresPermission(Permission.VIEW_PRODUCTS)
   @ApiOperation({ summary: 'Obtener un producto por ID' })
