@@ -8,6 +8,8 @@ import {
   IsBoolean,
   IsPositive,
   IsDateString,
+  MaxLength,
+  Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -71,6 +73,35 @@ export class CreateCompraDetalleDto {
   @Min(0)
   @Type(() => Number)
   cantidadBonificada?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Codigo con el que el PROVEEDOR identifica este item en su factura ' +
+      '("MMTE9072"). Se guarda tal cual en la linea —es el snapshot de lo que ' +
+      'decia el papel— y al CONFIRMAR se aprende en ProveedorProducto, para ' +
+      'que la proxima compra a ese proveedor reconozca el producto sola.',
+    example: 'MMTE9072',
+    maxLength: 60,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  codigoProveedor?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Garantia del proveedor por esta compra, en MESES ("12m" en la factura ' +
+      '= 12). Un numero y no texto: es lo unico que despues permite saber si ' +
+      'algo sigue en garantia. Lo que el proveedor imprime como "consult" se ' +
+      'manda VACIO, no 0.',
+    example: 12,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(600)
+  @Type(() => Number)
+  garantiaMeses?: number;
 
   @ApiPropertyOptional({
     description:

@@ -170,6 +170,8 @@ export class CompraService {
               unidadOriginalSimbolo: d.unidadOriginalSimbolo,
               factorAplicado: d.factorAplicado,
               nuevoPrecioVenta: d.nuevoPrecioVenta,
+              codigoProveedor: d.codigoProveedor,
+              garantiaMeses: d.garantiaMeses,
             })),
           },
           ...(gastosCalculados.length > 0 && {
@@ -236,6 +238,8 @@ export class CompraService {
         unidadOriginalSimbolo: string | null;
         factorAplicado: number | null;
         nuevoPrecioVenta: number | null;
+        codigoProveedor: string | null;
+        garantiaMeses: number | null;
       }> = [];
 
       for (const [index, linea] of dto.lineas.entries()) {
@@ -294,6 +298,10 @@ export class CompraService {
           unidadOriginalSimbolo: detalleOc.unidadOriginalSimbolo,
           factorAplicado: ocFactor,
           nuevoPrecioVenta: linea.nuevoPrecioVenta ?? null,
+          // La factura del proveedor recién aparece al RECIBIR: la OC se armó
+          // con nuestros nombres, no con los de él.
+          codigoProveedor: linea.codigoProveedor?.trim().toUpperCase() || null,
+          garantiaMeses: linea.garantiaMeses ?? null,
         });
       }
 
@@ -402,6 +410,8 @@ export class CompraService {
               unidadOriginalSimbolo: d.unidadOriginalSimbolo,
               factorAplicado: d.factorAplicado,
               nuevoPrecioVenta: d.nuevoPrecioVenta,
+              codigoProveedor: d.codigoProveedor,
+              garantiaMeses: d.garantiaMeses,
             })),
           },
           ...(gastosCalculados.length > 0 && {
@@ -810,6 +820,10 @@ export class CompraService {
         },
         include: this.getInclude(),
       });
+
+      // 5a. Aprender cómo codifica este proveedor lo que nos vendió, para que
+      //     la próxima compra lo reconozca sola.
+      await this.aprenderCodigosProveedor(tx, compra);
 
       // 5b. Si es contado y se indicó cómo se pagó, registrar el pago + egreso
       //     (reutiliza el ruteo de CxP: tesorería/caja/banco).
@@ -1628,6 +1642,8 @@ export class CompraService {
             unidadOriginalSimbolo: d.unidadOriginalSimbolo,
             factorAplicado: d.factorAplicado,
             nuevoPrecioVenta: d.nuevoPrecioVenta,
+            codigoProveedor: d.codigoProveedor,
+            garantiaMeses: d.garantiaMeses,
           })),
         });
 
@@ -2064,14 +2080,124 @@ export class CompraService {
   }
 
   /**
+   * Aprende, al CONFIRMAR, cómo este proveedor codifica y nombra lo que nos
+   * vendió: "MMTE9072" = nuestro producto X. Es lo que hace que la PRÓXIMA
+   * compra a ese proveedor se cargue tipeando su código, y de paso deja
+   * anotado a cuánto salió la última vez.
+   *
+   * Escribe en `ProveedorProducto`, el mismo diccionario de alias que usa
+   * `sugerirMapeoGuia` — así que cada compra cargada a mano también mejora el
+   * reconocimiento de las guías.
+   *
+   * 🔴 Un código no puede apuntar a DOS productos del mismo proveedor (hay un
+   * índice único parcial). Si ya está tomado —casi siempre un tipeo— se saltea
+   * esa línea y se avisa en el log: aprender un alias no puede voltear una
+   * compra que por lo demás está bien.
+   *
+   * 🔴 El choque se detecta ANTES de escribir, y no con un try/catch: en
+   * Postgres una violación de unique ABORTA la transacción entera, así que
+   * atraparla en JS no salva nada — las consultas siguientes fallarían con
+   * "current transaction is aborted".
+   */
+  private async aprenderCodigosProveedor(
+    tx: Prisma.TransactionClient,
+    compra: {
+      empresaId: string;
+      proveedorId: string;
+      moneda: string;
+      fechaRecepcion: Date;
+      detalles: Array<{
+        productoId: string | null;
+        varianteId: string | null;
+        descripcion: string;
+        codigoProveedor: string | null;
+        precioUnitario: Prisma.Decimal;
+      }>;
+    },
+  ): Promise<void> {
+    // Sin producto no hay nada que recordar: una línea suelta no equivale a
+    // ningún ítem del catálogo.
+    const conCodigo = compra.detalles.filter(
+      (d) => d.codigoProveedor?.trim() && d.productoId,
+    );
+    if (conCodigo.length === 0) return;
+
+    for (const d of conCodigo) {
+      const codigo = d.codigoProveedor!.trim().toUpperCase();
+
+      const existente = await tx.proveedorProducto.findFirst({
+        where: {
+          empresaId: compra.empresaId,
+          proveedorId: compra.proveedorId,
+          productoId: d.productoId,
+          varianteId: d.varianteId ?? null,
+        },
+        select: { id: true },
+      });
+
+      const dueño = await tx.proveedorProducto.findFirst({
+        where: { proveedorId: compra.proveedorId, codigoProveedor: codigo },
+        select: { id: true, productoId: true },
+      });
+      if (dueño && dueño.id !== existente?.id) {
+        this.logger.warn(
+          `Código de proveedor ya tomado: "${codigo}" apunta a otro producto`,
+          {
+            empresaId: compra.empresaId,
+            proveedorId: compra.proveedorId,
+            productoId: d.productoId,
+            productoQueLoTiene: dueño.productoId,
+          },
+        );
+        continue;
+      }
+
+      const datos = {
+        codigoProveedor: codigo,
+        descripcionProveedor: d.descripcion,
+        ultimoPrecio: d.precioUnitario,
+        ultimaMoneda: compra.moneda,
+        ultimaCompraAt: compra.fechaRecepcion,
+      };
+
+      if (existente) {
+        await tx.proveedorProducto.update({
+          where: { id: existente.id },
+          data: datos,
+        });
+      } else {
+        await tx.proveedorProducto.create({
+          data: {
+            empresaId: compra.empresaId,
+            proveedorId: compra.proveedorId,
+            productoId: d.productoId,
+            varianteId: d.varianteId ?? null,
+            // `precioCompra` es el PREFERENCIAL acordado y el modelo lo exige.
+            // No se inventa: arranca en el de esta compra, que es el único
+            // número real que tenemos, y después se negocia aparte.
+            precioCompra: d.precioUnitario,
+            ...datos,
+          },
+        });
+      }
+    }
+  }
+
+  /**
    * Guarda/actualiza el alias del proveedor para tus productos (recordar que
    * "OSO AZUL" del proveedor = tu "OSO LUCIFER"). Upsert sobre ProveedorProducto.
+   *
+   * Tambien es la puerta para CORREGIR a mano lo que se aprendio solo al
+   * confirmar una compra: un codigo mal tipeado se arregla acá, sin tener que
+   * tocar la compra vieja —que tiene que seguir mostrando lo que decia el
+   * papel—.
    */
   async guardarAliasProveedor(
     empresaId: string,
     proveedorId: string,
     items: Array<{
-      descripcionProveedor: string;
+      descripcionProveedor?: string;
+      codigoProveedor?: string | null;
       productoId: string;
       varianteId?: string | null;
       precioCompra?: number;
@@ -2079,15 +2205,43 @@ export class CompraService {
   ) {
     let guardados = 0;
     for (const it of items) {
-      if (!it.descripcionProveedor?.trim() || !it.productoId) continue;
+      const descripcion = it.descripcionProveedor?.trim();
+      // `null` explicito = BORRAR el codigo; `undefined` = no tocarlo.
+      const codigo =
+        it.codigoProveedor === undefined
+          ? undefined
+          : it.codigoProveedor?.trim().toUpperCase() || null;
+
+      if (!it.productoId) continue;
+      if (!descripcion && codigo === undefined) continue;
+
       const existing = await this.prisma.proveedorProducto.findFirst({
         where: { empresaId, proveedorId, productoId: it.productoId, varianteId: it.varianteId ?? null },
         select: { id: true },
       });
+
+      // 🔴 El mismo candado que al aprender: un codigo no puede apuntar a dos
+      // productos del mismo proveedor. Se avisa en vez de tirar el 500 crudo
+      // del indice unico, que no le dice nada a nadie.
+      if (codigo) {
+        const dueño = await this.prisma.proveedorProducto.findFirst({
+          where: { proveedorId, codigoProveedor: codigo },
+          select: { id: true },
+        });
+        if (dueño && dueño.id !== existing?.id) {
+          throw new BadRequestException(
+            `El código "${codigo}" ya está asignado a otro producto de este proveedor.`,
+          );
+        }
+      }
+
       if (existing) {
         await this.prisma.proveedorProducto.update({
           where: { id: existing.id },
-          data: { descripcionProveedor: it.descripcionProveedor.trim() },
+          data: {
+            ...(descripcion ? { descripcionProveedor: descripcion } : {}),
+            ...(codigo !== undefined ? { codigoProveedor: codigo } : {}),
+          },
         });
       } else {
         await this.prisma.proveedorProducto.create({
@@ -2096,7 +2250,8 @@ export class CompraService {
             proveedorId,
             productoId: it.productoId,
             varianteId: it.varianteId ?? null,
-            descripcionProveedor: it.descripcionProveedor.trim(),
+            descripcionProveedor: descripcion ?? null,
+            codigoProveedor: codigo ?? null,
             precioCompra: it.precioCompra ?? 0,
           },
         });
@@ -2453,6 +2608,11 @@ export class CompraService {
       factorAplicado,
       unidadOriginalSimbolo,
       nuevoPrecioVenta: dto.nuevoPrecioVenta ?? null,
+      // Cómo venía la línea en la factura del proveedor. Se normaliza acá
+      // (trim + MAYÚSCULAS) porque es la clave con la que después se busca:
+      // "mmte9072" y "MMTE9072 " tienen que caer en la misma fila.
+      codigoProveedor: dto.codigoProveedor?.trim().toUpperCase() || null,
+      garantiaMeses: dto.garantiaMeses ?? null,
     };
   }
 

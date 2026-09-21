@@ -10,6 +10,8 @@ import {
   IsDateString,
   IsEnum,
   Min,
+  Max,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -45,6 +47,30 @@ export class LineaRecepcionOcDto {
   @Min(0)
   @Type(() => Number)
   nuevoPrecioVenta?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Codigo con el que el PROVEEDOR identifica el item en su factura. Se ' +
+      'pide tambien acá —no solo en la compra suelta— porque la factura recién ' +
+      'aparece al RECIBIR: la orden de compra se hizo con nuestros nombres.',
+    example: 'MMTE9072',
+    maxLength: 60,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  codigoProveedor?: string;
+
+  @ApiPropertyOptional({
+    description: 'Garantia del proveedor por esta compra, en MESES.',
+    example: 12,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(600)
+  @Type(() => Number)
+  garantiaMeses?: number;
 }
 
 export class CreateCompraDesdeOcDto {

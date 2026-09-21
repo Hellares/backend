@@ -113,7 +113,9 @@ export class CompraController {
     body: {
       proveedorId: string;
       items: Array<{
-        descripcionProveedor: string;
+        descripcionProveedor?: string;
+        /** `null` borra el código; omitirlo lo deja como está. */
+        codigoProveedor?: string | null;
         productoId: string;
         varianteId?: string | null;
         precioCompra?: number;

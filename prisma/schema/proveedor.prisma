@@ -188,6 +188,14 @@ model ProveedorProducto {
   descripcionProveedor String?
   codigoProveedor      String?
 
+  // Última compra a ESTE proveedor por este producto. Distinto de
+  // `precioCompra`, que es el precio PREFERENCIAL acordado: esto es lo que
+  // salió la última vez de verdad, y es lo que permite comparar proveedores.
+  // Se escribe solo, al confirmar la compra.
+  ultimoPrecio   Decimal?  @db.Decimal(14, 6)
+  ultimaMoneda   String?
+  ultimaCompraAt DateTime?
+
   // Stock
   esPreferido Boolean @default(false)
 
@@ -212,4 +220,12 @@ model ProveedorProducto {
   @@index([proveedorId])
   @@index([productoId])
   @@index([varianteId])
+  // Buscar el producto POR el código del proveedor: es el camino que se usa al
+  // cargar una compra ("tipeo MMTE9072 y aparece").
+  //
+  // 🔴 Falta el candado de que un código no apunte a DOS productos del mismo
+  // proveedor. No se puede con `@@unique` porque tiene que ignorar los nulos
+  // (hay miles de filas sin código): va como índice único PARCIAL en SQL
+  // crudo, en la migración.
+  @@index([empresaId, codigoProveedor])
 }

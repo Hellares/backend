@@ -656,6 +656,24 @@ export class ProductoCatalogService {
           { codigoEmpresa: { equals: consulta, mode: 'insensitive' } },
           { variantes: { some: { codigoBarras: { equals: consulta, mode: 'insensitive' } } } },
           { variantes: { some: { sku: { equals: consulta, mode: 'insensitive' } } } },
+          // El código del PROVEEDOR ("MMTE9072" de Deltron). Es lo que está
+          // impreso en la factura que se está cargando, así que buscar por ahí
+          // es el camino natural al cargar una compra. Va por igualdad, como
+          // los demás códigos: lo resuelve el índice, no un escaneo.
+          {
+            proveedorProductos: {
+              some: { codigoProveedor: { equals: consulta, mode: 'insensitive' } },
+            },
+          },
+          {
+            variantes: {
+              some: {
+                proveedorProductos: {
+                  some: { codigoProveedor: { equals: consulta, mode: 'insensitive' } },
+                },
+              },
+            },
+          },
           ...(porPalabras.length > 0 ? [{ AND: porPalabras }] : []),
         ];
       } else if (porPalabras.length > 0) {

@@ -792,3 +792,61 @@ describe('CompraService.calcularDetalle — bonificación (unidades de regalo)',
     ).toThrow(/supera el importe de la línea/i);
   });
 });
+
+/**
+ * El código del proveedor y la garantía viajan en la línea (20-09).
+ *
+ * El código es la CLAVE con la que después se busca el producto ("tipeo
+ * MMTE9072 y aparece"), así que se normaliza al entrar: si se guardara tal
+ * cual lo tipearon, `mmte9072 ` y `MMTE9072` serían dos códigos distintos.
+ */
+describe('CompraService.calcularDetalle — código del proveedor y garantía', () => {
+  it('el código se guarda normalizado: sin espacios y en MAYÚSCULAS', () => {
+    const r = calcularDetalle(
+      {
+        descripcion: 'WEB CAM 2K TEROS TE-9072',
+        cantidad: 1,
+        precioUnitario: 13.6,
+        codigoProveedor: '  mmte9072 ',
+      },
+      0,
+      undefined,
+      false,
+    );
+    expect(r.codigoProveedor).toBe('MMTE9072');
+  });
+
+  it('sin código queda en null, no en cadena vacía', () => {
+    // Un texto opcional llega VACÍO desde un formulario, no ausente: si se
+    // guardara '' el índice único lo trataría como un código más.
+    const r = calcularDetalle(
+      { descripcion: 'X', cantidad: 1, precioUnitario: 10, codigoProveedor: '   ' },
+      0,
+      undefined,
+      false,
+    );
+    expect(r.codigoProveedor).toBeNull();
+  });
+
+  it('la garantía viaja como número de meses', () => {
+    const r = calcularDetalle(
+      { descripcion: 'X', cantidad: 1, precioUnitario: 10, garantiaMeses: 12 },
+      0,
+      undefined,
+      false,
+    );
+    expect(r.garantiaMeses).toBe(12);
+  });
+
+  it('el "consult" de la factura llega vacío y queda null, no 0', () => {
+    // 0 meses significaría "sin garantía", que es una afirmación distinta de
+    // "no sabemos cuánta es".
+    const r = calcularDetalle(
+      { descripcion: 'X', cantidad: 1, precioUnitario: 10 },
+      0,
+      undefined,
+      false,
+    );
+    expect(r.garantiaMeses).toBeNull();
+  });
+});

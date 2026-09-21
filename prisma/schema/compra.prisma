@@ -296,6 +296,24 @@ model CompraDetalle {
   // paga. Los dos pueden convivir en la misma línea.
   cantidadBonificada Int @default(0)
 
+  // ─── Cómo venía esta línea en la factura del proveedor ────────
+  // El código con el que ÉL lo identifica ("MMTE9072" de Deltron) tal como
+  // estaba impreso. Es un SNAPSHOT y no una relación a propósito: si mañana
+  // se corrige a qué producto equivale ese código, esta compra tiene que
+  // seguir mostrando lo que decía el papel.
+  //
+  // Al CONFIRMAR, el código se aprende en `ProveedorProducto` para que la
+  // próxima compra a ese proveedor reconozca el producto sola.
+  codigoProveedor String?
+
+  // Garantía que el proveedor da por ESTA compra, en MESES ("12m" en la
+  // factura de Deltron = 12).
+  //
+  // 🔴 Un número y no texto: es lo único que después permite responder "¿esto
+  // todavía está en garantía?". Lo que el proveedor imprime como "consult"
+  // entra VACÍO, que es lo honesto: no se sabe cuánta es.
+  garantiaMeses Int?
+
   // ─── Vencimiento del lote que va a entrar ─────────────────────
   // La que está impresa en el envase de ESTA entrega. Se pide al cargar la
   // línea cuando el producto tiene `tipoVencimiento` distinto de NINGUNO, y al
