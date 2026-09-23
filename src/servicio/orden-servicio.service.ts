@@ -36,6 +36,7 @@ import { UpdateOrdenServicioDto } from './dto/update-orden-servicio.dto';
 import { TransitionEstadoDto } from './dto/transition-estado.dto';
 import { QueryOrdenServicioDto } from './dto/query-orden-servicio.dto';
 import { createCursorPaginatedResponse } from '../common/utils/pagination.util';
+import { sedesPermitidas } from '../auth/sede-access.util';
 
 // B1 FIX: TERCERIZADO removido de transiciones directas — solo se permite via tercerizacion.crear()
 // B13 FIX: LISTO_ENTREGA ahora permite revertir a EN_REPARACION y CANCELADO
@@ -1108,7 +1109,7 @@ export class OrdenServicioService {
     empresaId: string,
     query: QueryOrdenServicioDto,
     esCliente = false,
-    visibilidad?: { rol?: string; usuarioId?: string },
+    visibilidad?: { rol?: string; usuarioId?: string; rolGlobal?: string },
   ) {
     const limit = Math.min(query.limit ?? 10, 100);
 
@@ -1132,8 +1133,27 @@ export class OrdenServicioService {
     }
 
     if (query.estado) where.estado = query.estado;
-    // Multi-sede: filtra por la sede de la OS (estricto).
-    if (query.sedeId) where.sedeId = query.sedeId;
+    // Multi-sede: filtra por la sede de la OS (estricto). `SedeAccessGuard` ya
+    // rechazó la sede que el usuario no tiene asignada.
+    if (query.sedeId) {
+      where.sedeId = query.sedeId;
+    } else if (visibilidad?.usuarioId) {
+      // Sin `sedeId` no hay nada que el guard pueda validar, así que el scope
+      // se aplica acá: si no, cualquiera pedía el listado pelado y veía todas
+      // las sedes. Las órdenes SIN sede (legacy) siguen visibles, igual que en
+      // `OrdenSedeAccessGuard`.
+      const permitidas = await sedesPermitidas(this.prisma, {
+        usuarioId: visibilidad.usuarioId,
+        empresaId,
+        rolGlobal: visibilidad.rolGlobal,
+      });
+      if (permitidas) {
+        where.AND = [
+          ...(where.AND ?? []),
+          { OR: [{ sedeId: { in: permitidas } }, { sedeId: null }] },
+        ];
+      }
+    }
     if (query.tipoServicio) where.tipoServicio = query.tipoServicio;
     if (query.prioridad) where.prioridad = query.prioridad;
     if (query.clienteId) where.clienteId = query.clienteId;

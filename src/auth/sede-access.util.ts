@@ -67,3 +67,45 @@ export async function puedeOperarEnSede(
   });
   return !!asignadaAEsta;
 }
+
+/**
+ * Sedes sobre las que el usuario puede operar, para SCOPEAR LISTADOS — ahí no
+ * hay una sede puntual que validar: si el request no manda `sedeId`, ningún
+ * guard interviene y la consulta devolvería todas las sedes de la empresa.
+ *
+ * `null` = sin restricción. Misma política progresiva que `puedeOperarEnSede`:
+ * SUPER_ADMIN, EMPRESA_ADMIN y usuarios aún sin asignaciones ven todo.
+ */
+export async function sedesPermitidas(
+  prisma: PrismaService,
+  ctx: SedeAccessCtx,
+): Promise<string[] | null> {
+  const { usuarioId, empresaId } = ctx;
+  if (!usuarioId || !empresaId) return null;
+
+  if (ctx.rolGlobal === Rol.SUPER_ADMIN) return null;
+
+  const rolesEmpresa: Rol[] = Array.isArray(ctx.rolesEmpresa)
+    ? ctx.rolesEmpresa
+    : (
+        await prisma.empresaUsuarioRol.findMany({
+          where: { usuarioId, empresaId, isActive: true, deletedAt: null },
+          select: { rol: true },
+        })
+      ).map((r) => r.rol);
+  if (rolesEmpresa.includes(Rol.EMPRESA_ADMIN)) return null;
+
+  const asignaciones = await prisma.usuarioSedeRol.findMany({
+    where: {
+      usuarioId,
+      isActive: true,
+      deletedAt: null,
+      sede: { empresaId, deletedAt: null },
+    },
+    select: { sedeId: true },
+  });
+  // Legacy: sin asignaciones → no se restringe.
+  if (asignaciones.length === 0) return null;
+
+  return [...new Set(asignaciones.map((a) => a.sedeId))];
+}

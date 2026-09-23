@@ -184,6 +184,7 @@ export class OrdenServicioController {
   }
 
   @Get()
+  @UseGuards(SedeAccessGuard)
   @RequiresPermission(Permission.MANAGE_ORDERS)
   @ApiOperation({ summary: 'Listar órdenes de servicio' })
   @ApiHeader({ name: 'x-tenant-id', required: true })
@@ -192,11 +193,13 @@ export class OrdenServicioController {
     @Query() query: QueryOrdenServicioDto,
     @CurrentUser('sub') usuarioId: string,
     @CurrentUser('tenantRole') rol: string,
+    @CurrentUser('rolGlobal') rolGlobal: string,
   ) {
     if (!empresaId) throw new BadRequestException('x-tenant-id es requerido');
     return this.ordenServicioService.findAll(empresaId, query, false, {
       rol,
       usuarioId,
+      rolGlobal,
     });
   }
 
