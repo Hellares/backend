@@ -215,6 +215,41 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     expect(venta.observaciones).toContain('Ref. entrega: Frente al parque');
   });
 
+  it('ENVIADO con envío por AGENCIA → el envío lleva la agencia y su sede (listo para el rótulo)', async () => {
+    const conAgencia = {
+      ...pedidoBase,
+      modalidadEnvio: 'AGENCIA',
+      agenciaEnvio: 'SHALOM',
+      agenciaDireccionEnvio: 'Jr. Los Pinos 123, Tarapoto',
+    };
+    prisma.pedidoMarketplace.findFirst
+      .mockResolvedValueOnce({ ...conAgencia })
+      .mockResolvedValueOnce({ ...conAgencia, detalles: [{ productoId: 'prod-1', varianteId: null, cantidad: 1 }] });
+
+    await service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'ENVIADO' } as any);
+
+    expect(prisma.ventaEnvio.create.mock.calls[0][0].data).toMatchObject({
+      agenciaNombre: 'SHALOM',
+      agenciaDireccion: 'Jr. Los Pinos 123, Tarapoto',
+      destinoProvincia: 'Trujillo',
+    });
+  });
+
+  it('ENVIADO con DELIVERY_LOCAL → no es envío por agencia: sin sección ENVÍO', async () => {
+    const delivery = { ...pedidoBase, modalidadEnvio: 'DELIVERY_LOCAL' };
+    prisma.pedidoMarketplace.findFirst
+      .mockResolvedValueOnce({ ...delivery })
+      .mockResolvedValueOnce({ ...delivery, detalles: [{ productoId: 'prod-1', varianteId: null, cantidad: 1 }] });
+
+    await service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'ENVIADO' } as any);
+
+    expect(prisma.ventaEnvio.create).not.toHaveBeenCalled();
+    // Sigue siendo una venta con envío (reparto) y con la dirección de entrega.
+    const venta = prisma.venta.create.mock.calls[0][0].data;
+    expect(venta.conEnvio).toBe(true);
+    expect(venta.direccionCliente).toBe('Av. Siempre Viva 123, Víctor Larco');
+  });
+
   it('ENVIADO → la liberación de reserva se acota a lo reservado (no negativa)', async () => {
     prisma.productoStock.findFirst.mockResolvedValue({
       ...stockRow,

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEnum, IsArray, ValidateNested } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsArray, ValidateNested, IsIn, IsNumber, Max, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { MetodoPagoMarketplace, TipoEntregaMarketplace } from '@prisma/client';
 
@@ -65,6 +65,41 @@ export class CheckoutDto {
   @IsOptional()
   @IsString()
   notasComprador?: string;
+
+  @ApiProperty({
+    description: 'Envío a domicilio: DELIVERY_LOCAL (reparto en la ciudad) o AGENCIA (a provincia)',
+    enum: ['DELIVERY_LOCAL', 'AGENCIA'],
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(['DELIVERY_LOCAL', 'AGENCIA'])
+  modalidadEnvio?: 'DELIVERY_LOCAL' | 'AGENCIA';
+
+  @ApiProperty({ description: 'AGENCIA: la agencia (Shalom, Olva…)', required: false })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  agenciaEnvio?: string;
+
+  @ApiProperty({ description: 'AGENCIA: la sede de la agencia en el destino', required: false })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  agenciaDireccionEnvio?: string;
+
+  @ApiProperty({ description: 'DELIVERY_LOCAL: ubicación compartida por el comprador', required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  latitudEnvio?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  longitudEnvio?: number;
 
   @ApiProperty({ description: 'Opciones de entrega por empresa', required: false, type: [EntregaEmpresaDto] })
   @IsOptional()

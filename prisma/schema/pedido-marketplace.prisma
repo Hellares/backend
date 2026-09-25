@@ -61,6 +61,13 @@ model PedidoMarketplace {
   provinciaEnvio    String?
   departamentoEnvio String?
   coordenadasEnvio  Json?
+  // ENVIO_DOMICILIO en las dos modalidades de la venta: 'DELIVERY_LOCAL'
+  // (reparto en la ciudad: dirección/referencia/distrito) o 'AGENCIA' (envío
+  // a provincia: agencia + su sede en destino). null = pedidos anteriores o
+  // app viejo, que no lo preguntaban.
+  modalidadEnvio        String?
+  agenciaEnvio          String?
+  agenciaDireccionEnvio String?
 
   subtotal   Decimal @db.Decimal(10, 2)
   descuento  Decimal @default(0) @db.Decimal(10, 2)

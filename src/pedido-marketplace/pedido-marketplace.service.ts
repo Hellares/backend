@@ -182,7 +182,29 @@ export class PedidoMarketplaceService {
       distritoEnvio: dto.distritoEnvio ?? null,
       provinciaEnvio: dto.provinciaEnvio ?? null,
       departamentoEnvio: dto.departamentoEnvio ?? null,
-      coordenadasEnvio: null,
+      coordenadasEnvio:
+        dto.latitudEnvio != null && dto.longitudEnvio != null
+          ? { lat: dto.latitudEnvio, lon: dto.longitudEnvio }
+          : null,
+    };
+
+    // Delivery en la ciudad vs envío a provincia por agencia (como en la
+    // venta). Cada uno pide lo suyo: sin esto la tienda tenía que volver a
+    // preguntarle al cliente la agencia o la referencia.
+    const modalidad = dto.modalidadEnvio ?? null;
+    if (modalidad === 'AGENCIA') {
+      if (!dto.agenciaEnvio?.trim() || !dto.provinciaEnvio?.trim() || !dto.agenciaDireccionEnvio?.trim()) {
+        throw new BadRequestException('Para envío por agencia indica la agencia, la ciudad y la sede de destino');
+      }
+    } else if (modalidad === 'DELIVERY_LOCAL') {
+      if (!dto.direccionEnvio?.trim() || !dto.distritoEnvio?.trim()) {
+        throw new BadRequestException('Para delivery indica la dirección de entrega y el distrito');
+      }
+    }
+    const modalidadData = {
+      modalidadEnvio: modalidad,
+      agenciaEnvio: modalidad === 'AGENCIA' ? dto.agenciaEnvio!.trim() : null,
+      agenciaDireccionEnvio: modalidad === 'AGENCIA' ? dto.agenciaDireccionEnvio!.trim() : null,
     };
 
     if (dto.direccionEnvioId) {
@@ -274,7 +296,7 @@ export class PedidoMarketplaceService {
             nombreComprador,
             emailComprador: comprador.email,
             telefonoComprador: comprador.persona.telefono,
-            ...(tipoEntrega === 'ENVIO_DOMICILIO' ? direccionData : {}),
+            ...(tipoEntrega === 'ENVIO_DOMICILIO' ? { ...direccionData, ...modalidadData } : {}),
             subtotal,
             costoEnvio: 0,
             total: subtotal,

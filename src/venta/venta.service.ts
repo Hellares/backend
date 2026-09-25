@@ -4771,7 +4771,22 @@ export class VentaService {
       },
     });
 
-    return { ...venta, devoluciones, envio, deliveryLocal };
+    // Venta de un pedido web/app: lo que el comprador ya dio para la entrega.
+    // El "Solicitar delivery" arranca con esto (dirección, referencia,
+    // distrito y su ubicación) en vez de volver a pedírselo.
+    const entregaPedido = await this.prisma.pedidoMarketplace.findFirst({
+      where: { ventaId: id, empresaId },
+      select: {
+        codigo: true,
+        modalidadEnvio: true,
+        direccionEnvio: true,
+        referenciaEnvio: true,
+        distritoEnvio: true,
+        coordenadasEnvio: true,
+      },
+    });
+
+    return { ...venta, devoluciones, envio, deliveryLocal, entregaPedido };
   }
 
   /**

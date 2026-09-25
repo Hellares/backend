@@ -758,11 +758,14 @@ export class PedidoMarketplaceEmpresaService {
 
           updateData.ventaId = venta.id;
 
-          // Lo que el comprador ya dio al pedir (web o app) llega a la sección
-          // ENVÍO de la venta: sin esto la tienda tenía que volver a
-          // pedírselo. La agencia no se pregunta al comprar: la completa la
-          // tienda si manda por agencia.
-          if (pedido.tipoEntrega === 'ENVIO_DOMICILIO') {
+          // Lo que el comprador ya dio al pedir (web o app) llega a la venta:
+          // sin esto la tienda tenía que volver a pedírselo.
+          // - AGENCIA: la sección ENVÍO completa (lista para el rótulo).
+          // - DELIVERY_LOCAL: no es envío por agencia; la dirección, referencia
+          //   y distrito los toma el "Solicitar delivery" del pedido ligado.
+          // - Sin modalidad (pedidos anteriores / app viejo): el envío con lo
+          //   que haya, y la agencia la completa la tienda.
+          if (pedido.tipoEntrega === 'ENVIO_DOMICILIO' && pedido.modalidadEnvio !== 'DELIVERY_LOCAL') {
             const comprador = await tx.usuario.findUnique({
               where: { id: pedido.compradorId },
               select: { persona: { select: { dni: true } } },
@@ -776,6 +779,8 @@ export class PedidoMarketplaceEmpresaService {
                 destinatarioCelular: pedido.telefonoComprador,
                 destinoDepartamento: pedido.departamentoEnvio,
                 destinoProvincia: pedido.provinciaEnvio,
+                agenciaNombre: pedido.agenciaEnvio,
+                agenciaDireccion: pedido.agenciaDireccionEnvio,
               },
             });
           }
