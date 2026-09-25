@@ -135,6 +135,14 @@ export class PedidoMarketplaceService {
     // 1. Obtener carrito enriquecido (precios forzados por backend)
     const carrito = await this.carritoService.getCarrito(usuarioId);
 
+    // Tienda web de UNA empresa: solo se compra lo de esa tienda. Sin esto, un
+    // comprador con productos de otras tiendas en el carrito (agregados desde
+    // el app) les generaba pedidos también.
+    if (dto.empresaId) {
+      carrito.empresas = carrito.empresas.filter((g: any) => g.empresa.id === dto.empresaId);
+      carrito.totalItems = carrito.empresas.reduce((n: number, g: any) => n + g.items.length, 0);
+    }
+
     if (carrito.totalItems === 0) {
       throw new BadRequestException('El carrito está vacío');
     }
@@ -337,8 +345,13 @@ export class PedidoMarketplaceService {
       }
     }
 
-    // 5. Vaciar carrito
-    await this.carritoService.vaciarCarrito(usuarioId);
+    // 5. Vaciar carrito (con `empresaId`, solo lo de esa tienda: lo de otras
+    // tiendas sigue esperando en el carrito)
+    if (dto.empresaId) {
+      await this.prisma.carritoItem.deleteMany({ where: { usuarioId, empresaId: dto.empresaId } });
+    } else {
+      await this.carritoService.vaciarCarrito(usuarioId);
+    }
 
     return {
       pedidos: pedidosCreados,

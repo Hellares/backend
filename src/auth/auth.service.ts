@@ -109,6 +109,14 @@ export class AuthService {
       if (existingPersona && existingPersona.usuario) {
         throw new ConflictException('El DNI ya está registrado');
       }
+      // Persona que una tienda cargó sin cuenta: antes pasaba de largo y
+      // `persona.create` reventaba por el DNI @unique (500). La cuenta se toma
+      // probando el celular (`/auth/comprador`), no creando otra persona.
+      if (existingPersona) {
+        throw new ConflictException(
+          'Este DNI ya está registrado como cliente de una tienda. Activa tu cuenta con el código que te enviamos por WhatsApp.',
+        );
+      }
     }
 
     // Determinar el tenant si no se proporciona
@@ -2515,6 +2523,34 @@ export class AuthService {
       emailVerificado: false,
       email: normalizedEmail,
       sessionsRevoked: true,
+    };
+  }
+
+  /**
+   * Sesión de COMPRADOR (marketplace, sin empresa) para un usuario que ya
+   * probó quién es por otro camino: hoy, el código por WhatsApp de la tienda
+   * web (`CompradorCuentaService`). Mismo resultado que `login` con
+   * `loginMode: 'marketplace'`.
+   */
+  async emitirSesionComprador(usuarioId: string, request?: any) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: usuarioId },
+      include: { persona: true },
+    });
+    if (!usuario || !usuario.isActive) {
+      throw new UnauthorizedException('Cuenta no disponible');
+    }
+    const clientInfo = request ? this.securityService.getClientInfo(request) : undefined;
+    await this.prisma.usuario.update({
+      where: { id: usuario.id },
+      data: { lastLoginAt: new Date() },
+    });
+    const tokens = await this.generateTokens(usuario, undefined, undefined, undefined, clientInfo, undefined);
+    this.auditLogger.logUserLogin(usuario.id, usuario.persona?.dni ?? usuario.id, clientInfo?.ip || 'unknown', true);
+    return {
+      user: this.buildUserResponse(usuario),
+      mode: 'marketplace',
+      ...tokens,
     };
   }
 

@@ -19,6 +19,14 @@ export class EntregaEmpresaDto {
 }
 
 export class CheckoutDto {
+  @ApiProperty({
+    description: 'Solo esta empresa (tienda web). Sin él se compra todo el carrito, como en el app.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  empresaId?: string;
+
   @ApiProperty({ description: 'Método de pago', enum: MetodoPagoMarketplace })
   @IsEnum(MetodoPagoMarketplace)
   metodoPago: MetodoPagoMarketplace;
