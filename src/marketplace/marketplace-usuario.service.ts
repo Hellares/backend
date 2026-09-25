@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { STOCK_VENDIBLE, vendible } from './stock-vendible';
 
 @Injectable()
 export class MarketplaceUsuarioService {
@@ -83,7 +84,7 @@ export class MarketplaceUsuarioService {
               },
               stocksPorSede: {
                 where: { precioConfigurado: true },
-                select: { precio: true, precioOferta: true, enOferta: true, stockActual: true },
+                select: { precio: true, precioOferta: true, enOferta: true, ...STOCK_VENDIBLE },
                 take: 1,
                 orderBy: { precio: 'asc' },
               },
@@ -122,7 +123,7 @@ export class MarketplaceUsuarioService {
           precio: stock?.precio ? Number(stock.precio) : null,
           precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
           enOferta: stock?.enOferta ?? false,
-          hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+          hayStock: vendible(stock) > 0,
           imagen: imagenMap.get(f.productoId) ?? null,
           empresa: {
             id: f.producto.empresa.id,
@@ -209,7 +210,7 @@ export class MarketplaceUsuarioService {
             },
             stocksPorSede: {
               where: { precioConfigurado: true },
-              select: { precio: true, precioOferta: true, enOferta: true, stockActual: true },
+              select: { precio: true, precioOferta: true, enOferta: true, ...STOCK_VENDIBLE },
               take: 1,
               orderBy: { precio: 'asc' },
             },
@@ -244,7 +245,7 @@ export class MarketplaceUsuarioService {
           precio: stock?.precio ? Number(stock.precio) : null,
           precioOferta: stock?.enOferta && stock?.precioOferta ? Number(stock.precioOferta) : null,
           enOferta: stock?.enOferta ?? false,
-          hayStock: stock?.stockActual ? stock.stockActual > 0 : false,
+          hayStock: vendible(stock) > 0,
           imagen: imagenMap.get(v.productoId) ?? null,
           empresa: {
             id: v.producto.empresa.id,

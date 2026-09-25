@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { STOCK_VENDIBLE, vendible } from './stock-vendible';
 import {
   condicionesPorAtributo,
   sumarAlAnd,
@@ -251,7 +252,7 @@ export class MarketplaceService {
       stocksPorSede: {
         where: { precioConfigurado: true },
         select: {
-          precio: true, precioOferta: true, enOferta: true, stockActual: true,
+          precio: true, precioOferta: true, enOferta: true, ...STOCK_VENDIBLE,
           fechaInicioOferta: true, fechaFinOferta: true,
           sede: { select: { nombre: true, coordenadas: true } },
         },
@@ -268,7 +269,7 @@ export class MarketplaceService {
           stocksPorSede: {
             where: { precioConfigurado: true },
             select: {
-              precio: true, precioOferta: true, enOferta: true, stockActual: true,
+              precio: true, precioOferta: true, enOferta: true, ...STOCK_VENDIBLE,
               fechaInicioOferta: true, fechaFinOferta: true,
               sede: { select: { coordenadas: true } },
             },
@@ -477,7 +478,7 @@ export class MarketplaceService {
         enOferta: ofertaActiva,
         ofertaSede: ofertaActiva ? (stock?.sede?.nombre ?? null) : null,
         ofertaFin: ofertaActiva ? (stock?.fechaFinOferta ?? null) : null,
-        hayStock: allStocks.some((s: any) => (s.stockActual ?? 0) > 0),
+        hayStock: allStocks.some((s: any) => vendible(s) > 0),
         tieneVariantes,
         imagen: imagenMap.get(p.id)?.url ?? null,
         imagenAncho: imagenMap.get(p.id)?.ancho ?? null,
@@ -754,7 +755,7 @@ export class MarketplaceService {
           // precio efectivo (oferta-aware), igual que la lista → coinciden.
           orderBy: { precio: 'asc' },
           select: {
-            precio: true, precioOferta: true, enOferta: true, stockActual: true,
+            precio: true, precioOferta: true, enOferta: true, ...STOCK_VENDIBLE,
             fechaInicioOferta: true, fechaFinOferta: true,
             sede: { select: { nombre: true, coordenadas: true, direccion: true, distrito: true, provincia: true } },
           },
@@ -787,7 +788,7 @@ export class MarketplaceService {
               where: { precioConfigurado: true },
               orderBy: { precio: 'asc' },
               select: {
-                precio: true, precioOferta: true, enOferta: true, stockActual: true,
+                precio: true, precioOferta: true, enOferta: true, ...STOCK_VENDIBLE,
                 fechaInicioOferta: true, fechaFinOferta: true,
                 sede: { select: { nombre: true, coordenadas: true, direccion: true, distrito: true, provincia: true } },
               },
@@ -909,8 +910,8 @@ export class MarketplaceService {
         precio: s?.precio ? Number(s.precio) : null,
         precioOferta: ofertaV && s?.precioOferta ? Number(s.precioOferta) : null,
         enOferta: ofertaV,
-        hayStock: s?.stockActual ? s.stockActual > 0 : false,
-        stockActual: s?.stockActual ?? 0,
+        hayStock: vendible(s) > 0,
+        stockActual: vendible(s),
         ofertaSede: ofertaV ? (s?.sede?.nombre ?? null) : null,
         ofertaFin: ofertaV ? (s?.fechaFinOferta ?? null) : null,
       };
@@ -963,8 +964,8 @@ export class MarketplaceService {
       ofertaInicio: ofertaActiva ? stock?.fechaInicioOferta ?? null : null,
       ofertaFin: ofertaActiva ? stock?.fechaFinOferta ?? null : null,
       hayStock: [...(producto.stocksPorSede ?? []), ...variantStocks]
-        .some((s: any) => (s.stockActual ?? 0) > 0),
-      stockActual: stock?.stockActual ?? 0,
+        .some((s: any) => vendible(s) > 0),
+      stockActual: vendible(stock),
       tieneVariantes: variantes.length > 0,
       variantes,
       niveles: this._mapNiveles(producto.preciosNivel),
