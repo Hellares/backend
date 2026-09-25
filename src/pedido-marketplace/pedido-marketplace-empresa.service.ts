@@ -702,7 +702,10 @@ export class PedidoMarketplaceEmpresaService {
               nombreCliente: pedido.nombreComprador,
               emailCliente: pedido.emailComprador,
               telefonoCliente: pedido.telefonoComprador,
-              direccionCliente: pedido.direccionEnvio,
+              // Dirección completa de entrega (con distrito): es la que se
+              // usa para el delivery y la que la tienda ve en la venta.
+              direccionCliente:
+                [pedido.direccionEnvio, pedido.distritoEnvio].filter(Boolean).join(', ') || null,
               subtotal: r2(totalVenta - igvVenta),
               descuento: pedido.descuento,
               impuestos: igvVenta,
@@ -712,7 +715,9 @@ export class PedidoMarketplaceEmpresaService {
                 ? EstadoVenta.CONFIRMADA
                 : EstadoVenta.PAGADA_COMPLETA,
               metodoPago: metodoPagoVenta,
-              observaciones: `Pedido marketplace ${pedido.codigo}`,
+              observaciones:
+                `Pedido marketplace ${pedido.codigo}` +
+                (pedido.referenciaEnvio ? ` · Ref. entrega: ${pedido.referenciaEnvio}` : ''),
               detalles: {
                 create: lineas.map(({ detalle, stock }, i) => {
                   const precio = Number(detalle.precioUnitario);
@@ -752,6 +757,28 @@ export class PedidoMarketplaceEmpresaService {
           });
 
           updateData.ventaId = venta.id;
+
+          // Lo que el comprador ya dio al pedir (web o app) llega a la sección
+          // ENVÍO de la venta: sin esto la tienda tenía que volver a
+          // pedírselo. La agencia no se pregunta al comprar: la completa la
+          // tienda si manda por agencia.
+          if (pedido.tipoEntrega === 'ENVIO_DOMICILIO') {
+            const comprador = await tx.usuario.findUnique({
+              where: { id: pedido.compradorId },
+              select: { persona: { select: { dni: true } } },
+            });
+            await tx.ventaEnvio.create({
+              data: {
+                ventaId: venta.id,
+                empresaId,
+                destinatarioNombre: pedido.nombreComprador,
+                destinatarioDni: comprador?.persona?.dni ?? null,
+                destinatarioCelular: pedido.telefonoComprador,
+                destinoDepartamento: pedido.departamentoEnvio,
+                destinoProvincia: pedido.provinciaEnvio,
+              },
+            });
+          }
         }
 
         // ── Salida real de inventario + kardex ligado a la venta ─────────────

@@ -26,6 +26,10 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     emailComprador: 'juan@mail.com',
     telefonoComprador: '999888777',
     direccionEnvio: 'Av. Siempre Viva 123',
+    referenciaEnvio: 'Frente al parque',
+    distritoEnvio: 'Víctor Larco',
+    provinciaEnvio: 'Trujillo',
+    departamentoEnvio: 'La Libertad',
     subtotal: 100,
     descuento: 0,
     total: 100,
@@ -58,6 +62,8 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
       },
       movimientoStock: { create: jest.fn().mockResolvedValue({}) },
       venta: { create: jest.fn().mockResolvedValue({ id: 'venta-1' }) },
+      ventaEnvio: { create: jest.fn().mockResolvedValue({}) },
+      usuario: { findUnique: jest.fn().mockResolvedValue({ persona: { dni: '44885296' } }) },
       sede: { findFirst: jest.fn().mockResolvedValue({ id: 'sede-fallback' }) },
       pedidoMarketplaceDetalle: {
         findMany: jest
@@ -177,6 +183,36 @@ describe('PedidoMarketplaceEmpresaService.cambiarEstado', () => {
     await service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'ENVIADO' } as any);
 
     expect(prisma.venta.create.mock.calls[0][0].data.conEnvio).toBe(false);
+    // Sin envío no hay datos de envío que copiar.
+    expect(prisma.ventaEnvio.create).not.toHaveBeenCalled();
+  });
+
+  it('ENVIADO con envío a domicilio → los datos que dio el comprador llegan a la venta', async () => {
+    prisma.pedidoMarketplace.findFirst
+      .mockResolvedValueOnce({ ...pedidoBase })
+      .mockResolvedValueOnce({
+        ...pedidoBase,
+        detalles: [{ productoId: 'prod-1', varianteId: null, cantidad: 1 }],
+      });
+
+    await service.cambiarEstado(EMPRESA, PEDIDO, USUARIO, { estado: 'ENVIADO' } as any);
+
+    // Sección ENVÍO de la venta: destinatario, DNI, celular y destino.
+    expect(prisma.ventaEnvio.create).toHaveBeenCalledWith({
+      data: {
+        ventaId: 'venta-1',
+        empresaId: EMPRESA,
+        destinatarioNombre: 'Juan Pérez',
+        destinatarioDni: '44885296',
+        destinatarioCelular: '999888777',
+        destinoDepartamento: 'La Libertad',
+        destinoProvincia: 'Trujillo',
+      },
+    });
+    // Dirección con distrito, y la referencia en observaciones.
+    const venta = prisma.venta.create.mock.calls[0][0].data;
+    expect(venta.direccionCliente).toBe('Av. Siempre Viva 123, Víctor Larco');
+    expect(venta.observaciones).toContain('Ref. entrega: Frente al parque');
   });
 
   it('ENVIADO → la liberación de reserva se acota a lo reservado (no negativa)', async () => {
