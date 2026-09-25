@@ -1450,6 +1450,7 @@ export class MarketplaceService {
     page: number = 1,
     limit: number = 20,
     search?: string,
+    categoriaId?: string,
   ) {
     const empresa = await this.prisma.empresa.findFirst({
       where: { subdominio, isActive: true, deletedAt: null, visibleEnMarketplace: true },
@@ -1462,11 +1463,18 @@ export class MarketplaceService {
 
     const skip = (page - 1) * limit;
 
-    const where: any = {
+    const base = {
       empresaId: empresa.id,
       visibleMarketplace: true,
       isActive: true,
       deletedAt: null,
+    };
+
+    const where: any = {
+      ...base,
+      // `categoriaId` es la EmpresaCategoria (la de la empresa, con su nombre
+      // personalizado), no la maestra: es lo que lista `categorias` abajo.
+      ...(categoriaId && { empresaCategoriaId: categoriaId }),
       ...(search && {
         OR: [
           { nombre: { contains: search, mode: 'insensitive' as const } },
@@ -1483,7 +1491,9 @@ export class MarketplaceService {
       this.prisma.producto.findMany({
         where,
         include: this._includeMarketplace,
-        orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }],
+        // `id` desempata: sin él, dos productos creados en el mismo instante
+        // pueden repetirse o saltarse entre una página y la siguiente.
+        orderBy: [{ destacado: 'desc' }, { creadoEn: 'desc' }, { id: 'asc' }],
         skip,
         take: limit,
       }),
@@ -1492,10 +1502,49 @@ export class MarketplaceService {
 
     const data = await this._mapearProductos(productos);
 
+    // Las categorías salen de TODO el catálogo visible (sin búsqueda ni
+    // filtro), no de la página cargada: si no, una categoría cuyos productos
+    // están todos después del primer `limit` no aparecería nunca. Solo en la
+    // página 1, que es la que arma el menú.
+    const categorias = page === 1 ? await this._categoriasDeEmpresa(base) : undefined;
+
     return {
       data,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      ...(categorias && { categorias }),
     };
+  }
+
+  /**
+   * Categorías con al menos un producto visible, con el mismo nombre que
+   * muestra `_mapearProductos` (el personalizado de la empresa, si no el
+   * maestro), ordenadas por nombre.
+   */
+  private async _categoriasDeEmpresa(where: Record<string, unknown>) {
+    const grupos = await this.prisma.producto.groupBy({
+      by: ['empresaCategoriaId'],
+      where: { ...where, empresaCategoriaId: { not: null } },
+      _count: { _all: true },
+    });
+    if (grupos.length === 0) return [];
+
+    const cats = await this.prisma.empresaCategoria.findMany({
+      where: { id: { in: grupos.map((g) => g.empresaCategoriaId as string) } },
+      select: {
+        id: true,
+        nombrePersonalizado: true,
+        categoriaMaestra: { select: { nombre: true } },
+      },
+    });
+    const totalPorId = new Map(grupos.map((g) => [g.empresaCategoriaId, g._count._all]));
+
+    return cats
+      .map((c) => ({
+        id: c.id,
+        nombre: c.nombrePersonalizado || c.categoriaMaestra?.nombre || 'Sin nombre',
+        total: totalPorId.get(c.id) ?? 0,
+      }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   }
 
   /**

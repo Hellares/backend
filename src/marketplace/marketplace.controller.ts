@@ -297,14 +297,18 @@ export class MarketplaceController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
+    @Query('categoriaId') categoriaId?: string,
   ) {
-    const pageNum = page ? parseInt(page, 10) : 1;
-    const limitNum = limit ? parseInt(limit, 10) : 20;
+    // Acotados: el endpoint es público y un `limit` sin tope arma una
+    // consulta de todo el catálogo; un `page` inválido daría `skip` NaN.
+    const pageNum = Math.max(1, parseInt(page ?? '', 10) || 1);
+    const limitNum = Math.min(60, Math.max(1, parseInt(limit ?? '', 10) || 20));
     return this.marketplaceService.getProductosByEmpresa(
       subdominio,
       pageNum,
       limitNum,
       search,
+      categoriaId || undefined,
     );
   }
 
