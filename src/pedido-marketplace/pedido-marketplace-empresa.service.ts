@@ -95,6 +95,7 @@ export class PedidoMarketplaceEmpresaService {
       where: { id: pedidoId, empresaId },
       include: {
         detalles: true,
+        sedeRetiro: { select: { id: true, nombre: true, direccion: true } },
         comprador: {
           select: {
             id: true,
@@ -834,18 +835,22 @@ export class PedidoMarketplaceEmpresaService {
       await this.registrarCobroContraentrega(empresaId, pedidoId);
     }
 
-    // Notificar al comprador
+    // Notificar al comprador. En retiro en tienda ENVIADO = "listo para recoger".
+    const esRetiro = pedido.tipoEntrega === 'RETIRO_TIENDA';
     const mensajes: Record<string, string> = {
       [EstadoPedidoMarketplace.EN_PREPARACION]:
         `Tu pedido #${pedido.codigo} está siendo preparado`,
-      [EstadoPedidoMarketplace.ENVIADO]:
-        `Tu pedido #${pedido.codigo} ha sido enviado${dto.codigoSeguimiento ? `. Seguimiento: ${dto.codigoSeguimiento}` : ''}`,
+      [EstadoPedidoMarketplace.ENVIADO]: esRetiro
+        ? `Tu pedido #${pedido.codigo} está listo para recoger. Lleva tu DNI.`
+        : `Tu pedido #${pedido.codigo} ha sido enviado${dto.codigoSeguimiento ? `. Seguimiento: ${dto.codigoSeguimiento}` : ''}`,
     };
 
     try {
       await this.notificacionService.enviarAUsuario(
         pedido.compradorId,
-        dto.estado === EstadoPedidoMarketplace.ENVIADO ? 'Pedido enviado' : 'Pedido en preparación',
+        dto.estado === EstadoPedidoMarketplace.ENVIADO
+          ? (esRetiro ? 'Pedido listo para recoger' : 'Pedido enviado')
+          : 'Pedido en preparación',
         mensajes[dto.estado] ?? `Tu pedido #${pedido.codigo} cambió a ${dto.estado}`,
         {
           tipo: TipoNotificacion.PEDIDO_MARKETPLACE,

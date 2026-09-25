@@ -568,6 +568,8 @@ export class CarritoService {
           distrito: true,
           provincia: true,
           coordenadas: true,
+          telefono: true,
+          horarioAtencion: true,
         },
       });
     }

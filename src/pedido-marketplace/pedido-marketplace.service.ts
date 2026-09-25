@@ -131,6 +131,34 @@ export class PedidoMarketplaceService {
    * El cliente NUNCA envía precios al checkout — el DTO solo trae
    * dirección/método de pago/notas. No hay vector de manipulación.
    */
+  /**
+   * Retiro en tienda: la empresa tiene que ofrecerlo y la sede tiene que ser
+   * SUYA y estar activa. Antes se aceptaba cualquier `sedeRetiroId` —incluso
+   * de otra empresa— y con él se elegía después la sede de la venta. Sin sede
+   * elegida y con una sola sede activa, esa.
+   */
+  private async sedeRetiroValida(empresaId: string, sedeRetiroId?: string | null): Promise<string> {
+    const empresa = await this.prisma.empresa.findUnique({
+      where: { id: empresaId },
+      select: { nombre: true, permiteRetiroTienda: true },
+    });
+    if (!empresa?.permiteRetiroTienda) {
+      throw new BadRequestException(`${empresa?.nombre ?? 'La tienda'} no ofrece retiro en tienda`);
+    }
+    const sedes = await this.prisma.sede.findMany({
+      where: { empresaId, isActive: true, deletedAt: null },
+      select: { id: true },
+    });
+    if (sedeRetiroId) {
+      if (!sedes.some((s) => s.id === sedeRetiroId)) {
+        throw new BadRequestException('Elige una tienda válida para recoger tu pedido');
+      }
+      return sedeRetiroId;
+    }
+    if (sedes.length === 1) return sedes[0].id;
+    throw new BadRequestException('Elige en qué tienda recoges tu pedido');
+  }
+
   async checkout(usuarioId: string, dto: CheckoutDto) {
     // 1. Obtener carrito enriquecido (precios forzados por backend)
     const carrito = await this.carritoService.getCarrito(usuarioId);
@@ -246,7 +274,10 @@ export class PedidoMarketplaceService {
         (e) => e.empresaId === grupo.empresa.id,
       );
       const tipoEntrega = entregaConfig?.tipoEntrega ?? 'ENVIO_DOMICILIO';
-      const sedeRetiroId = entregaConfig?.sedeRetiroId ?? null;
+      const sedeRetiroId =
+        tipoEntrega === 'RETIRO_TIENDA'
+          ? await this.sedeRetiroValida(grupo.empresa.id, entregaConfig?.sedeRetiroId)
+          : null;
 
       const pedido = await this.prisma.$transaction(async (tx) => {
         // Re-verificar y reservar stock dentro de la transacción (previene race conditions)
@@ -437,6 +468,19 @@ export class PedidoMarketplaceService {
       include: {
         empresa: { select: { id: true, nombre: true, logo: true, subdominio: true } },
         detalles: true,
+        // Retiro en tienda: dónde, cuándo y cómo llegar.
+        sedeRetiro: {
+          select: {
+            id: true,
+            nombre: true,
+            direccion: true,
+            distrito: true,
+            provincia: true,
+            telefono: true,
+            coordenadas: true,
+            horarioAtencion: true,
+          },
+        },
       },
     });
 
