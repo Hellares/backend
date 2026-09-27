@@ -228,10 +228,10 @@ describe('Tienda web: reportar un abono', () => {
     expect(creado).toMatchObject({ monto: 900, comprobanteUrl: 'u1.jpg', comprobantesUrls: ['u1.jpg', 'u2.jpg', 'u3.jpg'] });
   });
 
-  it('más de 3 capturas o ninguna: 400 sin subir nada', async () => {
+  it('más de 4 capturas o ninguna: 400 sin subir nada', async () => {
     const { service, storage } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito() });
-    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 100, metodoPago: 'YAPE' }, [file, file, file, file]))
-      .rejects.toThrow('hasta 3');
+    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 100, metodoPago: 'YAPE' }, [file, file, file, file, file]))
+      .rejects.toThrow('hasta 4');
     await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 100, metodoPago: 'YAPE' }, []))
       .rejects.toThrow('captura');
     expect(storage.uploadArchivo).not.toHaveBeenCalled();

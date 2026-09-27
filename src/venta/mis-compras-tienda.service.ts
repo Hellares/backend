@@ -43,8 +43,8 @@ export class MisComprasTiendaService {
 
   /** Cuántos pagos en revisión puede tener una compra a la vez (anti spam). */
   static readonly MAX_REPORTES_PENDIENTES = 3;
-  /** Capturas por pago: un abono grande puede ir en varios Yape (límite por operación). */
-  static readonly MAX_CAPTURAS = 3;
+  /** Capturas por pago: Yape topa S/ 500 por operación y S/ 2,000 al día → hasta 4 Yape en un abono. */
+  static readonly MAX_CAPTURAS = 4;
 
   constructor(
     private readonly prisma: PrismaService,

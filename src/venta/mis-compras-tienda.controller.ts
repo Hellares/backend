@@ -59,11 +59,11 @@ export class MisComprasTiendaController {
   }
 
   @Post(':id/abonos')
-  @ApiOperation({ summary: 'Reportar un abono (Yape/Plin/transferencia) con 1 a 3 capturas; la tienda lo aprueba' })
+  @ApiOperation({ summary: 'Reportar un abono (Yape/Plin/transferencia) con 1 a 4 capturas; la tienda lo aprueba' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(
-    // Hasta 3: un abono grande puede ir en varios Yape, cada uno con su captura.
-    FilesInterceptor('comprobantes', 3, {
+    // Hasta 4: Yape topa S/ 500 por operación y S/ 2,000 al día (4 Yape), una captura por cada uno.
+    FilesInterceptor('comprobantes', 4, {
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.match(/\/(jpg|jpeg|png|webp)$/)) {
           cb(new BadRequestException('La captura tiene que ser una imagen (JPG, PNG o WebP)'), false);
