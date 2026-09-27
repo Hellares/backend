@@ -1,7 +1,7 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, Post, Query, UploadedFile, UseGuards, UseInterceptors,
+  BadRequestException, Body, Controller, Get, Param, Post, Query, UploadedFiles, UseGuards, UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -59,10 +59,11 @@ export class MisComprasTiendaController {
   }
 
   @Post(':id/abonos')
-  @ApiOperation({ summary: 'Reportar un abono (Yape/Plin/transferencia) con la captura; la tienda lo aprueba' })
+  @ApiOperation({ summary: 'Reportar un abono (Yape/Plin/transferencia) con 1 a 3 capturas; la tienda lo aprueba' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(
-    FileInterceptor('comprobante', {
+    // Hasta 3: un abono grande puede ir en varios Yape, cada uno con su captura.
+    FilesInterceptor('comprobantes', 3, {
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.match(/\/(jpg|jpeg|png|webp)$/)) {
           cb(new BadRequestException('La captura tiene que ser una imagen (JPG, PNG o WebP)'), false);
@@ -76,12 +77,12 @@ export class MisComprasTiendaController {
   async reportarAbono(
     @Param('subdominio') subdominio: string,
     @Param('id') id: string,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFiles() files: Express.Multer.File[],
     @Body() dto: ReportarAbonoDto,
     @CurrentUser() user: { personaId: string; sub: string },
   ) {
-    if (!file) throw new BadRequestException('Adjunta la captura de tu pago');
+    if (!files?.length) throw new BadRequestException('Adjunta la captura de tu pago');
     const empresaId = await this.compras.empresaIdTienda(subdominio);
-    return this.compras.reportarAbono(empresaId, user.personaId, user.sub, id, dto, file);
+    return this.compras.reportarAbono(empresaId, user.personaId, user.sub, id, dto, files);
   }
 }

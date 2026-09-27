@@ -42,6 +42,8 @@ export class ReportesAbonoService {
       metodoPago: f.metodoPago,
       numeroOperacion: f.numeroOperacion,
       comprobanteUrl: f.comprobanteUrl,
+      // Las anteriores a varias capturas solo tienen `comprobanteUrl`.
+      comprobantes: f.comprobantesUrls?.length ? f.comprobantesUrls : [f.comprobanteUrl],
       empresaBancoId: f.empresaBancoId,
       cuentaReportada: f.empresaBancoId ? banco.get(f.empresaBancoId) ?? null : null,
       estado: f.estado,

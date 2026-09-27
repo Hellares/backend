@@ -43,6 +43,8 @@ export class MisComprasTiendaService {
 
   /** Cuántos pagos en revisión puede tener una compra a la vez (anti spam). */
   static readonly MAX_REPORTES_PENDIENTES = 3;
+  /** Capturas por pago: un abono grande puede ir en varios Yape (límite por operación). */
+  static readonly MAX_CAPTURAS = 3;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -442,8 +444,12 @@ export class MisComprasTiendaService {
     usuarioId: string,
     ventaId: string,
     dto: ReportarAbonoDto,
-    file: Express.Multer.File,
+    files: Express.Multer.File[],
   ) {
+    if (!files?.length) throw new BadRequestException('Adjunta la captura de tu pago');
+    if (files.length > MisComprasTiendaService.MAX_CAPTURAS) {
+      throw new BadRequestException(`Puedes subir hasta ${MisComprasTiendaService.MAX_CAPTURAS} capturas por pago`);
+    }
     const acceso = await this.acceso(empresaId, personaId);
     const v = acceso
       ? await this.prisma.venta.findFirst({ where: { id: ventaId, ...this.where(empresaId, acceso) }, include: incluirCompra })
@@ -481,17 +487,22 @@ export class MisComprasTiendaService {
       empresaBancoId = cuenta.id;
     }
 
-    // La captura se guarda ligada al REPORTE, no a la venta: así no aparece en
-    // la galería de fotos de la venta (ni la de un pago rechazado).
+    // Las capturas se guardan ligadas al REPORTE, no a la venta: así no
+    // aparecen en la galería de fotos de la venta (ni las de un pago rechazado).
     const id = randomUUID();
-    const archivo = await this.storage.uploadArchivo({
-      file,
-      empresaId,
-      entidadTipo: 'VENTA',
-      entidadId: id,
-      categoria: 'DOCUMENTO',
-      subidoPor: usuarioId,
-    });
+    const urls: string[] = [];
+    for (const [i, file] of files.entries()) {
+      const archivo = await this.storage.uploadArchivo({
+        file,
+        empresaId,
+        entidadTipo: 'VENTA',
+        entidadId: id,
+        categoria: 'DOCUMENTO',
+        orden: i,
+        subidoPor: usuarioId,
+      });
+      urls.push(archivo.url);
+    }
 
     const reporte = await this.prisma.reporteAbono.create({
       data: {
@@ -503,7 +514,8 @@ export class MisComprasTiendaService {
         monto,
         metodoPago: dto.metodoPago,
         numeroOperacion: dto.numeroOperacion?.trim() || null,
-        comprobanteUrl: archivo.url,
+        comprobanteUrl: urls[0],
+        comprobantesUrls: urls,
         empresaBancoId,
       },
       select: { id: true, monto: true, metodoPago: true, estado: true, creadoEn: true },

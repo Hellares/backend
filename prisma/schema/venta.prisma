@@ -486,7 +486,10 @@ model ReporteAbono {
   monto           Decimal            @db.Decimal(10, 2)
   metodoPago      MetodoPagoVenta // YAPE | PLIN | TRANSFERENCIA
   numeroOperacion String?
+  // La primera captura (compatibilidad) y TODAS: un pago puede venir en
+  // varios Yape (límite por operación), cada uno con su captura.
   comprobanteUrl  String
+  comprobantesUrls String[]          @default([])
   // La cuenta a la que dice haber transferido (solo TRANSFERENCIA).
   empresaBancoId  String?
   estado          EstadoReporteAbono @default(PENDIENTE)
