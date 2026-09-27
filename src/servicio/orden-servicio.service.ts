@@ -2062,6 +2062,29 @@ export class OrdenServicioService {
     const sede = o.sedeId
       ? await this.prisma.sede.findUnique({ where: { id: o.sedeId }, select: { nombre: true } })
       : null;
+    // Fotos del equipo: las de la orden y las de sus componentes. La firma del
+    // cliente también es un archivo de la orden (categoría FIRMA): no va.
+    // (`NOT categoria = FIRMA` en SQL descarta los NULL: por eso el OR.)
+    const fotos = await this.prisma.archivo.findMany({
+      where: {
+        empresaId,
+        isActive: true,
+        deletedAt: null,
+        tipoArchivo: 'IMAGEN',
+        AND: [
+          { OR: [{ categoria: null }, { categoria: { not: 'FIRMA' } }] },
+          {
+            OR: [
+              { entidadTipo: 'ORDEN_SERVICIO', entidadId: o.id },
+              { entidadTipo: 'SERVICIO_COMPONENTE', entidadId: { in: o.componentes.map((c) => c.id) } },
+            ],
+          },
+        ],
+      },
+      orderBy: { creadoEn: 'asc' },
+      take: 40,
+      select: { url: true, urlThumbnail: true },
+    });
 
     const diag = o.diagnostico as unknown;
     const diagnostico = typeof diag === 'string'
@@ -2107,6 +2130,7 @@ export class OrdenServicioService {
         fecha: h.creadoEn,
       })),
       adelantos: o.adelantos.map((a) => ({ monto: Number(a.monto), fecha: a.creadoEn })),
+      fotos: fotos.map((f) => ({ url: f.url, miniatura: f.urlThumbnail ?? f.url })),
     };
   }
 
