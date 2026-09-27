@@ -1936,6 +1936,17 @@ export class OrdenServicioService {
     });
     if (!orden) throw new NotFoundException('Orden no encontrada');
 
+    return this.crearMensajeDeCliente(empresaId, usuarioId, orden, contenido);
+  }
+
+  /** Guarda un mensaje del cliente y avisa al técnico (si hay) y a los admins. */
+  private async crearMensajeDeCliente(
+    empresaId: string,
+    usuarioId: string,
+    orden: { id: string; tecnicoId: string | null; codigo: string },
+    contenido: string,
+  ) {
+    const ordenServicioId = orden.id;
     const mensaje = await this.prisma.mensajeServicio.create({
       data: {
         empresaId,
@@ -1972,9 +1983,12 @@ export class OrdenServicioService {
   // ─── Tienda web: "Mis servicios" del comprador ───
   //
   // El comprador de la tienda entra con una sesión SIN empresa (DNI + código
-  // por WhatsApp), así que la empresa sale del subdominio y el cliente de su
-  // persona: `EmpresaPersona(personaId, empresaId)` es el `clienteId` de sus
-  // órdenes. Solo órdenes de cliente persona (las B2B van por contacto).
+  // por WhatsApp), así que la empresa sale del subdominio. Ve:
+  //  - sus órdenes personales: `EmpresaPersona(personaId, empresaId)` es el
+  //    `clienteId` de la orden;
+  //  - TODAS las órdenes de los clientes empresa (RUC) donde figura como
+  //    contacto con su DNI (`ClienteEmpresaContacto.dni`), aunque las haya
+  //    dejado otro contacto.
 
   /** La empresa de la tienda (activa y visible en el marketplace). */
   async empresaIdTienda(subdominio: string): Promise<string> {
@@ -1986,13 +2000,44 @@ export class OrdenServicioService {
     return empresa.id;
   }
 
-  private async clienteTienda(empresaId: string, personaId?: string): Promise<string | null> {
+  /** El filtro de las órdenes que ve el comprador en esta empresa, o null si no ve ninguna. */
+  private async accesoTienda(empresaId: string, personaId?: string): Promise<Prisma.OrdenServicioWhereInput | null> {
     if (!personaId) return null;
-    const ep = await this.prisma.empresaPersona.findFirst({
-      where: { personaId, empresaId, deletedAt: null },
-      select: { id: true },
-    });
-    return ep?.id ?? null;
+    const [ep, persona] = await Promise.all([
+      this.prisma.empresaPersona.findFirst({
+        where: { personaId, empresaId, deletedAt: null },
+        select: { id: true },
+      }),
+      this.prisma.persona.findUnique({ where: { id: personaId }, select: { dni: true } }),
+    ]);
+    const dni = persona?.dni?.trim();
+    const empresasCliente = dni
+      ? await this.prisma.clienteEmpresa.findMany({
+          where: { empresaId, isActive: true, deletedAt: null, contactos: { some: { dni } } },
+          select: { id: true },
+        })
+      : [];
+    const or: Prisma.OrdenServicioWhereInput[] = [];
+    if (ep) or.push({ clienteId: ep.id });
+    if (empresasCliente.length) or.push({ clienteEmpresaId: { in: empresasCliente.map((c) => c.id) } });
+    return or.length ? { OR: or } : null;
+  }
+
+  /** La orden, si el comprador tiene acceso (si no, 404: no se dice que existe). */
+  private async ordenTienda(empresaId: string, personaId: string, ordenId: string) {
+    const acceso = await this.accesoTienda(empresaId, personaId);
+    const orden = acceso
+      ? await this.prisma.ordenServicio.findFirst({
+          where: { id: ordenId, empresaId, AND: [acceso] },
+          select: { id: true, estado: true, codigo: true, tecnicoId: true },
+        })
+      : null;
+    if (!orden) throw new NotFoundException('Orden no encontrada');
+    return orden;
+  }
+
+  private static nombreEmpresaCliente(ce?: { razonSocial: string; nombreComercial: string | null } | null) {
+    return ce ? ce.nombreComercial || ce.razonSocial : null;
   }
 
   private static equipoTexto(o: {
@@ -2005,10 +2050,10 @@ export class OrdenServicioService {
   }
 
   async listarMisServiciosTienda(empresaId: string, personaId: string) {
-    const clienteId = await this.clienteTienda(empresaId, personaId);
-    if (!clienteId) return { data: [] };
+    const acceso = await this.accesoTienda(empresaId, personaId);
+    if (!acceso) return { data: [] };
     const ordenes = await this.prisma.ordenServicio.findMany({
-      where: { empresaId, clienteId },
+      where: { empresaId, AND: [acceso] },
       orderBy: { creadoEn: 'desc' },
       take: 100,
       select: {
@@ -2018,10 +2063,14 @@ export class OrdenServicioService {
         modeloEquipo: { select: { marca: true, modelo: true } },
         servicio: { select: { nombre: true } },
         componentes: { select: { costoAccion: true, costoRepuestos: true } },
+        clienteEmpresa: { select: { razonSocial: true, nombreComercial: true } },
+        contactoClienteEmpresa: { select: { nombre: true } },
       },
     });
     return {
       data: ordenes.map((o) => ({
+        empresaCliente: OrdenServicioService.nombreEmpresaCliente(o.clienteEmpresa),
+        contacto: o.contactoClienteEmpresa?.nombre ?? null,
         id: o.id,
         codigo: o.codigo,
         estado: o.estado,
@@ -2038,11 +2087,13 @@ export class OrdenServicioService {
   }
 
   async detalleMiServicioTienda(empresaId: string, personaId: string, ordenId: string) {
-    const clienteId = await this.clienteTienda(empresaId, personaId);
-    if (!clienteId) throw new NotFoundException('Orden no encontrada');
+    const acceso = await this.accesoTienda(empresaId, personaId);
+    if (!acceso) throw new NotFoundException('Orden no encontrada');
     const o = await this.prisma.ordenServicio.findFirst({
-      where: { id: ordenId, empresaId, clienteId },
+      where: { id: ordenId, empresaId, AND: [acceso] },
       include: {
+        clienteEmpresa: { select: { razonSocial: true, nombreComercial: true } },
+        contactoClienteEmpresa: { select: { nombre: true } },
         servicio: { select: { nombre: true } },
         modeloEquipo: { select: { marca: true, modelo: true } },
         tecnico: { select: { persona: { select: { nombres: true } } } },
@@ -2097,6 +2148,8 @@ export class OrdenServicioService {
       id: o.id,
       codigo: o.codigo,
       estado: o.estado,
+      empresaCliente: OrdenServicioService.nombreEmpresaCliente(o.clienteEmpresa),
+      contacto: o.contactoClienteEmpresa?.nombre ?? null,
       equipo: OrdenServicioService.equipoTexto(o),
       tipoEquipo: o.tipoEquipo,
       marcaModelo: o.modeloEquipo ? [o.modeloEquipo.marca, o.modeloEquipo.modelo].filter(Boolean).join(' ') : o.marcaEquipo,
@@ -2140,13 +2193,7 @@ export class OrdenServicioService {
    * (historial, candado y aviso al cliente), y avisa al técnico y a los admins.
    */
   async aprobarPresupuestoCliente(empresaId: string, personaId: string, usuarioId: string, ordenId: string) {
-    const clienteId = await this.clienteTienda(empresaId, personaId);
-    if (!clienteId) throw new NotFoundException('Orden no encontrada');
-    const orden = await this.prisma.ordenServicio.findFirst({
-      where: { id: ordenId, empresaId, clienteId },
-      select: { id: true, estado: true, codigo: true, tecnicoId: true },
-    });
-    if (!orden) throw new NotFoundException('Orden no encontrada');
+    const orden = await this.ordenTienda(empresaId, personaId, ordenId);
     if (orden.estado !== EstadoOrdenServicio.ESPERANDO_APROBACION) {
       throw new BadRequestException('Este presupuesto ya no espera tu aprobación');
     }
@@ -2173,6 +2220,25 @@ export class OrdenServicioService {
       .catch(OrdenServicioService.logNotifFallida('aprobación a admins'));
 
     return this.detalleMiServicioTienda(empresaId, personaId, ordenId);
+  }
+
+  /** Chat de la tienda (marca leídos los del técnico). */
+  async mensajesTienda(empresaId: string, personaId: string, ordenId: string) {
+    await this.ordenTienda(empresaId, personaId, ordenId);
+    await this.prisma.mensajeServicio.updateMany({
+      where: { ordenServicioId: ordenId, esCliente: false, leidoEn: null },
+      data: { leidoEn: new Date() },
+    });
+    return this.prisma.mensajeServicio.findMany({
+      where: { ordenServicioId: ordenId },
+      select: this.MENSAJE_SELECT,
+      orderBy: { creadoEn: 'asc' },
+    });
+  }
+
+  async enviarMensajeTienda(empresaId: string, personaId: string, usuarioId: string, ordenId: string, contenido: string) {
+    const orden = await this.ordenTienda(empresaId, personaId, ordenId);
+    return this.crearMensajeDeCliente(empresaId, usuarioId, orden, contenido);
   }
 
   private async notificarAdminsEmpresa(

@@ -8,8 +8,8 @@ import { OrdenServicioService } from './orden-servicio.service';
  * "Mis servicios" del comprador en la tienda web: sus órdenes de servicio en
  * ESA empresa (por subdominio). La sesión de la tienda no trae empresa, por
  * eso no sirve `ordenes-servicio/mis-ordenes` (pide x-tenant-id y el
- * TenantAuthGuard del app). La pertenencia se valida en el servicio: la orden
- * tiene que ser de la EmpresaPersona de su persona.
+ * TenantAuthGuard del app). El acceso se valida en el servicio: sus órdenes
+ * personales y las de los clientes empresa donde es contacto (por DNI).
  */
 @ApiTags('Tienda web - Mis servicios')
 @Controller('marketplace/empresas/:subdominio/mis-servicios')
@@ -44,7 +44,7 @@ export class MisServiciosTiendaController {
     @CurrentUser() user: { personaId: string },
   ) {
     const empresaId = await this.ordenes.empresaIdTienda(subdominio);
-    return this.ordenes.listarMensajesCliente(empresaId, user.personaId, id);
+    return this.ordenes.mensajesTienda(empresaId, user.personaId, id);
   }
 
   @Post(':id/mensajes')
@@ -59,7 +59,7 @@ export class MisServiciosTiendaController {
     if (!texto) throw new BadRequestException('El mensaje no puede estar vacío');
     if (texto.length > 1000) throw new BadRequestException('El mensaje es muy largo (máximo 1000 caracteres)');
     const empresaId = await this.ordenes.empresaIdTienda(subdominio);
-    return this.ordenes.enviarMensajeCliente(empresaId, user.personaId, user.sub, id, texto);
+    return this.ordenes.enviarMensajeTienda(empresaId, user.personaId, user.sub, id, texto);
   }
 
   @Post(':id/aprobar')
