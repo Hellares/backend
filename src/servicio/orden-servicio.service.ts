@@ -2164,6 +2164,10 @@ export class OrdenServicioService {
         nombre: [c.componente?.tipoComponente?.nombre, c.componente?.marca, c.componente?.modelo].filter(Boolean).join(' ')
           || c.componente?.codigo || 'Componente',
         monto: Number(c.costoAccion ?? 0) + Number(c.costoRepuestos ?? 0),
+        // Lo mismo que ve el taller en la card de componentes: la acción
+        // (REPARAR, COMPRAR…) y su descripción ("Compra de pantalla").
+        accion: c.tipoAccion,
+        descripcion: c.descripcionAccion?.trim() || null,
       })),
       // El servicio en sí (mano de obra): costoTotal es el costo del servicio y
       // los componentes se suman aparte (modelo aditivo).
