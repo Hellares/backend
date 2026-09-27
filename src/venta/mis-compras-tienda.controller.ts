@@ -58,8 +58,9 @@ export class MisComprasTiendaController {
     return this.compras.detalle(empresaId, user.personaId, id);
   }
 
-  @Post(':id/abonos')
-  @ApiOperation({ summary: 'Reportar un abono (Yape/Plin/transferencia) con 1 a 4 capturas; la tienda lo aprueba' })
+  // `abonos` no choca con GET `:id`: es POST.
+  @Post('abonos')
+  @ApiOperation({ summary: 'Reportar un pago a una o varias compras (Yape/Plin/transferencia) con 1 a 4 capturas; la tienda lo aprueba' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(
     // Hasta 4: Yape topa S/ 500 por operación y S/ 2,000 al día (4 Yape), una captura por cada uno.
@@ -76,13 +77,12 @@ export class MisComprasTiendaController {
   )
   async reportarAbono(
     @Param('subdominio') subdominio: string,
-    @Param('id') id: string,
     @UploadedFiles() files: Express.Multer.File[],
     @Body() dto: ReportarAbonoDto,
     @CurrentUser() user: { personaId: string; sub: string },
   ) {
     if (!files?.length) throw new BadRequestException('Adjunta la captura de tu pago');
     const empresaId = await this.compras.empresaIdTienda(subdominio);
-    return this.compras.reportarAbono(empresaId, user.personaId, user.sub, id, dto, files);
+    return this.compras.reportarAbono(empresaId, user.personaId, user.sub, dto, files);
   }
 }

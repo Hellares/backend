@@ -163,6 +163,8 @@ export class MisComprasTiendaService {
       ventas.flatMap((v) => v.detalles.map((d) => d.productoId).filter((x): x is string => !!x)),
     );
 
+    const revision = await this.enRevisionPorVenta(ventas.map((v) => v.id));
+
     const data = ventas.map((v) => {
       const m = this.montos(v, hoy);
       return {
@@ -178,6 +180,8 @@ export class MisComprasTiendaService {
         mora: m.mora,
         proximoPago: m.proxima,
         cantidadItems: v.detalles.length,
+        // Lo que ya reportó y espera aprobación: no se puede volver a pagar.
+        enRevision: revision.get(v.id)?.monto ?? 0,
         fotos: [...new Set(v.detalles.map((d) => (d.productoId ? fotos.get(d.productoId) : undefined)).filter((x): x is string => !!x))].slice(0, 3),
         empresaCliente: MisComprasTiendaService.nombreEmpresa(v.clienteEmpresa),
         clienteEmpresaId: v.clienteEmpresaId,
@@ -223,11 +227,20 @@ export class MisComprasTiendaService {
       : null;
     if (!v) throw new NotFoundException('Compra no encontrada');
 
-    const reportes = await this.prisma.reporteAbono.findMany({
-      where: { ventaId: v.id, estado: { in: ['PENDIENTE', 'RECHAZADO'] } },
-      orderBy: { creadoEn: 'desc' },
+    // Su parte de cada pago reportado (un pago puede cubrir varias compras).
+    const lineasReporte = await this.prisma.reporteAbonoVenta.findMany({
+      where: { ventaId: v.id, reporte: { estado: { in: ['PENDIENTE', 'RECHAZADO'] } } },
+      orderBy: { reporte: { creadoEn: 'desc' } },
       take: 10,
-      select: { id: true, monto: true, metodoPago: true, estado: true, motivoRechazo: true, creadoEn: true },
+      select: {
+        monto: true,
+        reporte: {
+          select: {
+            id: true, monto: true, metodoPago: true, estado: true, motivoRechazo: true, creadoEn: true,
+            _count: { select: { lineas: true } },
+          },
+        },
+      },
     });
     const pagos = await this.prisma.pagoVenta.findMany({
       where: { ventaId: v.id, anulado: false },
@@ -291,15 +304,20 @@ export class MisComprasTiendaService {
         cuota: p.cuotaVenta?.numero ?? null,
       })),
       // Lo que reportó y la tienda todavía no aprobó (o rechazó). No descuenta del saldo.
-      reportes: reportes.map((r) => ({
-        id: r.id,
-        monto: r2(Number(r.monto)),
-        metodo: r.metodoPago,
-        estado: r.estado,
-        motivoRechazo: r.motivoRechazo,
-        fecha: r.creadoEn,
+      reportes: lineasReporte.map((l) => ({
+        id: l.reporte.id,
+        // Lo que va a ESTA compra; el pago completo pudo cubrir otras.
+        monto: r2(Number(l.monto)),
+        pagoTotal: r2(Number(l.reporte.monto)),
+        compras: l.reporte._count.lineas,
+        metodo: l.reporte.metodoPago,
+        estado: l.reporte.estado,
+        motivoRechazo: l.reporte.motivoRechazo,
+        fecha: l.reporte.creadoEn,
       })),
-      enRevision: r2(reportes.filter((r) => r.estado === 'PENDIENTE').reduce((s, r) => s + Number(r.monto), 0)),
+      enRevision: r2(
+        lineasReporte.filter((l) => l.reporte.estado === 'PENDIENTE').reduce((s, l) => s + Number(l.monto), 0),
+      ),
     };
   }
 
@@ -434,15 +452,30 @@ export class MisComprasTiendaService {
     };
   }
 
+  /** Por venta: cuánto hay en pagos reportados PENDIENTES y en cuántos. */
+  private async enRevisionPorVenta(ventaIds: string[]) {
+    const mapa = new Map<string, { monto: number; pagos: number }>();
+    if (!ventaIds.length) return mapa;
+    const lineas = await this.prisma.reporteAbonoVenta.findMany({
+      where: { ventaId: { in: ventaIds }, reporte: { estado: 'PENDIENTE' } },
+      select: { ventaId: true, monto: true },
+    });
+    for (const l of lineas) {
+      const d = mapa.get(l.ventaId) ?? { monto: 0, pagos: 0 };
+      mapa.set(l.ventaId, { monto: r2(d.monto + Number(l.monto)), pagos: d.pagos + 1 });
+    }
+    return mapa;
+  }
+
   /**
-   * El cliente reporta que pagó (con la captura). Queda PENDIENTE: no toca el
-   * saldo hasta que la tienda lo apruebe en Cuentas por cobrar.
+   * El cliente reporta que pagó (con las capturas) y a qué compras va: una o
+   * varias del MISMO titular (personal, o una empresa), con cuánto a cada una.
+   * Queda PENDIENTE: no toca saldos hasta que la tienda lo apruebe.
    */
   async reportarAbono(
     empresaId: string,
     personaId: string,
     usuarioId: string,
-    ventaId: string,
     dto: ReportarAbonoDto,
     files: Express.Multer.File[],
   ) {
@@ -450,30 +483,40 @@ export class MisComprasTiendaService {
     if (files.length > MisComprasTiendaService.MAX_CAPTURAS) {
       throw new BadRequestException(`Puedes subir hasta ${MisComprasTiendaService.MAX_CAPTURAS} capturas por pago`);
     }
-    const acceso = await this.acceso(empresaId, personaId);
-    const v = acceso
-      ? await this.prisma.venta.findFirst({ where: { id: ventaId, ...this.where(empresaId, acceso) }, include: incluirCompra })
-      : null;
-    if (!v) throw new NotFoundException('Compra no encontrada');
-    if (!v.esCredito) throw new BadRequestException('Esta compra no es a crédito');
+    const lineas = dto.lineas ?? [];
+    if (!lineas.length) throw new BadRequestException('Elige a qué compras va el pago');
+    const ids = lineas.map((l) => l.ventaId);
+    if (new Set(ids).size !== ids.length) throw new BadRequestException('Una compra aparece dos veces');
 
-    const m = this.montos(v, diaLima(new Date()));
-    const pendientes = await this.prisma.reporteAbono.findMany({
-      where: { ventaId: v.id, estado: 'PENDIENTE' },
-      select: { monto: true },
+    const acceso = await this.acceso(empresaId, personaId);
+    const ventas = acceso
+      ? await this.prisma.venta.findMany({ where: { id: { in: ids }, ...this.where(empresaId, acceso) }, include: incluirCompra })
+      : [];
+    if (ventas.length !== ids.length) throw new NotFoundException('Compra no encontrada');
+    if (ventas.some((v) => !v.esCredito)) throw new BadRequestException('Solo se abona a compras a crédito');
+    // Personal y cada empresa se pagan por separado: la deuda de la empresa es de la empresa.
+    if (new Set(ventas.map((v) => v.clienteEmpresaId ?? '')).size > 1) {
+      throw new BadRequestException('No mezcles compras personales con las de una empresa en el mismo pago');
+    }
+
+    const hoy = diaLima(new Date());
+    const revision = await this.enRevisionPorVenta(ids);
+    const porId = new Map(ventas.map((v) => [v.id, v]));
+    const aRegistrar = lineas.map((l) => {
+      const v = porId.get(l.ventaId)!;
+      const enRev = revision.get(v.id);
+      if ((enRev?.pagos ?? 0) >= MisComprasTiendaService.MAX_REPORTES_PENDIENTES) {
+        throw new BadRequestException(`${v.codigo} ya tiene pagos en revisión. Espera a que la tienda los confirme.`);
+      }
+      const disponible = r2(this.montos(v, hoy).saldo - (enRev?.monto ?? 0));
+      const monto = r2(l.monto);
+      if (disponible <= 0) throw new BadRequestException(`${v.codigo} ya está pagada o cubierta por pagos en revisión`);
+      if (monto > disponible) {
+        throw new BadRequestException(`A ${v.codigo} le puedes pagar hasta S/ ${disponible.toFixed(2)}`);
+      }
+      return { ventaId: v.id, codigo: v.codigo, monto };
     });
-    if (pendientes.length >= MisComprasTiendaService.MAX_REPORTES_PENDIENTES) {
-      throw new BadRequestException('Ya tienes pagos en revisión para esta compra. Espera a que la tienda los confirme.');
-    }
-    const enRevision = pendientes.reduce((s, p) => s + Number(p.monto), 0);
-    const disponible = r2(m.saldo - enRevision);
-    if (disponible <= 0) {
-      throw new BadRequestException(m.saldo <= 0 ? 'Esta compra ya está pagada' : 'Tu saldo ya está cubierto por pagos en revisión');
-    }
-    const monto = r2(dto.monto);
-    if (monto > disponible) {
-      throw new BadRequestException(`El monto no puede ser mayor a S/ ${disponible.toFixed(2)}`);
-    }
+    const total = r2(aRegistrar.reduce((s, l) => s + l.monto, 0));
 
     let empresaBancoId: string | null = null;
     if (dto.metodoPago === 'TRANSFERENCIA') {
@@ -508,15 +551,15 @@ export class MisComprasTiendaService {
       data: {
         id,
         empresaId,
-        ventaId: v.id,
         personaId,
         usuarioId,
-        monto,
+        monto: total,
         metodoPago: dto.metodoPago,
         numeroOperacion: dto.numeroOperacion?.trim() || null,
         comprobanteUrl: urls[0],
         comprobantesUrls: urls,
         empresaBancoId,
+        lineas: { create: aRegistrar.map((l) => ({ ventaId: l.ventaId, monto: l.monto })) },
       },
       select: { id: true, monto: true, metodoPago: true, estado: true, creadoEn: true },
     });
@@ -526,19 +569,20 @@ export class MisComprasTiendaService {
         where: { empresaId, isActive: true, rol: { in: ['EMPRESA_ADMIN', 'SEDE_ADMIN', 'CAJERO'] } },
         select: { usuarioId: true },
       });
-      const ids = [...new Set(admins.map((a) => a.usuarioId))];
-      if (ids.length) {
+      const destinatarios = [...new Set(admins.map((a) => a.usuarioId))];
+      if (destinatarios.length) {
+        const a = aRegistrar.length === 1 ? `a la venta ${aRegistrar[0].codigo}` : `a ${aRegistrar.length} ventas`;
         await this.notificaciones.enviarAUsuarios(
-          ids,
+          destinatarios,
           'Pago reportado por un cliente',
-          `${v.nombreCliente} reportó un abono de S/ ${monto.toFixed(2)} a la venta ${v.codigo}. Revísalo en Cuentas por cobrar.`,
-          { tipo: TipoNotificacion.SISTEMA, empresaId, data: { reporteAbonoId: reporte.id, ventaId: v.id } },
+          `${ventas[0].nombreCliente} reportó un pago de S/ ${total.toFixed(2)} ${a}. Revísalo en Cuentas por cobrar.`,
+          { tipo: TipoNotificacion.SISTEMA, empresaId, data: { reporteAbonoId: reporte.id } },
         );
       }
     } catch (e) {
       this.logger.warn(`No se pudo avisar del reporte ${reporte.id}: ${(e as Error).message}`);
     }
 
-    return { ...reporte, monto: Number(reporte.monto) };
+    return { ...reporte, monto: Number(reporte.monto), compras: aRegistrar.length };
   }
 }

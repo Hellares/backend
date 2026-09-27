@@ -1,4 +1,5 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ValidationPipe } from '@nestjs/common';
+import { ReportarAbonoDto } from './dto/reportar-abono.dto';
 import { MisComprasTiendaService } from './mis-compras-tienda.service';
 
 /**
@@ -50,9 +51,10 @@ const makeService = (opts: {
     archivo: { findMany: jest.fn().mockResolvedValue([]) },
     pagoVenta: { findMany: jest.fn().mockResolvedValue([]) },
     reporteAbono: {
-      findMany: jest.fn().mockResolvedValue(opts.pendientes ?? []),
       create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: data.id, monto: data.monto, metodoPago: data.metodoPago, estado: 'PENDIENTE', creadoEn: new Date() })),
     },
+    // Líneas de pagos en revisión: [{ ventaId, monto }].
+    reporteAbonoVenta: { findMany: jest.fn().mockResolvedValue(opts.pendientes ?? []) },
     empresaBanco: { findFirst: jest.fn().mockResolvedValue(opts.cuenta ?? null) },
     empresaUsuarioRol: { findMany: jest.fn().mockResolvedValue([{ usuarioId: 'admin-1' }]) },
   };
@@ -179,61 +181,119 @@ describe('Tienda web: mis compras', () => {
   });
 });
 
-describe('Tienda web: reportar un abono', () => {
+describe('Tienda web: reportar un pago (a una o varias compras)', () => {
   const file: any = { mimetype: 'image/jpeg', size: 1000, buffer: Buffer.from('x') };
   const files = [file];
-  const credito = () => venta({
-    id: 'v1', codigo: 'V-1', esCredito: true, estado: 'CONFIRMADA', total: 1000, nombreCliente: 'Ana',
-    cuotas: [cuota(1, 500, 500, dia(5)), cuota(2, 500, 500, dia(35))],
+  const credito = (id: string, total: number, extra: any = {}) => venta({
+    id, codigo: `V-${id}`, esCredito: true, estado: 'CONFIRMADA', total, nombreCliente: 'Ana',
+    cuotas: [cuota(1, total, total, dia(5))], ...extra,
   });
+  const yape = (lineas: { ventaId: string; monto: number }[]) => ({ lineas, metodoPago: 'YAPE' as const });
 
   it('una compra al contado no acepta abonos', async () => {
-    const { service } = makeService({ empresaPersona: { id: 'ep1' }, venta: venta() });
-    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 10, metodoPago: 'YAPE' }, files))
-      .rejects.toThrow('no es a crédito');
+    const { service } = makeService({ empresaPersona: { id: 'ep1' }, ventas: [venta({ id: 'v1' })] });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 10 }]), files))
+      .rejects.toThrow('crédito');
   });
 
-  it('no deja reportar más que el saldo menos lo que ya está en revisión', async () => {
-    const { service, storage } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito(), pendientes: [{ monto: 900 }] });
-    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 150, metodoPago: 'YAPE' }, files))
+  it('una compra ajena (fuera del acceso) es 404', async () => {
+    const { service } = makeService({ empresaPersona: { id: 'ep1' }, ventas: [credito('v1', 100)] });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 10 }, { ventaId: 'v-ajena', monto: 10 }]), files))
+      .rejects.toThrow('no encontrada');
+  });
+
+  it('no deja pagarle a una compra más que su saldo menos lo que está en revisión', async () => {
+    const { service, storage } = makeService({
+      empresaPersona: { id: 'ep1' }, ventas: [credito('v1', 1000)], pendientes: [{ ventaId: 'v1', monto: 900 }],
+    });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 150 }]), files))
       .rejects.toThrow('S/ 100.00');
     expect(storage.uploadArchivo).not.toHaveBeenCalled();
   });
 
+  it('no mezcla compras personales con las de una empresa', async () => {
+    const { service } = makeService({
+      empresaPersona: { id: 'ep1' },
+      ventas: [credito('v1', 100), credito('v2', 100, { clienteEmpresaId: 'ce1' })],
+    });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 50 }, { ventaId: 'v2', monto: 50 }]), files))
+      .rejects.toThrow('No mezcles');
+  });
+
+  it('la misma compra dos veces: 400', async () => {
+    const { service } = makeService({ empresaPersona: { id: 'ep1' }, ventas: [credito('v1', 100)] });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 10 }, { ventaId: 'v1', monto: 10 }]), files))
+      .rejects.toThrow('dos veces');
+  });
+
   it('una transferencia exige una cuenta activa de la tienda', async () => {
-    const { service } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito(), cuenta: null });
-    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 100, metodoPago: 'TRANSFERENCIA', empresaBancoId: 'b-ajena' }, files))
+    const { service } = makeService({ empresaPersona: { id: 'ep1' }, ventas: [credito('v1', 1000)], cuenta: null });
+    await expect(service.reportarAbono('e1', 'p1', 'u1',
+      { lineas: [{ ventaId: 'v1', monto: 100 }], metodoPago: 'TRANSFERENCIA', empresaBancoId: 'b-ajena' }, files))
       .rejects.toThrow('cuenta');
   });
 
-  it('reporta: sube la captura ligada al reporte, queda PENDIENTE y avisa a la tienda', async () => {
-    const { service, prisma, storage, notificaciones } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito() });
-    const res = await service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 500, metodoPago: 'YAPE', numeroOperacion: ' 123 ' }, files);
-    const subida = storage.uploadArchivo.mock.calls[0][0];
+  it('una transferencia grande que salda 3 compras: un pago con 3 líneas y el total', async () => {
+    const { service, prisma, storage, notificaciones } = makeService({
+      empresaPersona: { id: 'ep1' },
+      ventas: [credito('a', 4000), credito('b', 3000), credito('c', 3000)],
+      cuenta: { id: 'b1' },
+    });
+    const res = await service.reportarAbono('e1', 'p1', 'u1', {
+      lineas: [{ ventaId: 'a', monto: 4000 }, { ventaId: 'b', monto: 3000 }, { ventaId: 'c', monto: 3000 }],
+      metodoPago: 'TRANSFERENCIA', empresaBancoId: 'b1', numeroOperacion: ' 987 ',
+    }, files);
     const creado = prisma.reporteAbono.create.mock.calls[0][0].data;
-    expect(subida.entidadId).toBe(creado.id);
-    expect(subida.entidadId).not.toBe('v1');
-    expect(creado).toMatchObject({ ventaId: 'v1', monto: 500, metodoPago: 'YAPE', numeroOperacion: '123', comprobanteUrl: 'https://cdn/captura.jpg' });
-    expect(res).toMatchObject({ estado: 'PENDIENTE', monto: 500 });
-    expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
+    expect(creado).toMatchObject({ monto: 10000, metodoPago: 'TRANSFERENCIA', empresaBancoId: 'b1', numeroOperacion: '987' });
+    expect(creado.lineas.create).toEqual([
+      { ventaId: 'a', monto: 4000 }, { ventaId: 'b', monto: 3000 }, { ventaId: 'c', monto: 3000 },
+    ]);
+    // La captura, ligada al REPORTE (no a una venta).
+    expect(storage.uploadArchivo.mock.calls[0][0].entidadId).toBe(creado.id);
+    expect(res).toMatchObject({ estado: 'PENDIENTE', monto: 10000, compras: 3 });
+    expect(notificaciones.enviarAUsuarios.mock.calls[0][2]).toContain('a 3 ventas');
   });
 
-  it('un pago en 3 Yape: sube las 3 capturas y las guarda todas (la primera también sola)', async () => {
-    const { service, prisma, storage } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito() });
+  it('un pago en 4 Yape: sube las 4 capturas y las guarda todas (la primera también sola)', async () => {
+    const { service, prisma, storage } = makeService({ empresaPersona: { id: 'ep1' }, ventas: [credito('v1', 2000)] });
     storage.uploadArchivo
-      .mockResolvedValueOnce({ url: 'u1.jpg' }).mockResolvedValueOnce({ url: 'u2.jpg' }).mockResolvedValueOnce({ url: 'u3.jpg' });
-    await service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 900, metodoPago: 'YAPE' }, [file, file, file]);
-    expect(storage.uploadArchivo).toHaveBeenCalledTimes(3);
+      .mockResolvedValueOnce({ url: 'u1.jpg' }).mockResolvedValueOnce({ url: 'u2.jpg' })
+      .mockResolvedValueOnce({ url: 'u3.jpg' }).mockResolvedValueOnce({ url: 'u4.jpg' });
+    await service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 2000 }]), [file, file, file, file]);
+    expect(storage.uploadArchivo).toHaveBeenCalledTimes(4);
     const creado = prisma.reporteAbono.create.mock.calls[0][0].data;
-    expect(creado).toMatchObject({ monto: 900, comprobanteUrl: 'u1.jpg', comprobantesUrls: ['u1.jpg', 'u2.jpg', 'u3.jpg'] });
+    expect(creado).toMatchObject({ comprobanteUrl: 'u1.jpg', comprobantesUrls: ['u1.jpg', 'u2.jpg', 'u3.jpg', 'u4.jpg'] });
   });
 
   it('más de 4 capturas o ninguna: 400 sin subir nada', async () => {
-    const { service, storage } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito() });
-    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 100, metodoPago: 'YAPE' }, [file, file, file, file, file]))
+    const { service, storage } = makeService({ empresaPersona: { id: 'ep1' }, ventas: [credito('v1', 1000)] });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 100 }]), [file, file, file, file, file]))
       .rejects.toThrow('hasta 4');
-    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 100, metodoPago: 'YAPE' }, []))
+    await expect(service.reportarAbono('e1', 'p1', 'u1', yape([{ ventaId: 'v1', monto: 100 }]), []))
       .rejects.toThrow('captura');
     expect(storage.uploadArchivo).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReportarAbonoDto por multipart', () => {
+  // El mismo pipe que main.ts: `lineas` llega como TEXTO JSON dentro del multipart.
+  const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+  const meta = { type: 'body' as const, metatype: ReportarAbonoDto };
+
+  it('convierte las líneas de texto JSON a objetos con monto numérico', async () => {
+    const dto = await pipe.transform(
+      { lineas: '[{"ventaId":"v1","monto":"4000"},{"ventaId":"v2","monto":"3000.5"}]', metodoPago: 'TRANSFERENCIA', empresaBancoId: 'b1' },
+      meta,
+    );
+    expect(dto.lineas).toEqual([
+      expect.objectContaining({ ventaId: 'v1', monto: 4000 }),
+      expect.objectContaining({ ventaId: 'v2', monto: 3000.5 }),
+    ]);
+  });
+
+  it('rechaza líneas vacías, JSON roto o un monto en cero', async () => {
+    await expect(pipe.transform({ lineas: '[]', metodoPago: 'YAPE' }, meta)).rejects.toBeDefined();
+    await expect(pipe.transform({ lineas: '{roto', metodoPago: 'YAPE' }, meta)).rejects.toBeDefined();
+    await expect(pipe.transform({ lineas: '[{"ventaId":"v1","monto":"0"}]', metodoPago: 'YAPE' }, meta)).rejects.toBeDefined();
   });
 });

@@ -180,7 +180,7 @@ model Venta {
   pedidoMarketplace           PedidoMarketplace?      @relation("VentaPedidoMarketplace")
   envio                       VentaEnvio?
   deliveryLocal               DeliveryLocal?
-  reportesAbono               ReporteAbono[]
+  lineasReporteAbono          ReporteAbonoVenta[]
 
   @@unique([empresaId, codigo])
   // FK indexes
@@ -471,38 +471,52 @@ enum EstadoReporteAbono {
   RECHAZADO
 }
 
-/// Un abono que el CLIENTE dice haber hecho (Yape, Plin o transferencia) desde
-/// "Mis compras" de la tienda web, con la captura del pago. NO toca el saldo:
-/// recién cuando la tienda lo aprueba en Cuentas por cobrar se registra el
-/// abono de verdad (`PagoVenta`, con su ingreso a banco/caja) y queda
-/// enlazado en `pagoVentaId`.
+/// Un pago que el CLIENTE dice haber hecho (Yape, Plin o transferencia) desde
+/// "Mis compras" de la tienda web, con sus capturas. Puede cubrir VARIAS
+/// compras del mismo titular (una transferencia grande que salda varias
+/// ventas): cada una es una línea con su monto. NO toca saldos: recién cuando
+/// la tienda lo aprueba en Cuentas por cobrar se registra un abono de verdad
+/// (`PagoVenta`, con su ingreso a banco/caja) por cada línea.
 model ReporteAbono {
-  id              String             @id @default(cuid())
-  empresaId       String
-  ventaId         String
+  id               String              @id @default(cuid())
+  empresaId        String
   // Quién lo reportó: su persona (acceso por DNI) y su usuario (la sesión).
-  personaId       String
-  usuarioId       String
-  monto           Decimal            @db.Decimal(10, 2)
-  metodoPago      MetodoPagoVenta // YAPE | PLIN | TRANSFERENCIA
-  numeroOperacion String?
+  personaId        String
+  usuarioId        String
+  // El total pagado = la suma de las líneas.
+  monto            Decimal             @db.Decimal(10, 2)
+  metodoPago       MetodoPagoVenta // YAPE | PLIN | TRANSFERENCIA
+  numeroOperacion  String?
   // La primera captura (compatibilidad) y TODAS: un pago puede venir en
   // varios Yape (límite por operación), cada uno con su captura.
-  comprobanteUrl  String
-  comprobantesUrls String[]          @default([])
+  comprobanteUrl   String
+  comprobantesUrls String[]            @default([])
   // La cuenta a la que dice haber transferido (solo TRANSFERENCIA).
-  empresaBancoId  String?
-  estado          EstadoReporteAbono @default(PENDIENTE)
-  motivoRechazo   String?
-  // El abono que se registró al aprobarlo. @unique = no se aprueba dos veces.
-  pagoVentaId     String?            @unique
-  revisadoPorId   String?
-  revisadoEn      DateTime?
-  creadoEn        DateTime           @default(now())
-  actualizadoEn   DateTime           @updatedAt
+  empresaBancoId   String?
+  estado           EstadoReporteAbono  @default(PENDIENTE)
+  motivoRechazo    String?
+  revisadoPorId    String?
+  revisadoEn       DateTime?
+  creadoEn         DateTime            @default(now())
+  actualizadoEn    DateTime            @updatedAt
 
-  venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  lineas ReporteAbonoVenta[]
 
   @@index([empresaId, estado])
+}
+
+/// A qué compra va cuánto de un pago reportado.
+model ReporteAbonoVenta {
+  id          String  @id @default(cuid())
+  reporteId   String
+  ventaId     String
+  monto       Decimal @db.Decimal(10, 2)
+  // El abono que se registró al aprobar. @unique = no se registra dos veces.
+  pagoVentaId String? @unique
+
+  reporte ReporteAbono @relation(fields: [reporteId], references: [id], onDelete: Cascade)
+  venta   Venta        @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+
+  @@unique([reporteId, ventaId])
   @@index([ventaId])
 }

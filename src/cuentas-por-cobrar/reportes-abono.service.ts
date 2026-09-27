@@ -1,17 +1,22 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EstadoReporteAbono, FuenteIngreso, MetodoPagoVenta } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CuentasPorCobrarService } from './cuentas-por-cobrar.service';
 
 /**
- * Pagos que los clientes reportan desde "Mis compras" de la tienda web.
+ * Pagos que los clientes reportan desde "Mis compras" de la tienda web. Un pago
+ * puede cubrir VARIAS ventas (una transferencia grande que salda varias): cada
+ * una es una línea con su monto.
  *
- * Aprobar = registrar el abono con el MISMO camino que el panel
- * (`registrarAbono`: cuotas, ingreso a banco/caja, estado de la venta) y
- * enlazarlo al reporte. Rechazar no toca plata.
+ * Aprobar = un abono por línea, por el MISMO camino que el panel
+ * (`registrarAbono`: cuotas, ingreso a banco/caja, estado de la venta). Es todo
+ * o nada: si una línea falla, se anulan los abonos ya registrados y el pago
+ * vuelve a PENDIENTE. Rechazar no toca plata.
  */
 @Injectable()
 export class ReportesAbonoService {
+  private readonly logger = new Logger(ReportesAbonoService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cxc: CuentasPorCobrarService,
@@ -22,7 +27,12 @@ export class ReportesAbonoService {
       where: { empresaId, estado },
       orderBy: { creadoEn: estado === 'PENDIENTE' ? 'asc' : 'desc' },
       take: 100,
-      include: { venta: { select: { codigo: true, nombreCliente: true, documentoCliente: true } } },
+      include: {
+        lineas: {
+          orderBy: { venta: { fechaVenta: 'asc' } },
+          include: { venta: { select: { codigo: true, nombreCliente: true, documentoCliente: true } } },
+        },
+      },
     });
     const bancoIds = [...new Set(filas.map((f) => f.empresaBancoId).filter((x): x is string => !!x))];
     const bancos = bancoIds.length
@@ -32,25 +42,28 @@ export class ReportesAbonoService {
         })
       : [];
     const banco = new Map(bancos.map((b) => [b.id, b]));
-    return filas.map((f) => ({
-      id: f.id,
-      ventaId: f.ventaId,
-      ventaCodigo: f.venta.codigo,
-      cliente: f.venta.nombreCliente,
-      documento: f.venta.documentoCliente,
-      monto: Number(f.monto),
-      metodoPago: f.metodoPago,
-      numeroOperacion: f.numeroOperacion,
-      comprobanteUrl: f.comprobanteUrl,
-      // Las anteriores a varias capturas solo tienen `comprobanteUrl`.
-      comprobantes: f.comprobantesUrls?.length ? f.comprobantesUrls : [f.comprobanteUrl],
-      empresaBancoId: f.empresaBancoId,
-      cuentaReportada: f.empresaBancoId ? banco.get(f.empresaBancoId) ?? null : null,
-      estado: f.estado,
-      motivoRechazo: f.motivoRechazo,
-      creadoEn: f.creadoEn,
-      revisadoEn: f.revisadoEn,
-    }));
+    return filas.map((f) => {
+      const primera = f.lineas[0]?.venta;
+      return {
+        id: f.id,
+        // Todas las ventas de un pago son del mismo titular (se valida al reportar).
+        cliente: primera?.nombreCliente ?? '—',
+        documento: primera?.documentoCliente ?? null,
+        monto: Number(f.monto),
+        metodoPago: f.metodoPago,
+        numeroOperacion: f.numeroOperacion,
+        comprobanteUrl: f.comprobanteUrl,
+        // Las anteriores a varias capturas solo tienen `comprobanteUrl`.
+        comprobantes: f.comprobantesUrls?.length ? f.comprobantesUrls : [f.comprobanteUrl],
+        empresaBancoId: f.empresaBancoId,
+        cuentaReportada: f.empresaBancoId ? banco.get(f.empresaBancoId) ?? null : null,
+        lineas: f.lineas.map((l) => ({ ventaId: l.ventaId, ventaCodigo: l.venta.codigo, monto: Number(l.monto) })),
+        estado: f.estado,
+        motivoRechazo: f.motivoRechazo,
+        creadoEn: f.creadoEn,
+        revisadoEn: f.revisadoEn,
+      };
+    });
   }
 
   /** Cuántos pagos esperan revisión (para el aviso del panel). */
@@ -64,9 +77,13 @@ export class ReportesAbonoService {
     usuarioId: string,
     destino: { fuente?: FuenteIngreso; bancoId?: string },
   ) {
-    const reporte = await this.prisma.reporteAbono.findFirst({ where: { id: reporteId, empresaId } });
+    const reporte = await this.prisma.reporteAbono.findFirst({
+      where: { id: reporteId, empresaId },
+      include: { lineas: { orderBy: { venta: { fechaVenta: 'asc' } } } },
+    });
     if (!reporte) throw new NotFoundException('Pago reportado no encontrado');
     if (reporte.estado !== 'PENDIENTE') throw new ConflictException('Este pago ya fue revisado');
+    if (!reporte.lineas.length) throw new BadRequestException('Este pago no tiene ventas asignadas');
 
     const fuente = destino.fuente ?? FuenteIngreso.BANCO;
     const bancoId = fuente === FuenteIngreso.BANCO ? destino.bancoId ?? reporte.empresaBancoId ?? undefined : undefined;
@@ -74,32 +91,41 @@ export class ReportesAbonoService {
       throw new BadRequestException('Elige la cuenta bancaria a la que entró el pago');
     }
 
-    // Se "toma" el reporte antes de mover plata: dos admins aprobando a la vez
-    // no registran dos abonos (el segundo encuentra 0 filas en PENDIENTE).
+    // Se "toma" el pago antes de mover plata: dos admins aprobando a la vez no
+    // registran dos veces (el segundo encuentra 0 filas en PENDIENTE).
     const tomado = await this.prisma.reporteAbono.updateMany({
       where: { id: reporteId, empresaId, estado: 'PENDIENTE' },
       data: { estado: 'APROBADO', revisadoPorId: usuarioId, revisadoEn: new Date() },
     });
     if (tomado.count === 0) throw new ConflictException('Este pago ya fue revisado');
 
+    // Bancarización: los digitales llevan referencia (00000 si no la dio). La
+    // misma en todas las líneas: fue UNA operación.
+    const referencia = reporte.numeroOperacion?.trim() || '00000';
+    const registrados: { lineaId: string; pagoId: string }[] = [];
     try {
-      const abono = await this.cxc.registrarAbono(
-        empresaId,
-        reporte.ventaId,
-        {
-          monto: Number(reporte.monto),
-          metodoPago: reporte.metodoPago as MetodoPagoVenta,
-          // Bancarización: los digitales llevan referencia (00000 si no la dio).
-          referencia: reporte.numeroOperacion?.trim() || '00000',
-          fuente,
-          bancoId,
-        },
-        usuarioId,
-      );
-      await this.prisma.reporteAbono.update({ where: { id: reporteId }, data: { pagoVentaId: abono.pagoId } });
-      return { ok: true, pagoId: abono.pagoId, saldoPendiente: abono.saldoPendiente };
+      for (const linea of reporte.lineas) {
+        const abono = await this.cxc.registrarAbono(
+          empresaId,
+          linea.ventaId,
+          { monto: Number(linea.monto), metodoPago: reporte.metodoPago as MetodoPagoVenta, referencia, fuente, bancoId },
+          usuarioId,
+        );
+        registrados.push({ lineaId: linea.id, pagoId: abono.pagoId });
+        await this.prisma.reporteAbonoVenta.update({ where: { id: linea.id }, data: { pagoVentaId: abono.pagoId } });
+      }
+      return { ok: true, abonos: registrados.length, pagos: registrados.map((r) => r.pagoId) };
     } catch (e) {
-      // No se registró el abono: el reporte vuelve a quedar para revisar.
+      // Todo o nada: se anulan los abonos que alcanzaron a registrarse (revierte
+      // su ingreso y recomputa cuotas) y el pago vuelve a quedar para revisar.
+      for (const r of registrados.reverse()) {
+        try {
+          await this.cxc.anularAbono(empresaId, r.pagoId, usuarioId, 'Aprobación de pago reportado incompleta: se revierte');
+          await this.prisma.reporteAbonoVenta.update({ where: { id: r.lineaId }, data: { pagoVentaId: null } });
+        } catch (err) {
+          this.logger.error(`No se pudo revertir el abono ${r.pagoId} del reporte ${reporteId}: ${(err as Error).message}`);
+        }
+      }
       await this.prisma.reporteAbono.update({
         where: { id: reporteId },
         data: { estado: 'PENDIENTE', revisadoPorId: null, revisadoEn: null },
