@@ -18,6 +18,9 @@ import { SedeAccessGuard } from '../auth/guards/sede-access.guard';
 import { StorageModule } from '../storage/storage.module';
 import { VentaEvidenciaService } from './venta-evidencia.service';
 
+import { MisComprasTiendaController } from './mis-compras-tienda.controller';
+import { MisComprasTiendaService } from './mis-compras-tienda.service';
+
 @Module({
   imports: [
     PrismaModule,
@@ -32,12 +35,13 @@ import { VentaEvidenciaService } from './venta-evidencia.service';
     CaracteristicaEmpresaModule,
     StorageModule,
   ],
-  controllers: [VentaAnalyticsController, VentaController],
+  controllers: [VentaAnalyticsController, VentaController, MisComprasTiendaController],
   providers: [
     VentaService,
     VentaAnalyticsService,
     VentaYapeTasksService,
     VentaEvidenciaService,
+    MisComprasTiendaService,
     SedeAccessGuard,
   ],
   exports: [VentaService, VentaEvidenciaService],
