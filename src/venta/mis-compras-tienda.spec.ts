@@ -28,6 +28,8 @@ const makeService = (opts: {
   ventas?: any[];
   venta?: any;
   clienteEmpresa?: any;
+  pendientes?: any[];
+  cuenta?: any;
 } = {}) => {
   const prisma: any = {
     empresaPersona: { findFirst: jest.fn().mockResolvedValue(opts.empresaPersona ?? null) },
@@ -47,8 +49,16 @@ const makeService = (opts: {
     },
     archivo: { findMany: jest.fn().mockResolvedValue([]) },
     pagoVenta: { findMany: jest.fn().mockResolvedValue([]) },
+    reporteAbono: {
+      findMany: jest.fn().mockResolvedValue(opts.pendientes ?? []),
+      create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: data.id, monto: data.monto, metodoPago: data.metodoPago, estado: 'PENDIENTE', creadoEn: new Date() })),
+    },
+    empresaBanco: { findFirst: jest.fn().mockResolvedValue(opts.cuenta ?? null) },
+    empresaUsuarioRol: { findMany: jest.fn().mockResolvedValue([{ usuarioId: 'admin-1' }]) },
   };
-  return { service: new MisComprasTiendaService(prisma), prisma };
+  const storage: any = { uploadArchivo: jest.fn().mockResolvedValue({ url: 'https://cdn/captura.jpg' }) };
+  const notificaciones: any = { enviarAUsuarios: jest.fn().mockResolvedValue(undefined) };
+  return { service: new MisComprasTiendaService(prisma, storage, notificaciones), prisma, storage, notificaciones };
 };
 
 const venta = (extra: any = {}) => ({
@@ -166,5 +176,44 @@ describe('Tienda web: mis compras', () => {
       ventas: [],
     });
     await expect(service.estadoCuenta('e1', 'p1', 'ce-ajena')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('Tienda web: reportar un abono', () => {
+  const file: any = { mimetype: 'image/jpeg', size: 1000, buffer: Buffer.from('x') };
+  const credito = () => venta({
+    id: 'v1', codigo: 'V-1', esCredito: true, estado: 'CONFIRMADA', total: 1000, nombreCliente: 'Ana',
+    cuotas: [cuota(1, 500, 500, dia(5)), cuota(2, 500, 500, dia(35))],
+  });
+
+  it('una compra al contado no acepta abonos', async () => {
+    const { service } = makeService({ empresaPersona: { id: 'ep1' }, venta: venta() });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 10, metodoPago: 'YAPE' }, file))
+      .rejects.toThrow('no es a crédito');
+  });
+
+  it('no deja reportar más que el saldo menos lo que ya está en revisión', async () => {
+    const { service, storage } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito(), pendientes: [{ monto: 900 }] });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 150, metodoPago: 'YAPE' }, file))
+      .rejects.toThrow('S/ 100.00');
+    expect(storage.uploadArchivo).not.toHaveBeenCalled();
+  });
+
+  it('una transferencia exige una cuenta activa de la tienda', async () => {
+    const { service } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito(), cuenta: null });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 100, metodoPago: 'TRANSFERENCIA', empresaBancoId: 'b-ajena' }, file))
+      .rejects.toThrow('cuenta');
+  });
+
+  it('reporta: sube la captura ligada al reporte, queda PENDIENTE y avisa a la tienda', async () => {
+    const { service, prisma, storage, notificaciones } = makeService({ empresaPersona: { id: 'ep1' }, venta: credito() });
+    const res = await service.reportarAbono('e1', 'p1', 'u1', 'v1', { monto: 500, metodoPago: 'YAPE', numeroOperacion: ' 123 ' }, file);
+    const subida = storage.uploadArchivo.mock.calls[0][0];
+    const creado = prisma.reporteAbono.create.mock.calls[0][0].data;
+    expect(subida.entidadId).toBe(creado.id);
+    expect(subida.entidadId).not.toBe('v1');
+    expect(creado).toMatchObject({ ventaId: 'v1', monto: 500, metodoPago: 'YAPE', numeroOperacion: '123', comprobanteUrl: 'https://cdn/captura.jpg' });
+    expect(res).toMatchObject({ estado: 'PENDIENTE', monto: 500 });
+    expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
   });
 });

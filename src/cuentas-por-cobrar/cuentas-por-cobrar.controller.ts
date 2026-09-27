@@ -20,13 +20,18 @@ import { CuentasPorCobrarService } from './cuentas-por-cobrar.service';
 import { QueryCuentasCobrarDto } from './dto/query-cuentas-cobrar.dto';
 import { UpdateConfiguracionMoraDto } from './dto/update-configuracion-mora.dto';
 import { RegistrarAbonoDto } from './dto/registrar-abono.dto';
+import { ReportesAbonoService } from './reportes-abono.service';
+import { EstadoReporteAbono, FuenteIngreso } from '@prisma/client';
 
 @ApiTags('Cuentas por Cobrar')
 @Controller('cuentas-por-cobrar')
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
 @ApiBearerAuth()
 export class CuentasPorCobrarController {
-  constructor(private readonly service: CuentasPorCobrarService) {}
+  constructor(
+    private readonly service: CuentasPorCobrarService,
+    private readonly reportes: ReportesAbonoService,
+  ) {}
 
   @Get()
   @RequiresPermission(Permission.VIEW_VENTAS)
@@ -89,6 +94,56 @@ export class CuentasPorCobrarController {
       clienteId,
       clienteEmpresaId,
     });
+  }
+
+  // ── Pagos que reportan los clientes desde la tienda web ──
+  // (antes de `:ventaId`: si no, "reportes-abono" se tomaría como una venta)
+
+  @Get('reportes-abono')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Pagos reportados por clientes desde la tienda web' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async listarReportes(
+    @Headers('x-tenant-id') empresaId: string,
+    @Query('estado') estado?: EstadoReporteAbono,
+  ) {
+    const valido = estado && ['PENDIENTE', 'APROBADO', 'RECHAZADO'].includes(estado) ? estado : 'PENDIENTE';
+    return this.reportes.listar(empresaId, valido);
+  }
+
+  @Get('reportes-abono/pendientes')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Cuántos pagos reportados esperan revisión' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async contarReportes(@Headers('x-tenant-id') empresaId: string) {
+    return this.reportes.contarPendientes(empresaId);
+  }
+
+  @Post('reportes-abono/:id/aprobar')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Aprobar un pago reportado: registra el abono' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async aprobarReporte(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() body: { fuente?: FuenteIngreso; bancoId?: string },
+  ) {
+    const fuente = body?.fuente && Object.values(FuenteIngreso).includes(body.fuente) ? body.fuente : undefined;
+    return this.reportes.aprobar(empresaId, id, usuarioId, { fuente, bancoId: body?.bancoId || undefined });
+  }
+
+  @Post('reportes-abono/:id/rechazar')
+  @RequiresPermission(Permission.MANAGE_VENTAS)
+  @ApiOperation({ summary: 'Rechazar un pago reportado (el cliente ve el motivo)' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async rechazarReporte(
+    @Headers('x-tenant-id') empresaId: string,
+    @Param('id') id: string,
+    @CurrentUser('id') usuarioId: string,
+    @Body() body: { motivo?: string },
+  ) {
+    return this.reportes.rechazar(empresaId, id, usuarioId, body?.motivo ?? '');
   }
 
   @Post(':ventaId/abono')

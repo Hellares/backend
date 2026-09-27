@@ -6,11 +6,12 @@ import { NotificacionModule } from '../notificacion/notificacion.module';
 import { CuentasPorCobrarController } from './cuentas-por-cobrar.controller';
 import { CuentasPorCobrarService } from './cuentas-por-cobrar.service';
 import { CuentasPorCobrarTasksService } from './cuentas-por-cobrar-tasks.service';
+import { ReportesAbonoService } from './reportes-abono.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, CajaModule, NotificacionModule],
   controllers: [CuentasPorCobrarController],
-  providers: [CuentasPorCobrarService, CuentasPorCobrarTasksService],
+  providers: [CuentasPorCobrarService, CuentasPorCobrarTasksService, ReportesAbonoService],
   exports: [CuentasPorCobrarService],
 })
 export class CuentasPorCobrarModule {}

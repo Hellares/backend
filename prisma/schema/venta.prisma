@@ -180,6 +180,7 @@ model Venta {
   pedidoMarketplace           PedidoMarketplace?      @relation("VentaPedidoMarketplace")
   envio                       VentaEnvio?
   deliveryLocal               DeliveryLocal?
+  reportesAbono               ReporteAbono[]
 
   @@unique([empresaId, codigo])
   // FK indexes
@@ -461,4 +462,44 @@ model VentaEnvio {
   venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
 
   @@index([empresaId])
+}
+
+/// Estado de un pago que el cliente reporta desde la tienda web.
+enum EstadoReporteAbono {
+  PENDIENTE
+  APROBADO
+  RECHAZADO
+}
+
+/// Un abono que el CLIENTE dice haber hecho (Yape, Plin o transferencia) desde
+/// "Mis compras" de la tienda web, con la captura del pago. NO toca el saldo:
+/// recién cuando la tienda lo aprueba en Cuentas por cobrar se registra el
+/// abono de verdad (`PagoVenta`, con su ingreso a banco/caja) y queda
+/// enlazado en `pagoVentaId`.
+model ReporteAbono {
+  id              String             @id @default(cuid())
+  empresaId       String
+  ventaId         String
+  // Quién lo reportó: su persona (acceso por DNI) y su usuario (la sesión).
+  personaId       String
+  usuarioId       String
+  monto           Decimal            @db.Decimal(10, 2)
+  metodoPago      MetodoPagoVenta // YAPE | PLIN | TRANSFERENCIA
+  numeroOperacion String?
+  comprobanteUrl  String
+  // La cuenta a la que dice haber transferido (solo TRANSFERENCIA).
+  empresaBancoId  String?
+  estado          EstadoReporteAbono @default(PENDIENTE)
+  motivoRechazo   String?
+  // El abono que se registró al aprobarlo. @unique = no se aprueba dos veces.
+  pagoVentaId     String?            @unique
+  revisadoPorId   String?
+  revisadoEn      DateTime?
+  creadoEn        DateTime           @default(now())
+  actualizadoEn   DateTime           @updatedAt
+
+  venta Venta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, estado])
+  @@index([ventaId])
 }

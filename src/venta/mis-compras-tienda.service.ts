@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma, TipoNotificacion } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
+import { NotificacionService } from '../notificacion/notificacion.service';
+import { ReportarAbonoDto } from './dto/reportar-abono.dto';
 
 /** El día de calendario en Perú (yyyy-MM-dd) de un instante. */
 const diaLima = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
@@ -35,7 +39,16 @@ type VentaCompra = Prisma.VentaGetPayload<{ include: typeof incluirCompra }>;
  */
 @Injectable()
 export class MisComprasTiendaService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(MisComprasTiendaService.name);
+
+  /** Cuántos pagos en revisión puede tener una compra a la vez (anti spam). */
+  static readonly MAX_REPORTES_PENDIENTES = 3;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+    private readonly notificaciones: NotificacionService,
+  ) {}
 
   async empresaIdTienda(subdominio: string): Promise<string> {
     const empresa = await this.prisma.empresa.findFirst({
@@ -208,6 +221,12 @@ export class MisComprasTiendaService {
       : null;
     if (!v) throw new NotFoundException('Compra no encontrada');
 
+    const reportes = await this.prisma.reporteAbono.findMany({
+      where: { ventaId: v.id, estado: { in: ['PENDIENTE', 'RECHAZADO'] } },
+      orderBy: { creadoEn: 'desc' },
+      take: 10,
+      select: { id: true, monto: true, metodoPago: true, estado: true, motivoRechazo: true, creadoEn: true },
+    });
     const pagos = await this.prisma.pagoVenta.findMany({
       where: { ventaId: v.id, anulado: false },
       orderBy: { fechaPago: 'asc' },
@@ -269,6 +288,16 @@ export class MisComprasTiendaService {
         fecha: p.fechaPago,
         cuota: p.cuotaVenta?.numero ?? null,
       })),
+      // Lo que reportó y la tienda todavía no aprobó (o rechazó). No descuenta del saldo.
+      reportes: reportes.map((r) => ({
+        id: r.id,
+        monto: r2(Number(r.monto)),
+        metodo: r.metodoPago,
+        estado: r.estado,
+        motivoRechazo: r.motivoRechazo,
+        fecha: r.creadoEn,
+      })),
+      enRevision: r2(reportes.filter((r) => r.estado === 'PENDIENTE').reduce((s, r) => s + Number(r.monto), 0)),
     };
   }
 
@@ -377,5 +406,127 @@ export class MisComprasTiendaService {
         ]),
       ),
     };
+  }
+
+  /** Cómo pagarle a la tienda: sus QR de Yape/Plin y sus cuentas activas en soles. */
+  async mediosPago(empresaId: string) {
+    const [cfg, cuentas] = await Promise.all([
+      this.prisma.configuracionEmpresa.findUnique({ where: { empresaId }, select: { qrYapeUrl: true, qrPlinUrl: true } }),
+      this.prisma.empresaBanco.findMany({
+        where: { empresaId, isActive: true, moneda: 'PEN' },
+        orderBy: [{ esPrincipal: 'desc' }, { creadoEn: 'asc' }],
+        select: { id: true, nombreBanco: true, tipoCuenta: true, numeroCuenta: true, cci: true, titular: true },
+      }),
+    ]);
+    return {
+      qrYapeUrl: cfg?.qrYapeUrl ?? null,
+      qrPlinUrl: cfg?.qrPlinUrl ?? null,
+      cuentas: cuentas.map((c) => ({
+        id: c.id,
+        banco: c.nombreBanco,
+        tipoCuenta: c.tipoCuenta,
+        numero: c.numeroCuenta,
+        cci: c.cci,
+        titular: c.titular,
+      })),
+    };
+  }
+
+  /**
+   * El cliente reporta que pagó (con la captura). Queda PENDIENTE: no toca el
+   * saldo hasta que la tienda lo apruebe en Cuentas por cobrar.
+   */
+  async reportarAbono(
+    empresaId: string,
+    personaId: string,
+    usuarioId: string,
+    ventaId: string,
+    dto: ReportarAbonoDto,
+    file: Express.Multer.File,
+  ) {
+    const acceso = await this.acceso(empresaId, personaId);
+    const v = acceso
+      ? await this.prisma.venta.findFirst({ where: { id: ventaId, ...this.where(empresaId, acceso) }, include: incluirCompra })
+      : null;
+    if (!v) throw new NotFoundException('Compra no encontrada');
+    if (!v.esCredito) throw new BadRequestException('Esta compra no es a crédito');
+
+    const m = this.montos(v, diaLima(new Date()));
+    const pendientes = await this.prisma.reporteAbono.findMany({
+      where: { ventaId: v.id, estado: 'PENDIENTE' },
+      select: { monto: true },
+    });
+    if (pendientes.length >= MisComprasTiendaService.MAX_REPORTES_PENDIENTES) {
+      throw new BadRequestException('Ya tienes pagos en revisión para esta compra. Espera a que la tienda los confirme.');
+    }
+    const enRevision = pendientes.reduce((s, p) => s + Number(p.monto), 0);
+    const disponible = r2(m.saldo - enRevision);
+    if (disponible <= 0) {
+      throw new BadRequestException(m.saldo <= 0 ? 'Esta compra ya está pagada' : 'Tu saldo ya está cubierto por pagos en revisión');
+    }
+    const monto = r2(dto.monto);
+    if (monto > disponible) {
+      throw new BadRequestException(`El monto no puede ser mayor a S/ ${disponible.toFixed(2)}`);
+    }
+
+    let empresaBancoId: string | null = null;
+    if (dto.metodoPago === 'TRANSFERENCIA') {
+      const cuenta = dto.empresaBancoId
+        ? await this.prisma.empresaBanco.findFirst({
+            where: { id: dto.empresaBancoId, empresaId, isActive: true },
+            select: { id: true },
+          })
+        : null;
+      if (!cuenta) throw new BadRequestException('Elige la cuenta a la que transferiste');
+      empresaBancoId = cuenta.id;
+    }
+
+    // La captura se guarda ligada al REPORTE, no a la venta: así no aparece en
+    // la galería de fotos de la venta (ni la de un pago rechazado).
+    const id = randomUUID();
+    const archivo = await this.storage.uploadArchivo({
+      file,
+      empresaId,
+      entidadTipo: 'VENTA',
+      entidadId: id,
+      categoria: 'DOCUMENTO',
+      subidoPor: usuarioId,
+    });
+
+    const reporte = await this.prisma.reporteAbono.create({
+      data: {
+        id,
+        empresaId,
+        ventaId: v.id,
+        personaId,
+        usuarioId,
+        monto,
+        metodoPago: dto.metodoPago,
+        numeroOperacion: dto.numeroOperacion?.trim() || null,
+        comprobanteUrl: archivo.url,
+        empresaBancoId,
+      },
+      select: { id: true, monto: true, metodoPago: true, estado: true, creadoEn: true },
+    });
+
+    try {
+      const admins = await this.prisma.empresaUsuarioRol.findMany({
+        where: { empresaId, isActive: true, rol: { in: ['EMPRESA_ADMIN', 'SEDE_ADMIN', 'CAJERO'] } },
+        select: { usuarioId: true },
+      });
+      const ids = [...new Set(admins.map((a) => a.usuarioId))];
+      if (ids.length) {
+        await this.notificaciones.enviarAUsuarios(
+          ids,
+          'Pago reportado por un cliente',
+          `${v.nombreCliente} reportó un abono de S/ ${monto.toFixed(2)} a la venta ${v.codigo}. Revísalo en Cuentas por cobrar.`,
+          { tipo: TipoNotificacion.SISTEMA, empresaId, data: { reporteAbonoId: reporte.id, ventaId: v.id } },
+        );
+      }
+    } catch (e) {
+      this.logger.warn(`No se pudo avisar del reporte ${reporte.id}: ${(e as Error).message}`);
+    }
+
+    return { ...reporte, monto: Number(reporte.monto) };
   }
 }

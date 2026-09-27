@@ -21,6 +21,7 @@ import { VentaEvidenciaService } from './venta-evidencia.service';
 import { MisComprasTiendaController } from './mis-compras-tienda.controller';
 import { MisComprasTiendaService } from './mis-compras-tienda.service';
 
+import { NotificacionModule } from '../notificacion/notificacion.module';
 @Module({
   imports: [
     PrismaModule,
@@ -34,6 +35,7 @@ import { MisComprasTiendaService } from './mis-compras-tienda.service';
     IntegracionYapeModule,
     CaracteristicaEmpresaModule,
     StorageModule,
+    NotificacionModule,
   ],
   controllers: [VentaAnalyticsController, VentaController, MisComprasTiendaController],
   providers: [
