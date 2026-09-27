@@ -9,6 +9,7 @@ import { ServicioService } from './servicio.service';
 import { ServicioController } from './servicio.controller';
 import { OrdenServicioService } from './orden-servicio.service';
 import { OrdenServicioController } from './orden-servicio.controller';
+import { MisServiciosTiendaController } from './mis-servicios-tienda.controller';
 import { ServicioComponenteService } from './servicio-componente.service';
 import { PlantillaServicioService } from './plantilla-servicio.service';
 import { PlantillaServicioController } from './plantilla-servicio.controller';
@@ -34,6 +35,7 @@ import { OrdenTecnicoAsignadoGuard } from './guards/orden-tecnico-asignado.guard
     ServicioController,
     EstadisticasServicioController,
     OrdenServicioController,
+    MisServiciosTiendaController,
     PlantillaServicioController,
     TipoComponenteController,
     ComponenteController,

@@ -1969,6 +1969,188 @@ export class OrdenServicioService {
     return mensaje;
   }
 
+  // ─── Tienda web: "Mis servicios" del comprador ───
+  //
+  // El comprador de la tienda entra con una sesión SIN empresa (DNI + código
+  // por WhatsApp), así que la empresa sale del subdominio y el cliente de su
+  // persona: `EmpresaPersona(personaId, empresaId)` es el `clienteId` de sus
+  // órdenes. Solo órdenes de cliente persona (las B2B van por contacto).
+
+  /** La empresa de la tienda (activa y visible en el marketplace). */
+  async empresaIdTienda(subdominio: string): Promise<string> {
+    const empresa = await this.prisma.empresa.findFirst({
+      where: { subdominio, isActive: true, deletedAt: null, visibleEnMarketplace: true },
+      select: { id: true },
+    });
+    if (!empresa) throw new NotFoundException('Tienda no encontrada');
+    return empresa.id;
+  }
+
+  private async clienteTienda(empresaId: string, personaId?: string): Promise<string | null> {
+    if (!personaId) return null;
+    const ep = await this.prisma.empresaPersona.findFirst({
+      where: { personaId, empresaId, deletedAt: null },
+      select: { id: true },
+    });
+    return ep?.id ?? null;
+  }
+
+  private static equipoTexto(o: {
+    tipoEquipo: string | null;
+    marcaEquipo: string | null;
+    modeloEquipo?: { marca: string | null; modelo: string } | null;
+  }): string {
+    const modelo = o.modeloEquipo ? [o.modeloEquipo.marca, o.modeloEquipo.modelo].filter(Boolean).join(' ') : null;
+    return [o.tipoEquipo, modelo ?? o.marcaEquipo].filter(Boolean).join(' ') || 'Equipo';
+  }
+
+  async listarMisServiciosTienda(empresaId: string, personaId: string) {
+    const clienteId = await this.clienteTienda(empresaId, personaId);
+    if (!clienteId) return { data: [] };
+    const ordenes = await this.prisma.ordenServicio.findMany({
+      where: { empresaId, clienteId },
+      orderBy: { creadoEn: 'desc' },
+      take: 100,
+      select: {
+        id: true, codigo: true, estado: true, tipoEquipo: true, marcaEquipo: true,
+        fechaPrometida: true, fechaEntrega: true, creadoEn: true,
+        costoTotal: true, adelanto: true, descuento: true, comprobanteId: true,
+        modeloEquipo: { select: { marca: true, modelo: true } },
+        servicio: { select: { nombre: true } },
+        componentes: { select: { costoAccion: true, costoRepuestos: true } },
+      },
+    });
+    return {
+      data: ordenes.map((o) => ({
+        id: o.id,
+        codigo: o.codigo,
+        estado: o.estado,
+        equipo: OrdenServicioService.equipoTexto(o),
+        servicio: o.servicio?.nombre ?? null,
+        fechaPrometida: o.fechaPrometida,
+        fechaEntrega: o.fechaEntrega,
+        creadoEn: o.creadoEn,
+        total: OrdenServicioService.costoNeto(o),
+        saldo: OrdenServicioService.saldoPendiente(o),
+        tieneComprobante: !!o.comprobanteId,
+      })),
+    };
+  }
+
+  async detalleMiServicioTienda(empresaId: string, personaId: string, ordenId: string) {
+    const clienteId = await this.clienteTienda(empresaId, personaId);
+    if (!clienteId) throw new NotFoundException('Orden no encontrada');
+    const o = await this.prisma.ordenServicio.findFirst({
+      where: { id: ordenId, empresaId, clienteId },
+      include: {
+        servicio: { select: { nombre: true } },
+        modeloEquipo: { select: { marca: true, modelo: true } },
+        tecnico: { select: { persona: { select: { nombres: true } } } },
+        componentes: { include: { componente: { include: { tipoComponente: true } } } },
+        historial: {
+          orderBy: { creadoEn: 'asc' },
+          select: { estadoAnterior: true, estadoNuevo: true, notas: true, comunicarCliente: true, creadoEn: true },
+        },
+        adelantos: {
+          where: { anulado: false },
+          orderBy: { creadoEn: 'asc' },
+          select: { monto: true, creadoEn: true },
+        },
+      },
+    });
+    if (!o) throw new NotFoundException('Orden no encontrada');
+    const sede = o.sedeId
+      ? await this.prisma.sede.findUnique({ where: { id: o.sedeId }, select: { nombre: true } })
+      : null;
+
+    const diag = o.diagnostico as unknown;
+    const diagnostico = typeof diag === 'string'
+      ? diag
+      : diag && typeof diag === 'object' && typeof (diag as { descripcion?: unknown }).descripcion === 'string'
+        ? (diag as { descripcion: string }).descripcion
+        : null;
+
+    return {
+      id: o.id,
+      codigo: o.codigo,
+      estado: o.estado,
+      equipo: OrdenServicioService.equipoTexto(o),
+      tipoEquipo: o.tipoEquipo,
+      marcaModelo: o.modeloEquipo ? [o.modeloEquipo.marca, o.modeloEquipo.modelo].filter(Boolean).join(' ') : o.marcaEquipo,
+      numeroSerie: o.numeroSerie,
+      servicio: o.servicio?.nombre ?? null,
+      sede: sede?.nombre ?? null,
+      tecnico: o.tecnico?.persona?.nombres ?? null,
+      descripcionProblema: o.descripcionProblema,
+      diagnostico,
+      accesorios: Array.isArray(o.accesorios) ? (o.accesorios as unknown[]).map(String) : [],
+      items: o.componentes.map((c) => ({
+        nombre: [c.componente?.tipoComponente?.nombre, c.componente?.marca, c.componente?.modelo].filter(Boolean).join(' ')
+          || c.componente?.codigo || 'Componente',
+        monto: Number(c.costoAccion ?? 0) + Number(c.costoRepuestos ?? 0),
+      })),
+      // El servicio en sí (mano de obra): costoTotal es el costo del servicio y
+      // los componentes se suman aparte (modelo aditivo).
+      costoServicio: o.costoTotal ? Number(o.costoTotal) : null,
+      descuento: o.descuento ? Number(o.descuento) : 0,
+      adelanto: Number(o.adelanto ?? 0),
+      total: OrdenServicioService.costoNeto(o),
+      saldo: OrdenServicioService.saldoPendiente(o),
+      fechaPrometida: o.fechaPrometida,
+      fechaEntrega: o.fechaEntrega,
+      creadoEn: o.creadoEn,
+      tieneComprobante: !!o.comprobanteId,
+      // Las notas del historial son internas salvo que se marcaron para el cliente.
+      historial: o.historial.map((h) => ({
+        estado: h.estadoNuevo,
+        nota: h.comunicarCliente ? h.notas : null,
+        fecha: h.creadoEn,
+      })),
+      adelantos: o.adelantos.map((a) => ({ monto: Number(a.monto), fecha: a.creadoEn })),
+    };
+  }
+
+  /**
+   * El cliente aprueba el presupuesto desde la tienda: pasa la orden de
+   * ESPERANDO_APROBACION a EN_REPARACION con la misma transición del app
+   * (historial, candado y aviso al cliente), y avisa al técnico y a los admins.
+   */
+  async aprobarPresupuestoCliente(empresaId: string, personaId: string, usuarioId: string, ordenId: string) {
+    const clienteId = await this.clienteTienda(empresaId, personaId);
+    if (!clienteId) throw new NotFoundException('Orden no encontrada');
+    const orden = await this.prisma.ordenServicio.findFirst({
+      where: { id: ordenId, empresaId, clienteId },
+      select: { id: true, estado: true, codigo: true, tecnicoId: true },
+    });
+    if (!orden) throw new NotFoundException('Orden no encontrada');
+    if (orden.estado !== EstadoOrdenServicio.ESPERANDO_APROBACION) {
+      throw new BadRequestException('Este presupuesto ya no espera tu aprobación');
+    }
+
+    await this.transitionEstado(
+      empresaId,
+      ordenId,
+      { nuevoEstado: EstadoOrdenServicio.EN_REPARACION, notas: 'Presupuesto aprobado por el cliente desde la tienda web' } as TransitionEstadoDto,
+      usuarioId,
+    );
+
+    const titulo = `Presupuesto aprobado - ${orden.codigo}`;
+    const cuerpo = 'El cliente aprobó el presupuesto desde la tienda web. La orden pasó a reparación.';
+    const opts = {
+      tipo: TipoNotificacion.ORDEN_SERVICIO,
+      data: { ordenId, action: 'APROBADO', target: 'staff' },
+      empresaId,
+    };
+    if (orden.tecnicoId) {
+      this.notificacionService.enviarAUsuario(orden.tecnicoId, titulo, cuerpo, opts)
+        .catch(OrdenServicioService.logNotifFallida('aprobación al técnico'));
+    }
+    this.notificarAdminsEmpresa(empresaId, titulo, cuerpo, opts, orden.tecnicoId ?? undefined)
+      .catch(OrdenServicioService.logNotifFallida('aprobación a admins'));
+
+    return this.detalleMiServicioTienda(empresaId, personaId, ordenId);
+  }
+
   private async notificarAdminsEmpresa(
     empresaId: string,
     titulo: string,
