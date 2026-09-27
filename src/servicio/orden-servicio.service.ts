@@ -2134,8 +2134,11 @@ export class OrdenServicioService {
       },
       orderBy: { creadoEn: 'asc' },
       take: 40,
-      select: { url: true, urlThumbnail: true },
+      select: { url: true, urlThumbnail: true, entidadTipo: true, entidadId: true },
     });
+    const fotosDe = (componenteId: string) => fotos
+      .filter((f) => f.entidadTipo === 'SERVICIO_COMPONENTE' && f.entidadId === componenteId)
+      .map((f) => ({ url: f.url, miniatura: f.urlThumbnail ?? f.url }));
 
     const diag = o.diagnostico as unknown;
     const diagnostico = typeof diag === 'string'
@@ -2168,6 +2171,8 @@ export class OrdenServicioService {
         // (REPARAR, COMPRAR…) y su descripción ("Compra de pantalla").
         accion: c.tipoAccion,
         descripcion: c.descripcionAccion?.trim() || null,
+        // Sus fotos van al lado del componente (también siguen en "Fotos del equipo").
+        fotos: fotosDe(c.id),
       })),
       // El servicio en sí (mano de obra): costoTotal es el costo del servicio y
       // los componentes se suman aparte (modelo aditivo).
