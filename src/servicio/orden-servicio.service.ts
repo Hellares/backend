@@ -2171,7 +2171,7 @@ export class OrdenServicioService {
         // (REPARAR, COMPRAR…) y su descripción ("Compra de pantalla").
         accion: c.tipoAccion,
         descripcion: c.descripcionAccion?.trim() || null,
-        // Sus fotos van al lado del componente (también siguen en "Fotos del equipo").
+        // Sus fotos van SOLO al lado del componente, no en "Fotos del equipo".
         fotos: fotosDe(c.id),
       })),
       // El servicio en sí (mano de obra): costoTotal es el costo del servicio y
@@ -2192,7 +2192,9 @@ export class OrdenServicioService {
         fecha: h.creadoEn,
       })),
       adelantos: o.adelantos.map((a) => ({ monto: Number(a.monto), fecha: a.creadoEn })),
-      fotos: fotos.map((f) => ({ url: f.url, miniatura: f.urlThumbnail ?? f.url })),
+      fotos: fotos
+        .filter((f) => f.entidadTipo === 'ORDEN_SERVICIO')
+        .map((f) => ({ url: f.url, miniatura: f.urlThumbnail ?? f.url })),
     };
   }
 
