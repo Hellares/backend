@@ -165,6 +165,7 @@ export class MisComprasTiendaService {
         cantidadItems: v.detalles.length,
         fotos: [...new Set(v.detalles.map((d) => (d.productoId ? fotos.get(d.productoId) : undefined)).filter((x): x is string => !!x))].slice(0, 3),
         empresaCliente: MisComprasTiendaService.nombreEmpresa(v.clienteEmpresa),
+        clienteEmpresaId: v.clienteEmpresaId,
       };
     });
 
@@ -233,6 +234,7 @@ export class MisComprasTiendaService {
       descuento: Number(v.descuento ?? 0),
       proximoPago: m.proxima,
       empresaCliente: MisComprasTiendaService.nombreEmpresa(v.clienteEmpresa),
+      clienteEmpresaId: v.clienteEmpresaId,
       comprobante: comp
         ? {
             tipo: comp.tipoComprobante,
@@ -267,6 +269,113 @@ export class MisComprasTiendaService {
         fecha: p.fechaPago,
         cuota: p.cuotaVenta?.numero ?? null,
       })),
+    };
+  }
+
+  /**
+   * Estado de cuenta de las compras A CRÉDITO de un titular: las personales
+   * (`clienteEmpresaId` null) o las de UNA empresa donde es contacto. Nunca
+   * mezcla: la deuda de la empresa la paga la empresa. Sale con la forma del
+   * estado de cuenta del panel (CxC), para que la web use el mismo PDF.
+   */
+  async estadoCuenta(empresaId: string, personaId: string, clienteEmpresaId: string | null) {
+    const acceso = await this.acceso(empresaId, personaId);
+    if (!acceso) throw new NotFoundException('Sin compras en esta tienda');
+
+    const [empresa, persona, ce] = await Promise.all([
+      this.prisma.empresa.findUnique({ where: { id: empresaId }, select: { nombre: true, ruc: true } }),
+      this.prisma.persona.findUnique({ where: { id: personaId }, select: { nombres: true, apellidos: true, dni: true } }),
+      clienteEmpresaId
+        ? this.prisma.clienteEmpresa.findFirst({ where: { id: clienteEmpresaId, empresaId }, select: { razonSocial: true, numeroDocumento: true } })
+        : Promise.resolve(null),
+    ]);
+    if (clienteEmpresaId && !ce) throw new NotFoundException('Empresa no encontrada');
+
+    const ventas = await this.prisma.venta.findMany({
+      where: {
+        ...this.where(empresaId, acceso),
+        esCredito: true,
+        clienteEmpresaId: clienteEmpresaId ?? null,
+      },
+      include: {
+        ...incluirCompra,
+        detalles: { select: { productoId: true, descripcion: true, cantidad: true, precioUnitario: true, total: true } },
+      },
+      orderBy: [{ fechaVenta: 'desc' }, { codigo: 'desc' }],
+      take: 200,
+    });
+    // Pedir la de una empresa donde NO es contacto da vacío por el acceso: 404.
+    if (clienteEmpresaId && !ventas.length) throw new NotFoundException('Sin compras a crédito de esa empresa');
+
+    const hoy = diaLima(new Date());
+    const filas = ventas.map((v) => {
+      const m = this.montos(v, hoy);
+      return {
+        ventaId: v.id,
+        codigo: v.codigo,
+        fechaVenta: v.fechaVenta,
+        total: m.total,
+        totalPagado: m.pagado,
+        saldoPendiente: m.saldo,
+        estado: m.estado === 'PAGADA' ? 'PAGADA' : m.estado === 'VENCIDA' ? 'VENCIDA' : 'PENDIENTE',
+        fechaVencimiento: m.proxima?.fechaVencimiento ?? v.fechaVencimientoPago,
+        diasVencimiento: null,
+        numeroCuotas: v.numeroCuotas ?? undefined,
+        totalMora: m.mora,
+      };
+    });
+    const abonos = ventas.length
+      ? await this.prisma.pagoVenta.findMany({
+          where: { anulado: false, ventaId: { in: ventas.map((v) => v.id) } },
+          orderBy: { fechaPago: 'desc' },
+          take: 300,
+          select: { id: true, monto: true, metodoPago: true, fechaPago: true, venta: { select: { codigo: true } } },
+        })
+      : [];
+    const conSaldo = filas.filter((f) => f.saldoPendiente > 0);
+
+    return {
+      empresa: { nombre: empresa?.nombre ?? '', ruc: empresa?.ruc ?? null },
+      estadoCuenta: {
+        cliente: ce
+          ? { id: clienteEmpresaId, tipo: 'EMPRESA', nombre: ce.razonSocial, documento: ce.numeroDocumento }
+          : {
+              id: null,
+              tipo: 'PERSONA',
+              nombre: [persona?.nombres, persona?.apellidos].filter(Boolean).join(' ') || null,
+              documento: persona?.dni ?? null,
+            },
+        resumen: {
+          saldoPendiente: r2(conSaldo.reduce((s, f) => s + f.saldoPendiente, 0)),
+          totalVendido: r2(filas.reduce((s, f) => s + f.total, 0)),
+          totalAbonado: r2(filas.reduce((s, f) => s + f.totalPagado, 0)),
+          totalMora: r2(filas.reduce((s, f) => s + f.totalMora, 0)),
+          cantidadVentas: filas.length,
+          ventasConSaldo: conSaldo.length,
+        },
+        ventas: filas,
+        abonos: abonos.map((a) => ({
+          id: a.id,
+          monto: r2(Number(a.monto)),
+          metodoPago: a.metodoPago,
+          // A dónde entró la plata (caja/banco) es interno de la tienda.
+          fuente: null,
+          fechaPago: a.fechaPago,
+          ventaCodigo: a.venta?.codigo ?? null,
+        })),
+      },
+      // Las líneas de cada venta, por ventaId (el PDF las cuelga de su fila).
+      detalles: Object.fromEntries(
+        ventas.map((v) => [
+          v.id,
+          v.detalles.map((d) => ({
+            descripcion: d.descripcion,
+            cantidad: Number(d.cantidad),
+            precioUnitario: r2(Number(d.precioUnitario)),
+            total: r2(Number(d.total)),
+          })),
+        ]),
+      ),
     };
   }
 }

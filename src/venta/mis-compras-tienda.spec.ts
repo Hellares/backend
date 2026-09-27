@@ -27,11 +27,20 @@ const makeService = (opts: {
   empresasCliente?: { id: string }[];
   ventas?: any[];
   venta?: any;
+  clienteEmpresa?: any;
 } = {}) => {
   const prisma: any = {
     empresaPersona: { findFirst: jest.fn().mockResolvedValue(opts.empresaPersona ?? null) },
-    persona: { findUnique: jest.fn().mockResolvedValue(opts.dni === undefined ? null : { dni: opts.dni }) },
-    clienteEmpresa: { findMany: jest.fn().mockResolvedValue(opts.empresasCliente ?? []) },
+    persona: {
+      findUnique: jest.fn().mockResolvedValue(
+        opts.dni === undefined ? null : { dni: opts.dni, nombres: 'Ana', apellidos: 'Díaz' },
+      ),
+    },
+    clienteEmpresa: {
+      findMany: jest.fn().mockResolvedValue(opts.empresasCliente ?? []),
+      findFirst: jest.fn().mockResolvedValue(opts.clienteEmpresa ?? null),
+    },
+    empresa: { findUnique: jest.fn().mockResolvedValue({ nombre: 'TIENDA SAC', ruc: '20123456789' }) },
     venta: {
       findMany: jest.fn().mockResolvedValue(opts.ventas ?? []),
       findFirst: jest.fn().mockResolvedValue(opts.venta ?? null),
@@ -131,5 +140,31 @@ describe('Tienda web: mis compras', () => {
     const res = await service.detalle('e1', 'p1', 'v1');
     expect(res.comprobante).toBeNull();
     expect(res.items).toEqual([{ descripcion: 'Mouse', cantidad: 2, precioUnitario: 45, descuento: 0, subtotal: 90, imagen: null }]);
+  });
+
+  it('estado de cuenta personal: solo crédito y SIN las compras de empresas', async () => {
+    const { service, prisma } = makeService({
+      empresaPersona: { id: 'ep1' }, dni: '12345678', empresasCliente: [{ id: 'ce1' }],
+      ventas: [venta({ id: 'a', codigo: 'V-A', esCredito: true, estado: 'CONFIRMADA', total: 300,
+        cuotas: [cuota(1, 300, 300, dia(5))],
+        detalles: [{ productoId: null, descripcion: 'Laptop', cantidad: 1, precioUnitario: 300, total: 300 }] })],
+    });
+    const res = await service.estadoCuenta('e1', 'p1', null);
+    const where = prisma.venta.findMany.mock.calls[0][0].where;
+    expect(where.esCredito).toBe(true);
+    expect(where.clienteEmpresaId).toBeNull();
+    expect(res.estadoCuenta.cliente).toMatchObject({ tipo: 'PERSONA', nombre: 'Ana Díaz', documento: '12345678' });
+    expect(res.estadoCuenta.resumen).toMatchObject({ saldoPendiente: 300, cantidadVentas: 1, ventasConSaldo: 1 });
+    expect(res.detalles.a).toEqual([{ descripcion: 'Laptop', cantidad: 1, precioUnitario: 300, total: 300 }]);
+    expect(res.empresa).toEqual({ nombre: 'TIENDA SAC', ruc: '20123456789' });
+  });
+
+  it('estado de cuenta de una empresa donde NO es contacto: 404 (el acceso deja la lista vacía)', async () => {
+    const { service } = makeService({
+      empresaPersona: { id: 'ep1' }, dni: '12345678',
+      clienteEmpresa: { razonSocial: 'OTRA SAC', numeroDocumento: '20999999999' },
+      ventas: [],
+    });
+    await expect(service.estadoCuenta('e1', 'p1', 'ce-ajena')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

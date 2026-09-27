@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -21,6 +21,18 @@ export class MisComprasTiendaController {
   async listar(@Param('subdominio') subdominio: string, @CurrentUser() user: { personaId: string }) {
     const empresaId = await this.compras.empresaIdTienda(subdominio);
     return this.compras.listar(empresaId, user.personaId);
+  }
+
+  // Antes de `:id`: si no, "estado-cuenta" se tomaría como el id de una venta.
+  @Get('estado-cuenta')
+  @ApiOperation({ summary: 'Estado de cuenta (crédito) personal o de una empresa donde es contacto' })
+  async estadoCuenta(
+    @Param('subdominio') subdominio: string,
+    @Query('empresa') clienteEmpresaId: string | undefined,
+    @CurrentUser() user: { personaId: string },
+  ) {
+    const empresaId = await this.compras.empresaIdTienda(subdominio);
+    return this.compras.estadoCuenta(empresaId, user.personaId, clienteEmpresaId?.trim() || null);
   }
 
   @Get(':id')
