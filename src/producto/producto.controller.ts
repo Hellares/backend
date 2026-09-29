@@ -31,6 +31,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { ProductoService } from './producto.service';
 import { ProductoVarianteService } from './producto-variante.service';
+import { VarianteDisenoService } from './variante-diseno.service';
+import { SepararPorDisenoDto } from './dto/separar-por-diseno.dto';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoAtributoValorService } from './producto-atributo-valor.service';
 import { PrecioNivelService } from './precio-nivel.service';
@@ -82,6 +84,7 @@ export class ProductoController {
     private readonly bulkUploadService: ProductoBulkUploadService,
     private readonly trazabilidadService: ProductoTrazabilidadService,
     private readonly costoVentaService: CostoVentaService,
+    private readonly varianteDisenoService: VarianteDisenoService,
   ) {}
 
   @Post()
@@ -993,6 +996,25 @@ export class ProductoController {
     @Headers('x-tenant-id') empresaId: string,
   ): Promise<{ nombreAnterior: string; nombre: string }> {
     return await this.varianteService.regenerarNombre(varianteId, empresaId);
+  }
+
+  @Post('variantes/:varianteId/separar-por-diseno')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Separar una variante en diseños (una foto = un diseño)',
+    description:
+      'Cada foto elegida pasa a ser una variante nueva con las unidades que se ' +
+      'le asignan: copia atributos, precios y costo, y mueve el stock con su ' +
+      'lote. Lo no asignado queda en la original; si queda en cero, se desactiva.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async separarPorDiseno(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: SepararPorDisenoDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.varianteDisenoService.separar(empresaId, varianteId, dto, user.sub);
   }
 
   @Post(':productoId/variantes/generar-combinaciones')

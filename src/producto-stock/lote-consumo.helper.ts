@@ -685,6 +685,107 @@ export async function heredarLotesDeTransferencia(
   return { asignaciones, sinCubrir: restante };
 }
 
+/**
+ * Replica en OTRO stock los lotes de los que salió una salida ya registrada.
+ *
+ * Es el pase de mercadería entre dos variantes que en realidad son la misma
+ * cosa física (separar una variante por diseño): el edredón no cambia de
+ * factura, de proveedor ni de costo por pasar a llamarse "KITTY / D3". Sin
+ * esto la entrada crearía un lote `AJU-` sin proveedor y el kardex del diseño
+ * no podría decir de qué compra vino.
+ *
+ * A diferencia de la transferencia, acá la salida y la entrada ocurren en la
+ * MISMA transacción y una sola vez, así que no hay tandas que descontar: se
+ * crea un lote de destino por cada lote de origen, enlazado por
+ * `loteOrigenId`.
+ */
+export async function heredarLotesDeSalida(
+  tx: Prisma.TransactionClient,
+  salidaMovimientoId: string,
+  cantidad: number,
+  destino: {
+    productoStockId: string;
+    empresaId: string;
+    sedeId: string;
+    productoId: string | null;
+    varianteId: string | null;
+    usuarioId: string;
+    observaciones: string;
+  },
+): Promise<{ asignaciones: AsignacionLote[]; sinCubrir: number }> {
+  if (cantidad <= 0) return { asignaciones: [], sinCubrir: 0 };
+
+  const consumos = await tx.movimientoStockLote.findMany({
+    where: { movimientoStockId: salidaMovimientoId, cantidad: { gt: 0 } },
+    select: {
+      cantidad: true,
+      lote: {
+        select: {
+          id: true,
+          codigo: true,
+          numeroLote: true,
+          precioCosto: true,
+          moneda: true,
+          fechaIngreso: true,
+          fechaVencimiento: true,
+          fechaProduccion: true,
+          proveedorId: true,
+          nombreProveedor: true,
+          compraId: true,
+        },
+      },
+    },
+    orderBy: { creadoEn: 'asc' },
+  });
+
+  const asignaciones: AsignacionLote[] = [];
+  let restante = cantidad;
+
+  for (const c of consumos) {
+    if (restante <= 0) break;
+    const origen = c.lote;
+    const toma = Math.min(c.cantidad, restante);
+
+    const nuevo = await tx.lote.create({
+      data: {
+        empresaId: destino.empresaId,
+        sedeId: destino.sedeId,
+        productoStockId: destino.productoStockId,
+        productoId: destino.productoId,
+        varianteId: destino.varianteId,
+        compraId: origen.compraId,
+        loteOrigenId: origen.id,
+        // Único por construcción: un lote de origen, un stock de destino.
+        codigo: `${origen.codigo}/${destino.productoStockId.slice(-6).toUpperCase()}`,
+        numeroLote: origen.numeroLote,
+        precioCosto: origen.precioCosto,
+        moneda: origen.moneda,
+        cantidadInicial: toma,
+        cantidadActual: toma,
+        // La del lote de origen: FEFO desempata los "sin vencimiento" por
+        // antigüedad, y la mercadería no llegó hoy por cambiarle el nombre.
+        fechaIngreso: origen.fechaIngreso,
+        fechaVencimiento: origen.fechaVencimiento,
+        fechaProduccion: origen.fechaProduccion,
+        proveedorId: origen.proveedorId,
+        nombreProveedor: origen.nombreProveedor,
+        observaciones: `${destino.observaciones}: hereda el lote ${origen.codigo}`,
+        creadoPor: destino.usuarioId,
+      },
+      select: { id: true },
+    });
+
+    asignaciones.push({
+      loteId: nuevo.id,
+      cantidad: -toma,
+      costoUnitario: origen.precioCosto,
+    });
+    restante -= toma;
+  }
+
+  return { asignaciones, sinCubrir: restante };
+}
+
 /** Persiste el reparto en la tabla puente. */
 export async function registrarAsignaciones(
   tx: Prisma.TransactionClient,

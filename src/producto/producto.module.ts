@@ -28,6 +28,7 @@ import { ProductoBulkUploadService } from './producto-bulk-upload.service';
 import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
 import { CostoVentaService } from './costo-venta.service';
 import { TextoBusquedaService } from './texto-busqueda.service';
+import { VarianteDisenoService } from './variante-diseno.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule],
@@ -71,6 +72,7 @@ import { TextoBusquedaService } from './texto-busqueda.service';
 
     // Índice de búsqueda unificada
     TextoBusquedaService,
+    VarianteDisenoService,
 
     // Helpers
     SedeContextHelper,

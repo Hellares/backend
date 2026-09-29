@@ -782,7 +782,7 @@ export class MarketplaceService {
           select: {
             id: true, nombre: true, sku: true,
             atributosValores: {
-              select: { valor: true, atributo: { select: { nombre: true } } },
+              select: { valor: true, atributo: { select: { nombre: true, clave: true } } },
             },
             stocksPorSede: {
               where: { precioConfigurado: true },
@@ -899,6 +899,9 @@ export class MarketplaceService {
         // que el comprador necesita para elegir.
         atributos: (v.atributosValores ?? []).map((a: any) => ({
           nombre: a.atributo?.nombre ?? '',
+          // La clave deja que la tienda reconozca el "Diseño" (una foto = un
+          // diseño) sin depender de cómo lo nombró la empresa.
+          clave: a.atributo?.clave ?? null,
           valor: a.valor,
         })),
         imagenes: varImgMap.get(v.id) ?? [],
