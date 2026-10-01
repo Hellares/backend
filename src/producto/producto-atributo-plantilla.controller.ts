@@ -159,8 +159,10 @@ export class ProductoAtributoPlantillaController {
   remove(
     @Param('id') id: string,
     @Headers('x-tenant-id') empresaId: string,
+    @Query('forzar') forzar?: string,
   ): Promise<void> {
-    return this.plantillaService.remove(id, empresaId);
+    // Sin `forzar=true`, una plantilla en uso no se elimina (ver el servicio).
+    return this.plantillaService.remove(id, empresaId, forzar === 'true');
   }
 
   @Post('aplicar')

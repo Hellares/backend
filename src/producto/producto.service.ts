@@ -70,6 +70,21 @@ export class ProductoService {
   }
 
   /**
+   * Las plantillas que llegan del cliente, reducidas a las ACTIVAS de la
+   * empresa y sin repetir, en el orden recibido. El id puede venir viejo (una
+   * plantilla ya eliminada en el cache del app) o ser de otra empresa.
+   */
+  private async plantillasValidas(empresaId: string, ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return ids;
+    const validas = await this.prisma.productoAtributoPlantilla.findMany({
+      where: { id: { in: ids }, empresaId, isActive: true },
+      select: { id: true },
+    });
+    const ok = new Set(validas.map((p) => p.id));
+    return [...new Set(ids)].filter((id) => ok.has(id));
+  }
+
+  /**
    * Garantiza que `impuestoPorcentaje` coincida con `tipoAfectacionIgv` (Cat.07 SUNAT).
    * GRAVADO → 18 ; EXONERADO/INAFECTO → 0. Lanza si el cliente envía valores incoherentes.
    */
@@ -211,6 +226,13 @@ export class ProductoService {
 
     // 1.5 Verificar límite de productos del plan de suscripción
     await this.planLimitsService.checkProductosLimit(empresaId);
+
+    if (productoData.plantillasAtributosIds) {
+      productoData.plantillasAtributosIds = await this.plantillasValidas(
+        empresaId,
+        productoData.plantillasAtributosIds,
+      );
+    }
 
     // 2. Resolver sedes: múltiples o única
     let sedesResueltas: string[] = [];
@@ -1188,6 +1210,13 @@ export class ProductoService {
     //   fechaInicioOferta: productoData.fechaInicioOferta,
     //   fechaFinOferta: productoData.fechaFinOferta,
     // });
+
+    if (productoData.plantillasAtributosIds) {
+      productoData.plantillasAtributosIds = await this.plantillasValidas(
+        empresaId,
+        productoData.plantillasAtributosIds,
+      );
+    }
 
     // 3. Validaciones (delegar a CatalogService)
     if (productoData.empresaCategoriaId) {

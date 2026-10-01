@@ -62,22 +62,26 @@ export class ProductoAtributoValorService {
   /// describe nada.
   private async podarSecciones(
     tx: Prisma.TransactionClient,
+    empresaId: string,
     ids: string[],
     recienAplicadas: Set<string>,
     atributosConValor: Set<string>,
   ): Promise<string[]> {
     if (ids.length === 0) return ids;
 
+    // Solo las ACTIVAS de la empresa: eliminar una plantilla es un soft
+    // delete, así que la fila sigue ahí; y el id llega del cliente, que puede
+    // mandar uno viejo de su cache o uno ajeno.
     const plantillas = await tx.productoAtributoPlantilla.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: ids }, empresaId, isActive: true },
       select: { id: true, atributos: { select: { atributoId: true } } },
     });
     const porId = new Map(plantillas.map((p) => [p.id, p]));
 
     return ids.filter((id) => {
-      if (recienAplicadas.has(id)) return true;
       const plantilla = porId.get(id);
       if (!plantilla) return false;
+      if (recienAplicadas.has(id)) return true;
       return plantilla.atributos.some((a) => atributosConValor.has(a.atributoId));
     });
   }
@@ -149,6 +153,7 @@ export class ProductoAtributoValorService {
       );
       const plantillasAtributosIds = await this.podarSecciones(
         tx,
+        empresaId,
         [...producto.plantillasAtributosIds, ...new Set(seccionesNuevas)],
         new Set(dto.plantillasAtributosIds ?? []),
         new Set(valoresCreados.map((v) => v.atributoId)),

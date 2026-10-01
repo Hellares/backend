@@ -82,21 +82,7 @@ export class ProductoAtributoPlantillaService {
     // Validar límite del plan (solo para plantillas personalizadas)
     await this.planLimitsService.checkPlantillasAtributosLimit(empresaId);
 
-    // Verificar que el nombre no esté duplicado
-    const existe = await this.prisma.productoAtributoPlantilla.findUnique({
-      where: {
-        empresaId_nombre: {
-          empresaId,
-          nombre: createDto.nombre,
-        },
-      },
-    });
-
-    if (existe) {
-      throw new BadRequestException(
-        `Ya existe una plantilla con el nombre "${createDto.nombre}"`,
-      );
-    }
+    await this.liberarNombre(empresaId, createDto.nombre);
 
     // Verificar que todos los atributos existan y pertenezcan a la empresa
     const atributoIds = createDto.atributos.map((a) => a.atributoId);
@@ -212,20 +198,7 @@ export class ProductoAtributoPlantillaService {
 
     // Verificar nombre único (si se está cambiando)
     if (updateDto.nombre && updateDto.nombre !== plantilla.nombre) {
-      const existe = await this.prisma.productoAtributoPlantilla.findUnique({
-        where: {
-          empresaId_nombre: {
-            empresaId,
-            nombre: updateDto.nombre,
-          },
-        },
-      });
-
-      if (existe) {
-        throw new BadRequestException(
-          `Ya existe una plantilla con el nombre "${updateDto.nombre}"`,
-        );
-      }
+      await this.liberarNombre(empresaId, updateDto.nombre);
     }
 
     // Validar atributos si se proporcionaron
@@ -284,9 +257,14 @@ export class ProductoAtributoPlantillaService {
   }
 
   /**
-   * Eliminar (soft delete) una plantilla
+   * Eliminar (soft delete) una plantilla.
+   *
+   * Si hay productos que la usan no se elimina salvo `forzar`: sus atributos
+   * perderían la sección y pasarían a "Otras" en la tienda sin que nadie lo
+   * decida. Con `forzar` la plantilla se quita de esos productos; los valores
+   * de los atributos NO se tocan.
    */
-  async remove(id: string, empresaId: string): Promise<void> {
+  async remove(id: string, empresaId: string, forzar = false): Promise<void> {
     const plantilla = await this.prisma.productoAtributoPlantilla.findFirst({
       where: { id, empresaId, isActive: true },
     });
@@ -301,12 +279,76 @@ export class ProductoAtributoPlantillaService {
       );
     }
 
-    await this.prisma.productoAtributoPlantilla.update({
-      where: { id },
-      data: { isActive: false },
+    const enUso = await this.prisma.producto.count({
+      where: { empresaId, deletedAt: null, plantillasAtributosIds: { has: id } },
     });
 
+    if (enUso > 0 && !forzar) {
+      throw new BadRequestException(
+        `La plantilla "${plantilla.nombre}" está en uso en ${enUso} producto${enUso === 1 ? '' : 's'}. ` +
+          'Si la eliminas, sus atributos quedan sin sección en la ficha.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.productoAtributoPlantilla.update({
+        where: { id },
+        data: { isActive: false, nombre: this.nombreDeEliminada(plantilla.nombre) },
+      });
+
+      // `timezone('UTC', now())` y no `now()`: el delta-sync del app compara
+      // contra UTC y un sello en hora local deja el cambio sin viajar.
+      await tx.$executeRaw`
+        UPDATE "Producto"
+           SET "plantillasAtributosIds" = array_remove("plantillasAtributosIds", ${id}),
+               "actualizadoEn" = timezone('UTC', now())
+         WHERE "empresaId" = ${empresaId}
+           AND ${id} = ANY("plantillasAtributosIds")`;
+    });
+
+    if (enUso > 0) {
+      try {
+        await this.cacheService.invalidateProductosLists(empresaId);
+      } catch (e) {
+        this.logger.warn(
+          `No se pudo invalidar el cache de productos de ${empresaId}: ${e}`,
+        );
+      }
+    }
+
     this.logger.log(`Plantilla ${id} eliminada para empresa ${empresaId}`);
+  }
+
+  /**
+   * El nombre es único por empresa y eliminar es un soft delete: sin esto, el
+   * nombre de una plantilla eliminada quedaba tomado para siempre y volver a
+   * crearla fallaba con "ya existe" aunque no apareciera en ninguna lista.
+   */
+  private nombreDeEliminada(nombre: string): string {
+    return `${nombre} (eliminada ${Date.now().toString(36)})`;
+  }
+
+  /**
+   * Deja `nombre` disponible: falla si lo tiene una plantilla ACTIVA y, si lo
+   * tiene una eliminada (las de antes de renombrar al eliminar), la renombra.
+   */
+  private async liberarNombre(empresaId: string, nombre: string): Promise<void> {
+    const existe = await this.prisma.productoAtributoPlantilla.findUnique({
+      where: { empresaId_nombre: { empresaId, nombre } },
+      select: { id: true, isActive: true },
+    });
+    if (!existe) return;
+
+    if (existe.isActive) {
+      throw new BadRequestException(
+        `Ya existe una plantilla con el nombre "${nombre}"`,
+      );
+    }
+
+    await this.prisma.productoAtributoPlantilla.update({
+      where: { id: existe.id },
+      data: { nombre: this.nombreDeEliminada(nombre) },
+    });
   }
 
   /**
