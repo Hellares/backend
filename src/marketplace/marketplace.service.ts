@@ -960,6 +960,11 @@ export class MarketplaceService {
         || producto.empresaCategoria?.categoriaMaestra?.nombre || null,
       marca: producto.empresaMarca?.nombrePersonalizado
         || producto.empresaMarca?.marcaMaestra?.nombre || null,
+      // La EmpresaCategoria: con ella la tienda pide los "similares" a
+      // `empresas/:subdominio/productos`, que solo trae los de ESA empresa.
+      categoriaId: producto.empresaCategoriaId ?? null,
+      // Un texto opcional llega vacío, no null: `||` y no `??`.
+      sku: producto.sku || producto.codigoEmpresa || null,
       precio: stock?.precio ? Number(stock.precio) : null,
       precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
       enOferta: ofertaActiva,
