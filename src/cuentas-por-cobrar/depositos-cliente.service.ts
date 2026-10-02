@@ -331,6 +331,79 @@ export class DepositosClienteService {
     return Math.max(0, r2(Number(agg._sum.monto ?? 0) - Number(agg._sum.montoAplicado ?? 0)));
   }
 
+  /**
+   * Todos los clientes con saldo a favor: plata que ya entró a caja/banco y
+   * todavía no se aplicó a ninguna venta. Para tesorería es lo que la empresa
+   * "le debe" a sus clientes en ventas; junto va lo que cada uno aún debe.
+   */
+  async saldosAFavor(empresaId: string) {
+    const grupos = await this.prisma.depositoCliente.groupBy({
+      by: ['clienteId', 'clienteEmpresaId'],
+      where: { empresaId, anulado: false },
+      _sum: { monto: true, montoAplicado: true },
+      _count: { _all: true },
+      _max: { creadoEn: true },
+    });
+    const conSaldo = grupos
+      .map((g) => ({
+        clienteId: g.clienteId,
+        clienteEmpresaId: g.clienteEmpresaId,
+        saldoAFavor: r2(Number(g._sum.monto ?? 0) - Number(g._sum.montoAplicado ?? 0)),
+        depositos: g._count._all,
+        ultimoDeposito: g._max.creadoEn,
+      }))
+      .filter((g) => g.saldoAFavor > 0.005);
+    if (!conSaldo.length) return { total: 0, clientes: [] };
+
+    const epIds = conSaldo.map((g) => g.clienteId).filter((x): x is string => !!x);
+    const ceIds = conSaldo.map((g) => g.clienteEmpresaId).filter((x): x is string => !!x);
+    const [eps, ces, cuentas] = await Promise.all([
+      epIds.length
+        ? this.prisma.empresaPersona.findMany({
+            where: { id: { in: epIds }, empresaId },
+            select: { id: true, persona: { select: { nombres: true, apellidos: true, dni: true } } },
+          })
+        : [],
+      ceIds.length
+        ? this.prisma.clienteEmpresa.findMany({
+            where: { id: { in: ceIds }, empresaId },
+            select: { id: true, razonSocial: true, numeroDocumento: true },
+          })
+        : [],
+      this.cxc.listar(empresaId),
+    ]);
+    const ficha = new Map<string, { nombre: string; documento: string | null }>();
+    for (const e of eps) {
+      ficha.set(e.id, {
+        nombre: [e.persona?.nombres, e.persona?.apellidos].filter(Boolean).join(' ') || 'Cliente',
+        documento: e.persona?.dni ?? null,
+      });
+    }
+    for (const c of ces) ficha.set(c.id, { nombre: c.razonSocial, documento: c.numeroDocumento });
+
+    // Lo que cada titular todavía debe (lo personal y la empresa, sin mezclar).
+    const deuda = new Map<string, number>();
+    for (const c of cuentas) {
+      if (c.saldoPendiente <= 0) continue;
+      const k = c.clienteEmpresaId ? `e:${c.clienteEmpresaId}` : c.clienteId ? `p:${c.clienteId}` : null;
+      if (k) deuda.set(k, r2((deuda.get(k) ?? 0) + c.saldoPendiente));
+    }
+
+    const clientes = conSaldo
+      .map((g) => {
+        const f = ficha.get(g.clienteEmpresaId ?? g.clienteId ?? '');
+        return {
+          ...g,
+          tipo: g.clienteEmpresaId ? 'EMPRESA' : 'PERSONA',
+          nombre: f?.nombre ?? 'Cliente',
+          documento: f?.documento ?? null,
+          deuda: deuda.get(g.clienteEmpresaId ? `e:${g.clienteEmpresaId}` : `p:${g.clienteId}`) ?? 0,
+        };
+      })
+      .sort((a, b) => b.saldoAFavor - a.saldoAFavor);
+    return { total: r2(clientes.reduce((s, c) => s + c.saldoAFavor, 0)), clientes };
+  }
+
   /** Los depósitos de un cliente, con a qué ventas fue cada uno. */
   async listar(empresaId: string, tIn: TitularDeposito) {
     const t = await this.titular(this.prisma, empresaId, tIn);

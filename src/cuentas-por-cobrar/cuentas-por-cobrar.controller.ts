@@ -117,6 +117,14 @@ export class CuentasPorCobrarController {
     return this.depositos.listar(empresaId, { clienteId, clienteEmpresaId });
   }
 
+  @Get('depositos/saldos-a-favor')
+  @RequiresPermission(Permission.VIEW_VENTAS)
+  @ApiOperation({ summary: 'Clientes con saldo a favor (depositado y sin aplicar) y el total' })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async saldosAFavor(@Headers('x-tenant-id') empresaId: string) {
+    return this.depositos.saldosAFavor(empresaId);
+  }
+
   @Get('depositos/sugerencia')
   @RequiresPermission(Permission.VIEW_VENTAS)
   @ApiOperation({ summary: 'Cómo repartir un monto entre las ventas con deuda del cliente (cuotas completas, la que vence primero)' })
