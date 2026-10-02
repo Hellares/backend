@@ -704,20 +704,42 @@ export class ProductoStockService {
     const limit = filtros?.limit ?? 100;
     const offset = filtros?.offset ?? 0;
 
-    const where: any = { productoStockId };
+    // 🔴 Una variante que nació de "Separar por diseño" trae también el
+    // historial de la variante de la que salió: es la MISMA mercadería con un
+    // atributo más, y sin esto su kardex arrancaba vacío (la compra y las
+    // ventas quedaban en la original, que encima se desactiva).
+    const origenes = await this.origenesPorSeparacion(productoStockId);
+    const propios: any = { productoStockId };
+    const where: any = origenes.length
+      ? {
+          OR: [
+            propios,
+            // Del origen, solo lo anterior a la separación: lo de después ya
+            // es de los otros diseños.
+            ...origenes.map((o) => ({
+              productoStockId: o.productoStockId,
+              creadoEn: { lt: o.hasta },
+            })),
+          ],
+        }
+      : { ...propios };
+    // Los filtros de abajo se SUMAN (AND): con origen el `where` ya usa OR.
+    const filtrosAnd: any[] = [];
+    where.AND = filtrosAnd;
 
     if (filtros?.tipo) {
-      where.tipo = filtros.tipo;
+      filtrosAnd.push({ tipo: filtros.tipo });
     }
 
     if (filtros?.fechaDesde || filtros?.fechaHasta) {
-      where.creadoEn = {};
+      const rango: any = {};
       if (filtros?.fechaDesde) {
-        where.creadoEn.gte = new Date(filtros.fechaDesde);
+        rango.gte = new Date(filtros.fechaDesde);
       }
       if (filtros?.fechaHasta) {
-        where.creadoEn.lte = new Date(filtros.fechaHasta);
+        rango.lte = new Date(filtros.fechaHasta);
       }
+      filtrosAnd.push({ creadoEn: rango });
     }
 
     // Filtro por código de documento: busca en numeroDocumento del propio
@@ -725,17 +747,19 @@ export class ProductoStockService {
     // transferencia/devolución). El user puede tipear "VEN-001" o solo "001".
     const docQuery = filtros?.documento?.trim();
     if (docQuery) {
-      where.OR = [
-        { numeroDocumento: { contains: docQuery, mode: 'insensitive' } },
-        { venta: { codigo: { contains: docQuery, mode: 'insensitive' } } },
-        { compra: { codigo: { contains: docQuery, mode: 'insensitive' } } },
-        {
-          transferencia: {
-            codigo: { contains: docQuery, mode: 'insensitive' },
+      filtrosAnd.push({
+        OR: [
+          { numeroDocumento: { contains: docQuery, mode: 'insensitive' } },
+          { venta: { codigo: { contains: docQuery, mode: 'insensitive' } } },
+          { compra: { codigo: { contains: docQuery, mode: 'insensitive' } } },
+          {
+            transferencia: {
+              codigo: { contains: docQuery, mode: 'insensitive' },
+            },
           },
-        },
-        { devolucion: { codigo: { contains: docQuery, mode: 'insensitive' } } },
-      ];
+          { devolucion: { codigo: { contains: docQuery, mode: 'insensitive' } } },
+        ],
+      });
     }
 
     // Para ubicar la LÍNEA de venta correspondiente a este stock (precio de
@@ -746,8 +770,14 @@ export class ProductoStockService {
       where: { id: productoStockId },
       select: { productoId: true, varianteId: true },
     });
-    const filtroLineaVenta = stockRow?.varianteId
-      ? { varianteId: stockRow.varianteId }
+    // Con origen, la línea de venta de un movimiento heredado es la de la
+    // variante ORIGINAL (la venta se hizo antes de separar).
+    const variantesDeLinea = [
+      stockRow?.varianteId,
+      ...origenes.map((o) => o.varianteId),
+    ].filter((x): x is string => !!x);
+    const filtroLineaVenta = variantesDeLinea.length
+      ? { varianteId: { in: variantesDeLinea } }
       : { productoId: stockRow?.productoId ?? '', varianteId: null };
 
     // Pedimos `limit + 1` para detectar si hay más sin requerir un count
@@ -819,9 +849,17 @@ export class ProductoStockService {
           : (u.email ?? ''),
       ]),
     );
+    const origenDe = new Map(origenes.map((o) => [o.productoStockId, o.nombre]));
     const movimientos = movimientosPage.map((m) => ({
       ...m,
       usuarioNombre: nombreUsuario.get(m.usuarioId) || null,
+      // Vino de la variante original (antes de separarla por diseño). Sus
+      // cantidades anterior/nueva son el stock de ESA variante, no de esta.
+      heredado: m.productoStockId !== productoStockId,
+      heredadoDe:
+        m.productoStockId !== productoStockId
+          ? (origenDe.get(m.productoStockId) ?? null)
+          : null,
     }));
 
     // Resumen agregado por tipo. Usa el MISMO `where` que la lista para
@@ -829,9 +867,11 @@ export class ProductoStockService {
     // global y descuadraba con lo visible cuando había filtros activos.
     // El resumen se calcula SIEMPRE sobre todo el histórico filtrado
     // (no respeta offset/limit) — es el total real.
+    // 🔴 Solo lo PROPIO: sumar lo heredado inflaría las entradas y salidas de
+    // esta variante con las de la original (y de sus otros diseños).
     const resumen = await this.prisma.movimientoStock.groupBy({
       by: ['tipo'],
-      where,
+      where: { ...propios, AND: filtrosAnd },
       _sum: { cantidad: true, valorMovimiento: true },
       _count: { id: true },
     });
@@ -851,6 +891,70 @@ export class ProductoStockService {
             : null,
       })),
     };
+  }
+
+  /**
+   * De qué stock(s) salió este por "Separar por diseño", subiendo la cadena
+   * (un diseño separado de otro ya separado).
+   *
+   * La separación no guarda un vínculo entre variantes: deja una
+   * PRODUCCION_ENTRADA acá y una PRODUCCION_SALIDA en la original, las dos con
+   * el MISMO motivo ("Separación por diseño: A → B") y en la misma
+   * transacción. Ese par es el vínculo.
+   */
+  private async origenesPorSeparacion(productoStockId: string) {
+    const origenes: {
+      productoStockId: string;
+      varianteId: string | null;
+      nombre: string | null;
+      hasta: Date;
+    }[] = [];
+    let actual = productoStockId;
+    let tope: Date | undefined;
+    // Tope de 5 saltos: es una cadena corta, y así no hay vuelta infinita.
+    for (let i = 0; i < 5; i++) {
+      const entrada = await this.prisma.movimientoStock.findFirst({
+        where: {
+          productoStockId: actual,
+          tipo: 'PRODUCCION_ENTRADA',
+          motivo: { startsWith: 'Separación por diseño' },
+          ...(tope ? { creadoEn: { lt: tope } } : {}),
+        },
+        orderBy: { creadoEn: 'asc' },
+        select: { motivo: true, creadoEn: true, sedeId: true, empresaId: true },
+      });
+      if (!entrada?.motivo) break;
+      const salida = await this.prisma.movimientoStock.findFirst({
+        where: {
+          empresaId: entrada.empresaId,
+          sedeId: entrada.sedeId,
+          tipo: 'PRODUCCION_SALIDA',
+          motivo: entrada.motivo,
+          productoStockId: { not: actual },
+          creadoEn: {
+            gte: new Date(entrada.creadoEn.getTime() - 30_000),
+            lte: new Date(entrada.creadoEn.getTime() + 30_000),
+          },
+        },
+        select: {
+          productoStockId: true,
+          creadoEn: true,
+          productoStock: {
+            select: { varianteId: true, variante: { select: { nombre: true } } },
+          },
+        },
+      });
+      if (!salida || origenes.some((o) => o.productoStockId === salida.productoStockId)) break;
+      origenes.push({
+        productoStockId: salida.productoStockId,
+        varianteId: salida.productoStock?.varianteId ?? null,
+        nombre: salida.productoStock?.variante?.nombre ?? null,
+        hasta: salida.creadoEn,
+      });
+      actual = salida.productoStockId;
+      tope = salida.creadoEn;
+    }
+    return origenes;
   }
 
   /**
