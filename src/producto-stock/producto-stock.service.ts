@@ -699,6 +699,13 @@ export class ProductoStockService {
       fechaDesde?: string;
       fechaHasta?: string;
       documento?: string;
+      /**
+       * Sumar el historial de la variante ORIGINAL (si esta nació de
+       * "Separar por diseño"). Es OPT-IN: quien lo pide tiene que dibujarlo
+       * aparte, porque esas filas NO son movimientos de este stock — sumadas
+       * a las propias dan un saldo que no existe.
+       */
+      incluirOrigen?: boolean;
     },
   ) {
     const limit = filtros?.limit ?? 100;
@@ -708,7 +715,13 @@ export class ProductoStockService {
     // historial de la variante de la que salió: es la MISMA mercadería con un
     // atributo más, y sin esto su kardex arrancaba vacío (la compra y las
     // ventas quedaban en la original, que encima se desactiva).
-    const origenes = await this.origenesPorSeparacion(productoStockId);
+    //
+    // Solo si lo piden (`incluirOrigen`): un cliente que no sabe distinguir
+    // las filas heredadas las mostraría como propias, y un kardex que lista
+    // una compra de 4 en una variante que recibió 1 es peor que uno corto.
+    const origenes = filtros?.incluirOrigen
+      ? await this.origenesPorSeparacion(productoStockId)
+      : [];
     const propios: any = { productoStockId };
     const where: any = origenes.length
       ? {
@@ -2304,6 +2317,8 @@ export class ProductoStockService {
       COTIZACION: 'Cotización',
       WHATSAPP_IA: 'Agente IA (WhatsApp)',
     };
+    // El Excel lleva SOLO lo propio (`incluirOrigen` no se pide): quien suma
+    // la columna Cantidad tiene que llegar al stock de esta variante.
     for (const mov of data.movimientos) {
       const doc = mov.venta?.codigo || mov.compra?.codigo || mov.transferencia?.codigo || mov.devolucion?.codigo || mov.numeroDocumento || '';
       const lineaVenta = mov.venta?.detalles?.[0];

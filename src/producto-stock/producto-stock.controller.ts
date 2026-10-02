@@ -371,6 +371,7 @@ export class ProductoStockController {
     @Query('fechaDesde') fechaDesde?: string,
     @Query('fechaHasta') fechaHasta?: string,
     @Query('documento') documento?: string,
+    @Query('incluirOrigen') incluirOrigen?: string,
   ) {
     return this.stockService.getHistorialMovimientos(id, {
       limit: limit ? parseInt(limit) : undefined,
@@ -379,6 +380,8 @@ export class ProductoStockController {
       fechaDesde,
       fechaHasta,
       documento,
+      // Opt-in: solo los clientes que dibujan lo heredado APARTE.
+      incluirOrigen: incluirOrigen === 'true',
     });
   }
 

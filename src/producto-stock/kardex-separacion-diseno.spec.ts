@@ -10,6 +10,9 @@ import { ProductoStockService } from './producto-stock.service';
  * - El resumen suma solo lo propio: si no, las entradas y salidas de esta
  *   variante se inflan con las de la original.
  * - Una variante que no viene de una separación se consulta como siempre.
+ * - Es OPT-IN: sin `incluirOrigen` (el APK viejo, el Excel) sale solo lo
+ *   propio. Las filas heredadas NO son movimientos de este stock: sumadas a
+ *   las propias dan un saldo que no existe.
  *
  * Caso real: VAR-000087 (JAYLI) se separó el 02-10-2026 en …/D1 y el kardex
  * de D1 mostraba una sola fila; la compra y las ventas quedaban en la
@@ -60,7 +63,7 @@ const make = (opts: { separada: boolean }) => {
 describe('Kardex de una variante separada por diseño', () => {
   it('trae lo propio y lo de la variante original anterior a la separación', async () => {
     const { service, prisma } = make({ separada: true });
-    const res = await service.getHistorialMovimientos('ps-d1');
+    const res = await service.getHistorialMovimientos('ps-d1', { incluirOrigen: true });
     const where = prisma.movimientoStock.findMany.mock.calls[0][0].where;
     expect(where.OR).toEqual([
       { productoStockId: 'ps-d1' },
@@ -75,14 +78,14 @@ describe('Kardex de una variante separada por diseño', () => {
 
   it('la línea de venta de un movimiento heredado se busca en la variante original', async () => {
     const { service, prisma } = make({ separada: true });
-    await service.getHistorialMovimientos('ps-d1');
+    await service.getHistorialMovimientos('ps-d1', { incluirOrigen: true });
     const include = prisma.movimientoStock.findMany.mock.calls[0][0].include;
     expect(include.venta.select.detalles.where).toEqual({ varianteId: { in: ['var-d1', 'var-original'] } });
   });
 
   it('el resumen suma solo lo propio', async () => {
     const { service, prisma } = make({ separada: true });
-    await service.getHistorialMovimientos('ps-d1', { tipo: 'SALIDA_VENTA' });
+    await service.getHistorialMovimientos('ps-d1', { tipo: 'SALIDA_VENTA', incluirOrigen: true });
     const where = prisma.movimientoStock.groupBy.mock.calls[0][0].where;
     expect(where.productoStockId).toBe('ps-d1');
     expect(where.OR).toBeUndefined();
@@ -91,7 +94,7 @@ describe('Kardex de una variante separada por diseño', () => {
 
   it('los filtros se suman al OR sin pisarlo', async () => {
     const { service, prisma } = make({ separada: true });
-    await service.getHistorialMovimientos('ps-d1', { documento: '814' });
+    await service.getHistorialMovimientos('ps-d1', { documento: '814', incluirOrigen: true });
     const where = prisma.movimientoStock.findMany.mock.calls[0][0].where;
     expect(where.OR).toHaveLength(2);
     expect(where.AND[0].OR[0]).toEqual({ numeroDocumento: { contains: '814', mode: 'insensitive' } });
@@ -102,10 +105,19 @@ describe('Kardex de una variante separada por diseño', () => {
     prisma.movimientoStock.findMany.mockResolvedValue([
       mov('m3', 'ps-d1', 'ENTRADA_COMPRA', '2026-10-02T07:04:07.712Z'),
     ]);
-    const res = await service.getHistorialMovimientos('ps-d1');
+    const res = await service.getHistorialMovimientos('ps-d1', { incluirOrigen: true });
     const where = prisma.movimientoStock.findMany.mock.calls[0][0].where;
     expect(where.productoStockId).toBe('ps-d1');
     expect(where.OR).toBeUndefined();
     expect(res.movimientos.every((m: any) => m.heredado === false)).toBe(true);
+  });
+
+  it('sin pedirlo (APK viejo, Excel) sale SOLO lo propio y ni busca el origen', async () => {
+    const { service, prisma } = make({ separada: true });
+    await service.getHistorialMovimientos('ps-d1');
+    const where = prisma.movimientoStock.findMany.mock.calls[0][0].where;
+    expect(where.productoStockId).toBe('ps-d1');
+    expect(where.OR).toBeUndefined();
+    expect(prisma.movimientoStock.findFirst).not.toHaveBeenCalled();
   });
 });
