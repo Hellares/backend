@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsString,
   IsOptional,
   IsNumber,
@@ -152,6 +153,29 @@ export class CreateVentaDetalleDto {
   @IsOptional()
   @IsIn(PRECIO_MODOS_COSTO as unknown as string[])
   precioModo?: PrecioModoCosto;
+
+  @ApiPropertyOptional({
+    description:
+      'VENDER POR MAYOR. La línea se cobra con su precio por mayor aunque la ' +
+      'cantidad no llegue al mínimo del nivel: el servidor la precia como si ' +
+      'llevara ese mínimo. Sigue ganando el menor (oferta, liquidación, VIP) ' +
+      'y `precioUnitario` tiene que coincidir con lo que calcula el servidor ' +
+      '(`POST /productos/precios-mayor` lo cotiza). Exige el granular ' +
+      '`venta.editar-precio`. No va junto con `precioModo` (a costo), ni en ' +
+      'servicios ni combos. Un ítem sin niveles por mayor queda a su precio.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  precioPorMayor?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Qué nivel por mayor aplicar (solo con `precioPorMayor`). Omitido = el ' +
+      'primer escalón (el de menor cantidad mínima).',
+  })
+  @IsOptional()
+  @IsString()
+  precioNivelId?: string;
 
   @ApiPropertyOptional({
     description:

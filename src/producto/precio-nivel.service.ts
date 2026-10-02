@@ -768,10 +768,25 @@ export class PrecioNivelService {
        * Sin este mapa, cada nivel se evalúa contra la línea, como siempre.
        */
       cantidadesGrupo?: Map<string, number>;
+      /**
+       * VENDER POR MAYOR: el cajero decide cobrar el precio por mayor aunque
+       * la cantidad no llegue al mínimo. El ítem se precia como si llevara el
+       * mínimo de ese escalón: `nivelId` si eligió uno, y si no el PRIMER
+       * escalón (el de menor cantidad mínima).
+       *
+       * No es un precio aparte: el nivel entra al mismo "gana el menor", así
+       * que una oferta, una liquidación o un precio VIP más baratos siguen
+       * ganando, y quien ya llega por cantidad a un escalón mejor lo conserva.
+       */
+      forzarMayor?: { nivelId?: string | null };
     },
   ): Promise<{
     precioUnitario: number;
     nivelAplicado: string;
+    /** El nivel ganó SOLO porque se forzó (la cantidad no llegaba a su mínimo). */
+    nivelForzado?: boolean;
+    /** Los escalones por mayor del ítem (cantidad mínima > 1), del más bajo al más alto. */
+    escalonesMayor?: Array<{ id: string; nombre: string; cantidadMinima: number; precio: number }>;
     descuentoAplicado: number;
     precioBase: number;
     /** Estado de liquidación si se aplicó (para snapshot de motivo en VentaDetalle). */
@@ -891,8 +906,37 @@ export class PrecioNivelService {
       return delGrupo != null && delGrupo > cantidad ? delGrupo : cantidad;
     };
 
+    const precioDeNivel = (n: (typeof niveles)[number]): number =>
+      n.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO
+        ? n.precio!.toNumber()
+        : precioBase * (1 - n.porcentajeDesc!.toNumber() / 100);
+
+    // Los escalones POR MAYOR: un nivel desde 1 unidad es el precio de
+    // siempre con otro nombre, no un mayoreo.
+    const escalones = niveles
+      .filter((n) => n.cantidadMinima > 1)
+      .sort((a, b) => a.cantidadMinima - b.cantidadMinima);
+
+    // ===== VENDER POR MAYOR (forzado por el cajero) =====
+    // El ítem se mide como si llevara el mínimo del escalón pedido.
+    let pisoForzado = 0;
+    if (opts?.forzarMayor && !opts?.ignorarNiveles) {
+      const pedido = opts.forzarMayor.nivelId;
+      const elegido = pedido ? escalones.find((n) => n.id === pedido) : escalones[0];
+      if (pedido && !elegido) {
+        // 🔴 No caer en silencio a otro escalón: se cobraría un precio que el
+        // cajero no eligió.
+        throw new BadRequestException({
+          code: 'NIVEL_MAYOR_NO_DISPONIBLE',
+          message: `El nivel por mayor elegido para "${itemNombre}" ya no existe o está inactivo. Vuelve a elegirlo.`,
+        });
+      }
+      // Sin escalones queda en 0: el ítem se cobra a su precio de siempre.
+      pisoForzado = elegido?.cantidadMinima ?? 0;
+    }
+
     const nivelesAplicables = niveles.filter((n) => {
-      const efectiva = cantidadParaNivel(n);
+      const efectiva = Math.max(cantidadParaNivel(n), pisoForzado);
       return (
         n.cantidadMinima <= efectiva &&
         (n.cantidadMaxima == null || n.cantidadMaxima >= efectiva)
@@ -901,15 +945,16 @@ export class PrecioNivelService {
 
     let precioConNivel: number | null = null;
     let nivelNombre: string | null = null;
+    /** El nivel aplica SOLO por el forzado: por cantidad no llegaba. */
+    let nivelPorForzado = false;
     if (nivelesAplicables.length) {
       // El más específico = mayor cantidadMinima (el orderBy ya los dejó así).
       const nivel = nivelesAplicables[0];
-      if (nivel.tipoPrecio === TipoPrecioNivel.PRECIO_FIJO) {
-        precioConNivel = nivel.precio!.toNumber();
-      } else {
-        precioConNivel = precioBase * (1 - nivel.porcentajeDesc!.toNumber() / 100);
-      }
-      nivelNombre = nivel.nombre;
+      precioConNivel = precioDeNivel(nivel);
+      nivelPorForzado = pisoForzado > 0 && cantidadParaNivel(nivel) < nivel.cantidadMinima;
+      // "(manual)" queda escrito en la venta: el reporte distingue el mayoreo
+      // que se ganó por cantidad del que decidió el cajero.
+      nivelNombre = nivelPorForzado ? `${nivel.nombre} (manual)` : nivel.nombre;
     }
 
     // Verificar oferta activa por fechas
@@ -942,6 +987,7 @@ export class PrecioNivelService {
       etiqueta: string;
       motivoLiquidacion?: string | null;
       vipPoliticaId?: string;
+      esNivel?: boolean;
     }> = [{ valor: precioBase, etiqueta: 'Precio base' }];
 
     // ===== Candidatos de precio especial VIP =====
@@ -972,7 +1018,7 @@ export class PrecioNivelService {
     // backend preciaría el componente por volumen y divergiría del precio
     // que mandó el cliente (base/oferta/liquidación) → 409 al cobrar.
     if (precioConNivel != null && !liquidacionVigente && !opts?.ignorarNiveles) {
-      candidatos.push({ valor: precioConNivel, etiqueta: nivelNombre ?? 'Nivel' });
+      candidatos.push({ valor: precioConNivel, etiqueta: nivelNombre ?? 'Nivel', esNivel: true });
     }
     if (precioOferta != null) candidatos.push({ valor: precioOferta, etiqueta: 'Oferta' });
     if (precioLiquidacion != null) {
@@ -999,6 +1045,13 @@ export class PrecioNivelService {
     return {
       precioUnitario: ganador.valor,
       nivelAplicado: ganador.etiqueta,
+      nivelForzado: nivelPorForzado && ganador.esNivel === true,
+      escalonesMayor: escalones.map((n) => ({
+        id: n.id,
+        nombre: n.nombre,
+        cantidadMinima: n.cantidadMinima,
+        precio: precioDeNivel(n),
+      })),
       descuentoAplicado,
       precioBase,
       motivoLiquidacion: ganador.motivoLiquidacion ?? null,
@@ -1011,6 +1064,73 @@ export class PrecioNivelService {
         precioLiquidacion ?? Number.POSITIVE_INFINITY,
       ),
     };
+  }
+
+  /**
+   * Cotiza "vender por mayor" para las líneas de un carrito: qué pagaría cada
+   * una normalmente y qué pagaría con el precio por mayor forzado, más sus
+   * escalones para que el cajero pueda elegir otro.
+   *
+   * Usa el MISMO cálculo que el cobro (`calcularPrecioSegunCantidad` con
+   * `forzarMayor`), con el mayoreo combinado del carrito adentro: lo que se ve
+   * acá es lo que el servidor va a exigir al cobrar.
+   */
+  async cotizarPorMayor(
+    items: Array<{
+      productoId?: string | null;
+      varianteId?: string | null;
+      cantidad?: number;
+      nivelId?: string | null;
+    }>,
+    sedeId: string,
+  ) {
+    const lineas = items.map((i) => ({
+      productoId: i.varianteId ? null : (i.productoId ?? null),
+      varianteId: i.varianteId ?? null,
+      cantidad: i.cantidad && i.cantidad > 0 ? i.cantidad : 1,
+      nivelId: i.nivelId ?? null,
+    }));
+    const cantidadesGrupo = await this.calcularCantidadesGrupoMayoreo(
+      lineas.map((l) => ({ varianteId: l.varianteId, cantidad: l.cantidad })),
+    );
+    const resultado: Array<Record<string, unknown>> = [];
+    for (const l of lineas) {
+      try {
+        const normal = await this.calcularPrecioSegunCantidad(
+          l.productoId, l.varianteId, sedeId, l.cantidad, { cantidadesGrupo },
+        );
+        const mayor = await this.calcularPrecioSegunCantidad(
+          l.productoId, l.varianteId, sedeId, l.cantidad,
+          { cantidadesGrupo, forzarMayor: { nivelId: l.nivelId } },
+        );
+        resultado.push({
+          productoId: l.productoId,
+          varianteId: l.varianteId,
+          cantidad: l.cantidad,
+          precioNormal: normal.precioUnitario,
+          precioMayor: mayor.precioUnitario,
+          nivelAplicado: mayor.nivelAplicado,
+          nivelForzado: mayor.nivelForzado === true,
+          // Sin escalones no hay precio por mayor que forzar: queda como está.
+          tieneMayor: (mayor.escalonesMayor ?? []).length > 0,
+          // El por mayor no mejora lo que ya pagaría (oferta/liquidación más
+          // barata, o ya llegaba por cantidad).
+          sinEfecto: mayor.precioUnitario >= normal.precioUnitario - 0.005,
+          escalones: mayor.escalonesMayor ?? [],
+          precioCosto: mayor.precioCosto ?? null,
+        });
+      } catch (e) {
+        resultado.push({
+          productoId: l.productoId,
+          varianteId: l.varianteId,
+          cantidad: l.cantidad,
+          error: e instanceof Error ? e.message : String(e),
+          tieneMayor: false,
+          escalones: [],
+        });
+      }
+    }
+    return { sedeId, items: resultado };
   }
 
   /**

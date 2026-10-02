@@ -453,6 +453,31 @@ export class VentaService {
       );
     }
 
+    /// VENDER POR MAYOR: líneas que el cajero decidió cobrar a precio por
+    /// mayor sin llegar a la cantidad. A diferencia del costo, el precio SÍ
+    /// sale de los niveles (forzando el escalón) y pasa por el mismo guard de
+    /// divergencia: el cajero cobra lo que vio en la cotización.
+    const lineasPorMayor = detalles.filter((d) => d.precioPorMayor === true);
+    if (lineasPorMayor.length) {
+      await this.assertPuedeVenderACosto(
+        opts?.usuarioId ?? null,
+        opts?.empresaId ?? null,
+        'por mayor',
+      );
+      for (const d of lineasPorMayor) {
+        if (d.precioModo) {
+          throw new BadRequestException(
+            `"${d.descripcion}" no puede venderse a costo y por mayor a la vez.`,
+          );
+        }
+        if (d.ordenServicioId || d.servicioId || d.comboId || d.origenComboId) {
+          throw new BadRequestException(
+            `"${d.descripcion}" es un servicio o un combo: no tiene precio por mayor.`,
+          );
+        }
+      }
+    }
+
     /// Divergencias entre el precio que el cliente envió y el que el backend
     /// calcula. Si después del loop hay alguna, abortamos la venta con 409
     /// para que el cajero refresque y reintente. Esto cierra la discrepancia
@@ -531,7 +556,15 @@ export class VentaService {
           d.cantidad,
           // Componentes de combo: sin niveles por mayor (el combo es su
           // propio deal). Evita divergencia 409 al editar cantidades.
-          { ignorarNiveles: !!d.origenComboId, vips: vipCtxs, cantidadesGrupo },
+          {
+            ignorarNiveles: !!d.origenComboId,
+            vips: vipCtxs,
+            cantidadesGrupo,
+            // Vender por mayor: se precia como si llevara el mínimo del escalón.
+            ...(d.precioPorMayor
+              ? { forzarMayor: { nivelId: d.precioNivelId ?? null } }
+              : {}),
+          },
         );
         // Precio VIP FAVORABLE: si el backend aplicó un precio especial de
         // cliente que es ≤ al que envió el cliente, NO se rebota con 409. El
@@ -581,6 +614,14 @@ export class VentaService {
           precioBaseVip: calc.vipAplicado ? calc.precioBase : null,
         });
       } catch (err) {
+        // 🔴 El nivel por mayor elegido ya no existe: esto NO cae al fallback.
+        // Aceptar el precio del cliente acá sería cobrar un nivel borrado.
+        if (
+          err instanceof BadRequestException &&
+          (err.getResponse() as { code?: string })?.code === 'NIVEL_MAYOR_NO_DISPONIBLE'
+        ) {
+          throw err;
+        }
         // Producto sin precio configurado en sede, etc. — caso edge donde el
         // cliente envía un precio "razonable" y el backend no puede recalcular.
         // Mantener fallback para no bloquear ventas legítimas.
@@ -625,12 +666,14 @@ export class VentaService {
   private async assertPuedeVenderACosto(
     usuarioId: string | null,
     empresaId: string | null,
+    /** Qué se intenta: "a costo" o "por mayor" (mismo permiso, otro texto). */
+    modo: 'a costo' | 'por mayor' = 'a costo',
   ): Promise<void> {
     if (!usuarioId || !empresaId) {
       // Flujos sin usuario en mano (edición de un borrador). No es un "no
       // tenés permiso": es que ese camino no sabe quién está pidiendo.
       throw new BadRequestException(
-        'Vender a costo solo está disponible al cobrar desde Venta Rápida.',
+        `Vender ${modo} solo está disponible al cobrar desde Venta Rápida.`,
       );
     }
 
@@ -652,9 +695,9 @@ export class VentaService {
 
     if (!permisos.canEditarPrecioVenta) {
       throw new BadRequestException({
-        code: 'SIN_PERMISO_VENDER_A_COSTO',
+        code: modo === 'a costo' ? 'SIN_PERMISO_VENDER_A_COSTO' : 'SIN_PERMISO_VENDER_POR_MAYOR',
         message:
-          'No tenés permiso para vender a costo. Pedile a un administrador ' +
+          `No tenés permiso para vender ${modo}. Pedile a un administrador ` +
           'el permiso "Cambiar precio al cobrar".',
       });
     }

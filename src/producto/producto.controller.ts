@@ -69,6 +69,7 @@ import { PrecioNivelResponseDto } from './dto/precio-nivel-response.dto';
 import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
 import { CostoVentaService } from './costo-venta.service';
 import { CostosVentaQueryDto } from './dto/costos-venta.dto';
+import { PreciosMayorQueryDto } from './dto/precios-mayor.dto';
 @ApiTags('Productos')
 @Controller('productos')
 @UseGuards(JwtAuthGuard, TenantAuthGuard, PermissionsGuard)
@@ -413,6 +414,23 @@ export class ProductoController {
   // =========================================
   // VENDER A COSTO (ANTES DE :id)
   // =========================================
+
+  @Post('precios-mayor')
+  @HttpCode(HttpStatus.OK)
+  @RequiresPermission(Permission.EDITAR_PRECIO_VENTA)
+  @ApiOperation({
+    summary: 'Cotiza "vender por mayor" para las líneas del carrito',
+    description:
+      'Para el interruptor de "vender por mayor" del POS. Por línea: el precio ' +
+      'normal, el precio por mayor forzado (aunque la cantidad no llegue al ' +
+      'mínimo), el nivel que queda aplicado y los escalones disponibles. Es el ' +
+      'mismo cálculo que hace el cobro, así que lo que devuelve es lo que el ' +
+      'servidor va a exigir en `precioUnitario`.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async preciosMayor(@Body() dto: PreciosMayorQueryDto) {
+    return this.precioNivelService.cotizarPorMayor(dto.items, dto.sedeId);
+  }
 
   @Post('costos-venta')
   @HttpCode(HttpStatus.OK)
