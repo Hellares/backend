@@ -1536,7 +1536,11 @@ export class ProductoService {
         }
 
         // 8. Actualizar atributos estructurados (dentro de la transacción)
-        if (atributosEstructurados && atributosEstructurados.length > 0 && !productoActualizado.tieneVariantes && !productoActualizado.esCombo) {
+        // 🔴 Un array VACÍO también cuenta: es "quitarle todos los atributos".
+        // Antes se exigía `length > 0` y sacar la última plantilla no borraba
+        // nada: el producto volvía a mostrar los valores de antes. Omitir el
+        // campo (undefined) sigue siendo "no tocar".
+        if (Array.isArray(atributosEstructurados) && !productoActualizado.tieneVariantes && !productoActualizado.esCombo) {
           // Eliminar atributos existentes del producto
           await tx.productoAtributoValor.deleteMany({
             where: { productoId: id },
