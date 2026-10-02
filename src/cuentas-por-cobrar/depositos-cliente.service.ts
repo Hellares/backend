@@ -102,7 +102,7 @@ export class DepositosClienteService {
       return sede.id;
     }
     const venta = await db.venta.findFirst({
-      where: { empresaId, esCredito: true, sedeId: { not: null }, ...DepositosClienteService.whereTitular(t) },
+      where: { empresaId, esCredito: true, ...DepositosClienteService.whereTitular(t) },
       orderBy: { fechaVenta: 'desc' },
       select: { sedeId: true },
     });
