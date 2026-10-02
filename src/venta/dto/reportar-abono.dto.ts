@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform, Type, plainToInstance } from 'class-transformer';
 import {
-  ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsNumber, IsOptional, IsString, MaxLength, Min, ValidateNested,
+  ArrayMaxSize, IsArray, IsIn, IsNumber, IsOptional, IsString, MaxLength, Min, ValidateNested,
 } from 'class-validator';
 
 export const METODOS_ABONO_CLIENTE = ['YAPE', 'PLIN', 'TRANSFERENCIA'] as const;
@@ -24,6 +24,9 @@ export class LineaAbonoDto {
  * El pago que el cliente reporta desde "Mis compras": a qué compras va y
  * cuánto a cada una. Llega como multipart (con las capturas), así que
  * `lineas` viaja como JSON en texto.
+ *
+ * SIN `lineas` es un DEPÓSITO: dice cuánto pagó (`monto`) y la tienda decide a
+ * qué compras va. `clienteEmpresaId` si lo pagó por una empresa.
  */
 export class ReportarAbonoDto {
   @ApiProperty({ type: [LineaAbonoDto], description: 'JSON: [{ ventaId, monto }]' })
@@ -34,11 +37,23 @@ export class ReportarAbonoDto {
     }
     return Array.isArray(lista) ? lista.map((x) => plainToInstance(LineaAbonoDto, x)) : lista;
   })
+  @IsOptional()
   @IsArray({ message: 'Elige a qué compras va el pago' })
-  @ArrayMinSize(1, { message: 'Elige al menos una compra' })
   @ArrayMaxSize(20)
   @ValidateNested({ each: true })
-  lineas: LineaAbonoDto[];
+  lineas?: LineaAbonoDto[];
+
+  @ApiProperty({ required: false, description: 'Cuánto depositó (solo sin `lineas`)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  monto?: number;
+
+  @ApiProperty({ required: false, description: 'La empresa por la que deposita (solo sin `lineas`)' })
+  @IsOptional()
+  @IsString()
+  clienteEmpresaId?: string;
 
   @ApiProperty({ enum: METODOS_ABONO_CLIENTE })
   @IsIn(METODOS_ABONO_CLIENTE as unknown as string[])

@@ -5998,6 +5998,17 @@ export class VentaService {
         );
       }
 
+      // 🔴 Abonos pagados con un DEPÓSITO del cliente: esa plata no entró a
+      // caja con esta venta, así que el reverso de caja de abajo sacaría
+      // efectivo que nunca entró por acá, y el cliente perdería su saldo. Se
+      // anulan antes en Cuentas por cobrar, donde vuelven a su saldo a favor.
+      const conDeposito = await tx.aplicacionDeposito.count({ where: { ventaId: id } });
+      if (conDeposito > 0) {
+        throw new BadRequestException(
+          'Esta venta tiene abonos pagados con un depósito del cliente. Anula esos abonos en Cuentas por cobrar (vuelven a su saldo a favor) y después anula la venta.',
+        );
+      }
+
       // Anulación automática por TTL (cron Yape): solo proceder si la venta
       // SIGUE pendiente sin pagos. Si entre la selección del cron y esta
       // transacción llegó el webhook y la pagó, abortamos para no revertir el

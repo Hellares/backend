@@ -37,7 +37,8 @@ const make = (opts: { reporte?: any; tomado?: number; registrar?: jest.Mock } = 
     registrarAbono: opts.registrar ?? jest.fn().mockImplementation(() => Promise.resolve({ pagoId: `pago-${++n}`, saldoPendiente: 0 })),
     anularAbono: jest.fn().mockResolvedValue({}),
   };
-  return { service: new ReportesAbonoService(prisma, cxc), prisma, cxc };
+  const depositos: any = { registrar: jest.fn().mockResolvedValue({ depositoId: 'dep-1', disponible: 0 }) };
+  return { service: new ReportesAbonoService(prisma, cxc, depositos), prisma, cxc, depositos };
 };
 
 describe('Pagos reportados por el cliente (CxC)', () => {
@@ -110,5 +111,30 @@ describe('Pagos reportados por el cliente (CxC)', () => {
     await service.rechazar('e1', 'r1', 'u', 'No llegó la transferencia');
     expect(prisma.reporteAbono.updateMany.mock.calls[0][0].data).toMatchObject({ estado: 'RECHAZADO', motivoRechazo: 'No llegó la transferencia' });
     expect(cxc.registrarAbono).not.toHaveBeenCalled();
+  });
+  it('un pago SIN compras es un deposito: entra una vez y no registra abonos', async () => {
+    const { service, cxc, depositos } = make({
+      reporte: reporte({ monto: 4000, metodoPago: 'TRANSFERENCIA', numeroOperacion: 'OP-1', lineas: [], clienteId: 'ep1', clienteEmpresaId: null }),
+    });
+    const res = await service.aprobar('e1', 'r1', 'u-admin', { fuente: 'BANCO', bancoId: 'b1' });
+    expect(depositos.registrar).toHaveBeenCalledWith(
+      'e1', 'u-admin',
+      expect.objectContaining({ clienteId: 'ep1', monto: 4000, metodoPago: 'TRANSFERENCIA', referencia: 'OP-1', fuente: 'BANCO', bancoId: 'b1' }),
+      { origen: 'TIENDA', reporteAbonoId: 'r1' },
+    );
+    expect(cxc.registrarAbono).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ ok: true, abonos: 0, depositoId: 'dep-1' });
+  });
+
+  it('si el deposito no se puede registrar, el pago vuelve a PENDIENTE', async () => {
+    const { service, prisma, depositos } = make({
+      reporte: reporte({ lineas: [], clienteId: 'ep1' }),
+    });
+    depositos.registrar.mockRejectedValue(new Error('sin caja abierta'));
+    await expect(service.aprobar('e1', 'r1', 'u-admin', { fuente: 'BANCO', bancoId: 'b1' })).rejects.toThrow('sin caja abierta');
+    expect(prisma.reporteAbono.update).toHaveBeenCalledWith({
+      where: { id: 'r1' },
+      data: { estado: 'PENDIENTE', revisadoPorId: null, revisadoEn: null },
+    });
   });
 });

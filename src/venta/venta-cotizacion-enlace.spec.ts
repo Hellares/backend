@@ -44,6 +44,7 @@ describe('enlace cotización ↔ venta', () => {
   describe('al anular una venta que vino de cotización', () => {
     beforeEach(() => {
       tx = {
+      aplicacionDeposito: { count: jest.fn().mockResolvedValue(0) },
         venta: {
           findFirst: jest.fn().mockResolvedValue({
             id: 'venta-1',
@@ -87,6 +88,7 @@ describe('enlace cotización ↔ venta', () => {
   describe('candado anti doble conversión', () => {
     it('rechaza convertir una cotización que ya tiene ventaId', async () => {
       tx = {
+      aplicacionDeposito: { count: jest.fn().mockResolvedValue(0) },
         cotizacion: {
           findFirst: jest.fn().mockResolvedValue({
             id: 'cot-1',
@@ -110,6 +112,7 @@ describe('enlace cotización ↔ venta', () => {
     // derivarse de `Venta.cotizacionId` sin excluir las anuladas.
     it('deja pasar la validación si la cotización fue liberada (ventaId null)', async () => {
       tx = {
+      aplicacionDeposito: { count: jest.fn().mockResolvedValue(0) },
         cotizacion: {
           findFirst: jest.fn().mockResolvedValue({
             id: 'cot-1',

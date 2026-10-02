@@ -375,11 +375,39 @@ export class CuentasPorCobrarService {
     },
     usuarioId: string,
   ) {
+    return this.prisma.$transaction((tx) =>
+      this.registrarAbonoEnTx(tx, empresaId, ventaId, data, usuarioId),
+    );
+  }
+
+  /**
+   * El abono en sí, dentro de una transacción YA abierta. Lo usa también el
+   * reparto de un depósito del cliente, que aplica a varias ventas de una.
+   *
+   * 🔴 `ingresoHecho`: la plata YA entró a banco/caja (con el depósito), así
+   * que acá NO se vuelve a ingresar. El abono queda con la fuente del
+   * depósito pero sin `movimientoCajaId`, que es de ese depósito.
+   */
+  async registrarAbonoEnTx(
+    tx: Prisma.TransactionClient,
+    empresaId: string,
+    ventaId: string,
+    data: {
+      monto: number;
+      metodoPago: MetodoPagoVenta;
+      referencia?: string;
+      fuente?: FuenteIngreso;
+      bancoId?: string;
+      banco?: string;
+    },
+    usuarioId: string,
+    ingresoHecho?: { fuente: FuenteIngreso; bancoId: string | null },
+  ) {
     if (!(data.monto > 0)) {
       throw new BadRequestException('El monto del abono debe ser mayor a 0');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    {
       // Lock pesimista de la venta (evita carreras de saldo)
       const filas = await tx.$queryRaw<
         Array<{
@@ -451,8 +479,11 @@ export class CuentasPorCobrarService {
         );
       }
 
-      // Rutear el INGRESO a la fuente (Tesorería/Caja/Banco)
-      const ingreso = await aplicarIngresoConFuente(tx, this.cajaService, {
+      // Rutear el INGRESO a la fuente (Tesorería/Caja/Banco), salvo que ya
+      // haya entrado con un depósito del cliente.
+      const ingreso = ingresoHecho
+        ? { fuente: ingresoHecho.fuente, bancoId: ingresoHecho.bancoId, movimientoCajaId: null }
+        : await aplicarIngresoConFuente(tx, this.cajaService, {
         empresaId,
         sedeId: venta.sedeId,
         usuarioId,
@@ -556,7 +587,7 @@ export class CuentasPorCobrarService {
         saldoPendiente:
           saldoCapitalRestante ?? Math.max(round2(target - nuevoTotalPagado), 0),
       };
-    });
+    }
   }
 
   /**
@@ -588,18 +619,35 @@ export class CuentasPorCobrarService {
       // Lock de la venta
       await tx.$queryRaw`SELECT "id" FROM "Venta" WHERE "id" = ${pago.ventaId} FOR UPDATE`;
 
-      // Revertir el ingreso (caja: marca movimiento anulado; banco: decrementa saldo)
-      await revertirIngresoConFuente(
-        tx,
-        {
-          monto: pago.monto,
-          fuente: pago.fuente,
-          bancoId: pago.bancoId,
-          movimientoCajaId: pago.movimientoCajaId,
-        },
-        usuarioId,
-        motivo || 'Anulación de abono',
-      );
+      // 🔴 Un abono que salió de un DEPÓSITO del cliente no tiene ingreso
+      // propio: la plata entró con el depósito y sigue ahí. Anularlo devuelve
+      // el monto al saldo a favor; revertir el ingreso le restaría al banco
+      // plata que nunca salió.
+      const aplicacion = await tx.aplicacionDeposito.findUnique({
+        where: { pagoVentaId: pago.id },
+        select: { id: true, depositoId: true, monto: true },
+      });
+      if (aplicacion) {
+        await tx.$queryRaw`SELECT "id" FROM "DepositoCliente" WHERE "id" = ${aplicacion.depositoId} FOR UPDATE`;
+        await tx.aplicacionDeposito.delete({ where: { id: aplicacion.id } });
+        await tx.depositoCliente.update({
+          where: { id: aplicacion.depositoId },
+          data: { montoAplicado: { decrement: aplicacion.monto } },
+        });
+      } else {
+        // Revertir el ingreso (caja: marca movimiento anulado; banco: decrementa saldo)
+        await revertirIngresoConFuente(
+          tx,
+          {
+            monto: pago.monto,
+            fuente: pago.fuente,
+            bancoId: pago.bancoId,
+            movimientoCajaId: pago.movimientoCajaId,
+          },
+          usuarioId,
+          motivo || 'Anulación de abono',
+        );
+      }
 
       // Marcar el abono anulado (soft-delete)
       await tx.pagoVenta.update({
@@ -615,7 +663,13 @@ export class CuentasPorCobrarService {
       // Recomputar cuotas + estado de la venta desde cero
       await this._recomputarCuotas(tx, empresaId, pago.ventaId);
 
-      return { ok: true, pagoId: pago.id, ventaId: pago.ventaId };
+      return {
+        ok: true,
+        pagoId: pago.id,
+        ventaId: pago.ventaId,
+        // El monto volvió al saldo a favor del cliente (no salió de caja/banco).
+        devueltoASaldoAFavor: !!aplicacion,
+      };
     });
   }
 
@@ -770,7 +824,7 @@ export class CuentasPorCobrarService {
 
   // ── Helpers de abonos ──
 
-  private _toImputable = (c: {
+  _toImputable = (c: {
     id: string;
     monto: Prisma.Decimal;
     montoPrincipal: Prisma.Decimal;
@@ -794,7 +848,7 @@ export class CuentasPorCobrarService {
     estado: c.estado,
   });
 
-  private async _configMora(
+  async _configMora(
     tx: Prisma.TransactionClient,
     empresaId: string,
   ): Promise<ConfigMoraImputacion | null> {

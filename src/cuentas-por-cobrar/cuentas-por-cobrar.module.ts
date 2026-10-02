@@ -7,11 +7,12 @@ import { CuentasPorCobrarController } from './cuentas-por-cobrar.controller';
 import { CuentasPorCobrarService } from './cuentas-por-cobrar.service';
 import { CuentasPorCobrarTasksService } from './cuentas-por-cobrar-tasks.service';
 import { ReportesAbonoService } from './reportes-abono.service';
+import { DepositosClienteService } from './depositos-cliente.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, CajaModule, NotificacionModule],
   controllers: [CuentasPorCobrarController],
-  providers: [CuentasPorCobrarService, CuentasPorCobrarTasksService, ReportesAbonoService],
-  exports: [CuentasPorCobrarService],
+  providers: [CuentasPorCobrarService, CuentasPorCobrarTasksService, ReportesAbonoService, DepositosClienteService],
+  exports: [CuentasPorCobrarService, DepositosClienteService],
 })
 export class CuentasPorCobrarModule {}

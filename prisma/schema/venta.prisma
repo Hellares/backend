@@ -493,6 +493,11 @@ model ReporteAbono {
   comprobantesUrls String[]            @default([])
   // La cuenta a la que dice haber transferido (solo TRANSFERENCIA).
   empresaBancoId   String?
+  // Un DEPÓSITO sin repartir: el cliente dice cuánto pagó pero no a qué
+  // compras (sin `lineas`). Ahí el titular va acá: su ficha de cliente o la
+  // empresa por la que paga. Al aprobarlo nace un `DepositoCliente`.
+  clienteId        String?
+  clienteEmpresaId String?
   estado           EstadoReporteAbono  @default(PENDIENTE)
   motivoRechazo    String?
   revisadoPorId    String?
@@ -518,5 +523,71 @@ model ReporteAbonoVenta {
   venta   Venta        @relation(fields: [ventaId], references: [id], onDelete: Cascade)
 
   @@unique([reporteId, ventaId])
+  @@index([ventaId])
+}
+
+enum OrigenDepositoCliente {
+  PANEL // lo registró la tienda en Cuentas por cobrar
+  TIENDA // lo reportó el cliente desde "Mis compras" y la tienda lo aprobó
+}
+
+/// Plata que el cliente entregó SIN decir a qué compras va (una transferencia
+/// de S/ 4,000 contra S/ 5,000 de deuda repartida en varias ventas). El
+/// ingreso a banco/caja se hace UNA vez, acá. Después la tienda la reparte
+/// entre las ventas a crédito (`AplicacionDeposito`), y lo que no alcanza para
+/// nada queda como SALDO A FAVOR del cliente = `monto` − `montoAplicado`.
+///
+/// El titular es la ficha de cliente (`clienteId` = EmpresaPersona) O el
+/// cliente empresa: nunca los dos. La deuda personal y la de la empresa no
+/// se mezclan.
+model DepositoCliente {
+  id               String                @id @default(cuid())
+  empresaId        String
+  // La sede a cuya caja entró (TESORERIA/CAJA la necesitan).
+  sedeId           String
+  clienteId        String?
+  clienteEmpresaId String?
+  monto            Decimal               @db.Decimal(10, 2)
+  // Lo ya repartido a ventas. Se mueve SOLO junto con sus aplicaciones.
+  montoAplicado    Decimal               @default(0) @db.Decimal(10, 2)
+  metodoPago       MetodoPagoVenta
+  referencia       String?
+  // A dónde entró la plata (para poder revertirla si se anula).
+  fuente           FuenteIngreso
+  bancoId          String?
+  movimientoCajaId String?               @unique
+  origen           OrigenDepositoCliente @default(PANEL)
+  // El pago reportado por el cliente del que salió (origen TIENDA).
+  reporteAbonoId   String?               @unique
+  nota             String?
+  registradoPorId  String
+  anulado          Boolean               @default(false)
+  motivoAnulacion  String?
+  anuladoPorId     String?
+  fechaAnulacion   DateTime?
+  creadoEn         DateTime              @default(now())
+  actualizadoEn    DateTime              @updatedAt
+
+  aplicaciones AplicacionDeposito[]
+
+  @@index([empresaId, clienteId])
+  @@index([empresaId, clienteEmpresaId])
+}
+
+/// Cuánto de un depósito se aplicó a UNA venta. Cada aplicación es un abono
+/// de verdad (`PagoVenta`), pero SIN ingreso propio: la plata ya entró con el
+/// depósito. Anular ese abono borra la aplicación y devuelve el saldo.
+model AplicacionDeposito {
+  id          String   @id @default(cuid())
+  depositoId  String
+  ventaId     String
+  monto       Decimal  @db.Decimal(10, 2)
+  pagoVentaId String   @unique
+  creadoPorId String
+  creadoEn    DateTime @default(now())
+
+  deposito DepositoCliente @relation(fields: [depositoId], references: [id], onDelete: Cascade)
+
+  @@index([depositoId])
   @@index([ventaId])
 }

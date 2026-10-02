@@ -35,6 +35,7 @@ describe('VentaService.anular — reverso de stock de una VARIANTE', () => {
   /** @param detalle la única línea de la venta que se anula */
   const build = (detalle: Record<string, unknown>) => {
     tx = {
+      aplicacionDeposito: { count: jest.fn().mockResolvedValue(0) },
       venta: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'vta-1',

@@ -25,12 +25,14 @@ const dia = (offset: number) => {
 const makeService = (opts: {
   empresaPersona?: any;
   dni?: string | null;
-  empresasCliente?: { id: string }[];
+  empresasCliente?: { id: string; razonSocial?: string; nombreComercial?: string | null }[];
   ventas?: any[];
   venta?: any;
   clienteEmpresa?: any;
   pendientes?: any[];
   cuenta?: any;
+  depositos?: any[];
+  depositosEnRevision?: any[];
 } = {}) => {
   const prisma: any = {
     empresaPersona: { findFirst: jest.fn().mockResolvedValue(opts.empresaPersona ?? null) },
@@ -50,7 +52,11 @@ const makeService = (opts: {
     },
     archivo: { findMany: jest.fn().mockResolvedValue([]) },
     pagoVenta: { findMany: jest.fn().mockResolvedValue([]) },
+    depositoCliente: { findMany: jest.fn().mockResolvedValue(opts.depositos ?? []) },
     reporteAbono: {
+      // Depósitos (pagos sin líneas) que esperan aprobación.
+      findMany: jest.fn().mockResolvedValue(opts.depositosEnRevision ?? []),
+      count: jest.fn().mockResolvedValue((opts.depositosEnRevision ?? []).length),
       create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: data.id, monto: data.monto, metodoPago: data.metodoPago, estado: 'PENDIENTE', creadoEn: new Date() })),
     },
     // Líneas de pagos en revisión: [{ ventaId, monto }].
@@ -275,6 +281,56 @@ describe('Tienda web: reportar un pago (a una o varias compras)', () => {
   });
 });
 
+describe('Tienda web: depósitos sin indicar compras y saldo a favor', () => {
+  const files = [{ originalname: 'c.jpg' }] as any;
+
+  it('el saldo a favor es lo depositado menos lo aplicado, por titular', async () => {
+    const { service } = makeService({
+      empresaPersona: { id: 'ep1' }, dni: '12345678', empresasCliente: [{ id: 'ce1', razonSocial: 'ACME SAC', nombreComercial: null }],
+      depositos: [
+        { clienteEmpresaId: null, monto: 4000, montoAplicado: 3980 },
+        { clienteEmpresaId: 'ce1', monto: 500, montoAplicado: 0 },
+      ],
+      depositosEnRevision: [{ clienteEmpresaId: null, monto: 300 }],
+    });
+    const res = await service.listar('e1', 'p1');
+    const personal = res.saldos.find((x: any) => x.clienteEmpresaId === null)!;
+    const acme = res.saldos.find((x: any) => x.clienteEmpresaId === 'ce1')!;
+    expect(personal).toMatchObject({ saldoAFavor: 20, enRevision: 300 });
+    expect(acme).toMatchObject({ saldoAFavor: 500, nombre: 'ACME SAC' });
+    expect(res.resumen.saldoAFavor).toBe(520);
+  });
+
+  it('un depósito sin compras queda PENDIENTE con su titular y sin líneas', async () => {
+    const { service, prisma, notificaciones } = makeService({ empresaPersona: { id: 'ep1' }, dni: '12345678' });
+    const res = await service.reportarAbono('e1', 'p1', 'u1', { metodoPago: 'YAPE', monto: 4000 } as any, files);
+    const creado = prisma.reporteAbono.create.mock.calls[0][0].data;
+    expect(creado).toMatchObject({ monto: 4000, clienteId: 'ep1', clienteEmpresaId: null });
+    expect(creado.lineas).toBeUndefined();
+    expect(res).toMatchObject({ esDeposito: true, compras: 0 });
+    expect(notificaciones.enviarAUsuarios).toHaveBeenCalled();
+  });
+
+  it('depositar por una empresa donde NO es contacto es 404', async () => {
+    const { service } = makeService({ empresaPersona: { id: 'ep1' }, dni: '12345678' });
+    await expect(
+      service.reportarAbono('e1', 'p1', 'u1', { metodoPago: 'YAPE', monto: 100, clienteEmpresaId: 'ajena' } as any, files),
+    ).rejects.toThrow('Empresa no encontrada');
+  });
+
+  it('sin ficha de cliente no puede dejar un depósito personal', async () => {
+    const { service } = makeService({ dni: '12345678' });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', { metodoPago: 'YAPE', monto: 100 } as any, files))
+      .rejects.toThrow('cuenta de cliente');
+  });
+
+  it('sin monto no hay depósito', async () => {
+    const { service } = makeService({ empresaPersona: { id: 'ep1' } });
+    await expect(service.reportarAbono('e1', 'p1', 'u1', { metodoPago: 'YAPE' } as any, files))
+      .rejects.toThrow('cuánto depositaste');
+  });
+});
+
 describe('ReportarAbonoDto por multipart', () => {
   // El mismo pipe que main.ts: `lineas` llega como TEXTO JSON dentro del multipart.
   const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
@@ -291,8 +347,15 @@ describe('ReportarAbonoDto por multipart', () => {
     ]);
   });
 
-  it('rechaza líneas vacías, JSON roto o un monto en cero', async () => {
-    await expect(pipe.transform({ lineas: '[]', metodoPago: 'YAPE' }, meta)).rejects.toBeDefined();
+  it('sin líneas es un depósito: pasa con su monto', async () => {
+    const dto = await pipe.transform({ metodoPago: 'YAPE', monto: '4000', clienteEmpresaId: 'ce1' }, meta);
+    expect(dto.lineas).toBeUndefined();
+    expect(dto.monto).toBe(4000);
+    expect(dto.clienteEmpresaId).toBe('ce1');
+  });
+
+  it('rechaza JSON roto o un monto en cero', async () => {
+    await expect(pipe.transform({ metodoPago: 'YAPE', monto: '0' }, meta)).rejects.toBeDefined();
     await expect(pipe.transform({ lineas: '{roto', metodoPago: 'YAPE' }, meta)).rejects.toBeDefined();
     await expect(pipe.transform({ lineas: '[{"ventaId":"v1","monto":"0"}]', metodoPago: 'YAPE' }, meta)).rejects.toBeDefined();
   });

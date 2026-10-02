@@ -83,6 +83,66 @@ export class MisComprasTiendaService {
     return or.length ? { OR: or } : null;
   }
 
+  /**
+   * Los titulares por los que puede pagar: su ficha de cliente (lo personal)
+   * y los clientes empresa donde es contacto. Un depósito va a UNO de ellos.
+   */
+  private async titulares(empresaId: string, personaId?: string) {
+    if (!personaId) return { epId: null as string | null, empresas: [] as { id: string; nombre: string }[] };
+    const [ep, persona] = await Promise.all([
+      this.prisma.empresaPersona.findFirst({ where: { personaId, empresaId, deletedAt: null }, select: { id: true } }),
+      this.prisma.persona.findUnique({ where: { id: personaId }, select: { dni: true } }),
+    ]);
+    const dni = persona?.dni?.trim();
+    const empresas = dni
+      ? await this.prisma.clienteEmpresa.findMany({
+          where: { empresaId, isActive: true, deletedAt: null, contactos: { some: { dni } } },
+          select: { id: true, razonSocial: true, nombreComercial: true },
+        })
+      : [];
+    return {
+      epId: ep?.id ?? null,
+      empresas: empresas.map((e) => ({ id: e.id, nombre: e.nombreComercial || e.razonSocial })),
+    };
+  }
+
+  /**
+   * Saldo a favor y depósitos en revisión, por titular (`''` = lo personal).
+   * A favor = lo depositado que la tienda todavía no aplicó a ninguna compra.
+   */
+  private async saldosAFavor(empresaId: string, personaId: string) {
+    const t = await this.titulares(empresaId, personaId);
+    const filtros: Prisma.DepositoClienteWhereInput[] = [];
+    if (t.epId) filtros.push({ clienteId: t.epId });
+    if (t.empresas.length) filtros.push({ clienteEmpresaId: { in: t.empresas.map((e) => e.id) } });
+    const [depositos, enRevision] = await Promise.all([
+      filtros.length
+        ? this.prisma.depositoCliente.findMany({
+            where: { empresaId, anulado: false, OR: filtros },
+            select: { clienteEmpresaId: true, monto: true, montoAplicado: true },
+          })
+        : [],
+      this.prisma.reporteAbono.findMany({
+        where: { empresaId, personaId, estado: 'PENDIENTE', lineas: { none: {} } },
+        select: { clienteEmpresaId: true, monto: true },
+      }),
+    ]);
+    const mapa = new Map<string, { aFavor: number; enRevision: number }>();
+    const de = (k: string) => {
+      if (!mapa.has(k)) mapa.set(k, { aFavor: 0, enRevision: 0 });
+      return mapa.get(k)!;
+    };
+    for (const d of depositos) {
+      const x = de(d.clienteEmpresaId ?? '');
+      x.aFavor = r2(x.aFavor + Number(d.monto) - Number(d.montoAplicado));
+    }
+    for (const r of enRevision) {
+      const x = de(r.clienteEmpresaId ?? '');
+      x.enRevision = r2(x.enRevision + Number(r.monto));
+    }
+    return { titulares: t, mapa };
+  }
+
   private where(empresaId: string, acceso: Prisma.VentaWhereInput): Prisma.VentaWhereInput {
     // BORRADOR = carrito que no se cerró; ANULADA = no existe para el cliente.
     return { empresaId, estado: { in: ['CONFIRMADA', 'PAGADA_PARCIAL', 'PAGADA_COMPLETA'] }, AND: [acceso] };
@@ -146,7 +206,11 @@ export class MisComprasTiendaService {
 
   async listar(empresaId: string, personaId: string) {
     const vacio = {
-      resumen: { deuda: 0, comprasConDeuda: 0, totalComprado: 0, totalPagado: 0, cantidad: 0, mora: 0, proximoPago: null },
+      resumen: {
+        deuda: 0, comprasConDeuda: 0, totalComprado: 0, totalPagado: 0, cantidad: 0, mora: 0, proximoPago: null,
+        saldoAFavor: 0, depositosEnRevision: 0,
+      },
+      saldos: [],
       data: [],
     };
     const acceso = await this.acceso(empresaId, personaId);
@@ -194,8 +258,33 @@ export class MisComprasTiendaService {
       .filter((x): x is NonNullable<typeof x> => !!x)
       .sort((a, b) => a.fechaVencimiento.getTime() - b.fechaVencimiento.getTime());
 
+    // Saldo a favor por titular (lo personal y cada empresa, sin mezclar),
+    // junto a lo que ese titular todavía debe.
+    const { titulares, mapa } = await this.saldosAFavor(empresaId, personaId);
+    const deudaDe = (clienteEmpresaId: string | null) =>
+      r2(conDeuda.filter((c) => (c.clienteEmpresaId ?? null) === clienteEmpresaId).reduce((s, c) => s + c.saldo, 0));
+    const saldos = [
+      { clienteEmpresaId: null as string | null, nombre: null as string | null },
+      ...titulares.empresas.map((e) => ({ clienteEmpresaId: e.id as string | null, nombre: e.nombre as string | null })),
+    ]
+      .map((t) => {
+        const s = mapa.get(t.clienteEmpresaId ?? '');
+        return {
+          ...t,
+          saldoAFavor: Math.max(0, s?.aFavor ?? 0),
+          enRevision: s?.enRevision ?? 0,
+          deuda: deudaDe(t.clienteEmpresaId),
+          // Lo personal solo admite depósito si tiene ficha de cliente.
+          puedeDepositar: t.clienteEmpresaId ? true : !!titulares.epId,
+        };
+      })
+      .filter((s) => s.saldoAFavor > 0 || s.enRevision > 0 || s.deuda > 0);
+
     return {
+      saldos,
       resumen: {
+        saldoAFavor: r2(saldos.reduce((s, x) => s + x.saldoAFavor, 0)),
+        depositosEnRevision: r2(saldos.reduce((s, x) => s + x.enRevision, 0)),
         deuda: r2(conDeuda.reduce((s, c) => s + c.saldo, 0)),
         comprasConDeuda: conDeuda.length,
         mora: r2(conDeuda.reduce((s, c) => s + c.mora, 0)),
@@ -383,6 +472,25 @@ export class MisComprasTiendaService {
       : [];
     const conSaldo = filas.filter((f) => f.saldoPendiente > 0);
 
+    // Sus depósitos sin repartir: lo que tiene a favor en ESTA cuenta.
+    const tit = await this.titulares(empresaId, personaId);
+    const depositos = clienteEmpresaId || tit.epId
+      ? await this.prisma.depositoCliente.findMany({
+          where: {
+            empresaId,
+            anulado: false,
+            ...(clienteEmpresaId ? { clienteEmpresaId } : { clienteId: tit.epId }),
+          },
+          orderBy: { creadoEn: 'desc' },
+          take: 100,
+          select: { id: true, monto: true, montoAplicado: true, metodoPago: true, creadoEn: true },
+        })
+      : [];
+    const saldoAFavor = Math.max(
+      0,
+      r2(depositos.reduce((s, d) => s + Number(d.monto) - Number(d.montoAplicado), 0)),
+    );
+
     return {
       empresa: { nombre: empresa?.nombre ?? '', ruc: empresa?.ruc ?? null },
       estadoCuenta: {
@@ -396,6 +504,7 @@ export class MisComprasTiendaService {
             },
         resumen: {
           saldoPendiente: r2(conSaldo.reduce((s, f) => s + f.saldoPendiente, 0)),
+          saldoAFavor,
           totalVendido: r2(filas.reduce((s, f) => s + f.total, 0)),
           totalAbonado: r2(filas.reduce((s, f) => s + f.totalPagado, 0)),
           totalMora: r2(filas.reduce((s, f) => s + f.totalMora, 0)),
@@ -411,6 +520,14 @@ export class MisComprasTiendaService {
           fuente: null,
           fechaPago: a.fechaPago,
           ventaCodigo: a.venta?.codigo ?? null,
+        })),
+        depositos: depositos.map((d) => ({
+          id: d.id,
+          monto: r2(Number(d.monto)),
+          aplicado: r2(Number(d.montoAplicado)),
+          disponible: r2(Number(d.monto) - Number(d.montoAplicado)),
+          metodoPago: d.metodoPago,
+          fecha: d.creadoEn,
         })),
       },
       // Las líneas de cada venta, por ventaId (el PDF las cuelga de su fila).
@@ -467,6 +584,125 @@ export class MisComprasTiendaService {
     return mapa;
   }
 
+  /** La cuenta de la tienda a la que dice haber transferido (solo TRANSFERENCIA). */
+  private async cuentaTransferida(empresaId: string, dto: ReportarAbonoDto): Promise<string | null> {
+    if (dto.metodoPago !== 'TRANSFERENCIA') return null;
+    const cuenta = dto.empresaBancoId
+      ? await this.prisma.empresaBanco.findFirst({
+          where: { id: dto.empresaBancoId, empresaId, isActive: true },
+          select: { id: true },
+        })
+      : null;
+    if (!cuenta) throw new BadRequestException('Elige la cuenta a la que transferiste');
+    return cuenta.id;
+  }
+
+  /**
+   * Las capturas se guardan ligadas al REPORTE, no a la venta: así no aparecen
+   * en la galería de fotos de la venta (ni las de un pago rechazado).
+   */
+  private async subirCapturas(empresaId: string, reporteId: string, usuarioId: string, files: Express.Multer.File[]) {
+    const urls: string[] = [];
+    for (const [i, file] of files.entries()) {
+      const archivo = await this.storage.uploadArchivo({
+        file,
+        empresaId,
+        entidadTipo: 'VENTA',
+        entidadId: reporteId,
+        categoria: 'DOCUMENTO',
+        orden: i,
+        subidoPor: usuarioId,
+      });
+      urls.push(archivo.url);
+    }
+    return urls;
+  }
+
+  private async avisarAdmins(empresaId: string, reporteId: string, texto: string) {
+    try {
+      const admins = await this.prisma.empresaUsuarioRol.findMany({
+        where: { empresaId, isActive: true, rol: { in: ['EMPRESA_ADMIN', 'SEDE_ADMIN', 'CAJERO'] } },
+        select: { usuarioId: true },
+      });
+      const destinatarios = [...new Set(admins.map((a) => a.usuarioId))];
+      if (destinatarios.length) {
+        await this.notificaciones.enviarAUsuarios(destinatarios, 'Pago reportado por un cliente', texto, {
+          tipo: TipoNotificacion.SISTEMA,
+          empresaId,
+          data: { reporteAbonoId: reporteId },
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`No se pudo avisar del reporte ${reporteId}: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * El cliente depositó SIN decir qué paga (transfirió S/ 4,000 contra una
+   * deuda repartida en varias compras). Queda PENDIENTE con su titular; al
+   * aprobarlo la tienda lo reparte y lo que sobre queda a su favor.
+   */
+  private async reportarDeposito(
+    empresaId: string,
+    personaId: string,
+    usuarioId: string,
+    dto: ReportarAbonoDto,
+    files: Express.Multer.File[],
+  ) {
+    const monto = r2(Number(dto.monto));
+    if (!(monto > 0)) throw new BadRequestException('Indica cuánto depositaste');
+
+    const t = await this.titulares(empresaId, personaId);
+    const clienteEmpresaId = dto.clienteEmpresaId?.trim() || null;
+    const empresaCliente = clienteEmpresaId ? t.empresas.find((e) => e.id === clienteEmpresaId) : null;
+    if (clienteEmpresaId && !empresaCliente) throw new NotFoundException('Empresa no encontrada');
+    if (!clienteEmpresaId && !t.epId) {
+      throw new BadRequestException('Elige a qué compras va tu pago: aún no tienes una cuenta de cliente en esta tienda');
+    }
+
+    const enRevision = await this.prisma.reporteAbono.count({
+      where: { empresaId, personaId, estado: 'PENDIENTE', lineas: { none: {} } },
+    });
+    if (enRevision >= MisComprasTiendaService.MAX_REPORTES_PENDIENTES) {
+      throw new BadRequestException('Ya tienes depósitos en revisión. Espera a que la tienda los confirme.');
+    }
+
+    const empresaBancoId = await this.cuentaTransferida(empresaId, dto);
+    const id = randomUUID();
+    const urls = await this.subirCapturas(empresaId, id, usuarioId, files);
+
+    const reporte = await this.prisma.reporteAbono.create({
+      data: {
+        id,
+        empresaId,
+        personaId,
+        usuarioId,
+        monto,
+        metodoPago: dto.metodoPago,
+        numeroOperacion: dto.numeroOperacion?.trim() || null,
+        comprobanteUrl: urls[0],
+        comprobantesUrls: urls,
+        empresaBancoId,
+        clienteId: clienteEmpresaId ? null : t.epId,
+        clienteEmpresaId,
+      },
+      select: { id: true, monto: true, metodoPago: true, estado: true, creadoEn: true },
+    });
+
+    const persona = await this.prisma.persona.findUnique({
+      where: { id: personaId },
+      select: { nombres: true, apellidos: true },
+    });
+    const quien = empresaCliente?.nombre || [persona?.nombres, persona?.apellidos].filter(Boolean).join(' ') || 'Un cliente';
+    await this.avisarAdmins(
+      empresaId,
+      reporte.id,
+      `${quien} reportó un depósito de S/ ${monto.toFixed(2)} sin indicar compras. Apruébalo y repártelo en Cuentas por cobrar.`,
+    );
+
+    return { ...reporte, monto: Number(reporte.monto), compras: 0, esDeposito: true };
+  }
+
   /**
    * El cliente reporta que pagó (con las capturas) y a qué compras va: una o
    * varias del MISMO titular (personal, o una empresa), con cuánto a cada una.
@@ -484,7 +720,8 @@ export class MisComprasTiendaService {
       throw new BadRequestException(`Puedes subir hasta ${MisComprasTiendaService.MAX_CAPTURAS} capturas por pago`);
     }
     const lineas = dto.lineas ?? [];
-    if (!lineas.length) throw new BadRequestException('Elige a qué compras va el pago');
+    // Sin compras elegidas es un depósito: la tienda decide a qué va.
+    if (!lineas.length) return this.reportarDeposito(empresaId, personaId, usuarioId, dto, files);
     const ids = lineas.map((l) => l.ventaId);
     if (new Set(ids).size !== ids.length) throw new BadRequestException('Una compra aparece dos veces');
 
@@ -518,34 +755,9 @@ export class MisComprasTiendaService {
     });
     const total = r2(aRegistrar.reduce((s, l) => s + l.monto, 0));
 
-    let empresaBancoId: string | null = null;
-    if (dto.metodoPago === 'TRANSFERENCIA') {
-      const cuenta = dto.empresaBancoId
-        ? await this.prisma.empresaBanco.findFirst({
-            where: { id: dto.empresaBancoId, empresaId, isActive: true },
-            select: { id: true },
-          })
-        : null;
-      if (!cuenta) throw new BadRequestException('Elige la cuenta a la que transferiste');
-      empresaBancoId = cuenta.id;
-    }
-
-    // Las capturas se guardan ligadas al REPORTE, no a la venta: así no
-    // aparecen en la galería de fotos de la venta (ni las de un pago rechazado).
+    const empresaBancoId = await this.cuentaTransferida(empresaId, dto);
     const id = randomUUID();
-    const urls: string[] = [];
-    for (const [i, file] of files.entries()) {
-      const archivo = await this.storage.uploadArchivo({
-        file,
-        empresaId,
-        entidadTipo: 'VENTA',
-        entidadId: id,
-        categoria: 'DOCUMENTO',
-        orden: i,
-        subidoPor: usuarioId,
-      });
-      urls.push(archivo.url);
-    }
+    const urls = await this.subirCapturas(empresaId, id, usuarioId, files);
 
     const reporte = await this.prisma.reporteAbono.create({
       data: {
@@ -564,24 +776,12 @@ export class MisComprasTiendaService {
       select: { id: true, monto: true, metodoPago: true, estado: true, creadoEn: true },
     });
 
-    try {
-      const admins = await this.prisma.empresaUsuarioRol.findMany({
-        where: { empresaId, isActive: true, rol: { in: ['EMPRESA_ADMIN', 'SEDE_ADMIN', 'CAJERO'] } },
-        select: { usuarioId: true },
-      });
-      const destinatarios = [...new Set(admins.map((a) => a.usuarioId))];
-      if (destinatarios.length) {
-        const a = aRegistrar.length === 1 ? `a la venta ${aRegistrar[0].codigo}` : `a ${aRegistrar.length} ventas`;
-        await this.notificaciones.enviarAUsuarios(
-          destinatarios,
-          'Pago reportado por un cliente',
-          `${ventas[0].nombreCliente} reportó un pago de S/ ${total.toFixed(2)} ${a}. Revísalo en Cuentas por cobrar.`,
-          { tipo: TipoNotificacion.SISTEMA, empresaId, data: { reporteAbonoId: reporte.id } },
-        );
-      }
-    } catch (e) {
-      this.logger.warn(`No se pudo avisar del reporte ${reporte.id}: ${(e as Error).message}`);
-    }
+    const a = aRegistrar.length === 1 ? `a la venta ${aRegistrar[0].codigo}` : `a ${aRegistrar.length} ventas`;
+    await this.avisarAdmins(
+      empresaId,
+      reporte.id,
+      `${ventas[0].nombreCliente} reportó un pago de S/ ${total.toFixed(2)} ${a}. Revísalo en Cuentas por cobrar.`,
+    );
 
     return { ...reporte, monto: Number(reporte.monto), compras: aRegistrar.length };
   }
