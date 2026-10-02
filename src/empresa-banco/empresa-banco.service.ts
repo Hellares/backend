@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { depositosEnBanco, sinAbonosDeDeposito } from '../cuentas-por-cobrar/depositos-ingreso.util';
 import {
   TipoMovimientoCaja,
   OrigenAjusteBanco,
@@ -249,7 +250,7 @@ export class EmpresaBancoService {
       ajustes,
       pagosAdelanto,
       pagosBoleta,
-      pagosVenta,
+      pagosVentaTodos,
       recaudadoTotal,
     ] = await Promise.all([
       // Ingresos: cobros digitales que entraron al banco (barrido + migración).
@@ -313,6 +314,7 @@ export class EmpresaBancoService {
           fechaPago: { gte: desde, lte: hasta },
         },
         select: {
+          id: true,
           monto: true,
           metodoPago: true,
           fechaPago: true,
@@ -329,6 +331,13 @@ export class EmpresaBancoService {
         GROUP BY 1`,
     ]);
 
+    // Un depósito de cliente entra UNA vez y entero; los abonos en que después
+    // se reparte no mueven plata, así que no se listan como ingreso.
+    const [pagosVenta, depositos] = await Promise.all([
+      sinAbonosDeDeposito(this.prisma, pagosVentaTodos),
+      depositosEnBanco(this.prisma, { empresaId, bancoId: id, rango: { gte: desde, lte: hasta } }),
+    ]);
+
     const recaudadoPorMetodo: Record<string, number> = {};
     for (const r of recaudadoTotal) {
       recaudadoPorMetodo[r.metodoPago] = r2(Number(r.total));
@@ -338,6 +347,10 @@ export class EmpresaBancoService {
       recaudadoPorMetodo[p.metodoPago] = r2(
         (recaudadoPorMetodo[p.metodoPago] ?? 0) + Number(p.monto),
       );
+    }
+
+    for (const d of depositos) {
+      recaudadoPorMetodo[d.metodoPago] = r2((recaudadoPorMetodo[d.metodoPago] ?? 0) + d.monto);
     }
 
     const nombreEmp = (x: any): string | null => {
@@ -411,6 +424,16 @@ export class EmpresaBancoService {
         metodoPago: p.metodoPago as string | null,
         monto: r2(Number(p.monto)),
         origen: 'ABONO_CREDITO',
+      })),
+      ...depositos.map((d) => ({
+        fecha: d.fecha,
+        tipo: 'INGRESO',
+        concepto: 'Depósito de cliente',
+        // Lo no aplicado sigue siendo del cliente: es plata que se le debe en ventas.
+        detalle: `${d.cliente}${d.aFavor > 0 ? ` · S/ ${d.aFavor.toFixed(2)} a favor del cliente` : ''}`,
+        metodoPago: d.metodoPago as string | null,
+        monto: r2(d.monto),
+        origen: 'DEPOSITO_CLIENTE',
       })),
     ].sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
 

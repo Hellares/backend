@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { depositosEnBanco, sinAbonosDeDeposito } from '../cuentas-por-cobrar/depositos-ingreso.util';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import {
   EstadoCaja,
@@ -2852,6 +2853,12 @@ export class CajaService {
     ]);
 
     const bancoNombre = new Map(bancos.map((b) => [b.id, b.nombreBanco]));
+    // Un depósito de cliente entra UNA vez y entero; los abonos en que después
+    // se reparte no mueven plata, así que no se listan como ingreso.
+    const [pagosVentaPropios, depositosCliente] = await Promise.all([
+      sinAbonosDeDeposito(this.prisma, pagosVentaBanco),
+      depositosEnBanco(this.prisma, { empresaId, sedeId, rango }),
+    ]);
     const nombreEmp = (x: any): string => {
       const p = x?.empleado?.usuario?.persona;
       return p ? `${p.nombres ?? ''} ${p.apellidos ?? ''}`.trim() : '';
@@ -2886,7 +2893,7 @@ export class CajaService {
         esBancario: true,
         bancoNombre: bancoNombre.get(b.bancoId!) ?? null,
       })),
-      ...pagosVentaBanco.map((p) => ({
+      ...pagosVentaPropios.map((p) => ({
         id: `abono-${p.id}`,
         cajaId: central.id,
         tipo: 'INGRESO',
@@ -2899,6 +2906,20 @@ export class CajaService {
         anulado: false,
         esBancario: true,
         bancoNombre: bancoNombre.get(p.bancoId!) ?? null,
+      })),
+      ...depositosCliente.map((d) => ({
+        id: `deposito-${d.id}`,
+        cajaId: central.id,
+        tipo: 'INGRESO',
+        categoria: 'VENTA',
+        metodoPago: d.metodoPago,
+        monto: d.monto,
+        descripcion: `[${bancoNombre.get(d.bancoId) ?? 'Banco'}] Depósito de cliente - ${d.cliente}${d.aFavor > 0 ? ` (S/ ${d.aFavor.toFixed(2)} a favor del cliente)` : ''}`,
+        fechaMovimiento: d.fecha,
+        esManual: false,
+        anulado: false,
+        esBancario: true,
+        bancoNombre: bancoNombre.get(d.bancoId) ?? null,
       })),
     ];
 
