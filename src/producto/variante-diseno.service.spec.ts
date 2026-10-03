@@ -494,6 +494,21 @@ describe('VarianteDisenoService.agregar', () => {
     expect(Number(mov.precioCostoUnitario)).toBe(55);
   });
 
+  it('con precio de venta propio (diseño exclusivo), la sede elegida lo toma', async () => {
+    const { service, tx } = montar();
+
+    await service.agregar(
+      'e1',
+      'v-d1',
+      { sedeId: 's1', disenos: [{ archivoId: 'f4', cantidad: 1, costoUnitario: 70, precioVenta: 95 }] },
+      'u1',
+    );
+
+    const fila = tx.productoStock.create.mock.calls[0][0].data;
+    expect(Number(fila.precio)).toBe(95);
+    expect(fila.precioConfigurado).toBe(true);
+  });
+
   it('sin costo, el ingreso usa el costo actual de la colección', async () => {
     const { service } = montar();
 

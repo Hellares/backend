@@ -404,7 +404,7 @@ export class VarianteDisenoService {
     );
     const stocks = await this.prisma.productoStock.findMany({
       where: { varianteId: plantilla.id },
-      select: { sedeId: true, precioCosto: true, sede: { select: { nombre: true } } },
+      select: { sedeId: true, precio: true, precioCosto: true, sede: { select: { nombre: true } } },
     });
     return {
       base: {
@@ -425,6 +425,8 @@ export class VarianteDisenoService {
         sedeId: s.sedeId,
         sedeNombre: s.sede.nombre,
         precioCosto: s.precioCosto != null ? Number(s.precioCosto) : null,
+        // El precio de venta de la colección: lo que se sugiere al ingresar.
+        precioVenta: s.precio != null ? Number(s.precio) : null,
       })),
     };
   }
@@ -581,6 +583,9 @@ export class VarianteDisenoService {
               esLaSede && entra && diseno.costoUnitario != null
                 ? new Prisma.Decimal(diseno.costoUnitario)
                 : (s.precioCosto ?? null);
+            // Precio propio en la sede elegida (un diseño exclusivo cuesta
+            // más); en las demás sedes, el de la colección.
+            const precioPropio = esLaSede && diseno.precioVenta != null;
             const creado = await tx.productoStock.create({
               data: {
                 sedeId: s.sedeId,
@@ -591,13 +596,13 @@ export class VarianteDisenoService {
                 stockActual: esLaSede && entra ? diseno.cantidad : 0,
                 stockMinimo: null,
                 ubicacion: s.ubicacion ?? null,
-                precio: s.precio ?? null,
+                precio: precioPropio ? new Prisma.Decimal(diseno.precioVenta!) : (s.precio ?? null),
                 precioCosto: costo,
                 precioOferta: s.precioOferta ?? null,
                 enOferta: s.enOferta ?? false,
                 fechaInicioOferta: s.fechaInicioOferta ?? null,
                 fechaFinOferta: s.fechaFinOferta ?? null,
-                precioConfigurado: s.precioConfigurado ?? false,
+                precioConfigurado: precioPropio || (s.precioConfigurado ?? false),
                 precioIncluyeIgv: s.precioIncluyeIgv ?? true,
                 envioGratis: s.envioGratis ?? false,
               },

@@ -36,6 +36,15 @@ export class DisenoNuevoDto {
   @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
   costoUnitario?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Precio de venta en la sede. Sin él, el de la colección (un diseño exclusivo puede costar más).',
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0)
+  precioVenta?: number;
 }
 
 /**
