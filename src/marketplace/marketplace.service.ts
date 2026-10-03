@@ -2,6 +2,23 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { STOCK_VENDIBLE, vendible } from './stock-vendible';
+import { condicionTextoBusqueda, tokenizarBusqueda } from '../producto/texto-busqueda.util';
+
+/**
+ * Búsqueda pública ("alianza", "edredon cristal"): cada palabra en
+ * `textoBusqueda`, que además del nombre trae marca, categoría y los valores
+ * de las VARIANTES (la colección ALIANZA vive en una variante, no en el
+ * nombre del producto). La frase en nombre/descripción queda de respaldo
+ * para un producto al que todavía no se le calculó el texto.
+ */
+function condicionBusquedaPublica(search: string) {
+  const terminos = tokenizarBusqueda(search);
+  return [
+    ...(terminos.length ? [{ AND: condicionTextoBusqueda(terminos) }] : []),
+    { nombre: { contains: search, mode: 'insensitive' as const } },
+    { descripcion: { contains: search, mode: 'insensitive' as const } },
+  ];
+}
 import {
   condicionesPorAtributo,
   sumarAlAnd,
@@ -56,10 +73,7 @@ export class MarketplaceService {
     };
 
     if (query.search) {
-      where.OR = [
-        { nombre: { contains: query.search, mode: 'insensitive' } },
-        { descripcion: { contains: query.search, mode: 'insensitive' } },
-      ];
+      where.OR = condicionBusquedaPublica(query.search);
     }
 
     if (query.categoriaId) {
@@ -1484,12 +1498,7 @@ export class MarketplaceService {
       // `categoriaId` es la EmpresaCategoria (la de la empresa, con su nombre
       // personalizado), no la maestra: es lo que lista `categorias` abajo.
       ...(categoriaId && { empresaCategoriaId: categoriaId }),
-      ...(search && {
-        OR: [
-          { nombre: { contains: search, mode: 'insensitive' as const } },
-          { descripcion: { contains: search, mode: 'insensitive' as const } },
-        ],
-      }),
+      ...(search && { OR: condicionBusquedaPublica(search) }),
     };
 
     // Mismo include + hidratación que el feed principal: así los productos
