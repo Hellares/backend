@@ -2,7 +2,10 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { STOCK_VENDIBLE, vendible } from './stock-vendible';
-import { condicionTextoBusqueda, tokenizarBusqueda } from '../producto/texto-busqueda.util';
+import { condicionTextoBusqueda, normalizarBusqueda, tokenizarBusqueda } from '../producto/texto-busqueda.util';
+
+/** Clave del atributo Diseño: D1, D2… no le dicen nada a quien busca. */
+const CLAVE_DISENO = 'diseno';
 
 /**
  * Búsqueda pública ("alianza", "edredon cristal"): cada palabra en
@@ -184,7 +187,8 @@ export class MarketplaceService {
 
     const userLat = query.lat;
     const userLng = query.lng;
-    let data = await this._mapearProductos(productos, userLat, userLng);
+    let data: any[] = await this._mapearProductos(productos, userLat, userLng);
+    if (query.search) data = await this._conCoincidencia(data, productos, query.search);
 
     // Si el usuario tiene ubicación, priorizar productos cercanos (20 km).
     // Excepción: si pidió orden explícito por precio, se respeta ese orden.
@@ -347,6 +351,97 @@ export class MarketplaceService {
    * card del marketplace: imagen principal, rating, oferta vigente y distancia.
    * Compartido por el listado y por las secciones del home.
    */
+  /**
+   * Encontrado por una VARIANTE ("cristal" → EDREDONES): la card muestra esa
+   * colección y no el producto genérico — su nombre, su foto, su "desde" y si
+   * le queda stock. Misma regla que el buscador del app
+   * (`coincidenciaPorVariantes`): las palabras que no están en el nombre, la
+   * marca o la categoría del producto tienen que estar en los valores de la
+   * variante (sin el Diseño). Si todas están en el producto, no hay
+   * coincidencia por variante y la card queda como siempre.
+   */
+  private async _conCoincidencia(data: any[], productos: any[], search: string) {
+    const terminos = tokenizarBusqueda(search);
+    const conVariantes = productos.filter((p: any) => (p.variantes?.length ?? 0) > 0);
+    if (!terminos.length || !conVariantes.length) return data;
+
+    const variantes = await this.prisma.productoVariante.findMany({
+      where: { productoId: { in: conVariantes.map((p: any) => p.id) }, isActive: true, deletedAt: null },
+      select: {
+        id: true,
+        productoId: true,
+        atributosValores: { select: { valor: true, atributo: { select: { nombre: true, clave: true } } } },
+        stocksPorSede: {
+          where: { precioConfigurado: true },
+          select: { precio: true, precioOferta: true, enOferta: true, fechaInicioOferta: true, fechaFinOferta: true, ...STOCK_VENDIBLE },
+        },
+      },
+    });
+
+    const coincidencias = new Map<string, any>();
+    for (const p of conVariantes) {
+      const delProducto = normalizarBusqueda([
+        p.nombre,
+        p.empresaMarca?.nombrePersonalizado || p.empresaMarca?.marcaMaestra?.nombre,
+        p.empresaCategoria?.nombrePersonalizado || p.empresaCategoria?.categoriaMaestra?.nombre,
+      ].filter(Boolean).join(' '));
+      const deVariante = terminos.filter((t) => !delProducto.includes(t));
+      if (!deVariante.length) continue;
+
+      const valores = (v: any) => v.atributosValores.filter((a: any) => a.atributo.clave !== CLAVE_DISENO);
+      const hits = variantes.filter((v) => v.productoId === p.id).filter((v) => {
+        const texto = normalizarBusqueda(valores(v).map((a: any) => a.valor).join(' '));
+        return deVariante.every((t) => texto.includes(t));
+      });
+      if (!hits.length) continue;
+
+      // Título: el valor que comparten todas y que contiene lo buscado
+      // ("CRISTAL"); si no hay uno común, lo buscado.
+      let titulo: string | null = null;
+      for (const a of valores(hits[0])) {
+        const comun = hits.every((v) => valores(v).some((b: any) => b.atributo.nombre === a.atributo.nombre && b.valor === a.valor));
+        if (comun && deVariante.some((t) => normalizarBusqueda(a.valor).includes(t))) { titulo = a.valor.trim(); break; }
+      }
+      titulo ??= deVariante.join(' ').toUpperCase();
+
+      const stocks = hits.flatMap((v) => v.stocksPorSede);
+      const conStock = stocks.filter((st: any) => vendible(st) > 0);
+      const stock = this._seleccionarStock(conStock.length ? conStock : stocks);
+      const precios = (conStock.length ? conStock : stocks).map((st: any) => this._precioEfectivo(st)).filter(Number.isFinite);
+      const ofertaActiva = this._ofertaVigente(stock);
+      const hitsConStock = hits.filter((v) => v.stocksPorSede.some((st: any) => vendible(st) > 0));
+      coincidencias.set(p.id, {
+        titulo,
+        variantes: hits.length,
+        precio: stock?.precio != null ? Number(stock.precio) : null,
+        precioOferta: ofertaActiva && stock?.precioOferta ? Number(stock.precioOferta) : null,
+        enOferta: ofertaActiva,
+        varia: precios.length > 1 && Math.min(...precios) !== Math.max(...precios),
+        hayStock: conStock.length > 0,
+        // La foto, de una que se pueda comprar.
+        varianteIds: (hitsConStock.length ? hitsConStock : hits).map((v) => v.id),
+      });
+    }
+    if (!coincidencias.size) return data;
+
+    const ids = [...coincidencias.values()].flatMap((c) => c.varianteIds);
+    const fotos = await this.prisma.archivo.findMany({
+      where: { entidadTipo: 'PRODUCTO_VARIANTE', entidadId: { in: ids }, tipoArchivo: 'IMAGEN', isActive: true, deletedAt: null },
+      select: { entidadId: true, url: true, urlThumbnail: true },
+      orderBy: { orden: 'asc' },
+    });
+    const fotoDe = new Map<string, string>();
+    for (const f of fotos) if (f.entidadId && !fotoDe.has(f.entidadId)) fotoDe.set(f.entidadId, f.urlThumbnail || f.url);
+
+    return data.map((d) => {
+      const c = coincidencias.get(d.id);
+      if (!c) return d;
+      const { varianteIds, ...resto } = c;
+      const imagen = (varianteIds as string[]).map((id) => fotoDe.get(id)).find(Boolean) ?? null;
+      return { ...d, coincidencia: { ...resto, imagen } };
+    });
+  }
+
   private async _mapearProductos(
     productos: any[],
     userLat?: number,
@@ -1518,7 +1613,8 @@ export class MarketplaceService {
       this.prisma.producto.count({ where }),
     ]);
 
-    const data = await this._mapearProductos(productos);
+    let data: any[] = await this._mapearProductos(productos);
+    if (search) data = await this._conCoincidencia(data, productos, search);
 
     // Las categorías salen de TODO el catálogo visible (sin búsqueda ni
     // filtro), no de la página cargada: si no, una categoría cuyos productos
