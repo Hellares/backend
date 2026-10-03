@@ -198,7 +198,30 @@ export class VariantePlantillaService {
     if (!combos.size) {
       throw new BadRequestException('Esa colección no tiene otros atributos además de la colección.');
     }
-    const atributoIds = [...orden.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+
+    // El orden del nombre es el de la colección MODELO ("2 PLAZAS / TELA /
+    // 3 PZS / HOMBRE / CRISTAL"), no el `orden` configurado de los atributos:
+    // las colecciones nuevas tienen que nombrarse igual que sus hermanas. Se
+    // lee de la variante modelo sin diseño más nueva (o un diseño), ubicando
+    // cada valor en su nombre; lo que no aparece va al final por `orden`.
+    const ref = modelo.find((v) => !v.atributosValores.some((a) => a.atributo.clave === CLAVE_ATRIBUTO_DISENO)) ?? modelo[0];
+    const partes = ref.nombre.split('/').map((x) => normalizar(x));
+    const posicion = new Map<string, number>();
+    for (const a of ref.atributosValores) {
+      if (a.atributo.clave === CLAVE_ATRIBUTO_DISENO) continue;
+      const i = partes.indexOf(normalizar(a.valor));
+      posicion.set(a.atributoId, i >= 0 ? i : 1000 + a.atributo.orden);
+    }
+    orden.set(dto.atributoColeccionId, 0);
+    const atributoIds = [...new Set([...orden.keys()])].sort(
+      (x, y) => (posicion.get(x) ?? 2000 + (orden.get(x) ?? 0)) - (posicion.get(y) ?? 2000 + (orden.get(y) ?? 0)),
+    );
+    // Los valores de cada combinación, en ese mismo orden (así se leen igual
+    // en el editor y en "Nueva colección").
+    const indice = new Map(atributoIds.map((id, i) => [id, i]));
+    for (const c of combos.values()) {
+      c.valores.sort((x, y) => (indice.get(x.atributoId) ?? 999) - (indice.get(y.atributoId) ?? 999));
+    }
     return this.crear(empresaId, {
       nombre: dto.nombre,
       descripcion: `Copiada de la colección ${dto.valorColeccion}`,
@@ -244,7 +267,13 @@ export class VariantePlantillaService {
       throw new BadRequestException(`Máximo ${MAX_COMBINACIONES} combinaciones por vez.`);
     }
 
-    const atributoIds = [plantilla.atributoColeccionId, ...plantilla.atributoIds];
+    // El orden del nombre: el de la plantilla. Si la plantilla no marca dónde
+    // va la colección (creada a mano sin ella), va al final.
+    const ordenNombre = plantilla.atributoIds.includes(plantilla.atributoColeccionId)
+      ? plantilla.atributoIds
+      : [...plantilla.atributoIds, plantilla.atributoColeccionId];
+    const posicion = new Map(ordenNombre.map((id, i) => [id, i]));
+    const atributoIds = ordenNombre;
     const atributos = await this.prisma.productoAtributo.findMany({
       where: { id: { in: atributoIds }, empresaId, isActive: true },
     });
@@ -270,13 +299,17 @@ export class VariantePlantillaService {
     const omitidas: string[] = [];
     for (const { c, precio, precioCosto } of elegidas) {
       const valores: Valor[] = [
-        ...(c.valores as unknown as Valor[]),
+        ...(c.valores as unknown as Valor[]).filter((v) => v.atributoId !== plantilla.atributoColeccionId),
         { atributoId: plantilla.atributoColeccionId, valor: valorColeccion },
-      ];
+      ].sort((x, y) => (posicion.get(x.atributoId) ?? 999) - (posicion.get(y.atributoId) ?? 999));
       const nombre = construirNombreVariante(
         valores.map((v) => {
           const a = atributosMap.get(v.atributoId)!;
-          return { valor: v.valor, orden: a.orden, usarEnNombreVariante: a.usarEnNombreVariante };
+          return {
+            valor: v.valor,
+            orden: posicion.get(v.atributoId) ?? 999,
+            usarEnNombreVariante: a.usarEnNombreVariante,
+          };
         }),
       );
       if (yaExisten.has(claveDe(valores))) {
@@ -370,17 +403,19 @@ export class VariantePlantillaService {
   // ─────────────────────────── Internos ───────────────────────────
 
   private async validar(empresaId: string, dto: GuardarVariantePlantillaDto) {
-    if (dto.atributoIds.includes(dto.atributoColeccionId)) {
-      throw new BadRequestException('El atributo de colección no va entre los de las combinaciones.');
+    if (new Set(dto.atributoIds).size !== dto.atributoIds.length) {
+      throw new BadRequestException('Hay atributos repetidos.');
     }
-    const ids = [dto.atributoColeccionId, ...dto.atributoIds];
+    const ids = [...new Set([dto.atributoColeccionId, ...dto.atributoIds])];
     const encontrados = await this.prisma.productoAtributo.count({
       where: { id: { in: ids }, empresaId, isActive: true },
     });
-    if (encontrados !== new Set(ids).size) {
+    if (encontrados !== ids.length) {
       throw new BadRequestException('Algún atributo no existe o está inactivo.');
     }
-    const permitidos = new Set(dto.atributoIds);
+    // `atributoIds` puede traer la colección: marca DÓNDE va en el nombre. Las
+    // combinaciones, en cambio, no llevan su valor (se escribe al aplicar).
+    const permitidos = new Set(dto.atributoIds.filter((id) => id !== dto.atributoColeccionId));
     const vistas = new Set<string>();
     for (const c of dto.combinaciones) {
       if (c.valores.some((v) => !permitidos.has(v.atributoId))) {

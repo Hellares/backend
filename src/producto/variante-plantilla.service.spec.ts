@@ -22,6 +22,9 @@ const av = (a: { id: string; clave: string; orden: number }, valor: string) => (
 function variante(id: string, material: string, coleccion: string, precio: number, diseno?: string) {
   return {
     id,
+    // El nombre en el orden de las colecciones de JAYLI: material primero,
+    // aunque el `orden` configurado diga tamaño primero.
+    nombre: [material, '2 PLAZAS', coleccion, ...(diseno ? [diseno] : [])].join(' / '),
     atributosValores: [
       av(ATR.tam, '2 PLAZAS'),
       av(ATR.mat, material),
@@ -103,11 +106,13 @@ describe('VariantePlantillaService.desdeColeccion', () => {
     });
 
     expect(creada.data.atributoColeccionId).toBe(ATR.col.id);
-    expect(creada.data.atributoIds).toEqual([ATR.tam.id, ATR.mat.id]);
+    // 🔑 El orden del NOMBRE del modelo (TELA / 2 PLAZAS / CRISTAL), con la
+    // colección en su lugar; no el `orden` configurado.
+    expect(creada.data.atributoIds).toEqual([ATR.mat.id, ATR.tam.id, ATR.col.id]);
     const combos = creada.data.combinaciones.create;
     expect(combos.map((c: any) => c.valores.map((v: any) => v.valor).join(' · '))).toEqual([
-      '2 PLAZAS · TELA',
-      '2 PLAZAS · CARNERITO',
+      'TELA · 2 PLAZAS',
+      'CARNERITO · 2 PLAZAS',
     ]);
     expect(combos[0]).toMatchObject({ precio: 95, precioCosto: 60 });
     expect(combos[0].niveles[0]).toMatchObject({ nombre: 'Por Mayor', cantidadMinima: 3, precio: 72 });
@@ -159,6 +164,16 @@ describe('VariantePlantillaService.aplicar', () => {
     });
   });
 
+  it('🔑 el nombre sigue el orden de la plantilla, con la colección en su lugar', async () => {
+    const { service } = montar({
+      plantilla: { ...plantilla, atributoIds: [ATR.mat.id, ATR.tam.id, ATR.col.id] },
+    });
+
+    const r = await service.aplicar('e1', 'pl-1', { productoId: 'p1', valorColeccion: 'DINOSAURIO' });
+
+    expect(r.creadas.map((c) => c.nombre)).toEqual(['TELA / 2 PLAZAS / DINOSAURIO', 'CARNERITO / 2 PLAZAS / DINOSAURIO']);
+  });
+
   it('solo las elegidas, con el precio que se ajustó', async () => {
     const { service, tx } = montar({ plantilla });
 
@@ -195,9 +210,15 @@ describe('VariantePlantillaService.crear', () => {
     combinaciones: [{ valores: [{ atributoId: ATR.tam.id, valor: '2 PLAZAS' }] }],
   };
 
-  it('🔴 el atributo de colección no puede ir entre los de las combinaciones', async () => {
+  it('🔴 una combinación no trae el valor de la colección (se escribe al aplicar)', async () => {
     const { service } = montar();
-    await expect(service.crear('e1', { ...base, atributoIds: [ATR.col.id] })).rejects.toThrow(BadRequestException);
+    await expect(
+      service.crear('e1', {
+        ...base,
+        atributoIds: [ATR.tam.id, ATR.col.id],
+        combinaciones: [{ valores: [{ atributoId: ATR.col.id, valor: 'CRISTAL' }] }],
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('🔴 combinaciones repetidas se rechazan', async () => {
