@@ -42,7 +42,29 @@ export class TextoBusquedaService {
             (SELECT coalesce(c."nombreLocal", c."nombrePersonalizado", cm."nombre")
                FROM "EmpresaCategoria" c
                LEFT JOIN "CategoriaMaestra" cm ON cm."id" = c."categoriaMaestraId"
-              WHERE c."id" = p."empresaCategoriaId")
+              WHERE c."id" = p."empresaCategoriaId"),
+            -- Los valores de las variantes activas ("CRISTAL", "TELA"…): quien
+            -- pide "un CRISTAL" no sabe que el producto se llama EDREDONES.
+            -- Sin el "Diseño" (D1, D2…): no lo busca nadie y solo mete ruido.
+            (SELECT string_agg(DISTINCT x.t, ' ') FROM (
+               SELECT av."valor" AS t
+                 FROM "ProductoVariante" v
+                 JOIN "ProductoAtributoValor" av ON av."varianteId" = v."id"
+                 JOIN "ProductoAtributo" a ON a."id" = av."atributoId"
+                WHERE v."productoId" = p."id"
+                  AND v."deletedAt" IS NULL
+                  AND v."isActive" = true
+                  AND a."clave" <> 'diseno'
+               UNION
+               -- La variante SIN atributos solo tiene su nombre ("Cristal").
+               SELECT v."nombre"
+                 FROM "ProductoVariante" v
+                WHERE v."productoId" = p."id"
+                  AND v."deletedAt" IS NULL
+                  AND v."isActive" = true
+                  AND NOT EXISTS (SELECT 1 FROM "ProductoAtributoValor" av
+                                   WHERE av."varianteId" = v."id")
+             ) x)
           ))),
           -- 🔴 UTC OBLIGATORIO, no \`now()\` pelado. La sesión de Postgres
           -- corre en America/Lima y la columna es \`timestamp SIN zona\`, así
@@ -73,7 +95,10 @@ export class TextoBusquedaService {
     }
   }
 
-  /** Tras crear o editar un producto. */
+  /**
+   * Tras crear o editar un producto, o cualquier cambio en sus variantes
+   * (alta, edición, baja, atributos): sus valores viven en el texto.
+   */
   async recalcularProducto(productoId: string): Promise<void> {
     await this.ejecutar(
       Prisma.sql`p."id" = ${productoId}`,

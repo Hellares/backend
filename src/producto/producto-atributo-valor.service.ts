@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
+import { TextoBusquedaService } from './texto-busqueda.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../common/logger/logger.service';
 import { CacheService } from '../redis/cache.service';
@@ -32,6 +33,8 @@ export class ProductoAtributoValorService {
     private readonly prisma: PrismaService,
     loggerService: AppLoggerService,
     private readonly cacheService: CacheService,
+    // Opcional y al final: los tests construyen el service a mano sin él.
+    @Optional() private readonly textoBusqueda?: TextoBusquedaService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ProductoAtributoValorService.name);
@@ -284,6 +287,9 @@ export class ProductoAtributoValorService {
       return valoresCreados.map((v) => this.mapToResponse(v));
     });
 
+    // Los valores de las variantes entran en el texto de búsqueda del
+    // producto ("CRISTAL" encuentra EDREDONES).
+    await this.textoBusqueda?.recalcularProducto(variante.productoId);
     await this.invalidarListas(empresaId);
     return resultado;
   }

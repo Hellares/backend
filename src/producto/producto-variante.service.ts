@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, Optional } from '@nestjs/common';
+import { TextoBusquedaService } from './texto-busqueda.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EstadoVenta, Prisma } from '@prisma/client';
 import { ConfiguracionCodigosService } from '../configuracion-codigos/configuracion-codigos.service';
@@ -23,9 +24,19 @@ export class ProductoVarianteService {
     private readonly configCodigosService: ConfiguracionCodigosService,
     private readonly realtime: RealtimeInvalidationService,
     loggerService: AppLoggerService,
+    // Opcional y al final: los tests construyen el service a mano sin él.
+    @Optional() private readonly textoBusqueda?: TextoBusquedaService,
   ) {
     this.logger = loggerService;
     this.logger.setContext(ProductoVarianteService.name);
+  }
+
+  /**
+   * Los valores de las variantes viven en `Producto.textoBusqueda` (buscar
+   * "CRISTAL" encuentra EDREDONES): todo cambio de variantes lo rehace.
+   */
+  private async rehacerBusqueda(productoId: string): Promise<void> {
+    await this.textoBusqueda?.recalcularProducto(productoId);
   }
 
   /**
@@ -234,6 +245,7 @@ export class ProductoVarianteService {
     // Invalidar cache de productos
     await this.cache.invalidateProductosLists(empresaId);
 
+    await this.rehacerBusqueda(productoId);
     // Notificar a otros devices: la variante nueva cambia la estructura
     // del producto padre. Los listeners harán reload para incluirla.
     this.realtime.notifyProductoActualizado({ empresaId, productoId });
@@ -548,6 +560,7 @@ export class ProductoVarianteService {
     // Invalidar cache
     await this.cache.invalidateProductosLists(empresaId);
 
+    await this.rehacerBusqueda(existing.productoId);
     // Notificar a otros devices: cambio estructural en la variante
     // (nombre/sku/isActive/atributos/imágenes) requiere reload del padre.
     this.realtime.notifyProductoActualizado({
@@ -666,6 +679,7 @@ export class ProductoVarianteService {
     // Invalidar cache de productos
     await this.cache.invalidateProductosLists(empresaId);
 
+    await this.rehacerBusqueda(variante.productoId);
     // Notificar a otros devices: variante borrada → el padre cambió.
     this.realtime.notifyProductoActualizado({
       empresaId,
@@ -1268,6 +1282,7 @@ export class ProductoVarianteService {
     // Invalidar cache
     await this.cache.invalidateProductosLists(empresaId);
 
+    await this.rehacerBusqueda(productoId);
     // Notificar: bulk de variantes → un solo evento del producto padre
     // (los listeners colapsan en debounce y hacen reload completo).
     this.realtime.notifyProductoActualizado({ empresaId, productoId });
