@@ -23,6 +23,7 @@ import {
 } from './utils/nombre-variante.util';
 import { TextoBusquedaService } from './texto-busqueda.service';
 import { SepararPorDisenoDto } from './dto/separar-por-diseno.dto';
+import { AgregarDisenosDto } from './dto/agregar-disenos.dto';
 
 /**
  * Clave del atributo que distingue un diseño de otro dentro de la misma
@@ -36,6 +37,22 @@ export const CLAVE_ATRIBUTO_DISENO = 'diseno';
 
 /** El valor del atributo: "D1", "D2"… Corto porque va al nombre y al ticket. */
 const PREFIJO_DISENO = 'D';
+
+/**
+ * Lo que identifica a una colección: los valores de los atributos SIN el
+ * diseño. Dos variantes con la misma clave son diseños de la misma colección
+ * (o su base). Misma normalización que la numeración de los diseños.
+ */
+function claveDeColeccion(
+  vals: Array<{ atributoId: string; valor: string }>,
+  atributoDisenoId: string,
+): string {
+  return vals
+    .filter((v) => v.atributoId !== atributoDisenoId)
+    .map((v) => `${v.atributoId}=${v.valor.trim().toUpperCase()}`)
+    .sort()
+    .join('|');
+}
 
 /**
  * Separa una variante en DISEÑOS: una foto = un diseño = una variante nueva
@@ -365,6 +382,320 @@ export class VarianteDisenoService {
     this.realtime.notifyProductoActualizado({ empresaId, productoId: origen.productoId });
 
     return creadas;
+  }
+
+  /**
+   * La colección de una variante, para la pantalla de "Agregar diseños": la
+   * base (donde se suben las fotos de los diseños por crear), los diseños que
+   * ya tiene, cómo se va a llamar el siguiente y el costo actual por sede
+   * (lo que se sugiere al ingresar stock).
+   */
+  async coleccion(empresaId: string, varianteId: string) {
+    const atributoDiseno = await this.asegurarAtributoDiseno(empresaId);
+    const { base, disenos, plantilla } = await this.resolverColeccion(
+      empresaId,
+      varianteId,
+      atributoDiseno.id,
+    );
+    const siguiente = await this.siguienteNumeroDeDiseno(
+      base.productoId,
+      base.atributosValores,
+      atributoDiseno.id,
+    );
+    const stocks = await this.prisma.productoStock.findMany({
+      where: { varianteId: plantilla.id },
+      select: { sedeId: true, precioCosto: true, sede: { select: { nombre: true } } },
+    });
+    return {
+      base: {
+        id: base.id,
+        nombre: base.nombre,
+        isActive: base.isActive,
+        archivos: base.archivos,
+      },
+      disenos: disenos.map((d) => ({
+        id: d.id,
+        nombre: d.nombre,
+        isActive: d.isActive,
+        diseno:
+          d.atributosValores.find((a) => a.atributoId === atributoDiseno.id)?.valor ?? null,
+      })),
+      siguienteDiseno: `${PREFIJO_DISENO}${siguiente}`,
+      sedes: stocks.map((s) => ({
+        sedeId: s.sedeId,
+        sedeNombre: s.sede.nombre,
+        precioCosto: s.precioCosto != null ? Number(s.precioCosto) : null,
+      })),
+    };
+  }
+
+  /**
+   * Agregar diseños NUEVOS a una colección: llegaron estampados que no estaban
+   * (CRISTAL tenía D1–D3 y entran dos más → D4, D5).
+   *
+   * A diferencia de `separar`, las unidades no salen de ninguna variante: cada
+   * diseño se crea en 0 (lo normal: las unidades entran con la COMPRA, con su
+   * proveedor y su costo real) o con un ingreso directo que queda en el kardex
+   * como `AJUSTE_ENTRADA` con su lote.
+   *
+   * Hereda de la colección lo mismo que separar: atributos de la base, y
+   * precio/costo por sede y precios por mayor del diseño más reciente (si
+   * alguien le cambió el precio a la colección después de separarla, ese es
+   * el vigente; la base desactivada quedó con el de entonces).
+   */
+  async agregar(
+    empresaId: string,
+    varianteId: string,
+    dto: AgregarDisenosDto,
+    usuarioId: string,
+  ) {
+    const archivoIds = dto.disenos.map((d) => d.archivoId);
+    if (new Set(archivoIds).size !== archivoIds.length) {
+      throw new BadRequestException('Hay una foto repetida: cada foto es un diseño.');
+    }
+
+    const atributoDiseno = await this.asegurarAtributoDiseno(empresaId);
+    const { base, plantilla } = await this.resolverColeccion(
+      empresaId,
+      varianteId,
+      atributoDiseno.id,
+    );
+
+    const fotosDeLaBase = new Set(base.archivos.map((a) => a.id));
+    if (archivoIds.some((id) => !fotosDeLaBase.has(id))) {
+      throw new BadRequestException(
+        'Alguna de las fotos no está en la colección (¿se borró o se movió?). Recargá y volvé a intentar.',
+      );
+    }
+
+    const numeroInicial = await this.siguienteNumeroDeDiseno(
+      base.productoId,
+      base.atributosValores,
+      atributoDiseno.id,
+    );
+
+    const etiquetaAtributos = base.atributosValores.map((v) => ({
+      valor: v.valor,
+      orden: v.atributo.orden,
+      usarEnNombreVariante: v.atributo.usarEnNombreVariante,
+    }));
+    const nombreAutogenerado =
+      etiquetaAtributos.length > 0 && nombreEsAutogenerado(base.nombre, etiquetaAtributos);
+    const nombreDe = (valorDiseno: string) =>
+      nombreAutogenerado
+        ? construirNombreVariante([
+            ...etiquetaAtributos,
+            {
+              valor: valorDiseno,
+              orden: atributoDiseno.orden,
+              usarEnNombreVariante: true,
+            },
+          ])
+        : `${base.nombre} / ${valorDiseno}`;
+
+    const creadas = await this.prisma.$transaction(
+      async (tx) => {
+        const stockFilas = await tx.productoStock.findMany({
+          where: { varianteId: plantilla.id },
+        });
+        // La sede elegida siempre tiene su fila, aunque la colección no
+        // tuviera stock ahí: es donde la compra o el ingreso van a cargar.
+        const sedes: Array<Partial<(typeof stockFilas)[number]> & { sedeId: string }> = [
+          ...stockFilas,
+        ];
+        if (!sedes.some((s) => s.sedeId === dto.sedeId)) {
+          const ref = stockFilas[0];
+          sedes.push({ ...(ref ?? {}), id: undefined, sedeId: dto.sedeId, ubicacion: null });
+        }
+
+        const resultado: Array<{ id: string; nombre: string; cantidad: number }> = [];
+
+        for (const [i, diseno] of dto.disenos.entries()) {
+          const valorDiseno = `${PREFIJO_DISENO}${numeroInicial + i}`;
+          const nombre = nombreDe(valorDiseno);
+          const sku = await this.skuLibre(tx, empresaId, `${base.sku}-${valorDiseno}`);
+          const { codigoEmpresa } = await this.configCodigos.generarCodigoVariante(empresaId, tx);
+
+          const nueva = await tx.productoVariante.create({
+            data: {
+              productoId: base.productoId,
+              empresaId,
+              nombre,
+              sku,
+              codigoEmpresa,
+              unidadMedidaId: base.unidadMedidaId,
+              unidadPresentacionId: base.unidadPresentacionId,
+              factorPresentacion: base.factorPresentacion,
+              peso: base.peso,
+              dimensiones: base.dimensiones ?? Prisma.JsonNull,
+              isActive: true,
+              orden: base.orden,
+            },
+            select: { id: true },
+          });
+
+          await tx.productoAtributoValor.createMany({
+            data: [
+              ...base.atributosValores.map((v) => ({
+                varianteId: nueva.id,
+                atributoId: v.atributoId,
+                valor: v.valor,
+              })),
+              { varianteId: nueva.id, atributoId: atributoDiseno.id, valor: valorDiseno },
+            ],
+          });
+
+          if (plantilla.preciosNivel.length) {
+            await tx.precioNivel.createMany({
+              data: plantilla.preciosNivel.map((n) => ({
+                varianteId: nueva.id,
+                nombre: n.nombre,
+                cantidadMinima: n.cantidadMinima,
+                cantidadMaxima: n.cantidadMaxima,
+                tipoPrecio: n.tipoPrecio,
+                precio: n.precio,
+                porcentajeDesc: n.porcentajeDesc,
+                descripcion: n.descripcion,
+                orden: n.orden,
+                isActive: true,
+              })),
+            });
+          }
+
+          await tx.archivo.update({
+            where: { id: diseno.archivoId },
+            data: {
+              varianteId: nueva.id,
+              entidadTipo: 'PRODUCTO_VARIANTE',
+              entidadId: nueva.id,
+              orden: 0,
+            },
+          });
+
+          const entra = diseno.cantidad > 0;
+          let stockSedeId = '';
+          let costoSede: Prisma.Decimal | null = null;
+          for (const s of sedes) {
+            const esLaSede = s.sedeId === dto.sedeId;
+            const costo =
+              esLaSede && entra && diseno.costoUnitario != null
+                ? new Prisma.Decimal(diseno.costoUnitario)
+                : (s.precioCosto ?? null);
+            const creado = await tx.productoStock.create({
+              data: {
+                sedeId: s.sedeId,
+                empresaId,
+                varianteId: nueva.id,
+                // Con el stock ya puesto, como el stock inicial al generar
+                // variantes: el movimiento de abajo lo documenta.
+                stockActual: esLaSede && entra ? diseno.cantidad : 0,
+                stockMinimo: null,
+                ubicacion: s.ubicacion ?? null,
+                precio: s.precio ?? null,
+                precioCosto: costo,
+                precioOferta: s.precioOferta ?? null,
+                enOferta: s.enOferta ?? false,
+                fechaInicioOferta: s.fechaInicioOferta ?? null,
+                fechaFinOferta: s.fechaFinOferta ?? null,
+                precioConfigurado: s.precioConfigurado ?? false,
+                precioIncluyeIgv: s.precioIncluyeIgv ?? true,
+                envioGratis: s.envioGratis ?? false,
+              },
+              select: { id: true },
+            });
+            if (esLaSede) {
+              stockSedeId = creado.id;
+              costoSede = costo;
+            }
+          }
+
+          if (entra) {
+            // El helper crea el lote de la entrada con este costo.
+            await crearMovimientoStockConValoracion(tx, {
+              productoStockId: stockSedeId,
+              empresaId,
+              sedeId: dto.sedeId,
+              tipo: 'AJUSTE_ENTRADA',
+              cantidadAnterior: 0,
+              cantidad: diseno.cantidad,
+              cantidadNueva: diseno.cantidad,
+              usuarioId,
+              motivo: `Nuevo diseño de la colección: ${nombre}`,
+              precioCostoUnitario: costoSede,
+            });
+          }
+
+          resultado.push({ id: nueva.id, nombre, cantidad: diseno.cantidad });
+        }
+
+        return { disenos: resultado };
+      },
+      { timeout: 30000 },
+    );
+
+    await this.textoBusqueda.recalcularProducto(base.productoId);
+    await this.cache.invalidateProductosLists(empresaId);
+    this.realtime.notifyProductoActualizado({ empresaId, productoId: base.productoId });
+
+    return creadas;
+  }
+
+  /**
+   * La colección de `varianteId`: las variantes del producto con sus mismos
+   * atributos sin contar el diseño (la regla que numera los diseños). Incluye
+   * las INACTIVAS: separar una variante entera la desactiva, y sigue siendo la
+   * base de la colección —la que tiene los atributos sin diseño y donde viven
+   * las fotos de los diseños por crear—.
+   *
+   * `varianteId` puede ser la base o cualquiera de sus diseños. Si no se
+   * separó nunca, la base es ella misma (sus diseños empiezan en D1).
+   */
+  private async resolverColeccion(empresaId: string, varianteId: string, atributoDisenoId: string) {
+    const v = await this.prisma.productoVariante.findFirst({
+      where: { id: varianteId, empresaId, deletedAt: null },
+      select: {
+        productoId: true,
+        atributosValores: { select: { atributoId: true, valor: true } },
+      },
+    });
+    if (!v) throw new NotFoundException('Variante no encontrada');
+
+    const claveCol = claveDeColeccion(v.atributosValores, atributoDisenoId);
+    const hermanas = await this.prisma.productoVariante.findMany({
+      where: { productoId: v.productoId, empresaId, deletedAt: null },
+      include: {
+        atributosValores: {
+          include: {
+            atributo: {
+              select: { id: true, clave: true, orden: true, usarEnNombreVariante: true },
+            },
+          },
+        },
+        preciosNivel: { where: { isActive: true } },
+        archivos: {
+          where: { deletedAt: null, isActive: true },
+          select: { id: true, url: true, urlThumbnail: true },
+          orderBy: { orden: 'asc' },
+        },
+      },
+      orderBy: { creadoEn: 'asc' },
+    });
+
+    const miembros = hermanas.filter(
+      (h) => claveDeColeccion(h.atributosValores, atributoDisenoId) === claveCol,
+    );
+    const esDiseno = (h: (typeof miembros)[number]) =>
+      h.atributosValores.some((a) => a.atributoId === atributoDisenoId);
+    const base = miembros.find((h) => !esDiseno(h));
+    if (!base) {
+      throw new BadRequestException(
+        'No se encontró la variante de la colección (la que no tiene diseño). ¿Se eliminó?',
+      );
+    }
+    const disenos = miembros.filter(esDiseno);
+    // Precios y costo: los del diseño activo más reciente; sin diseños, la base.
+    const plantilla = [...disenos].reverse().find((d) => d.isActive) ?? base;
+    return { base, disenos, plantilla };
   }
 
   /**

@@ -33,6 +33,7 @@ import { ProductoService } from './producto.service';
 import { ProductoVarianteService } from './producto-variante.service';
 import { VarianteDisenoService } from './variante-diseno.service';
 import { SepararPorDisenoDto } from './dto/separar-por-diseno.dto';
+import { AgregarDisenosDto } from './dto/agregar-disenos.dto';
 import { ProductoAtributoService } from './producto-atributo.service';
 import { ProductoAtributoValorService } from './producto-atributo-valor.service';
 import { PrecioNivelService } from './precio-nivel.service';
@@ -1033,6 +1034,41 @@ export class ProductoController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.varianteDisenoService.separar(empresaId, varianteId, dto, user.sub);
+  }
+
+  @Get('variantes/:varianteId/coleccion-diseno')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'La colección de una variante (base, diseños y siguiente número)',
+    description:
+      'Para agregar diseños nuevos: la base de la colección (donde se suben ' +
+      'las fotos), sus diseños, el nombre del siguiente (D4…) y el costo por sede.',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async coleccionDiseno(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+  ) {
+    return this.varianteDisenoService.coleccion(empresaId, varianteId);
+  }
+
+  @Post('variantes/:varianteId/agregar-disenos')
+  @RequiresPermission(Permission.MANAGE_PRODUCTS)
+  @ApiOperation({
+    summary: 'Agregar diseños nuevos a una colección',
+    description:
+      'Cada foto de la base pasa a ser un diseño nuevo (D4, D5…) con los ' +
+      'atributos y precios de la colección. Se crea en 0 (las unidades entran ' +
+      'con una compra) o con un ingreso directo (AJUSTE_ENTRADA con su lote).',
+  })
+  @ApiHeader({ name: 'x-tenant-id', required: true })
+  async agregarDisenos(
+    @Param('varianteId') varianteId: string,
+    @Headers('x-tenant-id') empresaId: string,
+    @Body() dto: AgregarDisenosDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.varianteDisenoService.agregar(empresaId, varianteId, dto, user.sub);
   }
 
   @Post(':productoId/variantes/generar-combinaciones')

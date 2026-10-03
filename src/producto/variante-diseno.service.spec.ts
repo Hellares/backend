@@ -315,3 +315,212 @@ describe('VarianteDisenoService.separar', () => {
     });
   });
 });
+
+/**
+ * Agregar diseños NUEVOS a una colección ya separada: CRISTAL tiene D1–D3 y
+ * llegan dos estampados más. Las unidades no salen de ninguna variante: en 0
+ * (entran con la compra) o con un ingreso directo.
+ */
+describe('VarianteDisenoService.agregar', () => {
+  const ATR = {
+    tam: { id: 'a-tam', clave: 'tamano', orden: 1, usarEnNombreVariante: true },
+    col: { id: 'a-col', clave: 'dise_o', orden: 5, usarEnNombreVariante: true },
+    dis: { id: 'a-dis', clave: 'diseno', orden: 9, usarEnNombreVariante: true },
+  };
+  const ATR_DISENO = { id: 'a-dis', orden: 9, isActive: true };
+
+  const valores = (extra?: string) => [
+    { atributoId: ATR.tam.id, valor: '2 PLAZAS', atributo: ATR.tam },
+    { atributoId: ATR.col.id, valor: 'CRISTAL', atributo: ATR.col },
+    ...(extra ? [{ atributoId: ATR.dis.id, valor: extra, atributo: ATR.dis }] : []),
+  ];
+  const variante = (id: string, nombre: string, extra?: string, over: Record<string, unknown> = {}) => ({
+    id,
+    productoId: 'p1',
+    empresaId: 'e1',
+    nombre,
+    sku: extra ? `EDR-CRI-${extra}` : 'EDR-CRI',
+    unidadMedidaId: null,
+    unidadPresentacionId: null,
+    factorPresentacion: null,
+    peso: null,
+    dimensiones: null,
+    orden: 2,
+    isActive: true,
+    atributosValores: valores(extra),
+    preciosNivel: [] as unknown[],
+    archivos: [] as unknown[],
+    ...over,
+  });
+
+  // La base quedó desactivada al separarla entera; las fotos nuevas se suben ahí.
+  const base = variante('v-base', '2 PLAZAS / CRISTAL', undefined, {
+    isActive: false,
+    archivos: [
+      { id: 'f4', url: 'u4', urlThumbnail: null },
+      { id: 'f5', url: 'u5', urlThumbnail: null },
+    ],
+    preciosNivel: [
+      { nombre: 'Viejo', cantidadMinima: 3, cantidadMaxima: null, tipoPrecio: 'PRECIO_FIJO', precio: 70, porcentajeDesc: null, descripcion: null, orden: 0 },
+    ],
+  });
+  const d1 = variante('v-d1', '2 PLAZAS / CRISTAL / D1', 'D1');
+  const d3 = variante('v-d3', '2 PLAZAS / CRISTAL / D3', 'D3', {
+    preciosNivel: [
+      { nombre: 'Por mayor', cantidadMinima: 3, cantidadMaxima: null, tipoPrecio: 'PRECIO_FIJO', precio: 80, porcentajeDesc: null, descripcion: null, orden: 0 },
+    ],
+  });
+  // Otra colección del mismo producto: no cuenta para nada.
+  const otra = variante('v-kitty', '2 PLAZAS / KITTY', undefined, {
+    atributosValores: [
+      { atributoId: ATR.tam.id, valor: '2 PLAZAS', atributo: ATR.tam },
+      { atributoId: ATR.col.id, valor: 'KITTY', atributo: ATR.col },
+    ],
+  });
+
+  const stockD3 = {
+    id: 'ps-d3',
+    sedeId: 's1',
+    ubicacion: null,
+    precio: 120,
+    precioCosto: 60,
+    precioOferta: null,
+    enOferta: false,
+    fechaInicioOferta: null,
+    fechaFinOferta: null,
+    precioConfigurado: true,
+    precioIncluyeIgv: true,
+    envioGratis: false,
+  };
+
+  function montar(opts: { hermanas?: unknown[]; findFirst?: unknown } = {}) {
+    const hermanas = opts.hermanas ?? [base, d1, d3, otra];
+    let nVar = 0;
+    let nStock = 0;
+    const tx = {
+      productoStock: {
+        findMany: jest.fn().mockResolvedValue([stockD3]),
+        create: jest.fn().mockImplementation(() => Promise.resolve({ id: `ps-nuevo-${++nStock}` })),
+      },
+      productoVariante: {
+        create: jest.fn().mockImplementation(() => Promise.resolve({ id: `v-nueva-${++nVar}` })),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      productoAtributoValor: { createMany: jest.fn().mockResolvedValue({}) },
+      precioNivel: { createMany: jest.fn().mockResolvedValue({}) },
+      archivo: { update: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      productoVariante: {
+        findFirst: jest.fn().mockResolvedValue(opts.findFirst ?? d1),
+        findMany: jest.fn().mockResolvedValue(hermanas),
+      },
+      productoAtributo: { findUnique: jest.fn().mockResolvedValue(ATR_DISENO) },
+      productoStock: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+    };
+    const service = new VarianteDisenoService(
+      prisma as any,
+      { invalidateProductosLists: jest.fn() } as any,
+      { notifyProductoActualizado: jest.fn() } as any,
+      { generarCodigoVariante: jest.fn().mockResolvedValue({ codigoEmpresa: 'VAR-9' }) } as any,
+      { recalcularProducto: jest.fn() } as any,
+    );
+    return { service, tx };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (crearMovimientoStockConValoracion as jest.Mock).mockResolvedValue({ id: 'mov-1' });
+  });
+
+  it('en 0: sigue la numeración (D4, D5), toma la foto de la base y NO mueve stock', async () => {
+    const { service, tx } = montar();
+
+    const r = await service.agregar(
+      'e1',
+      'v-d1',
+      { sedeId: 's1', disenos: [{ archivoId: 'f4', cantidad: 0 }, { archivoId: 'f5', cantidad: 0 }] },
+      'u1',
+    );
+
+    expect(r.disenos).toEqual([
+      { id: 'v-nueva-1', nombre: '2 PLAZAS / CRISTAL / D4', cantidad: 0 },
+      { id: 'v-nueva-2', nombre: '2 PLAZAS / CRISTAL / D5', cantidad: 0 },
+    ]);
+    expect(tx.productoVariante.create.mock.calls[0][0].data).toMatchObject({ sku: 'EDR-CRI-D4', isActive: true });
+    expect(tx.productoAtributoValor.createMany.mock.calls[0][0].data).toEqual([
+      { varianteId: 'v-nueva-1', atributoId: ATR.tam.id, valor: '2 PLAZAS' },
+      { varianteId: 'v-nueva-1', atributoId: ATR.col.id, valor: 'CRISTAL' },
+      { varianteId: 'v-nueva-1', atributoId: ATR_DISENO.id, valor: 'D4' },
+    ]);
+    expect(tx.archivo.update).toHaveBeenCalledWith({
+      where: { id: 'f4' },
+      data: expect.objectContaining({ varianteId: 'v-nueva-1', entidadId: 'v-nueva-1' }),
+    });
+    // Precio y costo del diseño VIGENTE (D3), no de la base desactivada.
+    expect(tx.productoStock.create.mock.calls[0][0].data).toMatchObject({
+      varianteId: 'v-nueva-1',
+      sedeId: 's1',
+      stockActual: 0,
+      precio: 120,
+      precioCosto: 60,
+    });
+    expect(tx.precioNivel.createMany.mock.calls[0][0].data[0]).toMatchObject({ nombre: 'Por mayor', precio: 80 });
+    expect(crearMovimientoStockConValoracion).not.toHaveBeenCalled();
+  });
+
+  it('con ingreso: el stock entra con AJUSTE_ENTRADA a su costo', async () => {
+    const { service, tx } = montar();
+
+    await service.agregar(
+      'e1',
+      'v-d3',
+      { sedeId: 's1', disenos: [{ archivoId: 'f4', cantidad: 2, costoUnitario: 55 }] },
+      'u1',
+    );
+
+    const fila = tx.productoStock.create.mock.calls[0][0].data;
+    expect(fila.stockActual).toBe(2);
+    expect(Number(fila.precioCosto)).toBe(55);
+    const mov = (crearMovimientoStockConValoracion as jest.Mock).mock.calls[0][1];
+    expect(mov).toMatchObject({
+      productoStockId: 'ps-nuevo-1',
+      tipo: 'AJUSTE_ENTRADA',
+      cantidadAnterior: 0,
+      cantidad: 2,
+      cantidadNueva: 2,
+    });
+    expect(Number(mov.precioCostoUnitario)).toBe(55);
+  });
+
+  it('sin costo, el ingreso usa el costo actual de la colección', async () => {
+    const { service } = montar();
+
+    await service.agregar('e1', 'v-d1', { sedeId: 's1', disenos: [{ archivoId: 'f4', cantidad: 1 }] }, 'u1');
+
+    const mov = (crearMovimientoStockConValoracion as jest.Mock).mock.calls[0][1];
+    expect(Number(mov.precioCostoUnitario)).toBe(60);
+  });
+
+  it('🔴 una foto que no es de la base se rechaza', async () => {
+    const { service } = montar();
+    await expect(
+      service.agregar('e1', 'v-d1', { sedeId: 's1', disenos: [{ archivoId: 'f-ajena', cantidad: 0 }] }, 'u1'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('una variante nunca separada es su propia base: arranca en D1', async () => {
+    const cruda = { ...base, isActive: true };
+    const { service } = montar({ hermanas: [cruda, otra], findFirst: cruda });
+
+    const r = await service.agregar(
+      'e1',
+      'v-base',
+      { sedeId: 's1', disenos: [{ archivoId: 'f4', cantidad: 0 }] },
+      'u1',
+    );
+
+    expect(r.disenos[0].nombre).toBe('2 PLAZAS / CRISTAL / D1');
+  });
+});
