@@ -99,6 +99,7 @@ model Empresa {
   productoVariantes        ProductoVariante[]
   productoAtributos        ProductoAtributo[]
   plantillasAtributos      ProductoAtributoPlantilla[]
+  variantePlantillas       VariantePlantilla[]
   configuracionesPrecios   ConfiguracionPrecio[]
 
   // Relaciones para sistema de descuentos

@@ -952,3 +952,66 @@ enum TipoCambioPrecio {
   CORRECCION // Corrección de error
   LIQUIDACION // Activación/desactivación de liquidación (remate bajo costo)
 }
+
+// =========================================
+// PLANTILLAS DE VARIANTES
+// =========================================
+
+/// Plantilla de VARIANTES: la estructura de una colección para repetirla.
+///
+/// No confundir con `ProductoAtributoPlantilla` (la ficha técnica del
+/// producto). Esta dice QUÉ variantes nacen: "Edredones" = 2 PLAZAS · TELA ·
+/// 3 PZS · HOMBRE, 2 PLAZAS · CARNERITO… con sus precios sugeridos. Al
+/// aplicarla en un producto se escribe el valor de la colección nueva
+/// (DINOSAURIO) y se crean esas combinaciones con ese valor.
+///
+/// Es un punto de partida, no un vínculo: editarla no toca las variantes ya
+/// creadas, y editar una variante no toca la plantilla.
+model VariantePlantilla {
+  id          String  @id @default(cuid())
+  empresaId   String
+  nombre      String
+  descripcion String?
+
+  /// El atributo que cambia en cada colección nueva ("Colección"). Sin FK:
+  /// si se borra el atributo, la plantilla avisa al aplicarla.
+  atributoColeccionId String
+
+  /// Los atributos de las combinaciones, en orden (sin el de colección).
+  atributoIds String[] @default([])
+
+  isActive Boolean @default(true)
+
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  empresa       Empresa                        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  combinaciones VariantePlantillaCombinacion[]
+
+  @@unique([empresaId, nombre])
+  @@index([empresaId])
+}
+
+/// Una combinación de la plantilla: los valores de sus atributos (sin la
+/// colección) y los precios sugeridos con los que nace la variante.
+model VariantePlantillaCombinacion {
+  id          String @id @default(cuid())
+  plantillaId String
+
+  /// [{ "atributoId": "...", "valor": "TELA" }, ...] — ARREGLO y no mapa:
+  /// jsonb no conserva el orden de las claves.
+  valores Json
+
+  precio      Decimal? @db.Decimal(14, 6)
+  precioCosto Decimal? @db.Decimal(14, 6)
+
+  /// Precios por mayor sugeridos: [{ nombre, cantidadMinima, cantidadMaxima,
+  /// tipoPrecio, precio, porcentajeDesc }].
+  niveles Json?
+
+  orden Int @default(0)
+
+  plantilla VariantePlantilla @relation(fields: [plantillaId], references: [id], onDelete: Cascade)
+
+  @@index([plantillaId])
+}

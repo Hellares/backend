@@ -29,6 +29,8 @@ import { ProductoTrazabilidadService } from './producto-trazabilidad.service';
 import { CostoVentaService } from './costo-venta.service';
 import { TextoBusquedaService } from './texto-busqueda.service';
 import { VarianteDisenoService } from './variante-diseno.service';
+import { VariantePlantillaService } from './variante-plantilla.service';
+import { VariantePlantillaController } from './variante-plantilla.controller';
 
 @Module({
   imports: [PrismaModule, AuthModule, ConfiguracionCodigosModule],
@@ -37,6 +39,7 @@ import { VarianteDisenoService } from './variante-diseno.service';
     ProductoComboController,
     ProductoAtributoController,
     ProductoAtributoPlantillaController,
+    VariantePlantillaController,
     ConfiguracionPrecioController,
     CompatibilidadController,
   ],
@@ -73,6 +76,8 @@ import { VarianteDisenoService } from './variante-diseno.service';
     // Índice de búsqueda unificada
     TextoBusquedaService,
     VarianteDisenoService,
+    // Plantillas de variantes: crear una colección nueva igual a otra
+    VariantePlantillaService,
 
     // Helpers
     SedeContextHelper,
