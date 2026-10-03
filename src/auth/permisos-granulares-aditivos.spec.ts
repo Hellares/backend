@@ -129,8 +129,10 @@ describe('Permisos granulares aditivos', () => {
       expect(p.canManageOrders).toBe(true);
       expect(p.canViewServices).toBe(true);
       expect(p.canViewClients).toBe(true);
-      // Sin el permiso tampoco registra clientes.
-      expect(p.canCrearClientes).toBe(false);
+      // Registra al cliente desde servicios por su rol (03-10), pero no
+      // edita ni borra los que ya están.
+      expect(p.canCrearClientes).toBe(true);
+      expect(p.canManageClients).toBe(false);
     });
 
     it('con el permiso, el técnico cotiza y ve el catálogo para cotizar', () => {

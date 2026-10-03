@@ -150,11 +150,12 @@ export class PermissionsService {
         isAnyAdmin || isVendedor || isCajero || isOperador,
 
       // Solo dar de alta uno nuevo (y buscarlo por DNI/RUC). Lo tiene todo el
-      // que puede gestionar clientes; el técnico lo recibe con
-      // `cotizacion.crear` porque el cliente al que le cotiza no siempre está
-      // registrado. Editar y eliminar siguen pidiendo `canManageClients`.
+      // que puede gestionar clientes, y el TÉCNICO por su rol (03-10): quien
+      // trae el equipo a servicio muchas veces no está registrado, y sin esto
+      // la orden se trababa en un 403. Editar y eliminar siguen pidiendo
+      // `canManageClients`. `cotizacion.crear` lo sigue sumando.
       canCrearClientes:
-        isAnyAdmin || isVendedor || isCajero || isOperador ||
+        isAnyAdmin || isVendedor || isCajero || isOperador || isTecnico ||
         tieneCotizacionCrear,
 
       // ==================== SEDES ====================
